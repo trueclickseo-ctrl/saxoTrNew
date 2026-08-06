@@ -19,7 +19,8 @@ LOOKBACK      = 120     # ~6-month momentum
 TOPN          = 10      # diversification beat concentration on both Sharpe & DD
 TARGET_VOL    = 0.15    # annualized vol target
 REBAL_DAYS    = 28      # calendar days between rebalances (~monthly)
-US_SLEEVE_SEK = 5000.0  # capital allocated to the US momentum sleeve (of the 10k base)
+US_SLEEVE_SEK = 100_000.0  # capital allocated to the US momentum sleeve (the full
+                           # 100k paper base — US momentum is the one proven strategy)
 
 
 def _panel(feat_data: dict, us_tickers) -> pd.DataFrame | None:

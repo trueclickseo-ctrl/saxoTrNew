@@ -73,13 +73,18 @@ CONSENSUS_MIN_AGREEMENT = 3     # >= 3 of 6 strategies must vote BUY
 # the dashboard leaderboard is genuinely per-strategy.
 STRATEGY_MODE = True   # False -> fall back to the detector-consensus scan
 
+# US is now handled by the VALIDATED cross-sectional momentum strategy
+# (atos/us_momentum.py, wired via run_us_momentum below). OMX/CPH per-instrument
+# strategies are PAUSED — backtesting showed they have no reliable edge; they stay
+# out until a validated strategy exists for those markets. So the per-instrument
+# strategy_scan has nothing to run and the engine trades only proven US momentum.
+US_MOMENTUM_ENABLED = True
+
 STRATEGY_INSTANCE_FOR_MARKET = {
-    "US Equities": S4_BreakoutVol(),     # US: Donchian breakout + volatility expansion
-    "OMX30":       S5_MomentumAccel(),   # OMX30: momentum acceleration
-    "CPH25":       S3_MeanReversion(),   # CPH25: RSI mean reversion
+    # "OMX30": S5_MomentumAccel(), "CPH25": S3_MeanReversion(),  # paused: unvalidated
 }
 STRATEGY_FOR_MARKET = {
-    "US Equities": "US Breakout",
+    "US Equities": "US Momentum",
     "OMX30":       "OMX Momentum",
     "CPH25":       "CPH Mean Reversion",
 }
@@ -598,6 +603,14 @@ def run_cycle():
                     "price": entry_price, "reason": skip_reason, "pnl_sek": None,
                 })
 
+    # ── 6c. US momentum rebalance (the validated strategy) ────────
+    if US_MOMENTUM_ENABLED:
+        print("  Running US momentum strategy...")
+        try:
+            run_us_momentum(feat_data, db.get_open_trades(), todays_actions)
+        except Exception as e:
+            print(f"  [US momentum] ERROR: {e}")
+
     # ── 7. Learning pass ──────────────────────────────────────────
     print("  Running learning pass...")
     learning_result = run_learning_pass()
@@ -671,6 +684,128 @@ def _log_buy_signal(mkt: str, ticker: str, decision, executed: int, block_reason
         "executed": executed,
         "block_reason": block_reason,
     })
+
+
+US_MOMENTUM_STATE = os.path.join(BASE_DIR, "data", "us_momentum_state.json")
+
+
+def _load_us_state():
+    try:
+        with open(US_MOMENTUM_STATE) as f:
+            return json.load(f)
+    except Exception:
+        return {"last_rebalance": None}
+
+
+def _save_us_state(state: dict):
+    os.makedirs(os.path.dirname(US_MOMENTUM_STATE), exist_ok=True)
+    tmp = f"{US_MOMENTUM_STATE}.tmp.{os.getpid()}"
+    with open(tmp, "w") as f:
+        json.dump(state, f, indent=2)
+    os.replace(tmp, US_MOMENTUM_STATE)
+
+
+def _place_us(side: str, ticker: str, shares: int, imap: dict,
+              todays_actions: list, price: float, cur_trade: dict = None) -> bool:
+    """Place ONE US market order and update DB + local cash on success."""
+    shares = int(shares)
+    if shares < 1 or ticker not in imap:
+        return False
+    try:
+        saxo_client.place_market_order(imap[ticker]["uic"], "Stock", side, shares)
+    except Exception as e:
+        print(f"  [US momentum] {side} {shares} {ticker} FAILED: {e}")
+        return False
+    rate = fx.get_rate_to_sek("USD")
+    price_sek = (price or 0) * rate
+    if side == "Buy":
+        comm = commission_sek(shares, price_sek)
+        db.insert_trade({
+            "strategy": "US Momentum", "market_group": "US Equities", "ticker": ticker,
+            "direction": "BUY", "entry_date": date.today().isoformat(),
+            "entry_price": price, "shares": shares, "commission_sek": comm,
+            "entry_score": 0, "d1_trend": 0, "d2_momentum": 0, "d3_breakout": 0,
+            "d4_mean_revert": 0, "d5_volume": 0, "d6_smart_money": 0,
+            "d7_mom_quality": 0, "d8_regime": 0, "stop_price": 0,
+            "trailing_stop_high": price, "regime_at_entry": "momentum",
+        })
+        record_fill(-(shares * price_sek + comm))
+        todays_actions.append({"action": "BUY", "ticker": ticker, "market_group": "US Equities",
+                               "score": 0, "shares": shares, "price": price,
+                               "reason": "US momentum", "pnl_sek": None})
+    else:  # Sell (full close of the tracked position)
+        comm = commission_sek(shares, price_sek)
+        if cur_trade:
+            entry_sek = cur_trade.get("entry_price", price) * rate
+            pnl = shares * (price_sek - entry_sek) - comm
+            db.close_trade(cur_trade["id"], price, "momentum_rebalance", pnl, comm)
+        record_fill(shares * price_sek - comm)
+        todays_actions.append({"action": "EXIT", "ticker": ticker, "market_group": "US Equities",
+                               "score": 0, "shares": shares, "price": price,
+                               "reason": "US momentum exit", "pnl_sek": None})
+    return True
+
+
+def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list):
+    """Validated US cross-sectional momentum, executed as a monthly rebalance with a
+    daily market risk-off overlay. See atos/us_momentum.py + STRATEGY_NOTES.md."""
+    from atos import us_momentum as USM
+    from instrument_map import load_instrument_map
+    if kill_switch_active():
+        print("  [US momentum] STOP_TRADING present — skip"); return
+    try:
+        imap = load_instrument_map()
+    except Exception as e:
+        print(f"  [US momentum] instrument_map load failed: {e}"); return
+
+    us_open = {t["ticker"]: t for t in open_trades if t.get("market_group") == "US Equities"}
+    tgt = USM.compute_targets(feat_data, ATOS_UNIVERSE)
+    print(f"  [US momentum] risk_off={tgt['risk_off']} | {tgt.get('reason')} | targets={tgt['targets']}")
+    fx_usd = fx.get_rate_to_sek("USD")
+
+    def _price(tk, fallback=0):
+        return float(feat_data[tk]["Close"].iloc[-1]) if tk in feat_data else fallback
+
+    def _sell_all_us():
+        for tk, tr in us_open.items():
+            _place_us("Sell", tk, tr.get("shares", 0), imap, todays_actions,
+                      price=_price(tk, tr.get("entry_price", 0)), cur_trade=tr)
+
+    # Daily risk-off overlay: exit US to cash the moment the market breaks trend.
+    if tgt["risk_off"]:
+        if us_open:
+            print("  [US momentum] RISK-OFF — selling all US to cash")
+            _sell_all_us()
+        return
+
+    # Rebalance only every REBAL_DAYS.
+    state = _load_us_state()
+    last = state.get("last_rebalance")
+    days_since = (date.today() - date.fromisoformat(last)).days if last else 10 ** 6
+    if days_since < USM.REBAL_DAYS:
+        print(f"  [US momentum] hold — {days_since}d since last rebalance (every {USM.REBAL_DAYS}d)")
+        return
+
+    # Clean model: liquidate all US, then rebuy the target top-N equal-weight.
+    print(f"  [US momentum] REBALANCE — liquidate & rebuy top {len(tgt['targets'])}")
+    _sell_all_us()
+    if tgt["targets"]:
+        # Live sizing uses the FULL sleeve equally (no vol-target scaling) so whole
+        # shares of expensive US names are affordable; the daily risk-off overlay
+        # (above) is what controls drawdown here. Vol-targeting would need ~5x the
+        # capital to size whole shares and is left to the backtest.
+        per_usd = (USM.US_SLEEVE_SEK / len(tgt["targets"])) / fx_usd
+        for tk in tgt["targets"]:
+            if tk not in feat_data or tk not in imap:
+                continue
+            px = _price(tk)
+            shares = int(per_usd / px) if px > 0 else 0
+            if shares >= 1:
+                _place_us("Buy", tk, shares, imap, todays_actions, price=px)
+            else:
+                print(f"  [US momentum] {tk}: ${per_usd:.0f} budget < 1 share (${px:.0f}) — skip")
+    state["last_rebalance"] = date.today().isoformat()
+    _save_us_state(state)
 
 
 def _currency_for(market_group: str) -> str:

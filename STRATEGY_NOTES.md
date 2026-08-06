@@ -134,6 +134,13 @@ monthly rebalance, per-stock EMA200 filter, daily market-regime risk-off (equal-
 Two dials for the user: *max return* (top10 base: CAGR 35%, DD 31%) vs *smoothest*
 (top10+risk-off+VT: CAGR 24%, DD 21%). Both are legit; default to the smoother one.
 
+**WIRED LIVE 2026-08-07** (`atos/us_momentum.py` + `run_us_momentum` in atos_runner.py):
+base capital bumped to 100,000 SEK, US sleeve = 100k, top-10 equal-weight whole shares
+(9/10 affordable; ASML $1711 > $1055/slot skipped), monthly rebalance + daily risk-off.
+**Vol-targeting DROPPED for live sizing** — it scales exposure to ~30%, making per-slot
+budgets too small for whole shares (needs ~5x capital). So live ≈ top10 + risk-off:
+expect ~Sharpe 1.18, DD ~24%. OMX/CPH per-instrument strategies PAUSED (unvalidated).
+
 **Next: wire this into the live engine.** NOTE: it's a PORTFOLIO/rebalance strategy (rank +
 hold top-N monthly), architecturally different from the runner's per-instrument signal loop —
 needs a rebalance execution path (compute targets → buy/sell to reach them), not a per-ticker BUY.

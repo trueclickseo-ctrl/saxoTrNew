@@ -23,12 +23,13 @@ from datetime import date
 import pandas as pd
 
 # -- Configuration --------------------------------------------------
-STARTING_CAPITAL_SEK  = 10_000   # total paper capital for ATOS
+STARTING_CAPITAL_SEK  = 100_000  # total paper capital (bumped from 10k so the US
+                                 # momentum strategy can hold 10 whole-share positions)
 RISK_PER_TRADE_PCT    = 0.01     # risk max 1% of market-group capital per trade
 ATR_STOP_MULTIPLE     = 2.5      # stop = entry - 2.5 * ATR
-MAX_POSITIONS_TOTAL   = 8        # max simultaneous open positions across all markets
+MAX_POSITIONS_TOTAL   = 14       # max simultaneous open positions across all markets
 MAX_POSITIONS_PER_MKT = {
-    "US Equities":   4,
+    "US Equities":   10,   # top-10 US momentum sleeve
     "OMX30":         2,
     "CPH25":         2,
 }
