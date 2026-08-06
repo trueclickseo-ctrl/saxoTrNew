@@ -1,17 +1,24 @@
 # Secrets — NEVER commit these
+# (comments must be on their own line; a trailing '#' is treated as
+#  literal pattern text by git, which silently breaks the ignore rule)
 saxo_token.json
 .env
 *.env
+# FTP credentials for the (legacy) dashboard upload
+config/deploy.json
 
-# ── ATOS v1 — credentials (CRITICAL: never commit) ───────────────
-config/deploy.json           # FTP password for namazic.com upload
-data/atos_risk_state.json    # runtime capital tracker (regenerates)
-
-# ── ATOS v1 — large/generated files ──────────────────────────────
-data/atos.db                 # SQLite database (large, local only)
-data/atos_live.db            # active SQLite DB (local runtime state, not history)
-config/deploy.json           # FTP creds — untracked; ROTATE + purge from history
-dashboard/                   # generated HTML (uploaded to namazic.com)
+# ── Runtime state / databases — local only, not history ──────────
+# SQLite databases (large, machine-local)
+data/atos.db
+data/atos_live.db
+# risk / daily capital trackers (regenerate automatically)
+data/atos_risk_state.json
+data/daily_state.json
+data/risk_capital.json
+# strategy monitor state
+data/strategy_monitor.json
+# generated HTML dashboard (was uploaded to namazic.com)
+dashboard/
 
 # Python
 __pycache__/
@@ -24,9 +31,7 @@ data/*.csv
 !data/instrument_map.csv
 !data/index_map.csv
 
-# Runtime state — regenerates automatically, not meaningful history
-data/daily_state.json
-data/risk_capital.json
+# Runtime
 results/
 STOP_TRADING
 
