@@ -134,6 +134,25 @@ monthly rebalance, per-stock EMA200 filter, daily market-regime risk-off (equal-
 Two dials for the user: *max return* (top10 base: CAGR 35%, DD 31%) vs *smoothest*
 (top10+risk-off+VT: CAGR 24%, DD 21%). Both are legit; default to the smoother one.
 
+## US signal hunt — 2026-08-07  (`backtest_us_strategies.py`)
+Same engine (top-10, EMA200 filter, monthly, daily risk-off, real costs), only the
+RANKING SIGNAL varies. 10y, fractional shares (isolates signal edge):
+
+| Signal | CAGR | Sharpe | MaxDD |
+|---|---|---|---|
+| **risk-adj momentum (ret/vol)** | 24.7% | **1.22** | **22.8%** |
+| momentum 120d (prev) | 24.5% | 1.08 | 24.0% |
+| low-volatility | 12.1% | 1.05 | 14.3% |
+| 52-week-high | 16.3% | 1.01 | 19.9% |
+| momentum 252d | 20.7% | 0.93 | 24.1% |
+| buy&hold | 26.1% | 1.24 | 33.6% |
+
+**Winner: risk-adjusted momentum (return / 60d vol).** Same return as plain momentum,
+higher Sharpe (1.22 vs 1.08), lower DD. Nearly matches buy&hold Sharpe (1.24) at 1/3
+less drawdown — the real value of the strategy is DD reduction, not beating B&H return.
+**Upgraded the live signal to risk-adjusted momentum** in atos/us_momentum.py.
+(mom252 worse than mom120; low-vol lowest DD but low return — a defensive alternative.)
+
 **WIRED LIVE 2026-08-07** (`atos/us_momentum.py` + `run_us_momentum` in atos_runner.py):
 base capital bumped to 100,000 SEK, US sleeve = 100k, top-10 equal-weight whole shares
 (9/10 affordable; ASML $1711 > $1055/slot skipped), monthly rebalance + daily risk-off.
