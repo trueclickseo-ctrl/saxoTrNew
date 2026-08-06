@@ -516,10 +516,10 @@ HTML_CONTENT = """<!DOCTYPE html>
             <div class="table-container">
                 <table id="leaderboardTable">
                     <thead><tr>
-                        <th>Market</th><th>P&amp;L (SEK)</th><th>Sharpe</th><th>Max DD</th>
+                        <th>Strategy</th><th>Instrument</th><th>P&amp;L (SEK)</th><th>Sharpe</th><th>Max DD</th>
                         <th>Win rate</th><th>Trades</th><th>Open</th><th>Status</th>
                     </tr></thead>
-                    <tbody><tr><td colspan="8" class="empty-state">Loading...</td></tr></tbody>
+                    <tbody><tr><td colspan="9" class="empty-state">Loading...</td></tr></tbody>
                 </table>
             </div>
         </div>
@@ -591,7 +591,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             <div class="table-container">
                 <table id="recentTradesTable">
                     <thead><tr>
-                        <th>Date</th><th>Market</th><th>Ticker</th><th>Action</th>
+                        <th>Date</th><th>Strategy</th><th>Ticker</th><th>Action</th>
                         <th>Shares</th><th>Price</th><th>P&amp;L</th>
                     </tr></thead>
                     <tbody><tr><td colspan="7" class="empty-state">Loading...</td></tr></tbody>
@@ -831,12 +831,13 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         function updateLeaderboard(rows) {
             const body = document.querySelector('#leaderboardTable tbody');
-            if (!rows || rows.length === 0) { body.innerHTML = '<tr><td colspan="8" class="empty-state">No data yet</td></tr>'; return; }
+            if (!rows || rows.length === 0) { body.innerHTML = '<tr><td colspan="9" class="empty-state">No data yet</td></tr>'; return; }
             body.innerHTML = rows.map(r => {
                 const pnlCls = r.pnl_sek >= 0 ? 'text-success' : 'text-danger';
                 const statusColor = r.status === 'Active' ? 'var(--success-color)' : 'var(--neutral-color)';
                 return `<tr>
-                    <td><strong>${r.label || r.market}</strong></td>
+                    <td><strong>${r.strategy || r.market}</strong></td>
+                    <td>${r.instrument || ''}</td>
                     <td class="${pnlCls}">${r.pnl_sek >= 0 ? '+' : ''}${formatNumber(r.pnl_sek)}</td>
                     <td>${r.sharpe != null ? r.sharpe.toFixed(2) : '—'}</td>
                     <td class="${r.max_dd_pct > 0 ? 'text-danger' : ''}">${r.max_dd_pct ? '-' + formatNumber(r.max_dd_pct) + '%' : '0.0%'}</td>
@@ -861,7 +862,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                     ? `<span class="${pnl >= 0 ? 'text-success' : 'text-danger'}">${pnl >= 0 ? '+' : ''}${formatNumber(pnl)} SEK</span>` : '—';
                 return `<tr>
                     <td>${(t.exit_date || t.entry_date) || '-'}</td>
-                    <td>${t.market_group}</td>
+                    <td>${t.strategy || t.market_group}</td>
                     <td><strong>${t.ticker}</strong></td>
                     <td><span class="badge ${badge}">${action}</span></td>
                     <td>${t.shares}</td>
@@ -1312,8 +1313,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             elif path == '/api/leaderboard':
                 import math
                 markets = ['US Equities', 'OMX30', 'CPH25']
-                labels = {'US Equities': 'US (S&P500 + Nasdaq100)',
-                          'OMX30': 'OMX30 (Stockholm)', 'CPH25': 'CPH25 (Copenhagen)'}
+                instruments = {'US Equities': 'US · S&P500 + Nasdaq100',
+                               'OMX30': 'OMXS30', 'CPH25': 'CPH25'}
+                strategies = {'US Equities': 'ATOS US', 'OMX30': 'ATOS OMX30', 'CPH25': 'ATOS CPH25'}
                 rows = []
                 for mg in markets:
                     closed = [r['pnl_sek'] for r in cursor.execute(
@@ -1334,7 +1336,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         if sd > 0:
                             sharpe = round(mean / sd * math.sqrt(252), 2)
                     rows.append({
-                        'market': mg, 'label': labels.get(mg, mg),
+                        'market': mg, 'strategy': strategies.get(mg, mg),
+                        'instrument': instruments.get(mg, mg),
                         'pnl_sek': round(pnl, 2), 'trades': n,
                         'win_rate': round((wins / n * 100) if n else 0, 1),
                         'max_dd_pct': round(maxdd / 10000 * 100, 1),
@@ -1345,7 +1348,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             elif path == '/api/trades/recent':
                 rows = [dict(r) for r in cursor.execute(
-                    "SELECT ticker, market_group, direction, entry_date, exit_date, "
+                    "SELECT strategy, ticker, market_group, direction, entry_date, exit_date, "
                     "entry_price, exit_price, shares, pnl_sek, was_profitable "
                     "FROM trades ORDER BY COALESCE(exit_date, entry_date) DESC, id DESC LIMIT 20"
                 ).fetchall()]

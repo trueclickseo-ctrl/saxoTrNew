@@ -66,6 +66,15 @@ HISTORY_DAYS   = 300    # days of history to download (need 200 for EMA200)
 # fall back to pure detector-score entries.
 REQUIRE_CONSENSUS       = True
 CONSENSUS_MIN_AGREEMENT = 3     # >= 3 of 6 strategies must vote BUY
+
+# Strategy label per market — attributes each trade to a named strategy sleeve so
+# the dashboard leaderboard is per-strategy. Today ATOS runs one consensus method
+# per market, so these are three instances of it (one per market).
+STRATEGY_FOR_MARKET = {
+    "US Equities": "ATOS US",
+    "OMX30":       "ATOS OMX30",
+    "CPH25":       "ATOS CPH25",
+}
 ASSET_TYPE_MAP = {      # Saxo asset type per market group
     "US Equities":  "Stock",
     "OMX30":        "Stock",
@@ -472,6 +481,7 @@ def run_cycle():
                 # Record the position ONLY after Saxo accepts the order, so
                 # the DB never shows a phantom fill Saxo doesn't have.
                 db.insert_trade({
+                    "strategy": STRATEGY_FOR_MARKET.get(mkt, "ATOS"),
                     "market_group": mkt, "ticker": ticker, "direction": "BUY",
                     "entry_date": date.today().isoformat(),
                     "entry_price": entry_price,

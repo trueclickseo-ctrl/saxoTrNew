@@ -141,15 +141,16 @@ def migrate_schema():
 
 def insert_trade(data: dict) -> int:
     """Insert a new open trade. Returns the trade id."""
+    data = {"strategy": "ATOS_v1", **data}  # default if caller omits it
     with _conn() as conn:
         cur = conn.execute("""
             INSERT INTO trades
-              (market_group, ticker, direction, entry_date, entry_price, shares,
+              (strategy, market_group, ticker, direction, entry_date, entry_price, shares,
                commission_sek, entry_score, d1_trend, d2_momentum, d3_breakout,
                d4_mean_revert, d5_volume, d6_smart_money, d7_mom_quality, d8_regime,
                trailing_stop_high, regime_at_entry, stop_price)
             VALUES
-              (:market_group, :ticker, :direction, :entry_date, :entry_price, :shares,
+              (:strategy, :market_group, :ticker, :direction, :entry_date, :entry_price, :shares,
                :commission_sek, :entry_score, :d1_trend, :d2_momentum, :d3_breakout,
                :d4_mean_revert, :d5_volume, :d6_smart_money, :d7_mom_quality, :d8_regime,
                :trailing_stop_high, :regime_at_entry, :stop_price)
