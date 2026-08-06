@@ -127,9 +127,9 @@ class S3_MeanReversion(Strategy):
     
     def default_parameters(self):
         return {
-            'rsi_oversold': 30, 'rsi_overbought': 70,
+            'rsi_oversold': 35, 'rsi_overbought': 70,   # widened from 30 (fired too rarely)
             'bb_period': 20, 'bb_std': 2.0,
-            'adx_max': 25  # Only works in ranging markets
+            'adx_max': 30  # ranging filter, widened from 25
         }
     
     def signal(self, df):
@@ -150,7 +150,7 @@ class S3_MeanReversion(Strategy):
             return 'HOLD'
         
         # BUY: RSI oversold + price near lower BB
-        if rsi < self.params['rsi_oversold'] and close <= bb_lower * 1.01:
+        if rsi < self.params['rsi_oversold'] and close <= bb_lower * 1.02:
             return 'BUY'
         
         # SELL: RSI overbought or price at upper BB
@@ -192,8 +192,8 @@ class S4_BreakoutVol(Strategy):
     def default_parameters(self):
         return {
             'entry_period': 20, 'exit_period': 10,
-            'vol_expansion': 1.1,  # ATR must be 10% above yesterday
-            'volume_threshold': 1.5  # Volume 50% above average
+            'vol_expansion': 1.0,   # ATR at least flat vs yesterday (was 1.1)
+            'volume_threshold': 1.2  # Volume 20% above average (was 1.5)
         }
     
     def signal(self, df):
@@ -211,11 +211,13 @@ class S4_BreakoutVol(Strategy):
         if any(pd.isna(v) for v in [close, donchian_high, atr, prev_atr]):
             return 'HOLD'
         
-        # BUY: Price breaks Donchian high + ATR expanding + volume surge
+        # BUY: Price breaks Donchian high + at least ONE confirmation (ATR
+        # expansion OR volume surge). Requiring both simultaneously fired ~1
+        # trade / 2y across 39 US names — far too strict.
         atr_expanding = atr > prev_atr * self.params['vol_expansion'] if prev_atr > 0 else False
         volume_ok = pd.notna(vol_ratio) and vol_ratio > self.params['volume_threshold']
-        
-        if close >= donchian_high and atr_expanding and volume_ok:
+
+        if close >= donchian_high and (atr_expanding or volume_ok):
             return 'BUY'
         
         # SELL: Price breaks 10-day low
@@ -256,12 +258,19 @@ class S5_MomentumAccel(Strategy):
         roc_10 = row.get('roc_10', 0)
         mom_accel = row.get('mom_acceleration', 0)
         rsi = row.get('rsi', 50)
-        
+        close = row.get('Close', 0)
+        ema200 = row.get('ema200', None)
+
         if any(pd.isna(v) for v in [roc_10, mom_accel, rsi]):
             return 'HOLD'
-        
-        # BUY: ROC strong + accelerating + RSI in sweet spot
-        if (roc_10 > self.params['roc_threshold'] and
+
+        # Trend filter: only take momentum longs in an established uptrend
+        # (price above EMA200). This cuts the counter-trend losers (e.g. HM-B).
+        uptrend = ema200 is not None and pd.notna(ema200) and close > ema200
+
+        # BUY: uptrend + ROC strong + accelerating + RSI in sweet spot
+        if (uptrend and
+            roc_10 > self.params['roc_threshold'] and
             mom_accel > 0 and
             self.params['rsi_min'] < rsi < self.params['rsi_max']):
             return 'BUY'
