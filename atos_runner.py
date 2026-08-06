@@ -778,12 +778,18 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list):
             _sell_all_us()
         return
 
-    # Rebalance only every REBAL_DAYS.
+    # Rebalance on the FIRST run of each calendar month (= first trading day of the
+    # month, since the engine runs daily). Predictable and easy to see coming.
     state = _load_us_state()
     last = state.get("last_rebalance")
-    days_since = (date.today() - date.fromisoformat(last)).days if last else 10 ** 6
-    if days_since < USM.REBAL_DAYS:
-        print(f"  [US momentum] hold — {days_since}d since last rebalance (every {USM.REBAL_DAYS}d)")
+    today = date.today()
+    if last:
+        ld = date.fromisoformat(last)
+        due = (today.year, today.month) != (ld.year, ld.month)
+    else:
+        due = True   # never rebalanced -> do it now
+    if not due:
+        print(f"  [US momentum] hold — already rebalanced this month (last {last})")
         return
 
     # Clean model: liquidate all US, then rebuy the target top-N equal-weight.

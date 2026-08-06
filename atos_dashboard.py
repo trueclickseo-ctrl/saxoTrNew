@@ -524,6 +524,11 @@ HTML_CONTENT = """<!DOCTYPE html>
             </div>
         </div>
 
+        <div class="glass-card" style="margin-bottom:30px;">
+            <div class="section-title">US Momentum — Schedule &amp; Holdings</div>
+            <div id="usMomentum" class="kpi-sub">Loading...</div>
+        </div>
+
         <div class="two-col delay-2">
             <div class="glass-card">
                 <div class="section-title">Equity Curve (90 Days)</div>
@@ -1101,8 +1106,19 @@ HTML_CONTENT = """<!DOCTYPE html>
         // Start
         fetchDashboardData();
         setInterval(fetchDashboardData, 60000);
+        function updateUsMomentum(d) {
+            const el = document.getElementById('usMomentum');
+            if (!d) { el.textContent = 'Unavailable'; return; }
+            const names = (d.holdings || []).map(h => `${h.ticker} (${h.shares})`).join(', ') || 'none yet';
+            el.innerHTML = `Last rebalance: <strong>${d.last_rebalance || 'never'}</strong> &nbsp;·&nbsp; ` +
+                `Next rebalance: <strong>${d.next_rebalance}</strong> (first trading day of month) &nbsp;·&nbsp; ` +
+                `Holdings (${d.holdings_count}): ${names}`;
+        }
+
         // Universe rarely changes — fetch once at load.
         fetch('/api/universe').then(r => r.json()).then(updateUniverse).catch(() => {});
+        fetch('/api/us_momentum').then(r => r.json()).then(updateUsMomentum).catch(() => {});
+        setInterval(() => fetch('/api/us_momentum').then(r => r.json()).then(updateUsMomentum).catch(() => {}), 60000);
         updateMarketStatus();
         setInterval(updateMarketStatus, 30000);
     </script>
@@ -1353,6 +1369,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "FROM trades ORDER BY COALESCE(exit_date, entry_date) DESC, id DESC LIMIT 20"
                 ).fetchall()]
                 self.send_json({'data': rows})
+
+            elif path == '/api/us_momentum':
+                from datetime import date as _date
+                state_file = os.path.join(DB_DIR, 'us_momentum_state.json')
+                last = None
+                try:
+                    with open(state_file) as _f:
+                        last = json.load(_f).get('last_rebalance')
+                except Exception:
+                    last = None
+                today = _date.today()
+                ny = today.year + (1 if today.month == 12 else 0)
+                nm = 1 if today.month == 12 else today.month + 1
+                next_rebal = _date(ny, nm, 1).isoformat() if last else "next engine run (first rebalance)"
+                cursor.execute("SELECT ticker, shares, entry_price FROM trades "
+                               "WHERE strategy='US Momentum' AND exit_date IS NULL ORDER BY ticker")
+                holds = [dict(r) for r in cursor.fetchall()]
+                self.send_json({"last_rebalance": last, "next_rebalance": next_rebal,
+                                "holdings": holds, "holdings_count": len(holds)})
 
             else:
                 self.send_error(404)
