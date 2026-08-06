@@ -134,6 +134,21 @@ monthly rebalance, per-stock EMA200 filter, daily market-regime risk-off (equal-
 Two dials for the user: *max return* (top10 base: CAGR 35%, DD 31%) vs *smoothest*
 (top10+risk-off+VT: CAGR 24%, DD 21%). Both are legit; default to the smoother one.
 
+## ML probability model — TESTED & REJECTED, 2026-08-07  (`research_ml_probability.py`)
+Meta-labeling / triple-barrier: label = hit +5% before -3% within 20d; technical
+features; HistGradientBoosting; WALK-FORWARD (TimeSeriesSplit) out-of-sample eval.
+- 92,547 rows, base rate P(win) = 40.1%.
+- **Walk-forward OOS AUC = 0.52** (0.50 = no skill). Essentially a coin flip.
+- Even at P>=0.80 the real win rate is only 46% (+6% over base), 295 trades — thin/fragile.
+
+**VERDICT: ML adds no reliable edge here — do not ship it as a signal.** The "82%
+probability" idea is not achievable with daily technical features; a model claiming
+82% would be overfit/miscalibrated (its most-confident real win rate is ~46%). Lesson:
+efficient liquid equities + technical features on daily bars = no ML edge. Stick with
+the validated risk-adjusted momentum strategy. (Needs scikit-learn; run under a venv.)
+Could revisit only with genuinely new information (fundamentals, order-flow, alt-data) —
+not more technical indicators.
+
 ## US signal hunt — 2026-08-07  (`backtest_us_strategies.py`)
 Same engine (top-10, EMA200 filter, monthly, daily risk-off, real costs), only the
 RANKING SIGNAL varies. 10y, fractional shares (isolates signal edge):
