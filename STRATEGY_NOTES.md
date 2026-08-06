@@ -75,3 +75,36 @@ Results:
   mean-reversion in ranging).
 - **Better exits** (chandelier/ATR-trailing) rather than fixed signal exits.
 - Try `S2_DualEMA` / `S6_SmartMoney` per market and compare.
+
+---
+
+## Cross-sectional (portfolio) momentum — 2026-08-07  (`backtest_momentum.py`)
+Rank instruments by 120d return, keep positive-momentum + above-EMA200, hold top N
+equal-weight, monthly rebalance, vs equal-weight buy&hold benchmark.
+
+**3y (2023–2026, bull market):**
+| Market | Mom CAGR | Mom Sharpe | Mom maxDD | B&H Sharpe |
+|---|---|---|---|---|
+| US | +40.9% | 1.22 | 17.6% | **1.96** |
+| OMX30 | +26.9% | 1.81 | 11.0% | **2.13** |
+| CPH25 | +4.6% | 0.35 | 23.3% | 0.52 |
+
+**10y (2016–2026, incl. 2018/2020/2022 bears) — the real test:**
+| Market | Mom CAGR | Mom Sharpe | Mom maxDD | B&H CAGR | B&H Sharpe | Verdict |
+|---|---|---|---|---|---|---|
+| **US** | **+40.8%** | **1.25** | 32.3% | +25.6% | 1.27 | **STRONG** — 3.2× B&H total return (+2480% vs +773%) at ~equal Sharpe |
+| OMX30 | +2.9% | 0.24 | 44.3% | +15.8% | 0.96 | **FAILS** — 3y Sharpe 1.81 was a bull mirage |
+| CPH25 | +15.1% | 0.76 | 25.8% | +12.9% | 0.76 | marginal — ties B&H |
+
+**CRITICAL LESSONS (do not repeat):**
+1. **Always test 10y, not 3y.** OMX momentum looked great over 3y (Sharpe 1.81) but the
+   full cycle exposed it as fragile (0.24, 44% DD). Recent-bull results mislead.
+2. **Buy&hold is a very strong benchmark.** Most strategies here fail to beat a diversified
+   equal-weight hold on a risk-adjusted basis. Any strategy must be measured against it.
+3. **US cross-sectional momentum is the one real edge found so far** — robust across bull+bear,
+   3.2× the buy&hold return over 10y at comparable Sharpe. Cost: deeper drawdowns (32%).
+4. **Momentum on small/concentrated universes (OMX 15, top-3) is fragile.** Needs breadth.
+
+**Best strategy so far: US cross-sectional momentum (top 5 of 39, monthly, EMA200 filter).**
+Next: reduce its 32% DD (volatility targeting / more names / crash filter); for OMX/CPH
+prefer simple trend-following buy&hold (hold above EMA200, cash below) over momentum.
