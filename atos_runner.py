@@ -41,6 +41,7 @@ from atos import database as db
 from atos.universe import ATOS_UNIVERSE, market_of, MARKET_GROUPS
 from atos.features import add_all
 from atos.decision_engine import scan_universe, BUY_THRESHOLD, consensus_evaluate
+from atos.strategies import S3_MeanReversion, S4_BreakoutVol, S5_MomentumAccel
 from atos.learner import run_learning_pass, format_weight_bar
 from atos.risk import (
     RiskEngine, get_risk_capital, get_available_cash, get_total_equity,
@@ -67,14 +68,77 @@ HISTORY_DAYS   = 300    # days of history to download (need 200 for EMA200)
 REQUIRE_CONSENSUS       = True
 CONSENSUS_MIN_AGREEMENT = 3     # >= 3 of 6 strategies must vote BUY
 
-# Strategy label per market — attributes each trade to a named strategy sleeve so
-# the dashboard leaderboard is per-strategy. Today ATOS runs one consensus method
-# per market, so these are three instances of it (one per market).
-STRATEGY_FOR_MARKET = {
-    "US Equities": "ATOS US",
-    "OMX30":       "ATOS OMX30",
-    "CPH25":       "ATOS CPH25",
+# Distinct algorithm per market (the "good algorithms" layer). Each market runs a
+# strategy suited to its character; every trade is tagged with the strategy name so
+# the dashboard leaderboard is genuinely per-strategy.
+STRATEGY_MODE = True   # False -> fall back to the detector-consensus scan
+
+STRATEGY_INSTANCE_FOR_MARKET = {
+    "US Equities": S4_BreakoutVol(),     # US: Donchian breakout + volatility expansion
+    "OMX30":       S5_MomentumAccel(),   # OMX30: momentum acceleration
+    "CPH25":       S3_MeanReversion(),   # CPH25: RSI mean reversion
 }
+STRATEGY_FOR_MARKET = {
+    "US Equities": "US Breakout",
+    "OMX30":       "OMX Momentum",
+    "CPH25":       "CPH Mean Reversion",
+}
+
+from typing import NamedTuple as _NamedTuple
+
+
+class StratDecision(_NamedTuple):
+    """Decision object shaped like decision_engine.Decision, plus the strategy
+    that produced it, so the existing risk/order/DB code works unchanged."""
+    action:         str
+    score:          float
+    d1_trend:       float = 0.0
+    d2_momentum:    float = 0.0
+    d3_breakout:    float = 0.0
+    d4_mean_revert: float = 0.0
+    d5_volume:      float = 0.0
+    strategy:       str = "ATOS"
+    regime:         str = "unknown"
+
+
+def strategy_scan(feat_data, open_tickers, weights):
+    """Per-market strategy signals: each market's assigned strategy decides
+    BUY / EXIT. Detector scores are attached for on-screen context only; the
+    strategy — not the detector consensus — is what governs the trade."""
+    from atos.decision_engine import evaluate
+    results = {}
+    for ticker, df in feat_data.items():
+        if df is None or df.empty or len(df) < 50:
+            continue
+        mkt   = market_of(ticker)
+        strat = STRATEGY_INSTANCE_FOR_MARKET.get(mkt)
+        if strat is None:
+            continue
+        row = df.iloc[-1]
+        if pd.isna(row.get("ema50")) or pd.isna(row.get("atr")):
+            continue
+        is_open = ticker in open_tickers
+        try:
+            sig  = strat.signal(df)
+            conf = float(strat.confidence(df))
+        except Exception as e:
+            print(f"  [WARN] strategy {STRATEGY_FOR_MARKET.get(mkt)} failed on {ticker}: {e}")
+            continue
+        if is_open:
+            action = "EXIT" if sig in ("SELL", "EXIT") else "HOLD"
+        else:
+            action = "BUY" if sig == "BUY" else "HOLD"
+        if action == "HOLD" and not is_open:
+            continue
+        d = evaluate(row, mkt, weights)   # detector breakdown, for display
+        results[ticker] = StratDecision(
+            action=action,
+            score=round(55 + max(0.0, min(conf, 1.0)) * 45, 1),   # 55–100 signal strength
+            d1_trend=d.d1_trend, d2_momentum=d.d2_momentum, d3_breakout=d.d3_breakout,
+            d4_mean_revert=d.d4_mean_revert, d5_volume=d.d5_volume,
+            strategy=STRATEGY_FOR_MARKET.get(mkt, "ATOS"),
+        )
+    return results
 ASSET_TYPE_MAP = {      # Saxo asset type per market group
     "US Equities":  "Stock",
     "OMX30":        "Stock",
@@ -280,14 +344,19 @@ def run_cycle():
         except Exception as e:
             print(f"  [WARN] feature calc failed for {ticker}: {e}")
 
-    # ── 5. Decision Engine scan ───────────────────────────────────
-    print(f"  Running Decision Engine on {len(feat_data)} instruments...")
-    decisions = scan_universe(
-        universe_data    = feat_data,
-        market_group_fn  = market_of,
-        open_tickers     = open_tickers,
-        weights          = weights,
-    )
+    # ── 5. Decision scan (per-market strategies, or detector consensus) ──
+    if STRATEGY_MODE:
+        print(f"  Running per-market strategies on {len(feat_data)} instruments "
+              f"(US=Breakout, OMX30=Momentum, CPH25=MeanReversion)...")
+        decisions = strategy_scan(feat_data, open_tickers, weights)
+    else:
+        print(f"  Running detector consensus on {len(feat_data)} instruments...")
+        decisions = scan_universe(
+            universe_data    = feat_data,
+            market_group_fn  = market_of,
+            open_tickers     = open_tickers,
+            weights          = weights,
+        )
     print(f"  Signals: {sum(1 for d in decisions.values() if d.action=='BUY')} BUY, "
           f"{sum(1 for d in decisions.values() if d.action=='EXIT')} EXIT")
 
@@ -417,9 +486,9 @@ def run_cycle():
             atr_sek   = atr_raw * rate
 
             # ── ATOS v3 consensus gate ────────────────────────────────
-            # The weighted detector score qualified this candidate; now
-            # require a multi-strategy quorum before risking capital.
-            if REQUIRE_CONSENSUS:
+            # Only for the detector-consensus path. In STRATEGY_MODE the
+            # per-market strategy IS the decision, so this quorum is skipped.
+            if REQUIRE_CONSENSUS and not STRATEGY_MODE:
                 consensus = consensus_evaluate(
                     df_full, mkt,
                     min_agreement=CONSENSUS_MIN_AGREEMENT,

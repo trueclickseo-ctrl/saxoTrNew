@@ -1315,7 +1315,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 markets = ['US Equities', 'OMX30', 'CPH25']
                 instruments = {'US Equities': 'US · S&P500 + Nasdaq100',
                                'OMX30': 'OMXS30', 'CPH25': 'CPH25'}
-                strategies = {'US Equities': 'ATOS US', 'OMX30': 'ATOS OMX30', 'CPH25': 'ATOS CPH25'}
+                strategies = {'US Equities': 'US Breakout', 'OMX30': 'OMX Momentum', 'CPH25': 'CPH Mean Reversion'}
                 rows = []
                 for mg in markets:
                     closed = [r['pnl_sek'] for r in cursor.execute(
