@@ -213,6 +213,22 @@ def run_cycle():
     # ── 0. Init DB ────────────────────────────────────────────────
     db.init_db()
 
+    # ── DEMO MODE (SIM paper only) ────────────────────────────────
+    # Set ATOS_DEMO=1 to relax the entry gate so the engine will actually
+    # trade on weak signals — for verifying the buy/sell path on the SIM
+    # account. ATOS_DEMO_MAX caps how many new positions it opens.
+    # Never leave this on for real evaluation — it defeats the risk gate.
+    _demo = bool(os.environ.get("ATOS_DEMO"))
+    if _demo:
+        global REQUIRE_CONSENSUS
+        REQUIRE_CONSENSUS = False
+        import atos.decision_engine as _de
+        import atos.risk as _rk
+        _de.BUY_THRESHOLD = 15
+        _rk.MIN_SCORE_TO_ENTER = 15
+        print("  [DEMO MODE] relaxed thresholds (SIM paper only) — engine will "
+              "trade on weak signals; consensus gate OFF")
+
     # ── 1. Safety checks ──────────────────────────────────────────
     if kill_switch_active():
         print("STOP_TRADING file present — halted. Delete it to resume.")
@@ -372,6 +388,8 @@ def run_cycle():
             if dec.action == "BUY" and ticker not in open_tickers
         ]
         buy_candidates.sort(key=lambda x: x[1].score, reverse=True)
+        if _demo:
+            buy_candidates = buy_candidates[:int(os.environ.get("ATOS_DEMO_MAX", 3))]
 
         for ticker, decision in buy_candidates:
             if ticker not in feat_data:

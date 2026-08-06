@@ -99,14 +99,29 @@ def get_balances() -> dict:
     return resp.json()
 
 
+_account_key_cache = None
+
+
 def get_account_key() -> str:
+    """AccountKey needed to place orders. Prefer the SAXO_ACCOUNT_KEY env var;
+    otherwise fetch it from the API once and cache it for this process (the SIM
+    login has a single account), so orders work out of the box."""
+    global _account_key_cache
     key = os.environ.get("SAXO_ACCOUNT_KEY")
+    if key:
+        return key
+    if _account_key_cache:
+        return _account_key_cache
+    info = get_account_info()
+    data = info.get("Data", info)
+    acct = data[0] if isinstance(data, list) and data else data
+    key = acct.get("AccountKey") if isinstance(acct, dict) else None
     if not key:
         raise RuntimeError(
-            "SAXO_ACCOUNT_KEY environment variable not set. Run get_account_info() "
-            "once, copy the AccountKey from the output, and set it as an env var "
-            "the same way you set SAXO_TOKEN."
+            "Could not determine AccountKey from Saxo /port/v1/accounts/me. "
+            "Set the SAXO_ACCOUNT_KEY env var explicitly."
         )
+    _account_key_cache = key
     return key
 
 

@@ -22,20 +22,39 @@ Once fix_permissions.bat is run, atos_runner.py can be edited directly.
 
 import sys
 import os
+import json
+import time
 
 # ── Path setup ────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
+TOKEN_FILE = os.path.join(BASE_DIR, "saxo_token.json")
+
+
+def _access_token_valid(buffer_s: int = 600) -> bool:
+    """True if the saved access token is still good (with a safety buffer).
+    Saxo SIM tokens last ~24h, so a daily one-click run rarely needs a browser."""
+    try:
+        with open(TOKEN_FILE) as f:
+            d = json.load(f)
+        return (d.get("obtained_at", 0) + d.get("expires_in", 0)) - buffer_s > time.time()
+    except Exception:
+        return False
+
 
 # ── Pre-flight: ensure Saxo token is valid ────────────────────────
+# Order matters: a still-valid ACCESS token needs no login even if the
+# refresh token is dead — only fall back to the browser as a last resort.
 print("Checking Saxo SIM token...")
 try:
     import saxo_auth_auto
-    if not saxo_auth_auto.refresh_existing():
-        print("\n  Token expired — launching automatic login...\n")
-        saxo_auth_auto.login_auto()
+    if _access_token_valid():
+        print("  Access token still valid — no login needed.\n")
+    elif saxo_auth_auto.refresh_existing():
+        print("  Token refreshed — no login needed.\n")
     else:
-        print("  Token is valid.\n")
+        print("\n  Token expired — launching browser login...\n")
+        saxo_auth_auto.login_auto()
 except Exception as e:
     print(f"  [WARN] Could not verify token: {e}")
     print("  The cycle will attempt to proceed — it may fail on Saxo API calls.\n")
@@ -68,6 +87,10 @@ if __name__ == "__main__":
                 creationflags=0x00000008  # DETACHED_PROCESS on Windows
             )
             print("  Dashboard launched at http://localhost:8070")
+            # Give the server a moment, then open the browser for the user.
+            import webbrowser, time as _t
+            _t.sleep(2)
+            webbrowser.open("http://localhost:8070")
         else:
             print("  [WARN] atos_dashboard.py not found — run it manually:")
             print("         py -3 atos_dashboard.py")
