@@ -777,10 +777,9 @@ HTML_CONTENT = """<!DOCTYPE html>
             
             let subText = `<span class="${cls}">${sign}${formatNumber(pct)}%</span>`;
             if (data.cash_balance !== null && data.cash_balance !== undefined) {
+                const invested = (eq !== null && eq !== undefined) ? (eq - data.cash_balance) : null;
+                if (invested !== null) subText += ` | Invested: ${formatNumber(invested)} ${currency}`;
                 subText += ` | Cash: ${formatNumber(data.cash_balance)} ${currency}`;
-            }
-            if (data.source === 'saxo_live') {
-                subText += ' | <span style="color: var(--success-color)">● LIVE</span>';
             }
             document.getElementById('kpiEquitySub').innerHTML = subText;
             
@@ -833,7 +832,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                 return;
             }
             
-            openBody.innerHTML = positions.map(p => {
+            let rows = positions.map(p => {
                 const pnlCls = p.pnl >= 0 ? 'text-success' : 'text-danger';
                 return `
                     <tr>
@@ -847,6 +846,21 @@ HTML_CONTENT = """<!DOCTYPE html>
                     </tr>
                 `;
             }).join('');
+            const s = liveData && liveData.summary;
+            if (s) {
+                const pnlCls = s.total_pnl_sek >= 0 ? 'text-success' : 'text-danger';
+                const pnlPct = s.total_invested_sek > 0 ? (s.total_pnl_sek / s.total_invested_sek * 100) : 0;
+                rows += `
+                    <tr style="border-top:2px solid var(--border-color);font-weight:700;">
+                        <td>TOTAL</td>
+                        <td></td>
+                        <td>${s.count}</td>
+                        <td colspan="2">Invested: ${formatNumber(s.total_invested_sek)} SEK</td>
+                        <td class="${pnlCls}">${s.total_pnl_sek >= 0 ? '+' : ''}${formatNumber(s.total_pnl_sek)} SEK (${pnlPct >= 0 ? '+' : ''}${formatNumber(pnlPct)}%)</td>
+                        <td>Market value: ${formatNumber(s.total_value_sek)} SEK</td>
+                    </tr>`;
+            }
+            openBody.innerHTML = rows;
         }
 
         function updateSignalsTable(signals) {
@@ -1153,7 +1167,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             'currency': disp.get('Currency', '?'),
                             'market_value': pview.get('MarketValue', 0),
                         })
-                    self.send_json({'data': formatted, 'source': 'saxo_live'})
+                    # Portfolio totals, each position converted to SEK by its currency.
+                    import sys as _sys
+                    _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                    try:
+                        import fx as _fx
+                    except Exception:
+                        _fx = None
+                    t_inv = t_pnl = t_val = 0.0
+                    for _p in formatted:
+                        _rate = 1.0
+                        if _fx is not None:
+                            try:
+                                _rate = _fx.get_rate_to_sek(_p.get('currency') or 'SEK')
+                            except Exception:
+                                _rate = 1.0
+                        t_inv += (_p.get('shares') or 0) * (_p.get('entry_price') or 0) * _rate
+                        t_pnl += (_p.get('pnl') or 0) * _rate
+                        t_val += (_p.get('market_value') or 0) * _rate
+                    # Market value = cost basis + unrealized P&L (robust even when
+                    # Saxo omits MarketValue, which it sometimes does on SIM).
+                    self.send_json({'data': formatted, 'source': 'saxo_live',
+                                    'summary': {'total_invested_sek': round(t_inv, 2),
+                                                'total_pnl_sek': round(t_pnl, 2),
+                                                'total_value_sek': round(t_inv + t_pnl, 2),
+                                                'count': len(formatted)}})
                 else:
                     self.send_json({'data': [], 'source': 'unavailable', 'error': 'Token expired or missing'})
 

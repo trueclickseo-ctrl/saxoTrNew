@@ -493,6 +493,15 @@ def run_cycle():
                 record_fill(-cost_sek)
                 cash_sek -= cost_sek
                 risk.register_fill(mkt)
+                # Add the fill to the in-cycle equity view so the daily-loss-cap
+                # doesn't falsely trip: cash left the account but the new position
+                # value offsets it, so equity is ~flat (only commission drag).
+                # Without this, a single buy makes equity look ~11% down and blocks
+                # every further buy this cycle — capping the engine at ~1 trade/day.
+                risk.open_trades.append({
+                    "market_group": mkt, "ticker": ticker,
+                    "shares": shares, "entry_price": entry_price,
+                })
                 open_tickers.add(ticker)
                 _log_buy_signal(mkt, ticker, decision, 1, None)
                 todays_actions.append({
