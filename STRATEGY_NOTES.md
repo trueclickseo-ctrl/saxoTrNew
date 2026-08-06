@@ -108,3 +108,32 @@ equal-weight, monthly rebalance, vs equal-weight buy&hold benchmark.
 **Best strategy so far: US cross-sectional momentum (top 5 of 39, monthly, EMA200 filter).**
 Next: reduce its 32% DD (volatility targeting / more names / crash filter); for OMX/CPH
 prefer simple trend-following buy&hold (hold above EMA200, cash below) over momentum.
+
+---
+
+## US momentum — drawdown reduction, 2026-08-07  (`backtest_us_momentum.py`, daily equity)
+Proper daily equity curve exposes the true drawdown (37.6%, worse than the monthly
+approx of 32%). Findings while cutting it:
+- **Monthly regime filter fails** (DD 37.6%→37.6%): the big DD is the *fast* 2020 crash;
+  a month-end check reacts too late. Also whipsaws (sells the V-bottom, misses snap-back).
+- **More holdings help most**: top-5 → top-10 improved BOTH Sharpe (1.20→1.28) AND DD
+  (37.6%→30.7%) for only a little less return (CAGR 40.7%→35.0%). Diversification > filters.
+- **Daily risk-off + vol-target on top-10** = best risk-adjusted:
+
+| Config | CAGR | Sharpe | MaxDD |
+|---|---|---|---|
+| top5 base (orig) | 40.7% | 1.20 | 37.6% |
+| top10 base | 35.0% | 1.28 | 30.7% |
+| **top10 + daily risk-off + vol-target (15%)** | **24.4%** | **1.30** | **21.3%** |
+
+**WINNER — US strategy is decided:** cross-sectional momentum, **top 10 of 39, 120d lookback,
+monthly rebalance, per-stock EMA200 filter, daily market-regime risk-off (equal-weight index
+< its 200d SMA → cash), volatility targeting to 15%.** 10y: Sharpe 1.30, MaxDD 21.3%, CAGR 24.4%
+— beats buy&hold's Sharpe (1.27) with half the original drawdown. This clears the bar.
+
+Two dials for the user: *max return* (top10 base: CAGR 35%, DD 31%) vs *smoothest*
+(top10+risk-off+VT: CAGR 24%, DD 21%). Both are legit; default to the smoother one.
+
+**Next: wire this into the live engine.** NOTE: it's a PORTFOLIO/rebalance strategy (rank +
+hold top-N monthly), architecturally different from the runner's per-instrument signal loop —
+needs a rebalance execution path (compute targets → buy/sell to reach them), not a per-ticker BUY.
