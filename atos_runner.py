@@ -38,7 +38,7 @@ sys.path.insert(0, BASE_DIR)
 
 # ── ATOS modules ──────────────────────────────────────────────────
 from atos import database as db
-from atos.universe import ATOS_UNIVERSE, market_of, MARKET_GROUPS
+from atos.universe import ATOS_UNIVERSE, US_TICKERS, market_of, MARKET_GROUPS
 from atos.features import add_all
 from atos.decision_engine import scan_universe, BUY_THRESHOLD, consensus_evaluate
 from atos.strategies import S3_MeanReversion, S4_BreakoutVol, S5_MomentumAccel
@@ -746,9 +746,10 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
     return True
 
 
-def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list):
+def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list, dry_run: bool = False):
     """Validated US cross-sectional momentum, executed as a monthly rebalance with a
-    daily market risk-off overlay. See atos/us_momentum.py + STRATEGY_NOTES.md."""
+    daily market risk-off overlay. See atos/us_momentum.py + STRATEGY_NOTES.md.
+    dry_run=True previews the orders (prints them) without placing any or touching the DB."""
     from atos import us_momentum as USM
     from instrument_map import load_instrument_map
     if kill_switch_active():
@@ -759,17 +760,24 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list):
         print(f"  [US momentum] instrument_map load failed: {e}"); return
 
     us_open = {t["ticker"]: t for t in open_trades if t.get("market_group") == "US Equities"}
-    tgt = USM.compute_targets(feat_data, ATOS_UNIVERSE)
-    print(f"  [US momentum] risk_off={tgt['risk_off']} | {tgt.get('reason')} | targets={tgt['targets']}")
+    tgt = USM.compute_targets(feat_data, US_TICKERS)   # US names only — not the whole universe
+    tag = "[US momentum DRY-RUN]" if dry_run else "[US momentum]"
+    print(f"  {tag} risk_off={tgt['risk_off']} | {tgt.get('reason')} | targets={tgt['targets']}")
     fx_usd = fx.get_rate_to_sek("USD")
 
     def _price(tk, fallback=0):
         return float(feat_data[tk]["Close"].iloc[-1]) if tk in feat_data else fallback
 
+    def _do(side, tk, shares, price, cur_trade=None):
+        if dry_run:
+            print(f"    {tag} would {side.upper()} {shares} {tk} @ ${price:.2f}  (~{shares*price*fx_usd:,.0f} SEK)")
+            return True
+        return _place_us(side, tk, shares, imap, todays_actions, price=price, cur_trade=cur_trade)
+
     def _sell_all_us():
         for tk, tr in us_open.items():
-            _place_us("Sell", tk, tr.get("shares", 0), imap, todays_actions,
-                      price=_price(tk, tr.get("entry_price", 0)), cur_trade=tr)
+            _do("Sell", tk, tr.get("shares", 0),
+                _price(tk, tr.get("entry_price", 0)), cur_trade=tr)
 
     # Daily risk-off overlay: exit US to cash the moment the market breaks trend.
     if tgt["risk_off"]:
@@ -807,11 +815,12 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list):
             px = _price(tk)
             shares = int(per_usd / px) if px > 0 else 0
             if shares >= 1:
-                _place_us("Buy", tk, shares, imap, todays_actions, price=px)
+                _do("Buy", tk, shares, px)
             else:
-                print(f"  [US momentum] {tk}: ${per_usd:.0f} budget < 1 share (${px:.0f}) — skip")
-    state["last_rebalance"] = date.today().isoformat()
-    _save_us_state(state)
+                print(f"  {tag} {tk}: ${per_usd:.0f} budget < 1 share (${px:.0f}) — skip")
+    if not dry_run:
+        state["last_rebalance"] = date.today().isoformat()
+        _save_us_state(state)
 
 
 def _currency_for(market_group: str) -> str:
