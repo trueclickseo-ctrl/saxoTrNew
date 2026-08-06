@@ -511,6 +511,19 @@ HTML_CONTENT = """<!DOCTYPE html>
             </div>
         </div>
 
+        <div class="glass-card" style="margin-bottom:30px;">
+            <div class="section-title">Strategy Leaderboard (per market)</div>
+            <div class="table-container">
+                <table id="leaderboardTable">
+                    <thead><tr>
+                        <th>Market</th><th>P&amp;L (SEK)</th><th>Sharpe</th><th>Max DD</th>
+                        <th>Win rate</th><th>Trades</th><th>Open</th><th>Status</th>
+                    </tr></thead>
+                    <tbody><tr><td colspan="8" class="empty-state">Loading...</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+
         <div class="two-col delay-2">
             <div class="glass-card">
                 <div class="section-title">Equity Curve (90 Days)</div>
@@ -568,6 +581,19 @@ HTML_CONTENT = """<!DOCTYPE html>
                             <th>Description</th>
                         </tr>
                     </thead>
+                    <tbody><tr><td colspan="7" class="empty-state">Loading...</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="glass-card delay-4">
+            <div class="section-title">Recent Trades</div>
+            <div class="table-container">
+                <table id="recentTradesTable">
+                    <thead><tr>
+                        <th>Date</th><th>Market</th><th>Ticker</th><th>Action</th>
+                        <th>Shares</th><th>Price</th><th>P&amp;L</th>
+                    </tr></thead>
                     <tbody><tr><td colspan="7" class="empty-state">Loading...</td></tr></tbody>
                 </table>
             </div>
@@ -736,7 +762,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                 const positionCount = livePos.length > 0 ? livePos.length : openData.length;
 
                 if (summary && !summary.error) {
-                    updateKPIs(summary, positionCount);
+                    updateKPIs(summary, positionCount, livePositions && livePositions.summary);
                 }
                 
                 if (equity && equity.data && equity.data.length > 0) {
@@ -756,6 +782,8 @@ HTML_CONTENT = """<!DOCTYPE html>
                 // Always update signals and closed trades from DB
                 updateSignalsTable(signalData);
                 updateClosedTradesTable(closedData);
+                fetch('/api/leaderboard').then(r => r.json()).then(d => updateLeaderboard(d.data)).catch(() => {});
+                fetch('/api/trades/recent').then(r => r.json()).then(d => updateRecentTrades(d.data)).catch(() => {});
 
                 document.getElementById('lastUpdated').textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
             } catch (err) {
@@ -764,33 +792,83 @@ HTML_CONTENT = """<!DOCTYPE html>
             }
         }
 
-        function updateKPIs(data, openCount) {
+        function updateKPIs(data, openCount, liveSummary) {
             if (!data) return;
-            const eq = data.total_equity;
             const currency = data.currency || 'SEK';
+            const cash = data.cash_balance;
+            // Mark-to-market equity = available cash + CURRENT market value of the
+            // positions (so unrealized profit/loss shows and moves the number).
+            let eq = data.total_equity;
+            let invested = null;
+            if (cash !== null && cash !== undefined && liveSummary && liveSummary.total_value_sek != null) {
+                eq = cash + liveSummary.total_value_sek;
+                invested = liveSummary.total_value_sek;
+            } else if (cash !== null && cash !== undefined && eq != null) {
+                invested = eq - cash;
+            }
             document.getElementById('kpiEquity').textContent = formatNumber(eq) + ' ' + currency;
-            
+
             const startingCapital = 10000;
             const pct = eq ? ((eq - startingCapital) / startingCapital) * 100 : 0;
             const sign = pct >= 0 ? '+' : '';
             const cls = pct >= 0 ? 'text-success' : 'text-danger';
-            
+
             let subText = `<span class="${cls}">${sign}${formatNumber(pct)}%</span>`;
-            if (data.cash_balance !== null && data.cash_balance !== undefined) {
-                const invested = (eq !== null && eq !== undefined) ? (eq - data.cash_balance) : null;
-                if (invested !== null) subText += ` | Invested: ${formatNumber(invested)} ${currency}`;
-                subText += ` | Cash: ${formatNumber(data.cash_balance)} ${currency}`;
+            if (invested !== null) subText += ` | Invested: ${formatNumber(invested)} ${currency}`;
+            if (cash !== null && cash !== undefined) subText += ` | Cash: ${formatNumber(cash)} ${currency}`;
+            if (data.saxo_total_eur !== null && data.saxo_total_eur !== undefined) {
+                subText += `<br><span style="color:var(--text-secondary)">Saxo account (live): ${formatNumber(data.saxo_total_eur)} ${data.saxo_currency} · cash ${formatNumber(data.saxo_cash_eur)} ${data.saxo_currency}</span>`;
             }
             document.getElementById('kpiEquitySub').innerHTML = subText;
-            
+
             const pnl = data.today_pnl || 0;
             const pnlCls = pnl >= 0 ? 'text-success' : 'text-danger';
             document.getElementById('kpiTodayPnl').innerHTML = `<span class="${pnlCls}">${pnl > 0 ? '+' : ''}${formatNumber(pnl)} ${currency}</span>`;
-            
             document.getElementById('kpiPositions').textContent = `${openCount}/10`;
-            
             document.getElementById('kpiWinRate').textContent = data.win_rate ? formatNumber(data.win_rate) + '%' : '---%';
             document.getElementById('kpiProfitFactor').textContent = `PF: ${data.profit_factor ? formatNumber(data.profit_factor) : '---'} | Trades: ${data.trades_count || 0}`;
+        }
+
+        function updateLeaderboard(rows) {
+            const body = document.querySelector('#leaderboardTable tbody');
+            if (!rows || rows.length === 0) { body.innerHTML = '<tr><td colspan="8" class="empty-state">No data yet</td></tr>'; return; }
+            body.innerHTML = rows.map(r => {
+                const pnlCls = r.pnl_sek >= 0 ? 'text-success' : 'text-danger';
+                const statusColor = r.status === 'Active' ? 'var(--success-color)' : 'var(--neutral-color)';
+                return `<tr>
+                    <td><strong>${r.label || r.market}</strong></td>
+                    <td class="${pnlCls}">${r.pnl_sek >= 0 ? '+' : ''}${formatNumber(r.pnl_sek)}</td>
+                    <td>${r.sharpe != null ? r.sharpe.toFixed(2) : '—'}</td>
+                    <td class="${r.max_dd_pct > 0 ? 'text-danger' : ''}">${r.max_dd_pct ? '-' + formatNumber(r.max_dd_pct) + '%' : '0.0%'}</td>
+                    <td>${r.trades ? formatNumber(r.win_rate) + '%' : '—'}</td>
+                    <td>${r.trades}</td>
+                    <td>${r.open_positions}</td>
+                    <td><span class="badge" style="background:rgba(16,185,129,0.1);color:${statusColor};border:1px solid ${statusColor}">${r.status}</span></td>
+                </tr>`;
+            }).join('');
+        }
+
+        function updateRecentTrades(rows) {
+            const body = document.querySelector('#recentTradesTable tbody');
+            if (!rows || rows.length === 0) { body.innerHTML = '<tr><td colspan="7" class="empty-state">No trades yet</td></tr>'; return; }
+            body.innerHTML = rows.map(t => {
+                const closed = !!t.exit_date;
+                const action = closed ? 'SELL' : 'BUY';
+                const badge = closed ? 'exit' : 'buy';
+                const price = closed ? (t.exit_price != null ? t.exit_price : '-') : (t.entry_price != null ? t.entry_price : '-');
+                const pnl = t.pnl_sek;
+                const pnlHtml = (closed && pnl != null)
+                    ? `<span class="${pnl >= 0 ? 'text-success' : 'text-danger'}">${pnl >= 0 ? '+' : ''}${formatNumber(pnl)} SEK</span>` : '—';
+                return `<tr>
+                    <td>${(t.exit_date || t.entry_date) || '-'}</td>
+                    <td>${t.market_group}</td>
+                    <td><strong>${t.ticker}</strong></td>
+                    <td><span class="badge ${badge}">${action}</span></td>
+                    <td>${t.shares}</td>
+                    <td>${typeof price === 'number' ? price.toFixed(2) : price}</td>
+                    <td>${pnlHtml}</td>
+                </tr>`;
+            }).join('');
         }
 
         function updateWeights(w) {
@@ -1096,6 +1174,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 gl = pf_row['gross_loss'] if pf_row and pf_row['gross_loss'] else 0
                 profit_factor = (gp / gl) if gl > 0 else (gp if gp > 0 else 0)
 
+                # Real Saxo broker account (EUR) — shown SEPARATELY so the actual
+                # account balance is visible, distinct from the ATOS 10k SEK sleeve.
+                saxo_total = saxo_cash = None
+                saxo_cur = 'EUR'
+                _tok = _load_saxo_token()
+                if _tok:
+                    _bal = _saxo_get_balance(_tok)
+                    if _bal:
+                        saxo_total = _bal.get('TotalValue')
+                        saxo_cash = _bal.get('CashBalance')
+                        saxo_cur = _bal.get('Currency', 'EUR')
+
                 self.send_json({
                     "total_equity": atos_equity,
                     "today_pnl": today_pnl,
@@ -1104,7 +1194,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "profit_factor": profit_factor,
                     "cash_balance": atos_cash,
                     "currency": "SEK",
-                    "source": "atos"
+                    "source": "atos",
+                    "saxo_total_eur": saxo_total,
+                    "saxo_cash_eur": saxo_cash,
+                    "saxo_currency": saxo_cur,
                 })
 
             elif path == '/api/equity':
@@ -1215,6 +1308,48 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     })
                 self.send_json({'groups': groups,
                                 'total': sum(gr['count'] for gr in groups)})
+
+            elif path == '/api/leaderboard':
+                import math
+                markets = ['US Equities', 'OMX30', 'CPH25']
+                labels = {'US Equities': 'US (S&P500 + Nasdaq100)',
+                          'OMX30': 'OMX30 (Stockholm)', 'CPH25': 'CPH25 (Copenhagen)'}
+                rows = []
+                for mg in markets:
+                    closed = [r['pnl_sek'] for r in cursor.execute(
+                        "SELECT pnl_sek FROM trades WHERE market_group=? AND exit_date IS NOT NULL AND pnl_sek IS NOT NULL ORDER BY exit_date, id",
+                        (mg,)).fetchall()]
+                    openc = cursor.execute("SELECT COUNT(*) c FROM trades WHERE market_group=? AND exit_date IS NULL",
+                                           (mg,)).fetchone()['c']
+                    n = len(closed); pnl = sum(closed); wins = sum(1 for p in closed if p > 0)
+                    cum = peak = maxdd = 0.0
+                    for p in closed:
+                        cum += p
+                        peak = max(peak, cum)
+                        maxdd = max(maxdd, peak - cum)
+                    sharpe = None
+                    if n >= 2:
+                        mean = pnl / n
+                        sd = math.sqrt(sum((p - mean) ** 2 for p in closed) / (n - 1))
+                        if sd > 0:
+                            sharpe = round(mean / sd * math.sqrt(252), 2)
+                    rows.append({
+                        'market': mg, 'label': labels.get(mg, mg),
+                        'pnl_sek': round(pnl, 2), 'trades': n,
+                        'win_rate': round((wins / n * 100) if n else 0, 1),
+                        'max_dd_pct': round(maxdd / 10000 * 100, 1),
+                        'sharpe': sharpe, 'open_positions': openc,
+                        'status': 'Active' if openc or n else 'Idle',
+                    })
+                self.send_json({'data': rows})
+
+            elif path == '/api/trades/recent':
+                rows = [dict(r) for r in cursor.execute(
+                    "SELECT ticker, market_group, direction, entry_date, exit_date, "
+                    "entry_price, exit_price, shares, pnl_sek, was_profitable "
+                    "FROM trades ORDER BY COALESCE(exit_date, entry_date) DESC, id DESC LIMIT 20"
+                ).fetchall()]
+                self.send_json({'data': rows})
 
             else:
                 self.send_error(404)
