@@ -1,0 +1,35 @@
+# Secrets — NEVER commit these
+saxo_token.json
+.env
+*.env
+
+# ── ATOS v1 — credentials (CRITICAL: never commit) ───────────────
+config/deploy.json           # FTP password for namazic.com upload
+data/atos_risk_state.json    # runtime capital tracker (regenerates)
+
+# ── ATOS v1 — large/generated files ──────────────────────────────
+data/atos.db                 # SQLite database (large, local only)
+data/atos_live.db            # active SQLite DB (local runtime state, not history)
+config/deploy.json           # FTP creds — untracked; ROTATE + purge from history
+dashboard/                   # generated HTML (uploaded to namazic.com)
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+atos/__pycache__/
+
+# Regenerable data — large historical price CSVs, re-downloadable via data_loader.py
+data/*.csv
+!data/instrument_map.csv
+!data/index_map.csv
+
+# Runtime state — regenerates automatically, not meaningful history
+data/daily_state.json
+data/risk_capital.json
+results/
+STOP_TRADING
+
+# OS clutter
+.DS_Store
+Thumbs.db

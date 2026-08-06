@@ -1,0 +1,1131 @@
+import os
+import sqlite3
+import json
+import threading
+import webbrowser
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlparse, parse_qs
+from datetime import datetime
+
+DB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+DB_PATH = os.path.join(DB_DIR, 'atos.db')
+PORT = 8070
+
+def init_db():
+    os.makedirs(DB_DIR, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.executescript("""
+        CREATE TABLE IF NOT EXISTS trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy TEXT NOT NULL DEFAULT 'ATOS_v1',
+            market_group TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            direction TEXT NOT NULL DEFAULT 'BUY',
+            entry_date TEXT NOT NULL,
+            exit_date TEXT,
+            entry_price REAL NOT NULL,
+            exit_price REAL,
+            shares REAL NOT NULL,
+            pnl_sek REAL,
+            commission_sek REAL DEFAULT 0,
+            entry_score REAL,
+            d1_trend REAL,
+            d2_momentum REAL,
+            d3_breakout REAL,
+            d4_mean_revert REAL,
+            d5_volume REAL,
+            exit_reason TEXT,
+            was_profitable INTEGER,
+            stop_price REAL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS signals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            signal_date TEXT NOT NULL,
+            market_group TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            final_score REAL NOT NULL,
+            d1_trend REAL,
+            d2_momentum REAL,
+            d3_breakout REAL,
+            d4_mean_revert REAL,
+            d5_volume REAL,
+            action TEXT NOT NULL,
+            executed INTEGER NOT NULL DEFAULT 0,
+            block_reason TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS detector_weights (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            updated_at TEXT NOT NULL,
+            num_trades_used INTEGER NOT NULL DEFAULT 0,
+            w_trend REAL NOT NULL DEFAULT 1.0,
+            w_momentum REAL NOT NULL DEFAULT 1.0,
+            w_breakout REAL NOT NULL DEFAULT 1.0,
+            w_mean_revert REAL NOT NULL DEFAULT 1.0,
+            w_volume REAL NOT NULL DEFAULT 1.0,
+            note TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS equity_curve (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snap_date TEXT NOT NULL UNIQUE,
+            total_equity_sek REAL NOT NULL,
+            us_equity_sek REAL DEFAULT 0,
+            omx30_equity_sek REAL DEFAULT 0,
+            dax_equity_sek REAL DEFAULT 0,
+            commodities_sek REAL DEFAULT 0,
+            forex_sek REAL DEFAULT 0,
+            open_positions INTEGER DEFAULT 0,
+            trades_today INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS market_allocation (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            alloc_date TEXT NOT NULL,
+            market_group TEXT NOT NULL,
+            allocated_pct REAL NOT NULL,
+            capital_sek REAL NOT NULL,
+            win_rate REAL,
+            profit_factor REAL,
+            note TEXT,
+            UNIQUE(alloc_date, market_group)
+        );
+    """)
+    conn.commit()
+    conn.close()
+
+# ── Saxo API Integration ──────────────────────────────────────────
+TOKEN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'saxo_token.json')
+SIM_BASE = 'https://gateway.saxobank.com/sim/openapi/'
+
+def _load_saxo_token():
+    """Load access token from saxo_token.json if valid."""
+    import time as _time
+    if not os.path.exists(TOKEN_FILE):
+        return None
+    try:
+        with open(TOKEN_FILE) as f:
+            data = json.load(f)
+        token = data.get('access_token', '')
+        obtained = float(data.get('obtained_at', 0))
+        expires_in = int(data.get('expires_in', 1200))
+        if _time.time() > obtained + expires_in - 60:
+            return None  # expired
+        return token
+    except Exception:
+        return None
+
+def _saxo_headers(token):
+    return {'Authorization': f'Bearer {token}'}
+
+def _saxo_get_balance(token):
+    """Get live account balance from Saxo."""
+    import requests
+    try:
+        r = requests.get(SIM_BASE + 'port/v1/balances/me',
+                        headers=_saxo_headers(token), timeout=10)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return None
+
+def _saxo_get_positions(token):
+    """Get live open positions from Saxo."""
+    import requests
+    try:
+        r = requests.get(SIM_BASE + 'port/v1/positions/me',
+                        headers=_saxo_headers(token),
+                        params={'FieldGroups': 'PositionBase,PositionView,DisplayAndFormat'},
+                        timeout=10)
+        if r.status_code == 200:
+            return r.json().get('Data', [])
+    except Exception:
+        pass
+    return []
+
+HTML_CONTENT = """<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ATOS Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        :root[data-theme="dark"] {
+            --bg-color: #0f1117;
+            --surface-color: rgba(26, 29, 46, 0.7);
+            --surface-solid: #1a1d2e;
+            --text-primary: #e2e8f0;
+            --text-secondary: #94a3b8;
+            --border-color: rgba(255, 255, 255, 0.1);
+            --accent-gradient: linear-gradient(135deg, #8b5cf6, #3b82f6);
+            --accent-color: #6366f1;
+            --success-color: #10b981;
+            --danger-color: #ef4444;
+            --warning-color: #f59e0b;
+            --neutral-color: #64748b;
+        }
+
+        :root[data-theme="light"] {
+            --bg-color: #f8fafc;
+            --surface-color: rgba(255, 255, 255, 0.8);
+            --surface-solid: #ffffff;
+            --text-primary: #1e293b;
+            --text-secondary: #475569;
+            --border-color: rgba(0, 0, 0, 0.1);
+            --accent-gradient: linear-gradient(135deg, #6d28d9, #2563eb);
+            --accent-color: #4f46e5;
+            --success-color: #059669;
+            --danger-color: #dc2626;
+            --warning-color: #d97706;
+            --neutral-color: #94a3b8;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            transition: background-color 0.3s, color 0.3s, border-color 0.3s;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            line-height: 1.5;
+            padding-bottom: 40px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 0;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 30px;
+            animation: fadeIn 0.5s ease-out;
+        }
+
+        .logo {
+            font-size: 24px;
+            font-weight: 700;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            background-color: var(--success-color);
+            border-radius: 50%;
+            display: inline-block;
+            box-shadow: 0 0 10px var(--success-color);
+            animation: pulse 2s infinite;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .last-updated {
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .theme-toggle {
+            background: none;
+            border: none;
+            color: var(--text-primary);
+            cursor: pointer;
+            font-size: 20px;
+            padding: 8px;
+            border-radius: 50%;
+            background-color: var(--surface-solid);
+            border: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .glass-card {
+            background: var(--surface-color);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 24px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            animation: fadeInUp 0.5s ease-out backwards;
+        }
+
+        /* KPI Row */
+        .kpi-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .kpi-card {
+            text-align: center;
+        }
+
+        .kpi-card h3 {
+            font-size: 14px;
+            color: var(--text-secondary);
+            font-weight: 500;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .kpi-value {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .kpi-sub {
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .text-success { color: var(--success-color); }
+        .text-danger { color: var(--danger-color); }
+
+        /* Two Column Layout */
+        .two-col {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 24px;
+        }
+        
+        @media (max-width: 900px) {
+            .two-col {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        /* Tables */
+        .table-container {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+            font-size: 14px;
+        }
+
+        th, td {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        th {
+            color: var(--text-secondary);
+            font-weight: 500;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        th:hover {
+            color: var(--text-primary);
+        }
+
+        tbody tr:hover {
+            background-color: rgba(255, 255, 255, 0.02);
+        }
+
+        .badge {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .badge.buy { background-color: rgba(16, 185, 129, 0.1); color: var(--success-color); border: 1px solid rgba(16, 185, 129, 0.2); }
+        .badge.exit { background-color: rgba(239, 68, 68, 0.1); color: var(--danger-color); border: 1px solid rgba(239, 68, 68, 0.2); }
+        .badge.blocked { background-color: rgba(245, 158, 11, 0.1); color: var(--warning-color); border: 1px solid rgba(245, 158, 11, 0.2); }
+
+        /* Score Pills */
+        .score-pill {
+            display: inline-block;
+            width: 28px;
+            height: 20px;
+            line-height: 20px;
+            text-align: center;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-right: 2px;
+            color: white;
+        }
+        
+        .score-row {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+        }
+
+        /* Weight Bars */
+        .weight-item {
+            margin-bottom: 15px;
+        }
+        
+        .weight-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 14px;
+            margin-bottom: 6px;
+        }
+
+        .weight-bar-bg {
+            height: 8px;
+            background-color: var(--border-color);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .weight-bar-fill {
+            height: 100%;
+            background: var(--accent-gradient);
+            border-radius: 4px;
+            transition: width 1s ease-out;
+        }
+
+        footer {
+            text-align: center;
+            padding: 40px 0 20px;
+            color: var(--text-secondary);
+            font-size: 14px;
+            border-top: 1px solid var(--border-color);
+            margin-top: 40px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-secondary);
+        }
+
+        /* Animations */
+        @keyframes pulse {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .delay-1 { animation-delay: 0.1s; }
+        .delay-2 { animation-delay: 0.2s; }
+        .delay-3 { animation-delay: 0.3s; }
+        .delay-4 { animation-delay: 0.4s; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">
+                <span class="status-dot"></span>
+                ATOS <span style="font-weight: 400; font-size: 18px; color: var(--text-secondary)">Algorithmic Trading OS</span>
+            </div>
+            <div class="header-actions">
+                <span class="last-updated" id="lastUpdated">Updating...</span>
+                <button class="theme-toggle" id="themeToggle" title="Toggle Theme">
+                    🌙
+                </button>
+            </div>
+        </header>
+
+        <div class="kpi-row delay-1">
+            <div class="glass-card kpi-card">
+                <h3>Total Equity</h3>
+                <div class="kpi-value" id="kpiEquity">--- SEK</div>
+                <div class="kpi-sub" id="kpiEquitySub">---</div>
+            </div>
+            <div class="glass-card kpi-card">
+                <h3>Today's P&L</h3>
+                <div class="kpi-value" id="kpiTodayPnl">---</div>
+                <div class="kpi-sub">Realized & Unrealized</div>
+            </div>
+            <div class="glass-card kpi-card">
+                <h3>Open Positions</h3>
+                <div class="kpi-value" id="kpiPositions">0/10</div>
+                <div class="kpi-sub">Active Trades</div>
+            </div>
+            <div class="glass-card kpi-card">
+                <h3>Algorithm Stats</h3>
+                <div class="kpi-value" id="kpiWinRate">---%</div>
+                <div class="kpi-sub" id="kpiProfitFactor">PF: --- | Trades: 0</div>
+            </div>
+        </div>
+
+        <div class="two-col delay-2">
+            <div class="glass-card">
+                <div class="section-title">Equity Curve (90 Days)</div>
+                <div style="height: 300px; position: relative;">
+                    <canvas id="equityChart"></canvas>
+                </div>
+            </div>
+            
+            <div class="glass-card">
+                <div class="section-title">Algorithm Brain Weights</div>
+                <div id="weightsContainer">
+                    <div class="empty-state">Loading...</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="two-col delay-3" style="margin-top: 24px;">
+            <div class="glass-card" style="grid-column: 1 / -1;">
+                <div class="section-title">Today's Signals</div>
+                <div class="table-container">
+                    <table id="signalsTable">
+                        <thead>
+                            <tr>
+                                <th>Action</th>
+                                <th>Ticker</th>
+                                <th>Market</th>
+                                <th>Score</th>
+                                <th>D1-D5 Breakdown</th>
+                                <th>Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody><tr><td colspan="6" class="empty-state">Loading...</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="glass-card delay-4">
+            <div class="section-title">Open Positions (Portfolio)</div>
+            <div class="table-container">
+                <table id="openPositionsTable">
+                    <thead>
+                        <tr>
+                            <th>Ticker</th>
+                            <th>Exchange</th>
+                            <th>Shares</th>
+                            <th>Entry Price</th>
+                            <th>Entry Date</th>
+                            <th>P&L</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody><tr><td colspan="7" class="empty-state">Loading...</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="glass-card delay-4">
+            <div class="section-title">Trade History (Closed)</div>
+            <div class="table-container">
+                <table id="tradeHistoryTable">
+                    <thead>
+                        <tr>
+                            <th>Ticker</th>
+                            <th>Market</th>
+                            <th>Entry Date</th>
+                            <th>Exit Date</th>
+                            <th>Shares</th>
+                            <th>P&L</th>
+                            <th>Exit Reason</th>
+                            <th>D1-D5 Breakdown</th>
+                        </tr>
+                    </thead>
+                    <tbody><tr><td colspan="8" class="empty-state">Loading...</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+
+        <footer>
+            ATOS v3 &middot; Saxo SIM (Live) &middot; localhost:8070
+        </footer>
+    </div>
+
+    <script>
+        // Charts initialization (must be declared before setTheme)
+        let equityChartInstance = null;
+
+        // Theme Management
+        const themeToggle = document.getElementById('themeToggle');
+        const htmlElement = document.documentElement;
+        
+        function setTheme(theme) {
+            htmlElement.setAttribute('data-theme', theme);
+            localStorage.setItem('theme', theme);
+            themeToggle.innerHTML = theme === 'dark' ? '☀️' : '🌙';
+            updateChartTheme();
+        }
+
+        const savedTheme = localStorage.getItem('theme') || 'dark';
+        setTheme(savedTheme);
+
+        themeToggle.addEventListener('click', () => {
+            const currentTheme = htmlElement.getAttribute('data-theme');
+            setTheme(currentTheme === 'dark' ? 'light' : 'dark');
+        });
+
+        function updateChartTheme() {
+            const isDark = htmlElement.getAttribute('data-theme') === 'dark';
+            const textColor = isDark ? '#94a3b8' : '#475569';
+            const gridColor = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)';
+            
+            if (equityChartInstance) {
+                equityChartInstance.options.scales.x.ticks.color = textColor;
+                equityChartInstance.options.scales.y.ticks.color = textColor;
+                equityChartInstance.options.scales.x.grid.color = gridColor;
+                equityChartInstance.options.scales.y.grid.color = gridColor;
+                equityChartInstance.update();
+            }
+        }
+
+        function initEquityChart(labels, data) {
+            const ctx = document.getElementById('equityChart').getContext('2d');
+            
+            if (equityChartInstance) {
+                equityChartInstance.destroy();
+            }
+
+            if (!labels || labels.length === 0) {
+                return;
+            }
+
+            const isDark = htmlElement.getAttribute('data-theme') === 'dark';
+            
+            const gradient = ctx.createLinearGradient(0, 0, 0, 300);
+            gradient.addColorStop(0, 'rgba(99, 102, 241, 0.5)');
+            gradient.addColorStop(1, 'rgba(99, 102, 241, 0.0)');
+
+            equityChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Total Equity (SEK)',
+                        data: data,
+                        borderColor: '#6366f1',
+                        backgroundColor: gradient,
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        pointHoverRadius: 4,
+                        fill: true,
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: { mode: 'index', intersect: false }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' },
+                            ticks: { color: isDark ? '#94a3b8' : '#475569', maxTicksLimit: 10 }
+                        },
+                        y: {
+                            grid: { color: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' },
+                            ticks: { color: isDark ? '#94a3b8' : '#475569' }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Helper functions
+        function formatNumber(num) {
+            if (num === null || num === undefined) return '---';
+            return parseFloat(num).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function getScoreColor(val) {
+            if (val === null || val === undefined) return '#64748b';
+            if (val > 0.5) return '#10b981';
+            if (val > 0) return '#34d399';
+            if (val < -0.5) return '#ef4444';
+            if (val < 0) return '#f87171';
+            return '#64748b';
+        }
+
+        function generateScorePills(d1, d2, d3, d4, d5) {
+            const vals = [d1, d2, d3, d4, d5];
+            return `<div class="score-row">` + vals.map(v => 
+                `<span class="score-pill" style="background-color: ${getScoreColor(v)}">${v !== null ? v.toFixed(1) : '-'}</span>`
+            ).join('') + `</div>`;
+        }
+
+        // Fetch and Update Data
+        async function fetchDashboardData() {
+            try {
+                document.getElementById('lastUpdated').textContent = 'Updating...';
+
+                const [summary, equity, open, closed, signals, weights, livePositions] = await Promise.all([
+                    fetch('/api/summary').then(r => r.json()).catch(e => ({ error: e.message })),
+                    fetch('/api/equity').then(r => r.json()).catch(e => ({ data: [] })),
+                    fetch('/api/trades/open').then(r => r.json()).catch(e => ({ data: [] })),
+                    fetch('/api/trades/closed').then(r => r.json()).catch(e => ({ data: [] })),
+                    fetch('/api/signals').then(r => r.json()).catch(e => ({ data: [] })),
+                    fetch('/api/weights').then(r => r.json()).catch(e => ({ current: null })),
+                    fetch('/api/positions/live').then(r => r.json()).catch(e => ({ data: [] }))
+                ]);
+
+                const livePos = (livePositions && livePositions.data) || [];
+                const openData = (open && open.data) || [];
+                const closedData = (closed && closed.data) || [];
+                const signalData = (signals && signals.data) || [];
+                
+                // Use live position count if available, otherwise DB count
+                const positionCount = livePos.length > 0 ? livePos.length : openData.length;
+
+                if (summary && !summary.error) {
+                    updateKPIs(summary, positionCount);
+                }
+                
+                if (equity && equity.data && equity.data.length > 0) {
+                    const labels = equity.data.map(d => d.snap_date);
+                    const data = equity.data.map(d => d.total_equity_sek);
+                    initEquityChart(labels, data);
+                }
+
+                updateWeights(weights ? weights.current : null);
+                
+                // Update tables - use live positions if available
+                if (livePos.length > 0) {
+                    updateLivePositions(livePositions);
+                } else {
+                    updateTables(openData, closedData, signalData);
+                }
+                // Always update signals and closed trades from DB
+                updateSignalsTable(signalData);
+                updateClosedTradesTable(closedData);
+
+                document.getElementById('lastUpdated').textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
+            } catch (err) {
+                console.error('Dashboard fetch error:', err);
+                document.getElementById('lastUpdated').textContent = `Error: ${err.message}`;
+            }
+        }
+
+        function updateKPIs(data, openCount) {
+            if (!data) return;
+            const eq = data.total_equity;
+            const currency = data.currency || 'SEK';
+            document.getElementById('kpiEquity').textContent = formatNumber(eq) + ' ' + currency;
+            
+            const startingCapital = 10000;
+            const pct = eq ? ((eq - startingCapital) / startingCapital) * 100 : 0;
+            const sign = pct >= 0 ? '+' : '';
+            const cls = pct >= 0 ? 'text-success' : 'text-danger';
+            
+            let subText = `<span class="${cls}">${sign}${formatNumber(pct)}%</span>`;
+            if (data.cash_balance !== null && data.cash_balance !== undefined) {
+                subText += ` | Cash: ${formatNumber(data.cash_balance)} ${currency}`;
+            }
+            if (data.source === 'saxo_live') {
+                subText += ' | <span style="color: var(--success-color)">● LIVE</span>';
+            }
+            document.getElementById('kpiEquitySub').innerHTML = subText;
+            
+            const pnl = data.today_pnl || 0;
+            const pnlCls = pnl >= 0 ? 'text-success' : 'text-danger';
+            document.getElementById('kpiTodayPnl').innerHTML = `<span class="${pnlCls}">${pnl > 0 ? '+' : ''}${formatNumber(pnl)} ${currency}</span>`;
+            
+            document.getElementById('kpiPositions').textContent = `${openCount}/10`;
+            
+            document.getElementById('kpiWinRate').textContent = data.win_rate ? formatNumber(data.win_rate) + '%' : '---%';
+            document.getElementById('kpiProfitFactor').textContent = `PF: ${data.profit_factor ? formatNumber(data.profit_factor) : '---'} | Trades: ${data.trades_count || 0}`;
+        }
+
+        function updateWeights(w) {
+            const container = document.getElementById('weightsContainer');
+            if (!w) {
+                container.innerHTML = '<div class="empty-state">No weights learned yet</div>';
+                return;
+            }
+            
+            const maxW = 2.5; // based on prompt req
+            const names = ['w_trend', 'w_momentum', 'w_breakout', 'w_mean_revert', 'w_volume'];
+            const labels = ['Trend (D1)', 'Momentum (D2)', 'Breakout (D3)', 'Mean Revert (D4)', 'Volume (D5)'];
+            
+            let html = '';
+            names.forEach((name, i) => {
+                const val = w[name] || 1.0;
+                const pct = Math.min((val / maxW) * 100, 100);
+                html += `
+                    <div class="weight-item">
+                        <div class="weight-header">
+                            <span>${labels[i]}</span>
+                            <strong>${val.toFixed(2)}</strong>
+                        </div>
+                        <div class="weight-bar-bg">
+                            <div class="weight-bar-fill" style="width: ${pct}%"></div>
+                        </div>
+                    </div>
+                `;
+            });
+            container.innerHTML = html;
+        }
+
+        function updateLivePositions(liveData) {
+            const openBody = document.querySelector('#openPositionsTable tbody');
+            const positions = (liveData && liveData.data) || [];
+            
+            if (positions.length === 0) {
+                // Don't overwrite if we already have DB positions
+                return;
+            }
+            
+            openBody.innerHTML = positions.map(p => {
+                const pnlCls = p.pnl >= 0 ? 'text-success' : 'text-danger';
+                return `
+                    <tr>
+                        <td><strong>${p.ticker}</strong></td>
+                        <td>${p.market_group}</td>
+                        <td>${p.shares}</td>
+                        <td>${p.entry_price ? p.entry_price.toFixed(2) : '-'}</td>
+                        <td>${p.entry_date ? p.entry_date.substring(0, 10) : '-'}</td>
+                        <td class="${pnlCls}">${p.pnl >= 0 ? '+' : ''}${formatNumber(p.pnl)} ${p.currency}</td>
+                        <td>${p.description}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function updateSignalsTable(signals) {
+            const sigBody = document.querySelector('#signalsTable tbody');
+            if (!signals || signals.length === 0) {
+                sigBody.innerHTML = '<tr><td colspan="6" class="empty-state">No signals today</td></tr>';
+            } else {
+                sigBody.innerHTML = signals.map(s => {
+                    const badgeClass = s.action === 'BUY' ? 'buy' : s.action === 'EXIT' ? 'exit' : 'blocked';
+                    return `
+                        <tr>
+                            <td><span class="badge ${badgeClass}">${s.action}</span></td>
+                            <td><strong>${s.ticker}</strong></td>
+                            <td>${s.market_group}</td>
+                            <td>${s.final_score ? s.final_score.toFixed(2) : '-'}</td>
+                            <td>${generateScorePills(s.d1_trend, s.d2_momentum, s.d3_breakout, s.d4_mean_revert, s.d5_volume)}</td>
+                            <td>${s.block_reason || '-'}</td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+        }
+
+        function updateClosedTradesTable(closed) {
+            const histBody = document.querySelector('#tradeHistoryTable tbody');
+            if (!closed || closed.length === 0) {
+                histBody.innerHTML = '<tr><td colspan="8" class="empty-state">No closed trades yet</td></tr>';
+            } else {
+                histBody.innerHTML = closed.map(t => {
+                    const pnlCls = t.pnl_sek >= 0 ? 'text-success' : 'text-danger';
+                    return `
+                        <tr>
+                            <td><strong>${t.ticker}</strong></td>
+                            <td>${t.market_group}</td>
+                            <td>${t.entry_date}</td>
+                            <td>${t.exit_date}</td>
+                            <td>${t.shares}</td>
+                            <td class="${pnlCls}">${t.pnl_sek > 0 ? '+' : ''}${formatNumber(t.pnl_sek)}</td>
+                            <td>${t.exit_reason || '-'}</td>
+                            <td>${generateScorePills(t.d1_trend, t.d2_momentum, t.d3_breakout, t.d4_mean_revert, t.d5_volume)}</td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+        }
+
+        function updateTables(open, closed, signals) {
+            // Signals
+            const sigBody = document.querySelector('#signalsTable tbody');
+            if (!signals || signals.length === 0) {
+                sigBody.innerHTML = '<tr><td colspan="6" class="empty-state">No signals today</td></tr>';
+            } else {
+                sigBody.innerHTML = signals.map(s => {
+                    const badgeClass = s.action === 'BUY' ? 'buy' : s.action === 'EXIT' ? 'exit' : 'blocked';
+                    return `
+                        <tr>
+                            <td><span class="badge ${badgeClass}">${s.action}</span></td>
+                            <td><strong>${s.ticker}</strong></td>
+                            <td>${s.market_group}</td>
+                            <td>${s.final_score ? s.final_score.toFixed(2) : '-'}</td>
+                            <td>${generateScorePills(s.d1_trend, s.d2_momentum, s.d3_breakout, s.d4_mean_revert, s.d5_volume)}</td>
+                            <td>${s.block_reason || '-'}</td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+
+            // Open Positions
+            const openBody = document.querySelector('#openPositionsTable tbody');
+            if (!open || open.length === 0) {
+                openBody.innerHTML = '<tr><td colspan="7" class="empty-state">No open positions</td></tr>';
+            } else {
+                openBody.innerHTML = open.map(p => `
+                    <tr>
+                        <td><strong>${p.ticker}</strong></td>
+                        <td>${p.market_group}</td>
+                        <td>${p.shares}</td>
+                        <td>${p.entry_price}</td>
+                        <td>${p.entry_date}</td>
+                        <td>${p.entry_score ? p.entry_score.toFixed(2) : '-'}</td>
+                        <td>${generateScorePills(p.d1_trend, p.d2_momentum, p.d3_breakout, p.d4_mean_revert, p.d5_volume)}</td>
+                    </tr>
+                `).join('');
+            }
+
+            // History
+            const histBody = document.querySelector('#tradeHistoryTable tbody');
+            if (!closed || closed.length === 0) {
+                histBody.innerHTML = '<tr><td colspan="8" class="empty-state">No closed trades yet</td></tr>';
+            } else {
+                histBody.innerHTML = closed.map(t => {
+                    const pnlCls = t.pnl_sek >= 0 ? 'text-success' : 'text-danger';
+                    return `
+                        <tr>
+                            <td><strong>${t.ticker}</strong></td>
+                            <td>${t.market_group}</td>
+                            <td>${t.entry_date}</td>
+                            <td>${t.exit_date}</td>
+                            <td>${t.shares}</td>
+                            <td class="${pnlCls}">${t.pnl_sek > 0 ? '+' : ''}${formatNumber(t.pnl_sek)}</td>
+                            <td>${t.exit_reason || '-'}</td>
+                            <td>${generateScorePills(t.d1_trend, t.d2_momentum, t.d3_breakout, t.d4_mean_revert, t.d5_volume)}</td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+        }
+
+        // Start
+        fetchDashboardData();
+        setInterval(fetchDashboardData, 60000);
+    </script>
+</body>
+</html>"""
+
+def get_db_conn():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+class DashboardHandler(BaseHTTPRequestHandler):
+    def send_json(self, data, status=200):
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode('utf-8'))
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path == '/':
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html')
+            self.end_headers()
+            self.wfile.write(HTML_CONTENT.encode('utf-8'))
+            return
+
+        if not path.startswith('/api/'):
+            self.send_error(404)
+            return
+
+        try:
+            conn = get_db_conn()
+            cursor = conn.cursor()
+
+            if path == '/api/summary':
+                # Try live Saxo balance first
+                saxo_token = _load_saxo_token()
+                live_equity = None
+                live_pnl = None
+                live_cash = None
+                live_currency = 'EUR'
+                if saxo_token:
+                    balance = _saxo_get_balance(saxo_token)
+                    if balance:
+                        live_equity = balance.get('TotalValue')
+                        live_cash = balance.get('CashBalance')
+                        live_pnl = balance.get('UnrealizedPositionsValue', 0)
+                        live_currency = balance.get('Currency', 'EUR')
+
+                # Fallback to DB equity
+                if live_equity is None:
+                    cursor.execute("SELECT total_equity_sek FROM equity_curve ORDER BY snap_date DESC LIMIT 1")
+                    eq_row = cursor.fetchone()
+                    live_equity = eq_row['total_equity_sek'] if eq_row else 10000.0
+
+                # DB-based P&L for today (closed trades)
+                cursor.execute("SELECT SUM(pnl_sek) as tpnl FROM trades WHERE exit_date LIKE ?", (datetime.now().strftime('%Y-%m-%d') + '%',))
+                tpnl_row = cursor.fetchone()
+                db_today_pnl = tpnl_row['tpnl'] if tpnl_row and tpnl_row['tpnl'] else 0.0
+
+                # Use live unrealized P&L if available, add to closed P&L
+                total_today_pnl = db_today_pnl + (live_pnl if live_pnl else 0)
+
+                cursor.execute("SELECT COUNT(*) as cnt, SUM(CASE WHEN was_profitable = 1 THEN 1 ELSE 0 END) as wins FROM trades WHERE exit_date IS NOT NULL")
+                stats_row = cursor.fetchone()
+                trades_count = stats_row['cnt'] if stats_row else 0
+                wins = stats_row['wins'] if stats_row else 0
+                win_rate = (wins / trades_count * 100) if trades_count > 0 else 0
+
+                cursor.execute("SELECT SUM(CASE WHEN pnl_sek > 0 THEN pnl_sek ELSE 0 END) as gross_profit, SUM(CASE WHEN pnl_sek < 0 THEN ABS(pnl_sek) ELSE 0 END) as gross_loss FROM trades WHERE exit_date IS NOT NULL")
+                pf_row = cursor.fetchone()
+                gp = pf_row['gross_profit'] if pf_row and pf_row['gross_profit'] else 0
+                gl = pf_row['gross_loss'] if pf_row and pf_row['gross_loss'] else 0
+                profit_factor = (gp / gl) if gl > 0 else (gp if gp > 0 else 0)
+
+                self.send_json({
+                    "total_equity": live_equity,
+                    "today_pnl": total_today_pnl,
+                    "trades_count": trades_count,
+                    "win_rate": win_rate,
+                    "profit_factor": profit_factor,
+                    "cash_balance": live_cash,
+                    "currency": live_currency,
+                    "source": "saxo_live" if saxo_token else "database"
+                })
+
+            elif path == '/api/equity':
+                cursor.execute("SELECT snap_date, total_equity_sek FROM equity_curve ORDER BY snap_date DESC LIMIT 90")
+                rows = [dict(r) for r in cursor.fetchall()]
+                rows.reverse() # chronological
+                self.send_json({"data": rows})
+
+            elif path == '/api/trades/open':
+                cursor.execute("SELECT * FROM trades WHERE exit_date IS NULL ORDER BY entry_date DESC")
+                rows = [dict(r) for r in cursor.fetchall()]
+                self.send_json({"data": rows})
+
+            elif path == '/api/trades/closed':
+                cursor.execute("SELECT * FROM trades WHERE exit_date IS NOT NULL ORDER BY exit_date DESC LIMIT 100")
+                rows = [dict(r) for r in cursor.fetchall()]
+                self.send_json({"data": rows})
+
+            elif path == '/api/signals':
+                cursor.execute("SELECT * FROM signals ORDER BY id DESC LIMIT 200")
+                rows = [dict(r) for r in cursor.fetchall()]
+                self.send_json({"data": rows})
+
+            elif path == '/api/weights':
+                cursor.execute("SELECT * FROM detector_weights ORDER BY id DESC LIMIT 1")
+                current = cursor.fetchone()
+                self.send_json({"current": dict(current) if current else None})
+
+            elif path == '/api/positions/live':
+                saxo_token = _load_saxo_token()
+                if saxo_token:
+                    positions = _saxo_get_positions(saxo_token)
+                    formatted = []
+                    for p in positions:
+                        disp = p.get('DisplayAndFormat', {})
+                        pbase = p.get('PositionBase', {})
+                        pview = p.get('PositionView', {})
+                        # Derive market from Saxo symbol suffix
+                        sym = disp.get('Symbol', '?')
+                        if ':xome' in sym:
+                            mkt = 'OMX30'
+                        elif ':xams' in sym:
+                            mkt = 'EU'
+                        elif ':xnas' in sym or ':xnys' in sym:
+                            mkt = 'US'
+                        elif ':xetr' in sym:
+                            mkt = 'DAX'
+                        else:
+                            mkt = disp.get('Currency', '?')
+                        formatted.append({
+                            'ticker': sym,
+                            'description': disp.get('Description', '?'),
+                            'market_group': mkt,
+                            'shares': pbase.get('Amount', 0),
+                            'entry_price': pbase.get('OpenPrice', 0),
+                            'entry_date': pbase.get('ExecutionTimeOpen', '?'),
+                            'current_price': pview.get('CurrentPrice', 0),
+                            'pnl': pview.get('ProfitLossOnTrade', 0),
+                            'pnl_pct': pview.get('ProfitLossOnTradeInPercentage', 0),
+                            'currency': disp.get('Currency', '?'),
+                            'market_value': pview.get('MarketValue', 0),
+                        })
+                    self.send_json({'data': formatted, 'source': 'saxo_live'})
+                else:
+                    self.send_json({'data': [], 'source': 'unavailable', 'error': 'Token expired or missing'})
+
+            else:
+                self.send_error(404)
+
+        except Exception as e:
+            self.send_json({"error": str(e)}, status=500)
+        finally:
+            conn.close()
+
+def run_server():
+    server_address = ('', PORT)
+    httpd = HTTPServer(server_address, DashboardHandler)
+    print(f"ATOS Dashboard running at http://localhost:{PORT}")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    httpd.server_close()
+
+if __name__ == '__main__':
+    init_db()
+    
+    # Run server in a thread so we can open browser
+    server_thread = threading.Thread(target=run_server)
+    server_thread.daemon = True
+    server_thread.start()
+    
+    time.sleep(0.5)
+    webbrowser.open(f'http://localhost:{PORT}')
+    
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("Shutting down...")
