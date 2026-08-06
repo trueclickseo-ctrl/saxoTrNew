@@ -9,7 +9,10 @@ from urllib.parse import urlparse, parse_qs
 from datetime import datetime
 
 DB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
-DB_PATH = os.path.join(DB_DIR, 'atos.db')
+# The ATOS engine (atos/database.py) writes to atos_live.db — the dashboard MUST
+# read the same file or every DB-backed panel (signals, trades, weights, stats,
+# equity curve) shows up empty.
+DB_PATH = os.path.join(DB_DIR, 'atos_live.db')
 PORT = 8070
 
 def init_db():
@@ -501,6 +504,13 @@ HTML_CONTENT = """<!DOCTYPE html>
             </div>
         </div>
 
+        <div class="glass-card" style="margin-bottom:30px;">
+            <div class="section-title">Market Status</div>
+            <div id="marketStatus" style="display:flex;flex-wrap:wrap;gap:16px;">
+                <div class="empty-state">Loading...</div>
+            </div>
+        </div>
+
         <div class="two-col delay-2">
             <div class="glass-card">
                 <div class="section-title">Equity Curve (90 Days)</div>
@@ -536,6 +546,11 @@ HTML_CONTENT = """<!DOCTYPE html>
                     </table>
                 </div>
             </div>
+        </div>
+
+        <div class="glass-card delay-4">
+            <div class="section-title">Tradeable Universe (stock-only: US · OMX30 · CPH25)</div>
+            <div id="universeContainer"><div class="empty-state">Loading...</div></div>
         </div>
 
         <div class="glass-card delay-4">
@@ -940,9 +955,63 @@ HTML_CONTENT = """<!DOCTYPE html>
             }
         }
 
+        function updateUniverse(resp) {
+            const c = document.getElementById('universeContainer');
+            if (!resp || !resp.groups) { c.innerHTML = '<div class="empty-state">Unavailable</div>'; return; }
+            let html = '';
+            resp.groups.forEach(g => {
+                html += `<div style="margin-bottom:18px;">
+                    <div class="weight-header">
+                        <span><strong>${g.market_group}</strong></span>
+                        <span class="kpi-sub">${g.tradable}/${g.count} tradable</span>
+                    </div>
+                    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">` +
+                    g.tickers.map(t =>
+                        `<span class="score-pill" title="${t.mapped ? 'mapped — tradable' : 'not mapped yet'}"
+                               style="width:auto;padding:0 8px;background-color:${t.mapped ? '#10b981' : '#64748b'}">${t.ticker}</span>`
+                    ).join('') +
+                    `</div></div>`;
+            });
+            c.innerHTML = html;
+        }
+
+        function marketOpenNow(tz, o, c) {
+            const parts = new Intl.DateTimeFormat('en-US', {timeZone: tz, weekday: 'short',
+                hour: '2-digit', minute: '2-digit', hour12: false}).formatToParts(new Date());
+            const wd = parts.find(p => p.type === 'weekday').value;
+            if (wd === 'Sat' || wd === 'Sun') return false;
+            let h = parseInt(parts.find(p => p.type === 'hour').value);
+            const m = parseInt(parts.find(p => p.type === 'minute').value);
+            if (h === 24) h = 0;
+            const cur = h * 60 + m;
+            return cur >= (o[0] * 60 + o[1]) && cur < (c[0] * 60 + c[1]);
+        }
+        function updateMarketStatus() {
+            const mkts = [
+                {name: 'US (NYSE / Nasdaq)', tz: 'America/New_York', o: [9,30], c: [16,0], hours: '09:30–16:00 ET'},
+                {name: 'OMX30 (Stockholm)',  tz: 'Europe/Stockholm', o: [9,0],  c: [17,30], hours: '09:00–17:30 CET'},
+                {name: 'CPH25 (Copenhagen)', tz: 'Europe/Copenhagen', o: [9,0], c: [17,0],  hours: '09:00–17:00 CET'},
+            ];
+            document.getElementById('marketStatus').innerHTML = mkts.map(mk => {
+                const open = marketOpenNow(mk.tz, mk.o, mk.c);
+                const color = open ? 'var(--success-color)' : 'var(--neutral-color)';
+                return `<div style="flex:1;min-width:220px;padding:14px;border:1px solid var(--border-color);border-radius:10px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <strong>${mk.name}</strong>
+                        <span class="badge" style="background:${open?'rgba(16,185,129,0.12)':'rgba(100,116,139,0.12)'};color:${color};border:1px solid ${color}">${open ? 'OPEN' : 'CLOSED'}</span>
+                    </div>
+                    <div class="kpi-sub" style="margin-top:6px;">${mk.hours}</div>
+                </div>`;
+            }).join('');
+        }
+
         // Start
         fetchDashboardData();
         setInterval(fetchDashboardData, 60000);
+        // Universe rarely changes — fetch once at load.
+        fetch('/api/universe').then(r => r.json()).then(updateUniverse).catch(() => {});
+        updateMarketStatus();
+        setInterval(updateMarketStatus, 30000);
     </script>
 </body>
 </html>"""
@@ -980,38 +1049,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
             cursor = conn.cursor()
 
             if path == '/api/summary':
-                # Try live Saxo balance first
-                saxo_token = _load_saxo_token()
-                live_equity = None
-                live_pnl = None
-                live_cash = None
-                live_currency = 'EUR'
-                if saxo_token:
-                    balance = _saxo_get_balance(saxo_token)
-                    if balance:
-                        live_equity = balance.get('TotalValue')
-                        live_cash = balance.get('CashBalance')
-                        live_pnl = balance.get('UnrealizedPositionsValue', 0)
-                        live_currency = balance.get('Currency', 'EUR')
+                # ATOS STRATEGY equity (10,000 SEK baseline) — deliberately NOT
+                # the raw Saxo demo balance (~€999k), which would read +9,899%.
+                cursor.execute("SELECT total_equity_sek FROM equity_curve ORDER BY snap_date DESC LIMIT 1")
+                eq_row = cursor.fetchone()
+                atos_equity = eq_row['total_equity_sek'] if eq_row else 10000.0
 
-                # Fallback to DB equity
-                if live_equity is None:
-                    cursor.execute("SELECT total_equity_sek FROM equity_curve ORDER BY snap_date DESC LIMIT 1")
-                    eq_row = cursor.fetchone()
-                    live_equity = eq_row['total_equity_sek'] if eq_row else 10000.0
+                # Cash from the ATOS risk-state file (same source the engine sizes off)
+                atos_cash = None
+                try:
+                    _rs = os.path.join(DB_DIR, 'atos_risk_state.json')
+                    if os.path.exists(_rs):
+                        with open(_rs) as _f:
+                            atos_cash = json.load(_f).get('available_cash_sek')
+                except Exception:
+                    atos_cash = None
 
-                # DB-based P&L for today (closed trades)
+                # Today's realized P&L (closed trades) in SEK
                 cursor.execute("SELECT SUM(pnl_sek) as tpnl FROM trades WHERE exit_date LIKE ?", (datetime.now().strftime('%Y-%m-%d') + '%',))
                 tpnl_row = cursor.fetchone()
-                db_today_pnl = tpnl_row['tpnl'] if tpnl_row and tpnl_row['tpnl'] else 0.0
-
-                # Use live unrealized P&L if available, add to closed P&L
-                total_today_pnl = db_today_pnl + (live_pnl if live_pnl else 0)
+                today_pnl = tpnl_row['tpnl'] if tpnl_row and tpnl_row['tpnl'] else 0.0
 
                 cursor.execute("SELECT COUNT(*) as cnt, SUM(CASE WHEN was_profitable = 1 THEN 1 ELSE 0 END) as wins FROM trades WHERE exit_date IS NOT NULL")
                 stats_row = cursor.fetchone()
                 trades_count = stats_row['cnt'] if stats_row else 0
-                wins = stats_row['wins'] if stats_row else 0
+                wins = stats_row['wins'] if stats_row and stats_row['wins'] else 0
                 win_rate = (wins / trades_count * 100) if trades_count > 0 else 0
 
                 cursor.execute("SELECT SUM(CASE WHEN pnl_sek > 0 THEN pnl_sek ELSE 0 END) as gross_profit, SUM(CASE WHEN pnl_sek < 0 THEN ABS(pnl_sek) ELSE 0 END) as gross_loss FROM trades WHERE exit_date IS NOT NULL")
@@ -1021,14 +1083,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 profit_factor = (gp / gl) if gl > 0 else (gp if gp > 0 else 0)
 
                 self.send_json({
-                    "total_equity": live_equity,
-                    "today_pnl": total_today_pnl,
+                    "total_equity": atos_equity,
+                    "today_pnl": today_pnl,
                     "trades_count": trades_count,
                     "win_rate": win_rate,
                     "profit_factor": profit_factor,
-                    "cash_balance": live_cash,
-                    "currency": live_currency,
-                    "source": "saxo_live" if saxo_token else "database"
+                    "cash_balance": atos_cash,
+                    "currency": "SEK",
+                    "source": "atos"
                 })
 
             elif path == '/api/equity':
@@ -1094,6 +1156,27 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self.send_json({'data': formatted, 'source': 'saxo_live'})
                 else:
                     self.send_json({'data': [], 'source': 'unavailable', 'error': 'Token expired or missing'})
+
+            elif path == '/api/universe':
+                import sys as _sys
+                _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                from atos.universe import MARKET_GROUPS
+                try:
+                    from instrument_map import load_instrument_map
+                    imap = load_instrument_map()
+                except Exception:
+                    imap = {}
+                groups = []
+                for g, tickers in MARKET_GROUPS.items():
+                    items = [{'ticker': t, 'mapped': t in imap} for t in sorted(tickers)]
+                    groups.append({
+                        'market_group': g,
+                        'count': len(items),
+                        'tradable': sum(1 for i in items if i['mapped']),
+                        'tickers': items,
+                    })
+                self.send_json({'groups': groups,
+                                'total': sum(gr['count'] for gr in groups)})
 
             else:
                 self.send_error(404)
