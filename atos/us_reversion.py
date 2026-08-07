@@ -43,13 +43,14 @@ import numpy as np
 import pandas as pd
 
 # ── Strategy parameters ───────────────────────────────────────────────────
-RSI_ENTRY    = 35      # RSI below this → oversold, eligible for entry
-RSI_EXIT     = 60      # RSI above this → recovery complete, exit
-DIP_PCT      = 0.05    # Price must be >= 5% below 20-day SMA to qualify
-VOL_MULT     = 1.5     # Today's volume >= 1.5x 20-day avg volume (capitulation)
-STOP_PCT     = 0.07    # Hard stop-loss: 7% below entry price
+RSI_ENTRY     = 30     # RSI below this → oversold (stricter than 35 — fewer, better signals)
+RSI_EXIT      = 60     # RSI above this → recovery complete, exit
+DIP_PCT       = 0.06   # Price must be >= 6% below 20-day SMA (deeper dip = stronger bounce)
+VOL_MULT      = 2.0    # Today's volume >= 2x 20-day avg volume (clear capitulation flush)
+STOP_PCT      = 0.05   # Hard stop-loss: 5% below entry (was 7% — tighter = smaller losses)
 MAX_HOLD_DAYS = 10     # Time-stop: exit after 10 trading days regardless
-MAX_POSITIONS = 3      # Max concurrent reversion positions
+MAX_POSITIONS = 2      # Max concurrent positions (was 3 — lower concentration risk)
+SLEEVE_DD_CAP = 0.15   # Pause new entries if sleeve equity drops >15% from peak
 REVERSION_SLEEVE_SEK = 300_000.0   # Separate capital pool (do not mix with US Blend)
 # ─────────────────────────────────────────────────────────────────────────
 
