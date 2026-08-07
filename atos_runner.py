@@ -814,16 +814,17 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list, dr
             _save_us_state(state)
         return
 
-    # Rebalance on the FIRST run of each calendar month (first trading day).
+    # Rebalance when REBAL_DAYS calendar days have elapsed since last rebalance.
     last  = state.get("last_rebalance")
     today = date.today()
     if last:
-        ld = date.fromisoformat(last)
-        due = (today.year, today.month) != (ld.year, ld.month)
+        days_since = (today - date.fromisoformat(last)).days
+        due = days_since >= USM.REBAL_DAYS
     else:
         due = True
     if not due:
-        print(f"  {tag} hold — already rebalanced this month (last {last}); "
+        print(f"  {tag} hold — rebalanced {days_since}d ago (next in "
+              f"{USM.REBAL_DAYS - days_since}d, every {USM.REBAL_DAYS}d); "
               f"sleeve equity ~{sleeve_equity:,.0f} SEK")
         return
 

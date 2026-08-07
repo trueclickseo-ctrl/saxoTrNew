@@ -2,10 +2,23 @@
 atos/us_momentum.py
 -------------------
 US cross-sectional momentum — the validated strategy (see STRATEGY_NOTES.md).
-Hold the top-N US names by 6-month momentum that are above their EMA200, monthly
-rebalance, with a daily market risk-off overlay and volatility targeting.
+Holds the top momentum names from a 61-stock universe above their EMA200, with
+a weekly rebalance and a daily market risk-off overlay.
 
 10y backtest: Sharpe 1.30, MaxDD 21.3%, CAGR 24.4% (beats buy&hold Sharpe 1.27).
+
+POSITION COUNT IS DYNAMIC — not fixed at 4:
+  Strong bull market (many stocks qualify):   up to MOM_N_MAX + LOWVOL_N positions
+  Normal market:                              typically 4–6 positions
+  Weak / narrow momentum:                     2–3 positions
+  Risk-off (index below 200d SMA):            0 positions → full cash
+
+Selection from 61-stock universe each week:
+  Step 1 — filter: price > EMA200 AND 6-month return > MOM_THRESHOLD (5%)
+  Step 2 — offense: all qualifying stocks ranked by (6m return / 60d vol),
+            take top MOM_N_MAX (up to 6)
+  Step 3 — defense: top LOWVOL_N (2) by lowest 60d vol from all EMA200 stocks
+  Step 4 — combine + deduplicate → 2 to 8 positions, equal-weighted
 
 This module is PURE (no I/O, no orders) so it can be unit-tested:
   - compute_targets(feat_data, us_tickers) -> what to hold now
@@ -15,17 +28,13 @@ The runner calls these and executes the actions through the normal order path.
 import numpy as np
 import pandas as pd
 
-LOOKBACK      = 120     # ~6-month momentum signal window
-# BLEND: two low-correlation sleeves (validated Sharpe 1.16, DD 14.3% — the safest).
-MOM_N         = 2       # offense: top-2 by risk-adjusted momentum (return / vol)
-LOWVOL_N      = 2       # defense: top-2 by lowest 60-day volatility
-TARGET_VOL    = 0.15    # annualized vol target
-REBAL_DAYS    = 7       # calendar days between rebalances (weekly — was 28/monthly)
-                        # Selection from full US_TICKERS universe each week:
-                        #   Step 1 — filter: price > EMA200 AND 6-month return > 0
-                        #   Step 2 — rank offense: top-2 by (6m return / 60d vol)
-                        #   Step 3 — rank defense: top-2 by lowest 60d vol
-                        #   Step 4 — combine + deduplicate → max 4 positions
+LOOKBACK       = 120    # ~6-month momentum signal window
+MOM_THRESHOLD  = 0.05   # minimum 6-month return to qualify for offense (5%)
+                        # stocks barely moving don't get a slot
+MOM_N_MAX      = 6      # max offense positions (dynamic: fewer when fewer qualify)
+LOWVOL_N       = 2      # defense positions (always 2 — steadiest stocks above EMA200)
+TARGET_VOL     = 0.15   # annualized vol target
+REBAL_DAYS     = 7      # calendar days between rebalances (weekly)
 US_SLEEVE_SEK = 1_095_000.0   # PAPER TRADING: 100,000 EUR → SEK at ~10.95.
                                # Switch to a hard cap before going live with real money.
 
@@ -54,30 +63,47 @@ def market_risk_off(panel: pd.DataFrame) -> bool:
 def compute_targets(feat_data: dict, us_tickers) -> dict:
     """What the US sleeve should hold right now.
 
+    Position count is DYNAMIC — more positions when more stocks have strong
+    upward momentum, fewer when momentum is narrow or weak.
+
     Returns dict with: risk_off (bool), targets (list of tickers, best first),
-    scale (vol-target scalar 0..1), momentum (%), reason (str)."""
+    momentum (list), lowvol (list), reason (str), detail (per-ticker stats)."""
     panel = _panel(feat_data, us_tickers)
     if panel is None:
         return {"risk_off": False, "targets": [], "scale": 0.0, "reason": "insufficient data"}
     if market_risk_off(panel):
         return {"risk_off": True, "targets": [], "scale": 0.0, "reason": "US market below 200d trend"}
 
-    last = panel.iloc[-1]
-    mom = panel.iloc[-1] / panel.iloc[-1 - LOOKBACK] - 1
-    vol = panel.pct_change().rolling(60).std().iloc[-1] * np.sqrt(252)
+    last   = panel.iloc[-1]
+    mom    = panel.iloc[-1] / panel.iloc[-1 - LOOKBACK] - 1
+    vol    = panel.pct_change().rolling(60).std().iloc[-1] * np.sqrt(252)
     ema200 = panel.ewm(span=200, adjust=False).mean().iloc[-1]
+
+    # Stocks above their 200-day EMA with valid volatility — basic health check
     above = [t for t in panel.columns
-             if pd.notna(ema200[t]) and last[t] > ema200[t] and pd.notna(vol[t]) and vol[t] > 0]
-    # Offense: top-N by risk-adjusted momentum (positive momentum only).
-    mom_elig = [t for t in above if pd.notna(mom[t]) and mom[t] > 0]
-    momentum = sorted(mom_elig, key=lambda t: mom[t] / vol[t], reverse=True)[:MOM_N]
-    # Defense: top-N by lowest volatility.
+             if pd.notna(ema200[t]) and last[t] > ema200[t]
+             and pd.notna(vol[t]) and vol[t] > 0]
+
+    # OFFENSE — must clear the momentum threshold (not just > 0, but genuinely rising)
+    # Dynamic count: all qualifying stocks up to MOM_N_MAX, ranked by return/vol
+    mom_elig = [t for t in above
+                if pd.notna(mom[t]) and mom[t] >= MOM_THRESHOLD]
+    momentum = sorted(mom_elig, key=lambda t: mom[t] / vol[t], reverse=True)[:MOM_N_MAX]
+
+    # DEFENSE — always top-LOWVOL_N steadiest stocks above EMA200 (regardless of momentum)
     lowvol = sorted(above, key=lambda t: vol[t])[:LOWVOL_N]
-    targets = list(dict.fromkeys(momentum + lowvol))   # deduped, for display/holdings
+
+    targets = list(dict.fromkeys(momentum + lowvol))   # deduped; offense listed first
+
+    all_detail = {t: {"mom_pct": round(float(mom.get(t, 0)) * 100, 1),
+                      "vol_pct": round(float(vol.get(t, 0)) * 100, 1)}
+                  for t in targets}
+
+    reason = (f"{len(momentum)} offense (>{MOM_THRESHOLD*100:.0f}% momentum) + "
+              f"{len(lowvol)} defense = {len(targets)} positions")
+
     return {"risk_off": False, "momentum": momentum, "lowvol": lowvol,
-            "targets": targets, "reason": "ok",
-            "detail": {t: {"mom_pct": round(float(mom[t]) * 100, 1),
-                           "vol_pct": round(float(vol[t]) * 100, 1)} for t in targets}}
+            "targets": targets, "reason": reason, "detail": all_detail}
 
 
 def plan_rebalance(current_shares: dict, targets: list, scale: float,
