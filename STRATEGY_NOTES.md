@@ -134,6 +134,27 @@ monthly rebalance, per-stock EMA200 filter, daily market-regime risk-off (equal-
 Two dials for the user: *max return* (top10 base: CAGR 35%, DD 31%) vs *smoothest*
 (top10+risk-off+VT: CAGR 24%, DD 21%). Both are legit; default to the smoother one.
 
+## Multi-strategy diversification — 2026-08-07  (`research_more_strategies.py`)
+Hunt for a small set of validated, LOW-CORRELATION strategies to run together safely.
+Same portfolio engine (top-5, monthly, daily risk-off, costs), 10y:
+
+| Strategy | CAGR | Sharpe | MaxDD |
+|---|---|---|---|
+| Momentum (risk-adj) — offense | 26.6% | 1.10 | 29.4% |
+| Low-vol — defense | 9.2% | 0.80 | 16.7% |
+| Reversal (10d losers) | 20.5% | 1.00 | 22.5% |
+| **BLEND 50% mom + 50% low-vol** | 18.3% | **1.16** | **14.3%** |
+
+Correlations (daily): MOM–LOWVOL **0.44**, MOM–REV 0.59, LOWVOL–REV 0.50.
+
+**WINNER: the BLEND (50% risk-adj momentum + 50% low-vol).** Beats BOTH parents on
+Sharpe (1.16 vs 1.10 / 0.80) and has the LOWEST drawdown (14.3% — half of momentum
+alone). Low 0.44 correlation is why: offense + defense smooth each other. **This is the
+best risk-adjusted, safest strategy found — recommend it as the engine's US strategy.**
+(Reversal is a legit 3rd option, Sharpe 1.00, but correlates more with momentum.)
+Caveat for the 15k whole-share account: the blend wants ~6 positions (3 mom + 3 lowvol);
+on 15k use top-2 each (4 positions) to keep whole shares affordable.
+
 ## ML probability model — TESTED & REJECTED, 2026-08-07  (`research_ml_probability.py`)
 Meta-labeling / triple-barrier: label = hit +5% before -3% within 20d; technical
 features; HistGradientBoosting; WALK-FORWARD (TimeSeriesSplit) out-of-sample eval.
