@@ -45,7 +45,7 @@ import sys
 import time
 import logging
 import requests
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, date, timezone, timedelta
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
@@ -54,6 +54,16 @@ import saxo_client
 import fx
 from atos import database as db
 from atos.risk import commission_sek
+
+# US market holidays 2025–2026 (NYSE observed dates)
+_US_HOLIDAYS = {
+    date(2025, 1, 1), date(2025, 1, 20), date(2025, 2, 17), date(2025, 4, 18),
+    date(2025, 5, 26), date(2025, 6, 19), date(2025, 7, 4), date(2025, 9, 1),
+    date(2025, 11, 27), date(2025, 12, 25),
+    date(2026, 1, 1), date(2026, 1, 19), date(2026, 2, 16), date(2026, 4, 3),
+    date(2026, 5, 25), date(2026, 6, 19), date(2026, 7, 3), date(2026, 9, 7),
+    date(2026, 11, 26), date(2026, 12, 25),
+}
 
 # ── Configuration ──────────────────────────────────────────────────
 POLL_INTERVAL    = 1            # seconds between price checks
@@ -99,9 +109,18 @@ def _et_now() -> datetime:
     return now_utc.astimezone(tz)
 
 
+def _is_trading_day(d: date = None) -> bool:
+    """True if the given date is a US stock market trading day."""
+    d = d or _et_now().date()
+    if d.weekday() >= 5:          # weekend
+        return False
+    return d not in _US_HOLIDAYS
+
+
 def _market_is_open() -> bool:
+    """True if US market is currently open (Mon–Fri 09:30–16:00 ET, not a holiday)."""
     now = _et_now()
-    if now.weekday() >= 5:
+    if not _is_trading_day(now.date()):
         return False
     t = (now.hour, now.minute)
     return MARKET_OPEN <= t < MARKET_CLOSE
@@ -112,6 +131,100 @@ def _seconds_until_close() -> float:
     close = now.replace(hour=MARKET_CLOSE[0], minute=MARKET_CLOSE[1],
                         second=0, microsecond=0)
     return max((close - now).total_seconds(), 0)
+
+
+# ── Yahoo Finance last-close prices (used when market is closed) ────
+
+def _fetch_yahoo_prices(tickers: list) -> dict:
+    """Fetch last closing price for each ticker from Yahoo Finance.
+    Returns {ticker: last_close_price}. Used when Saxo market is closed."""
+    if not tickers:
+        return {}
+    try:
+        import yfinance as yf
+        raw = yf.download(
+            tickers, period="2d", interval="1d",
+            auto_adjust=True, threads=False, progress=False
+        )
+        prices = {}
+        if len(tickers) == 1:
+            if not raw.empty:
+                prices[tickers[0]] = float(raw["Close"].iloc[-1])
+        else:
+            for t in tickers:
+                try:
+                    prices[t] = float(raw["Close"][t].dropna().iloc[-1])
+                except Exception:
+                    pass
+        return prices
+    except Exception as e:
+        log.warning("Yahoo price fetch failed: %s", e)
+        return {}
+
+
+def _print_closed_table(open_trades: list, yahoo_prices: dict, imap: dict):
+    """Show portfolio with last closing prices when market is closed."""
+    now_et = _et_now()
+    today  = now_et.date()
+
+    os.system("cls")
+    print(f"{'─'*80}")
+    trading_day = _is_trading_day()
+    day_label = "trading day" if trading_day else "holiday/weekend"
+    print(f"  ATOS Portfolio  |  {now_et.strftime('%A %H:%M')} ET  |  "
+          f"Market CLOSED ({day_label})")
+    print(f"  Prices: last Yahoo Finance close (Saxo API inactive)")
+    print(f"{'─'*80}")
+    print(f"  {'Ticker':<8}  {'Entry':>10}  {'Last Close':>10}  {'Shares':>7}  "
+          f"{'P&L (SEK)':>12}  {'%Chg':>7}  {'Stop':>10}")
+    print(f"{'─'*80}")
+
+    total_pnl = 0.0
+    total_cost = 0.0
+    for t in open_trades:
+        ticker = t.get("ticker", "")
+        if ticker not in imap:
+            continue
+        shares     = t.get("shares", 0) or 0
+        entry      = t.get("entry_price", 0) or 0
+        stop_p     = t.get("stop_price", 0) or 0
+        trail_high = t.get("trailing_stop_high") or entry
+        cur        = yahoo_prices.get(ticker, 0)
+        currency   = imap[ticker].get("currency", "USD")
+        try:
+            rate = fx.get_rate_to_sek(currency) if currency != "SEK" else 1.0
+        except Exception:
+            rate = 10.95
+
+        eff_stop = (stop_p if stop_p > 0
+                    else trail_high * (1.0 - TRAILING_PCT) if trail_high > 0
+                    else entry * (1.0 - HARD_STOP_PCT))
+
+        pnl_sek  = (cur - entry) * shares * rate if cur > 0 else 0.0
+        pct_chg  = (cur - entry) / entry * 100 if entry > 0 and cur > 0 else 0.0
+        total_pnl  += pnl_sek
+        total_cost += entry * shares * rate
+
+        cur_str = f"{cur:.2f}" if cur > 0 else "  ---"
+        pnl_str = f"{pnl_sek:+,.0f}" if cur > 0 else "  ---"
+        pct_str = f"{pct_chg:+.2f}%" if cur > 0 else "  ---"
+        col   = "\033[92m" if pnl_sek >= 0 else "\033[91m"
+        reset = "\033[0m"
+        print(f"  {ticker:<8}  {currency} {entry:>8.2f}  {currency} {cur_str:>8}  "
+              f"{int(shares):>7,}  {col}{pnl_str:>12}{reset}  "
+              f"{col}{pct_str:>7}{reset}  {currency} {eff_stop:>8.2f}")
+
+    print(f"{'─'*80}")
+    total_pct = total_pnl / total_cost * 100 if total_cost > 0 else 0
+    col   = "\033[92m" if total_pnl >= 0 else "\033[91m"
+    reset = "\033[0m"
+    print(f"  {'TOTAL':<8}  {'':>10}  {'':>10}  {'':>7}  "
+          f"{col}{total_pnl:>+12,.0f}{reset}  {col}{total_pct:>+7.2f}%{reset}")
+    print(f"{'─'*80}")
+    print()
+    print("  Monitor will AUTO-START live Saxo polling when market opens (09:30 ET).")
+    print("  (Press Ctrl+C to exit)")
+    print()
 
 
 # ── Live price fetching ────────────────────────────────────────────
@@ -461,16 +574,19 @@ def main():
     blind_since          = [None]
     tick                 = 0
 
+    # Pre-load Yahoo prices for closed-market display
+    open_trades = db.get_open_trades()
+    tracked_tickers = [t["ticker"] for t in open_trades if t.get("ticker") in imap]
+    yahoo_prices: dict = {}
+    yahoo_fetched_at = 0.0   # timestamp; refresh every 5 minutes when closed
+
     try:
         while True:
             now_et = _et_now()
+            market_open = _market_is_open()
 
-            # Graceful shutdown at market close (Mon–Fri only)
-            if now_et.weekday() < 5 and _seconds_until_close() <= 0:
-                log.info("US market closed (16:00 ET). Monitor shutdown.")
-                break
-
-            if _market_is_open():
+            if market_open:
+                # ── LIVE MODE — Saxo API polling ──────────────────────
                 try:
                     _poll_once(imap, consecutive_failures, blind_since,
                                tick, show_table)
@@ -479,12 +595,27 @@ def main():
                 tick += 1
                 if tick % 60 == 0:
                     log.info("Heartbeat tick=%d | %s ET | %d positions watched",
-                             tick, now_et.strftime("%H:%M:%S"), len(db.get_open_trades()))
+                             tick, now_et.strftime("%H:%M:%S"),
+                             len(db.get_open_trades()))
+
+                # Stop after market close on a trading day
+                if _seconds_until_close() <= 0:
+                    log.info("US market closed (16:00 ET). Live polling stopped.")
+                    # Fall through to closed-market display below
+
             else:
+                # ── CLOSED/HOLIDAY MODE — Yahoo prices, no Saxo API ──
                 if show_table:
-                    os.system("cls")
-                    print(f"  ATOS Monitor | {now_et.strftime('%H:%M:%S')} ET | "
-                          f"Waiting for market open (09:30 ET)")
+                    # Refresh Yahoo prices every 5 minutes
+                    if time.time() - yahoo_fetched_at > 300:
+                        open_trades = db.get_open_trades()
+                        tracked_tickers = [t["ticker"] for t in open_trades
+                                           if t.get("ticker") in imap]
+                        if tracked_tickers:
+                            yahoo_prices = _fetch_yahoo_prices(tracked_tickers)
+                        yahoo_fetched_at = time.time()
+
+                    _print_closed_table(open_trades, yahoo_prices, imap)
                 time.sleep(30)
                 continue
 
@@ -492,6 +623,16 @@ def main():
 
     except KeyboardInterrupt:
         log.info("Monitor stopped by user (Ctrl+C).")
+
+    # Final closed-market snapshot after market closes
+    if show_table:
+        open_trades = db.get_open_trades()
+        tracked_tickers = [t["ticker"] for t in open_trades if t.get("ticker") in imap]
+        if tracked_tickers:
+            log.info("Fetching final closing prices from Yahoo...")
+            yahoo_prices = _fetch_yahoo_prices(tracked_tickers)
+        _print_closed_table(open_trades, yahoo_prices, imap)
+        input("\n  Market closed. Press Enter to exit...")
 
 
 if __name__ == "__main__":
