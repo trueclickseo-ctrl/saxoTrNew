@@ -5,7 +5,7 @@ repeat work. Update this every time a strategy or its parameters change.
 
 ---
 
-## SUMMARY / SCOREBOARD  (as of 2026-08-07)
+## SUMMARY / SCOREBOARD  (as of 2026-08-08)
 
 **How many strategies did we find?** We tested **~a dozen** configurations. **4 validated**
 (cleared 10y / real-cost / beats-benchmark bar); **1 is running live** (the blend).
@@ -18,9 +18,14 @@ repeat work. Update this every time a strategy or its parameters change.
 | Low-volatility | 0.80–1.05 | ~14–17% | defense |
 | Short-term reversal (10d) | 1.00 | 22.5% | optional 3rd |
 
-**LIVE STRATEGY: the US Momentum+Low-Vol Blend** (top-2 momentum + top-2 low-vol,
-compounding 15k sleeve, monthly rebalance + daily risk-off). It beats every single
-strategy on risk-adjusted return because momentum & low-vol only correlate 0.44.
+**LIVE STRATEGY: US Momentum+Low-Vol Blend** — 61-stock universe, weekly rebalance
+(REBAL_DAYS=7), dynamic 2–8 positions (up to 6 offense + 2 defense), 1,095,000 SEK
+compounding sleeve. Beats every single strategy on risk-adjusted return because
+momentum & low-vol only correlate 0.44. Running since 2026-08-07.
+
+**PENDING STRATEGY: US Mean Reversion** — short-term dip-buying on the same 61-stock
+universe. Coded, backtested, but DISABLED (US_REVERSION_ENABLED = False in
+atos_runner.py). DO NOT ENABLE until all 4 criteria are met (see §US Reversion below).
 
 ### ❌ Tested and rejected (don't revisit)
 - Per-market signal strategies (US Breakout / OMX Momentum / CPH Mean-Reversion) — weak.
@@ -257,23 +262,127 @@ less drawdown — the real value of the strategy is DD reduction, not beating B&
 **Upgraded the live signal to risk-adjusted momentum** in atos/us_momentum.py.
 (mom252 worse than mom120; low-vol lowest DD but low return — a defensive alternative.)
 
-**LIVE CONFIG — COMPOUNDING 15k sleeve:** the US sleeve STARTS at 15,000 SEK and
-COMPOUNDS with its own P&L — budget = sleeve equity (`sleeve_cash` in
-data/us_momentum_state.json + current US position value). Profit raises the budget
-(reward: 15k->16k trades bigger), loss lowers it (penalty: 16k->14k trades smaller).
-It NEVER reads or tops up from the real account balance, so extra deposits stay
-untouched. Running-budget guard caps each rebalance's spend at the current sleeve
-equity. **TOPN = 3** (top-10 needs
-~100k for whole shares; on 15k the top-3 by risk-adj momentum is what fits, and bigger
-slots still afford the pricey leaders — preview: AMD/UNH/CSCO, ~13k deployed).
-Running-budget guard caps total spend at the budget. NOTE: top-3 is more concentrated
-than the validated top-10, so expect higher vol/DD than the paper numbers. Monthly
-rebalance (first trading day) + daily risk-off.
-[history] Was 100k/top-10 for paper validation; now capped at the real 15k budget.
-**Vol-targeting DROPPED for live sizing** — it scales exposure to ~30%, making per-slot
-budgets too small for whole shares (needs ~5x capital). So live ≈ top10 + risk-off:
-expect ~Sharpe 1.18, DD ~24%. OMX/CPH per-instrument strategies PAUSED (unvalidated).
+**LIVE CONFIG — 2026-08-08:**
 
-**Next: wire this into the live engine.** NOTE: it's a PORTFOLIO/rebalance strategy (rank +
-hold top-N monthly), architecturally different from the runner's per-instrument signal loop —
-needs a rebalance execution path (compute targets → buy/sell to reach them), not a per-ticker BUY.
+| Parameter | Value | Notes |
+|---|---|---|
+| Universe | 61 stocks | S&P500 across all 11 sectors |
+| Rebalance | Every 7 calendar days | Retries next trading day if market closed |
+| Offense | Up to 6 stocks | RSI-adj momentum > 5% 6-month return, ranked by return/vol |
+| Defense | Always 2 stocks | Lowest 60d vol above EMA200 |
+| Total positions | 2–8 (dynamic) | Fewer when momentum is narrow; deduped |
+| Sleeve | 1,095,000 SEK | Compounds with own P&L; never topped up from account |
+| Risk-off | Daily | Equal-weight index < 200d SMA → full cash |
+| Corporate events | Every cycle | Auto-exit 3d before ex-div; skip 2d before earnings |
+| Last rebalance | 2026-08-07 | 7 positions: AMD UNH CSCO BAC MU MS V |
+| Next rebalance | ~2026-08-14 | V may be excluded (ex-div 2026-08-11) |
+
+OMX/CPH per-instrument strategies PAUSED — backtesting showed no reliable edge over 10y.
+
+---
+
+## Option 3: US Mean Reversion — Design & Backtest Log
+
+**Module:** `atos/us_reversion.py` | **Backtest:** `backtest_us_reversion.py`
+**Status: DISABLED** — `US_REVERSION_ENABLED = False` in `atos_runner.py`
+
+### Logic
+Buy strong stocks (above EMA200) that have had a sharp short-term dip. Catch the bounce.
+
+| Signal | Rule | Why |
+|---|---|---|
+| EMA200 filter | Price > EMA200 | Avoid falling knives — only buy dips in uptrends |
+| Oversold | RSI(14) < entry threshold | Short-term panic/profit-taking |
+| Deep dip | Price > dip% below 20d SMA | Meaningful move, not just noise |
+| Capitulation | Volume > mult × 20d avg | Flush-out day — sellers exhausted |
+
+### Exit conditions (first hit wins)
+- RSI recovers above 60 (mean reversion complete)
+- Price reaches 20d SMA (target hit)
+- Hard stop: price drops STOP_PCT below entry
+- Time-stop: MAX_HOLD_DAYS regardless
+
+### Correlation with US Blend
+Momentum (offense) + low-vol (defense) work in trending markets. Mean reversion works in
+choppy/range-bound markets. Together: lower drawdown, smoother equity curve over full cycles.
+
+---
+
+### Backtest iteration log
+
+#### Attempt 1 — 2026-08-08 (WRONG — accounting bug)
+Parameters: RSI<35, Dip>5%, Vol>1.5×, Stop 7%, MaxPos 3, no DD cap
+Result:
+- 73 trades | WR 60.3% | Sharpe 1.10 | CAGR 68.3% | **MaxDD 58.1%** ← WRONG
+- **BUG:** cost was never deducted from cash on entry. Equity curve inflated peaks
+  (cash + open position value instead of net portfolio value). Drawdown figure meaningless.
+
+#### Attempt 2 — 2026-08-08 (tightened params, still wrong accounting)
+Parameters: RSI<30, Dip>6%, Vol>2.0×, Stop 5%, MaxPos 2, DDcap 15%
+Result: Only 1 trade found — params too strict.
+
+#### Attempt 3 — 2026-08-08 (CORRECTED accounting + tighter params)
+Fixed: cost deducted on entry (`cash -= cost`), proceeds credited on exit (`cash += proceeds`).
+Total = cash + mark-to-market of open positions.
+
+Parameters: RSI<30, Dip>6%, Vol>2.0×, Stop 5%, MaxPos 2, DDcap 15%
+Result:
+- **13 trades | WR 61.5% | Sharpe 1.13 | CAGR 7.2% | MaxDD 10.8%** ← ACCURATE
+- Passes: Sharpe ✓, WR ✓, MaxDD ✓
+- **FAILS: Trade count 13 < 15 minimum** — statistically insufficient
+
+Best trade: AVGO 2024-09-06 (SMA20 +15.5%, 3d, +23,680 SEK)
+Worst trade: LLY 2024-10-30 (stop-loss -8.3%, 5d, -14,030 SEK)
+
+→ **Grid search running** to find parameters with 15+ trades while keeping MaxDD < 20%.
+
+---
+
+### Criteria to enable (ALL four must pass)
+
+| # | Criterion | Target | Current |
+|---|---|---|---|
+| 1 | Sharpe ratio | ≥ 0.8 | 1.13 ✓ |
+| 2 | Win rate | ≥ 50% | 61.5% ✓ |
+| 3 | Max drawdown | < 20% | 10.8% ✓ |
+| 4 | Trade count | ≥ 15 | 13 ✗ |
+
+To run grid search and find a passing parameter set:
+```
+python backtest_us_reversion.py --grid
+```
+Then update `atos/us_reversion.py` with the winning parameters, confirm single-run
+backtest passes all 4 criteria, and flip `US_REVERSION_ENABLED = True`.
+
+Capital: **separate 300,000 SEK sleeve** — completely isolated from US Blend sleeve.
+Max 2 concurrent positions. SLEEVE_DD_CAP = 15% (pauses new entries if sleeve down 15%).
+
+---
+
+## New Features — 2026-08-08
+
+### Intraday Monitor (`intraday_monitor.py`)
+- Polls Saxo API every **1 second** during US market hours (09:30–16:00 ET, DST-aware)
+- Stop-loss hierarchy: fixed entry stop → trailing 12% from peak → hard floor -15%
+- Circuit breaker: CRITICAL alert if blind > 180 seconds
+- Market-closed mode: Yahoo prices every 5 min (no Saxo API calls, no holiday orders)
+- Stable ANSI display (cursor-home overwrite, not cls — terminal stays copyable)
+- Double-click launcher: `ATOS_Monitor.bat`
+- `--no-display` flag for headless Task Scheduler runs
+
+### Corporate Events Module (`atos/corporate_events.py`)
+- Checks ex-dividend and earnings dates via yfinance on every engine cycle
+- **Exit flag**: sells held positions 3 days before ex-div, 2 days before earnings
+- **Buy filter**: skips new buys into tickers with imminent events (don't open 2 days before ex-div)
+- LRU cache keyed on (ticker, today) — only one yfinance call per ticker per day
+- Live catch on 2026-08-08: V flagged ex-div 2026-08-11 → auto-sell 756 shares (~2.6M SEK)
+
+### Daily Engine Logging
+- Engine stdout is tee'd to `data/engine_YYYY-MM-DD.log` each run
+- Task Scheduler output is no longer lost
+- File is gitignored (local only)
+
+### Holiday / Closed-Market Guard
+- Rebalance timestamp only advances if at least one buy order actually filled
+- On a market holiday: engine retries the full rebalance the next trading day
+- Prevents "skipped week" bug when scheduled rebalance day falls on a US holiday
