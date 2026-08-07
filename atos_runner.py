@@ -906,8 +906,15 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list, dr
     print(f"  {tag} deployed ~{deployed_sek:,.0f} of {sleeve_equity:,.0f} SEK; "
           f"{sleeve_equity - deployed_sek:,.0f} SEK stays as cash (rest of account untouched)")
     if not dry_run:
-        state["last_rebalance"] = date.today().isoformat()
-        state["sleeve_cash"]    = sleeve_equity - deployed_sek
+        # Only stamp last_rebalance if at least one buy order landed.
+        # If the market is closed (holiday) Saxo rejects all orders and deployed_sek=0,
+        # so we do NOT advance the timestamp — the engine retries next trading day.
+        if deployed_sek > 0:
+            state["last_rebalance"] = date.today().isoformat()
+        elif priority:
+            print(f"  {tag} WARNING: 0 orders filled — market may be closed. "
+                  f"Rebalance will retry tomorrow (last_rebalance unchanged).")
+        state["sleeve_cash"] = sleeve_equity - deployed_sek
         _save_us_state(state)
 
 
