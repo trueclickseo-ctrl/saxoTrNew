@@ -1331,7 +1331,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 markets = ['US Equities', 'OMX30', 'CPH25']
                 instruments = {'US Equities': 'US · S&P500 + Nasdaq100',
                                'OMX30': 'OMXS30', 'CPH25': 'CPH25'}
-                strategies = {'US Equities': 'US Breakout', 'OMX30': 'OMX Momentum', 'CPH25': 'CPH Mean Reversion'}
+                strategies = {'US Equities': 'US Blend', 'OMX30': 'OMX (paused)', 'CPH25': 'CPH (paused)'}
                 rows = []
                 for mg in markets:
                     closed = [r['pnl_sek'] for r in cursor.execute(
@@ -1384,7 +1384,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 nm = 1 if today.month == 12 else today.month + 1
                 next_rebal = _date(ny, nm, 1).isoformat() if last else "next engine run (first rebalance)"
                 cursor.execute("SELECT ticker, shares, entry_price FROM trades "
-                               "WHERE strategy='US Momentum' AND exit_date IS NULL ORDER BY ticker")
+                               "WHERE strategy='US Blend' AND exit_date IS NULL ORDER BY ticker")
                 holds = [dict(r) for r in cursor.fetchall()]
                 self.send_json({"last_rebalance": last, "next_rebalance": next_rebal,
                                 "holdings": holds, "holdings_count": len(holds)})
