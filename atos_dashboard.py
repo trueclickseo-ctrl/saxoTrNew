@@ -813,7 +813,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             }
             document.getElementById('kpiEquity').textContent = formatNumber(eq) + ' ' + currency;
 
-            const startingCapital = 100000;
+            const startingCapital = 15000;
             const pct = eq ? ((eq - startingCapital) / startingCapital) * 100 : 0;
             const sign = pct >= 0 ? '+' : '';
             const cls = pct >= 0 ? 'text-success' : 'text-danger';
@@ -1162,7 +1162,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 # the raw Saxo demo balance (~€999k), which would read +9,899%.
                 cursor.execute("SELECT total_equity_sek FROM equity_curve ORDER BY snap_date DESC LIMIT 1")
                 eq_row = cursor.fetchone()
-                atos_equity = eq_row['total_equity_sek'] if eq_row else 100000.0
+                atos_equity = eq_row['total_equity_sek'] if eq_row else 15000.0
 
                 # Cash from the ATOS risk-state file (same source the engine sizes off)
                 atos_cash = None

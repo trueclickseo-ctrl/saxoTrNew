@@ -23,8 +23,8 @@ from datetime import date
 import pandas as pd
 
 # -- Configuration --------------------------------------------------
-STARTING_CAPITAL_SEK  = 100_000  # total paper capital (bumped from 10k so the US
-                                 # momentum strategy can hold 10 whole-share positions)
+STARTING_CAPITAL_SEK  = 15_000   # HARD TRADING BUDGET (SEK). The bot only ever deploys
+                                 # up to this much; the rest of the real account is untouched.
 RISK_PER_TRADE_PCT    = 0.01     # risk max 1% of market-group capital per trade
 ATR_STOP_MULTIPLE     = 2.5      # stop = entry - 2.5 * ATR
 MAX_POSITIONS_TOTAL   = 14       # max simultaneous open positions across all markets

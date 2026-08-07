@@ -168,9 +168,19 @@ less drawdown — the real value of the strategy is DD reduction, not beating B&
 **Upgraded the live signal to risk-adjusted momentum** in atos/us_momentum.py.
 (mom252 worse than mom120; low-vol lowest DD but low return — a defensive alternative.)
 
-**WIRED LIVE 2026-08-07** (`atos/us_momentum.py` + `run_us_momentum` in atos_runner.py):
-base capital bumped to 100,000 SEK, US sleeve = 100k, top-10 equal-weight whole shares
-(9/10 affordable; ASML $1711 > $1055/slot skipped), monthly rebalance + daily risk-off.
+**LIVE CONFIG — COMPOUNDING 15k sleeve:** the US sleeve STARTS at 15,000 SEK and
+COMPOUNDS with its own P&L — budget = sleeve equity (`sleeve_cash` in
+data/us_momentum_state.json + current US position value). Profit raises the budget
+(reward: 15k->16k trades bigger), loss lowers it (penalty: 16k->14k trades smaller).
+It NEVER reads or tops up from the real account balance, so extra deposits stay
+untouched. Running-budget guard caps each rebalance's spend at the current sleeve
+equity. **TOPN = 3** (top-10 needs
+~100k for whole shares; on 15k the top-3 by risk-adj momentum is what fits, and bigger
+slots still afford the pricey leaders — preview: AMD/UNH/CSCO, ~13k deployed).
+Running-budget guard caps total spend at the budget. NOTE: top-3 is more concentrated
+than the validated top-10, so expect higher vol/DD than the paper numbers. Monthly
+rebalance (first trading day) + daily risk-off.
+[history] Was 100k/top-10 for paper validation; now capped at the real 15k budget.
 **Vol-targeting DROPPED for live sizing** — it scales exposure to ~30%, making per-slot
 budgets too small for whole shares (needs ~5x capital). So live ≈ top10 + risk-off:
 expect ~Sharpe 1.18, DD ~24%. OMX/CPH per-instrument strategies PAUSED (unvalidated).

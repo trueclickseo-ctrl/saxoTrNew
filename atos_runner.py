@@ -779,47 +779,68 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list, dr
             _do("Sell", tk, tr.get("shares", 0),
                 _price(tk, tr.get("entry_price", 0)), cur_trade=tr)
 
+    # US sleeve capital — starts at US_SLEEVE_SEK and COMPOUNDS with the strategy's
+    # own P&L. Profits raise the tradeable budget (the bot's reward); losses lower it.
+    # It is NEVER topped up from the rest of the account, so extra deposits stay untouched.
+    state         = _load_us_state()
+    sleeve_cash   = float(state.get("sleeve_cash", USM.US_SLEEVE_SEK))
+    us_value      = sum((tr.get("shares", 0) or 0) * _price(tk, tr.get("entry_price", 0)) * fx_usd
+                        for tk, tr in us_open.items())
+    sleeve_equity = sleeve_cash + us_value   # current tradeable budget (compounds)
+
     # Daily risk-off overlay: exit US to cash the moment the market breaks trend.
     if tgt["risk_off"]:
         if us_open:
-            print("  [US momentum] RISK-OFF — selling all US to cash")
+            print(f"  {tag} RISK-OFF — selling all US to cash (sleeve ~{sleeve_equity:,.0f} SEK)")
             _sell_all_us()
+        if not dry_run:
+            state["sleeve_cash"] = sleeve_equity   # value parked in cash until re-entry
+            _save_us_state(state)
         return
 
-    # Rebalance on the FIRST run of each calendar month (= first trading day of the
-    # month, since the engine runs daily). Predictable and easy to see coming.
-    state = _load_us_state()
-    last = state.get("last_rebalance")
+    # Rebalance on the FIRST run of each calendar month (first trading day).
+    last  = state.get("last_rebalance")
     today = date.today()
     if last:
         ld = date.fromisoformat(last)
         due = (today.year, today.month) != (ld.year, ld.month)
     else:
-        due = True   # never rebalanced -> do it now
+        due = True
     if not due:
-        print(f"  [US momentum] hold — already rebalanced this month (last {last})")
+        print(f"  {tag} hold — already rebalanced this month (last {last}); "
+              f"sleeve equity ~{sleeve_equity:,.0f} SEK")
         return
 
-    # Clean model: liquidate all US, then rebuy the target top-N equal-weight.
-    print(f"  [US momentum] REBALANCE — liquidate & rebuy top {len(tgt['targets'])}")
+    # Liquidate all US, then rebuy the top-N. Budget = the CURRENT sleeve equity
+    # (compounds with profit). Whole shares; slots capped by the running remaining
+    # budget so total spend can never exceed the sleeve (and never touches the rest).
+    print(f"  {tag} REBALANCE — top {len(tgt['targets'])} | budget {sleeve_equity:,.0f} SEK "
+          f"(started {USM.US_SLEEVE_SEK:,.0f}, compounds with P&L)")
     _sell_all_us()
+    deployed_sek = 0.0
     if tgt["targets"]:
-        # Live sizing uses the FULL sleeve equally (no vol-target scaling) so whole
-        # shares of expensive US names are affordable; the daily risk-off overlay
-        # (above) is what controls drawdown here. Vol-targeting would need ~5x the
-        # capital to size whole shares and is left to the backtest.
-        per_usd = (USM.US_SLEEVE_SEK / len(tgt["targets"])) / fx_usd
+        per_slot_usd  = (sleeve_equity / len(tgt["targets"])) / fx_usd
+        remaining_sek = sleeve_equity
         for tk in tgt["targets"]:
             if tk not in feat_data or tk not in imap:
                 continue
             px = _price(tk)
-            shares = int(per_usd / px) if px > 0 else 0
+            if px <= 0:
+                continue
+            slot_usd = min(per_slot_usd, remaining_sek / fx_usd)
+            shares = int(slot_usd / px)
             if shares >= 1:
                 _do("Buy", tk, shares, px)
+                cost = shares * px * fx_usd
+                remaining_sek -= cost
+                deployed_sek  += cost
             else:
-                print(f"  {tag} {tk}: ${per_usd:.0f} budget < 1 share (${px:.0f}) — skip")
+                print(f"  {tag} {tk}: budget/slot too small for 1 share (${px:.0f}) — skip")
+        print(f"  {tag} deployed ~{deployed_sek:,.0f} of {sleeve_equity:,.0f} SEK; "
+              f"{sleeve_equity - deployed_sek:,.0f} SEK stays as cash (rest of account untouched)")
     if not dry_run:
         state["last_rebalance"] = date.today().isoformat()
+        state["sleeve_cash"]    = sleeve_equity - deployed_sek
         _save_us_state(state)
 
 

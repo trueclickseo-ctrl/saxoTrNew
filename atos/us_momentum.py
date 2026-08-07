@@ -16,11 +16,13 @@ import numpy as np
 import pandas as pd
 
 LOOKBACK      = 120     # ~6-month momentum
-TOPN          = 10      # diversification beat concentration on both Sharpe & DD
+TOPN          = 3       # concentrated for a small budget (top-10 needs ~100k for whole
+                        # shares; on a 15k budget we hold the top 3 by risk-adj momentum)
 TARGET_VOL    = 0.15    # annualized vol target
 REBAL_DAYS    = 28      # calendar days between rebalances (~monthly)
-US_SLEEVE_SEK = 100_000.0  # capital allocated to the US momentum sleeve (the full
-                           # 100k paper base — US momentum is the one proven strategy)
+US_SLEEVE_SEK = 15_000.0  # HARD TRADING BUDGET (SEK). The bot deploys at most this
+                          # much and never reads the real account balance — anything
+                          # above this in the Saxo account stays untouched.
 
 
 def _panel(feat_data: dict, us_tickers) -> pd.DataFrame | None:
