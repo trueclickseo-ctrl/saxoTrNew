@@ -50,6 +50,7 @@ from atos.risk import (
     STARTING_CAPITAL_SEK,
 )
 from atos.dashboard_gen import generate as gen_dashboard
+from atos.corporate_events import get_exit_flags, tickers_to_avoid as corp_avoid
 
 # ── Existing infrastructure (unchanged) ───────────────────────────
 import saxo_client
@@ -804,6 +805,41 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list, dr
                         for tk, tr in us_open.items())
     sleeve_equity = sleeve_cash + us_value   # current tradeable budget (compounds)
 
+    # ── Corporate event exits (ex-dividend / earnings) ────────────────────
+    # Run every cycle — not just on rebalance day. If we hold a stock that is
+    # 1-3 days from its ex-dividend date or 1-2 days from earnings, sell now
+    # to avoid the mechanical price drop (ex-div) or binary gap risk (earnings).
+    if us_open:
+        event_flags = get_exit_flags(list(us_open.keys()))
+        if event_flags:
+            event_sell_value = 0.0
+            for tk, reason in event_flags.items():
+                tr = us_open.get(tk)
+                if not tr:
+                    continue
+                print(f"  {tag} EVENT EXIT: {tk} — {reason}")
+                sh = tr.get("shares", 0) or 0
+                px = _price(tk, tr.get("entry_price", 0))
+                _do("Sell", tk, sh, px, cur_trade=tr)
+                event_sell_value += sh * px * fx_usd
+            # Park the recovered cash back into the sleeve so the next rebalance
+            # has the correct budget (mirrors how risk-off overlay works).
+            if not dry_run and event_sell_value > 0:
+                # Recalculate open positions after the exits
+                remaining_us_open = {k: v for k, v in us_open.items()
+                                     if k not in event_flags}
+                remaining_us_value = sum(
+                    (t.get("shares", 0) or 0) * _price(tk2, t.get("entry_price", 0)) * fx_usd
+                    for tk2, t in remaining_us_open.items()
+                )
+                state["sleeve_cash"] = sleeve_equity - remaining_us_value
+                _save_us_state(state)
+            # Refresh us_open and sleeve_equity so the rest of the cycle is correct
+            us_open = {k: v for k, v in us_open.items() if k not in event_flags}
+            us_value     = sum((tr.get("shares", 0) or 0) * _price(tk2, tr.get("entry_price", 0)) * fx_usd
+                               for tk2, tr in us_open.items())
+            sleeve_equity = sleeve_cash + us_value
+
     # Daily risk-off overlay: exit US to cash the moment the market breaks trend.
     if tgt["risk_off"]:
         if us_open:
@@ -841,8 +877,16 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list, dr
     # Blend priority: momentum names (offense) first, then low-vol (defense), deduped.
     # Dynamic greedy sizing: each name gets remaining_budget / names_still_to_place, so
     # budget skipped on an unaffordable name flows forward and the sleeve stays invested.
+    # Exclude tickers with imminent ex-dividend or earnings from new buys.
+    # We check only the rebalance candidates (not the full 61-stock universe).
+    corp_skip = corp_avoid(mom_names + lv_names)
+    if corp_skip:
+        print(f"  {tag} skipping {sorted(corp_skip)} — imminent corporate event (buy next rebalance)")
+
     priority = []
     for tk in mom_names + lv_names:
+        if tk in corp_skip:
+            continue
         if tk not in priority and tk in feat_data and tk in imap and _price(tk) > 0:
             priority.append(tk)
     remaining_sek = sleeve_equity
