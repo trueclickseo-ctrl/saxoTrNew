@@ -66,7 +66,8 @@ _US_HOLIDAYS = {
 }
 
 # ── Configuration ──────────────────────────────────────────────────
-POLL_INTERVAL    = 1            # seconds between price checks
+POLL_INTERVAL    = 1            # seconds between stop-loss price checks
+DISPLAY_INTERVAL = 5            # seconds between screen redraws (lets you copy text)
 HARD_STOP_PCT    = 0.15         # 15% below entry price (last-resort floor)
 TRAILING_PCT     = 0.12         # 12% below trailing_stop_high
 BLIND_SECONDS    = 180          # circuit-breaker: alert if blind for 3 min
@@ -164,10 +165,12 @@ def _fetch_yahoo_prices(tickers: list) -> dict:
 
 def _print_closed_table(open_trades: list, yahoo_prices: dict, imap: dict):
     """Show portfolio with last closing prices when market is closed."""
+    global _display_initialized
     now_et = _et_now()
-    today  = now_et.date()
 
-    os.system("cls")
+    pfx = (_ANSI_CLEAR + _ANSI_HOME) if not _display_initialized else _ANSI_HOME
+    _display_initialized = True
+    sys.stdout.write(pfx)
     print(f"{'─'*80}")
     trading_day = _is_trading_day()
     day_label = "trading day" if trading_day else "holiday/weekend"
@@ -402,14 +405,20 @@ def _execute_stop_sell(trade: dict, cur_price: float, reason: str, imap: dict):
 
 # ── Terminal portfolio table ───────────────────────────────────────
 
-def _print_portfolio_table(open_trades: list, prices: dict, imap: dict, tick: int):
-    """Clears screen and prints a live portfolio table to the terminal."""
-    now_et = _et_now()
+_ANSI_HOME  = "\033[H"      # move cursor to top-left (no screen wipe)
+_ANSI_CLEAR = "\033[2J"    # clear screen — only used once at startup
 
-    # Build rows
+_display_initialized = False
+
+
+def _render_table(open_trades: list, prices: dict, imap: dict, tick: int,
+                  mode: str = "LIVE") -> str:
+    """Build the full portfolio table as a string (no side-effects)."""
+    now_et = _et_now()
     rows = []
-    total_pnl_sek = 0.0
-    total_cost_sek = 0.0
+    total_pnl = 0.0
+    total_cost = 0.0
+
     for t in open_trades:
         ticker = t.get("ticker", "")
         if ticker not in imap:
@@ -426,78 +435,83 @@ def _print_portfolio_table(open_trades: list, prices: dict, imap: dict, tick: in
         except Exception:
             rate = 10.95
 
-        # Effective stop (same logic as _stop_triggered)
-        if stop_p > 0:
-            effective_stop = stop_p
-        elif trail_high > 0:
-            effective_stop = trail_high * (1.0 - TRAILING_PCT)
-        else:
-            effective_stop = entry * (1.0 - HARD_STOP_PCT)
+        eff_stop = (stop_p if stop_p > 0
+                    else trail_high * (1.0 - TRAILING_PCT) if trail_high > 0
+                    else entry * (1.0 - HARD_STOP_PCT))
 
-        pnl_sek  = (cur - entry) * shares * rate if cur > 0 else 0.0
-        pct_chg  = (cur - entry) / entry * 100 if entry > 0 and cur > 0 else 0.0
-        cost_sek = entry * shares * rate
-        total_pnl_sek  += pnl_sek
-        total_cost_sek += cost_sek
+        pnl_sek = (cur - entry) * shares * rate if cur > 0 else 0.0
+        pct_chg = (cur - entry) / entry * 100 if entry > 0 and cur > 0 else 0.0
+        total_pnl  += pnl_sek
+        total_cost += entry * shares * rate
 
-        rows.append({
-            "ticker": ticker, "entry": entry, "cur": cur, "shares": int(shares),
-            "pnl_sek": pnl_sek, "pct": pct_chg, "stop": effective_stop,
-            "currency": currency,
-        })
+        rows.append({"ticker": ticker, "entry": entry, "cur": cur,
+                     "shares": int(shares), "pnl_sek": pnl_sek,
+                     "pct": pct_chg, "stop": eff_stop, "currency": currency})
 
-    total_pct = total_pnl_sek / total_cost_sek * 100 if total_cost_sek > 0 else 0
+    total_pct = total_pnl / total_cost * 100 if total_cost > 0 else 0
+    W = "\033[0m"
 
-    # Clear screen (Windows)
-    os.system("cls")
-
-    # Header
-    mkt_status = "OPEN" if _market_is_open() else "CLOSED"
-    print(f"{'─'*80}")
-    print(f"  ATOS Live Portfolio  |  {now_et.strftime('%H:%M:%S')} ET  |  "
-          f"Market: {mkt_status}  |  Tick #{tick}")
-    print(f"{'─'*80}")
-    print(f"  {'Ticker':<8}  {'Entry':>10}  {'Current':>10}  {'Shares':>7}  "
-          f"{'P&L (SEK)':>12}  {'%Chg':>7}  {'Stop':>10}")
-    print(f"{'─'*80}")
+    lines = []
+    lines.append("─" * 80)
+    lines.append(f"  ATOS Portfolio  |  {now_et.strftime('%H:%M:%S')} ET  |  "
+                 f"Market: {mode}  |  Polling every {POLL_INTERVAL}s  "
+                 f"(display every {DISPLAY_INTERVAL}s — text is copyable)")
+    lines.append("─" * 80)
+    lines.append(f"  {'Ticker':<8}  {'Entry':>10}  {'Current':>10}  {'Shares':>7}  "
+                 f"{'P&L (SEK)':>12}  {'%Chg':>7}  {'Stop':>10}")
+    lines.append("─" * 80)
 
     for r in rows:
-        cur_str  = f"{r['cur']:.2f}" if r['cur'] > 0 else " ---"
-        pnl_str  = f"{r['pnl_sek']:+,.0f}" if r['cur'] > 0 else " ---"
-        pct_str  = f"{r['pct']:+.2f}%" if r['cur'] > 0 else " ---"
-        pnl_color = "\033[92m" if r['pnl_sek'] >= 0 else "\033[91m"   # green / red
-        reset     = "\033[0m"
-        print(f"  {r['ticker']:<8}  {r['currency']} {r['entry']:>8.2f}  "
-              f"{r['currency']} {cur_str:>8}  {r['shares']:>7,}  "
-              f"{pnl_color}{pnl_str:>12}{reset}  {pnl_color}{pct_str:>7}{reset}  "
-              f"{r['currency']} {r['stop']:>8.2f}")
+        cur_str = f"{r['cur']:.2f}" if r['cur'] > 0 else "    ---"
+        pnl_str = f"{r['pnl_sek']:+,.0f}" if r['cur'] > 0 else "    ---"
+        pct_str = f"{r['pct']:+.2f}%" if r['cur'] > 0 else "    ---"
+        col = "\033[92m" if r['pnl_sek'] >= 0 else "\033[91m"
+        lines.append(
+            f"  {r['ticker']:<8}  {r['currency']} {r['entry']:>8.2f}  "
+            f"{r['currency']} {cur_str:>8}  {r['shares']:>7,}  "
+            f"{col}{pnl_str:>12}{W}  {col}{pct_str:>7}{W}  "
+            f"{r['currency']} {r['stop']:>8.2f}"
+        )
 
-    print(f"{'─'*80}")
-    total_pnl_str = f"{total_pnl_sek:+,.0f}"
-    total_pct_str = f"{total_pct:+.2f}%"
-    col   = "\033[92m" if total_pnl_sek >= 0 else "\033[91m"
-    reset = "\033[0m"
-    print(f"  {'TOTAL':<8}  {'':>10}  {'':>10}  {'':>7}  "
-          f"{col}{total_pnl_str:>12}{reset}  {col}{total_pct_str:>7}{reset}")
-    print(f"{'─'*80}")
-    print(f"  Trailing stop: {TRAILING_PCT*100:.0f}% below high  |  "
-          f"Hard floor: {HARD_STOP_PCT*100:.0f}% below entry  |  "
-          f"CRITICAL alert if blind >{BLIND_SECONDS}s")
-    print()
-    print("  (Press Ctrl+C to stop)")
+    lines.append("─" * 80)
+    col = "\033[92m" if total_pnl >= 0 else "\033[91m"
+    lines.append(
+        f"  {'TOTAL':<8}  {'':>10}  {'':>10}  {'':>7}  "
+        f"{col}{total_pnl:>+12,.0f}{W}  {col}{total_pct:>+7.2f}%{W}"
+    )
+    lines.append("─" * 80)
+    lines.append(f"  Stop rules: trailing {TRAILING_PCT*100:.0f}% below high  |  "
+                 f"hard floor {HARD_STOP_PCT*100:.0f}% below entry")
+    lines.append("")
+    lines.append("  Ctrl+C to stop.  Text above stays still — safe to select & copy.")
+    lines.append("")   # blank line so cursor parks below the table
+    return "\n".join(lines)
+
+
+def _print_portfolio_table(open_trades: list, prices: dict, imap: dict, tick: int):
+    """Overwrites the terminal table in place without flashing."""
+    global _display_initialized
+    text = _render_table(open_trades, prices, imap, tick, mode="LIVE")
+    if not _display_initialized:
+        # First paint: clear once so we start with a clean slate
+        sys.stdout.write(_ANSI_CLEAR + _ANSI_HOME + text)
+        _display_initialized = True
+    else:
+        # Subsequent paints: jump to top and overwrite — no flash, text is stable
+        sys.stdout.write(_ANSI_HOME + text)
+    sys.stdout.flush()
 
 
 # ── Single poll ────────────────────────────────────────────────────
 
 def _poll_once(imap: dict, consecutive_failures: list, blind_since: list,
-               tick: int, show_table: bool) -> dict:
-    """Returns the latest prices dict (or {} on failure)."""
+               tick: int, show_table: bool, last_display: list) -> dict:
+    """Poll prices, check stops, optionally refresh display.
+    last_display[0] = timestamp of last screen redraw (throttled to DISPLAY_INTERVAL).
+    Returns the latest prices dict (or {} on failure)."""
     open_trades = db.get_open_trades()
     if not open_trades:
         consecutive_failures[0] = 0
-        if show_table:
-            os.system("cls")
-            print(f"  ATOS Monitor | {_et_now().strftime('%H:%M:%S')} ET | No open positions.")
         return {}
 
     prices = _fetch_saxo_prices(consecutive_failures)
@@ -517,11 +531,13 @@ def _poll_once(imap: dict, consecutive_failures: list, blind_since: list,
         return {}
     blind_since[0] = None
 
-    # Show live table
-    if show_table:
+    # Redraw display only every DISPLAY_INTERVAL seconds so text stays
+    # stable long enough for the user to select and copy it
+    if show_table and (time.time() - last_display[0]) >= DISPLAY_INTERVAL:
         _print_portfolio_table(open_trades, prices, imap, tick)
+        last_display[0] = time.time()
 
-    # Check stops
+    # Check stops (always runs every POLL_INTERVAL — independent of display)
     uic_to_trade = {imap[t["ticker"]]["uic"]: t
                     for t in open_trades if t.get("ticker") in imap}
 
@@ -572,13 +588,12 @@ def main():
 
     consecutive_failures = [0]
     blind_since          = [None]
+    last_display         = [0.0]   # timestamp of last screen redraw
     tick                 = 0
 
-    # Pre-load Yahoo prices for closed-market display
-    open_trades = db.get_open_trades()
-    tracked_tickers = [t["ticker"] for t in open_trades if t.get("ticker") in imap]
+    open_trades      = db.get_open_trades()
     yahoo_prices: dict = {}
-    yahoo_fetched_at = 0.0   # timestamp; refresh every 5 minutes when closed
+    yahoo_fetched_at = 0.0
 
     try:
         while True:
@@ -586,10 +601,10 @@ def main():
             market_open = _market_is_open()
 
             if market_open:
-                # ── LIVE MODE — Saxo API polling ──────────────────────
+                # ── LIVE MODE — Saxo API every 1s, display every 5s ──
                 try:
                     _poll_once(imap, consecutive_failures, blind_since,
-                               tick, show_table)
+                               tick, show_table, last_display)
                 except Exception as e:
                     log.error("Unhandled poll error: %s", e)
                 tick += 1
@@ -598,24 +613,20 @@ def main():
                              tick, now_et.strftime("%H:%M:%S"),
                              len(db.get_open_trades()))
 
-                # Stop after market close on a trading day
                 if _seconds_until_close() <= 0:
                     log.info("US market closed (16:00 ET). Live polling stopped.")
-                    # Fall through to closed-market display below
 
             else:
-                # ── CLOSED/HOLIDAY MODE — Yahoo prices, no Saxo API ──
-                if show_table:
-                    # Refresh Yahoo prices every 5 minutes
-                    if time.time() - yahoo_fetched_at > 300:
-                        open_trades = db.get_open_trades()
-                        tracked_tickers = [t["ticker"] for t in open_trades
-                                           if t.get("ticker") in imap]
-                        if tracked_tickers:
-                            yahoo_prices = _fetch_yahoo_prices(tracked_tickers)
-                        yahoo_fetched_at = time.time()
-
+                # ── CLOSED/HOLIDAY MODE — Yahoo prices every 5min ────
+                if show_table and (time.time() - yahoo_fetched_at > 300):
+                    open_trades = db.get_open_trades()
+                    tickers = [t["ticker"] for t in open_trades
+                               if t.get("ticker") in imap]
+                    if tickers:
+                        yahoo_prices = _fetch_yahoo_prices(tickers)
+                    yahoo_fetched_at = time.time()
                     _print_closed_table(open_trades, yahoo_prices, imap)
+
                 time.sleep(30)
                 continue
 
