@@ -29,6 +29,34 @@ import json
 import ftplib
 from datetime import datetime, date
 
+
+class _Tee:
+    """Write to both the original stdout and a log file simultaneously."""
+    def __init__(self, log_path: str):
+        self._term = sys.stdout
+        self._file = open(log_path, "a", encoding="utf-8", buffering=1)
+
+    def write(self, data):
+        self._term.write(data)
+        self._file.write(data)
+
+    def flush(self):
+        self._term.flush()
+        self._file.flush()
+
+    def close(self):
+        sys.stdout = self._term
+        self._file.close()
+
+
+def _setup_logging():
+    """Redirect stdout → both terminal and data/engine_YYYY-MM-DD.log."""
+    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, f"engine_{date.today():%Y-%m-%d}.log")
+    sys.stdout = _Tee(log_path)
+    return log_path
+
 import pandas as pd
 import yfinance as yf
 
@@ -80,6 +108,12 @@ STRATEGY_MODE = True   # False -> fall back to the detector-consensus scan
 # out until a validated strategy exists for those markets. So the per-instrument
 # strategy_scan has nothing to run and the engine trades only proven US momentum.
 US_MOMENTUM_ENABLED = True
+
+# ── Option 3: US Mean Reversion ────────────────────────────────────────────
+# DISABLED until backtest_us_reversion.py shows Sharpe >= 0.8 and WinRate >= 50%.
+# Run:  python backtest_us_reversion.py
+# Then flip this to True when the verdict is ENABLE.
+US_REVERSION_ENABLED = False
 
 STRATEGY_INSTANCE_FOR_MARKET = {
     # "OMX30": S5_MomentumAccel(), "CPH25": S3_MeanReversion(),  # paused: unvalidated
@@ -287,7 +321,9 @@ def print_banner(total_equity: float, day_start: float, open_count: int,
 # ══════════════════════════════════════════════════════════════════
 
 def run_cycle():
+    log_path = _setup_logging()
     print(f"\n{'='*60}\nATOS Daily Cycle — {datetime.now():%Y-%m-%d %H:%M:%S}\n{'='*60}")
+    print(f"Log: {log_path}")
 
     # ── 0. Init DB ────────────────────────────────────────────────
     db.init_db()
@@ -616,6 +652,14 @@ def run_cycle():
         except Exception as e:
             print(f"  [US momentum] ERROR: {e}")
 
+    # ── 6d. US mean reversion (Option 3 — enable after backtest) ──
+    if US_REVERSION_ENABLED:
+        print("  Running US reversion strategy...")
+        try:
+            run_us_reversion(feat_data, db.get_open_trades(), todays_actions)
+        except Exception as e:
+            print(f"  [US reversion] ERROR: {e}")
+
     # ── 7. Learning pass ──────────────────────────────────────────
     print("  Running learning pass...")
     learning_result = run_learning_pass()
@@ -916,6 +960,132 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list, dr
                   f"Rebalance will retry tomorrow (last_rebalance unchanged).")
         state["sleeve_cash"] = sleeve_equity - deployed_sek
         _save_us_state(state)
+
+
+def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list):
+    """US Mean Reversion — short-term dip-buying strategy (3-10 day holds).
+
+    Completely independent of US Blend: separate sleeve capital, separate DB rows
+    (strategy='US Reversion'), separate position limit (MAX_POSITIONS=3).
+
+    Enabled only when US_REVERSION_ENABLED = True (after backtest passes).
+    """
+    from atos import us_reversion as USR
+    from instrument_map import load_instrument_map
+
+    if kill_switch_active():
+        print("  [US reversion] STOP_TRADING present — skip"); return
+    try:
+        imap = load_instrument_map()
+    except Exception as e:
+        print(f"  [US reversion] instrument_map load failed: {e}"); return
+
+    tag = "[US reversion]"
+    fx_usd = fx.get_rate_to_sek("USD")
+
+    # Current open reversion positions (this strategy only)
+    rev_open = {t["ticker"]: t for t in open_trades if t.get("strategy") == "US Reversion"}
+
+    def _price(tk):
+        return float(feat_data[tk]["Close"].iloc[-1]) if tk in feat_data else 0.0
+
+    def _rsi_sma20(tk):
+        if tk not in feat_data:
+            return None, None
+        c = feat_data[tk]["Close"].dropna()
+        if len(c) < 20:
+            return None, None
+        delta = c.diff()
+        gain  = delta.clip(lower=0).rolling(14).mean()
+        loss  = (-delta.clip(upper=0)).rolling(14).mean()
+        rs    = gain / loss.replace(0, np.nan)
+        rsi   = float((100 - 100 / (1 + rs)).iloc[-1])
+        sma20 = float(c.rolling(20).mean().iloc[-1])
+        return rsi, sma20
+
+    # ── Exit check for existing reversion positions ────────────────
+    from datetime import date as _date
+    today = _date.today()
+    for ticker, trade in list(rev_open.items()):
+        cur_price = _price(ticker)
+        if cur_price <= 0:
+            continue
+        cur_rsi, sma20 = _rsi_sma20(ticker)
+        entry_date = _date.fromisoformat(trade.get("entry_date", today.isoformat()))
+        days_held = (today - entry_date).days   # calendar days (conservative)
+        exit_flag, reason = USR.should_exit(trade, cur_price, cur_rsi, sma20, days_held)
+        if exit_flag:
+            sh = trade.get("shares", 0) or 0
+            print(f"  {tag} EXIT {ticker}: {reason}")
+            uic = imap.get(ticker, {}).get("uic")
+            if uic and sh > 0:
+                try:
+                    saxo_client.place_order(uic=uic, side="Sell", qty=sh, asset_type="Stock")
+                    pnl_sek = (cur_price - trade.get("entry_price", 0)) * sh * fx_usd
+                    db.close_trade(trade["id"], exit_price=cur_price,
+                                   exit_date=today.isoformat(), pnl_sek=pnl_sek)
+                    todays_actions.append({
+                        "action": "SELL", "ticker": ticker, "market_group": "US Equities",
+                        "score": 0, "shares": sh, "price": cur_price,
+                        "reason": f"reversion exit: {reason}", "pnl_sek": pnl_sek,
+                    })
+                except Exception as e:
+                    print(f"  {tag} sell {ticker} FAILED: {e}")
+
+    # ── Entry scan — only if slots are available ───────────────────
+    # Re-read open trades after exits (some may have just been closed)
+    rev_open_now = {t["ticker"]: t for t in db.get_open_trades()
+                    if t.get("strategy") == "US Reversion"}
+    slots_free = USR.MAX_POSITIONS - len(rev_open_now)
+    if slots_free <= 0:
+        print(f"  {tag} full ({USR.MAX_POSITIONS}/{USR.MAX_POSITIONS} positions)")
+        return
+
+    candidates = USR.scan(feat_data, US_TICKERS)
+    candidates = [c for c in candidates if c["ticker"] not in rev_open_now]
+    if not candidates:
+        print(f"  {tag} no entry signals today")
+        return
+
+    print(f"  {tag} {len(candidates)} candidate(s), {slots_free} slot(s) free")
+    slot_sek = USR.REVERSION_SLEEVE_SEK / USR.MAX_POSITIONS
+
+    for cand in candidates[:slots_free]:
+        ticker = cand["ticker"]
+        price  = cand["price"]
+        uic_data = imap.get(ticker, {})
+        uic = uic_data.get("uic")
+        if not uic:
+            print(f"  {tag} {ticker}: no UIC in instrument_map — skip")
+            continue
+
+        shares = int(slot_sek / (price * fx_usd))
+        if shares < 1:
+            print(f"  {tag} {ticker}: slot too small for 1 share — skip")
+            continue
+
+        print(f"  {tag} BUY {ticker}: RSI={cand['rsi']} dip={cand['dip_pct']}% "
+              f"vol={cand['vol_ratio']}× | {shares} shares @ ${price:.2f}")
+        try:
+            saxo_client.place_order(uic=uic, side="Buy", qty=shares, asset_type="Stock")
+            comm = commission_sek(shares, price * fx_usd)
+            db.insert_trade({
+                "strategy": "US Reversion", "market_group": "US Equities",
+                "ticker": ticker, "direction": "BUY",
+                "entry_date": today.isoformat(), "entry_price": price,
+                "shares": shares, "commission_sek": comm,
+                "entry_score": cand["score"], "d1_trend": 0, "d2_momentum": 0,
+                "d3_breakout": 0, "d4_meanrev": cand["rsi"], "d5_vol": cand["vol_ratio"],
+            })
+            todays_actions.append({
+                "action": "BUY", "ticker": ticker, "market_group": "US Equities",
+                "score": cand["score"], "shares": shares, "price": price,
+                "reason": (f"mean-reversion: RSI {cand['rsi']}, "
+                           f"dip {cand['dip_pct']}%, vol {cand['vol_ratio']}×"),
+                "pnl_sek": None,
+            })
+        except Exception as e:
+            print(f"  {tag} buy {ticker} FAILED: {e}")
 
 
 def _currency_for(market_group: str) -> str:

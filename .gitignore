@@ -16,6 +16,7 @@ data/atos_live.db-wal
 # Log files
 data/monitor_log.txt
 data/*.log
+data/engine_*.log
 # risk / daily capital trackers (regenerate automatically)
 data/atos_risk_state.json
 data/daily_state.json
