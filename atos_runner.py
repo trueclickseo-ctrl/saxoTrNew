@@ -721,7 +721,7 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
     if side == "Buy":
         comm = commission_sek(shares, price_sek)
         db.insert_trade({
-            "strategy": "US Momentum", "market_group": "US Equities", "ticker": ticker,
+            "strategy": "US Blend", "market_group": "US Equities", "ticker": ticker,
             "direction": "BUY", "entry_date": date.today().isoformat(),
             "entry_price": price, "shares": shares, "commission_sek": comm,
             "entry_score": 0, "d1_trend": 0, "d2_momentum": 0, "d3_breakout": 0,
@@ -814,30 +814,35 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list, dr
     # Liquidate all US, then rebuy the top-N. Budget = the CURRENT sleeve equity
     # (compounds with profit). Whole shares; slots capped by the running remaining
     # budget so total spend can never exceed the sleeve (and never touches the rest).
-    print(f"  {tag} REBALANCE — top {len(tgt['targets'])} | budget {sleeve_equity:,.0f} SEK "
+    mom_names = tgt.get("momentum") or []
+    lv_names  = tgt.get("lowvol") or []
+    print(f"  {tag} REBALANCE (blend) — {len(mom_names)} momentum {mom_names} + "
+          f"{len(lv_names)} low-vol {lv_names} | budget {sleeve_equity:,.0f} SEK "
           f"(started {USM.US_SLEEVE_SEK:,.0f}, compounds with P&L)")
     _sell_all_us()
     deployed_sek = 0.0
-    if tgt["targets"]:
-        per_slot_usd  = (sleeve_equity / len(tgt["targets"])) / fx_usd
-        remaining_sek = sleeve_equity
-        for tk in tgt["targets"]:
-            if tk not in feat_data or tk not in imap:
-                continue
-            px = _price(tk)
-            if px <= 0:
-                continue
-            slot_usd = min(per_slot_usd, remaining_sek / fx_usd)
-            shares = int(slot_usd / px)
-            if shares >= 1:
-                _do("Buy", tk, shares, px)
-                cost = shares * px * fx_usd
-                remaining_sek -= cost
-                deployed_sek  += cost
-            else:
-                print(f"  {tag} {tk}: budget/slot too small for 1 share (${px:.0f}) — skip")
-        print(f"  {tag} deployed ~{deployed_sek:,.0f} of {sleeve_equity:,.0f} SEK; "
-              f"{sleeve_equity - deployed_sek:,.0f} SEK stays as cash (rest of account untouched)")
+    # Blend priority: momentum names (offense) first, then low-vol (defense), deduped.
+    # Dynamic greedy sizing: each name gets remaining_budget / names_still_to_place, so
+    # budget skipped on an unaffordable name flows forward and the sleeve stays invested.
+    priority = []
+    for tk in mom_names + lv_names:
+        if tk not in priority and tk in feat_data and tk in imap and _price(tk) > 0:
+            priority.append(tk)
+    remaining_sek = sleeve_equity
+    for i, tk in enumerate(priority):
+        names_left = len(priority) - i
+        slot_usd = (remaining_sek / names_left) / fx_usd
+        px = _price(tk)
+        shares = int(slot_usd / px)
+        if shares >= 1:
+            _do("Buy", tk, shares, px)
+            cost = shares * px * fx_usd
+            remaining_sek -= cost
+            deployed_sek  += cost
+        else:
+            print(f"  {tag} {tk}: ${slot_usd:.0f}/slot < 1 share (${px:.0f}) — skip")
+    print(f"  {tag} deployed ~{deployed_sek:,.0f} of {sleeve_equity:,.0f} SEK; "
+          f"{sleeve_equity - deployed_sek:,.0f} SEK stays as cash (rest of account untouched)")
     if not dry_run:
         state["last_rebalance"] = date.today().isoformat()
         state["sleeve_cash"]    = sleeve_equity - deployed_sek

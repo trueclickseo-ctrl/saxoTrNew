@@ -16,8 +16,9 @@ import numpy as np
 import pandas as pd
 
 LOOKBACK      = 120     # ~6-month momentum
-TOPN          = 3       # concentrated for a small budget (top-10 needs ~100k for whole
-                        # shares; on a 15k budget we hold the top 3 by risk-adj momentum)
+# BLEND: two low-correlation sleeves (validated Sharpe 1.16, DD 14.3% — the safest).
+MOM_N         = 2       # offense: top-2 by risk-adjusted momentum
+LOWVOL_N      = 2       # defense: top-2 by lowest volatility
 TARGET_VOL    = 0.15    # annualized vol target
 REBAL_DAYS    = 28      # calendar days between rebalances (~monthly)
 US_SLEEVE_SEK = 15_000.0  # HARD TRADING BUDGET (SEK). The bot deploys at most this
@@ -59,24 +60,20 @@ def compute_targets(feat_data: dict, us_tickers) -> dict:
 
     last = panel.iloc[-1]
     mom = panel.iloc[-1] / panel.iloc[-1 - LOOKBACK] - 1
-    # RISK-ADJUSTED momentum (return / volatility) — won the signal hunt: same
-    # return as plain momentum, higher Sharpe (1.22 vs 1.08) and lower drawdown.
     vol = panel.pct_change().rolling(60).std().iloc[-1] * np.sqrt(252)
-    score = mom / vol.replace(0, np.nan)
     ema200 = panel.ewm(span=200, adjust=False).mean().iloc[-1]
-    elig = [t for t in panel.columns
-            if pd.notna(score[t]) and mom[t] > 0 and pd.notna(ema200[t]) and last[t] > ema200[t]]
-    ranked = sorted(elig, key=lambda t: score[t], reverse=True)[:TOPN]
-
-    scale = 1.0
-    if ranked:
-        rets = panel[ranked].pct_change().dropna().tail(20)
-        pvol = rets.mean(axis=1).std() * np.sqrt(252) if len(rets) > 1 else 0.0
-        if pvol > 0:
-            scale = min(1.0, TARGET_VOL / pvol)
-    return {"risk_off": False, "targets": ranked, "scale": round(float(scale), 3),
-            "momentum": {t: round(float(mom[t]) * 100, 1) for t in ranked},
-            "reason": "ok"}
+    above = [t for t in panel.columns
+             if pd.notna(ema200[t]) and last[t] > ema200[t] and pd.notna(vol[t]) and vol[t] > 0]
+    # Offense: top-N by risk-adjusted momentum (positive momentum only).
+    mom_elig = [t for t in above if pd.notna(mom[t]) and mom[t] > 0]
+    momentum = sorted(mom_elig, key=lambda t: mom[t] / vol[t], reverse=True)[:MOM_N]
+    # Defense: top-N by lowest volatility.
+    lowvol = sorted(above, key=lambda t: vol[t])[:LOWVOL_N]
+    targets = list(dict.fromkeys(momentum + lowvol))   # deduped, for display/holdings
+    return {"risk_off": False, "momentum": momentum, "lowvol": lowvol,
+            "targets": targets, "reason": "ok",
+            "detail": {t: {"mom_pct": round(float(mom[t]) * 100, 1),
+                           "vol_pct": round(float(vol[t]) * 100, 1)} for t in targets}}
 
 
 def plan_rebalance(current_shares: dict, targets: list, scale: float,
