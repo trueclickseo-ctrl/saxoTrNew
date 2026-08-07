@@ -166,6 +166,25 @@ monthly rebalance, per-stock EMA200 filter, daily market-regime risk-off (equal-
 Two dials for the user: *max return* (top10 base: CAGR 35%, DD 31%) vs *smoothest*
 (top10+risk-off+VT: CAGR 24%, DD 21%). Both are legit; default to the smoother one.
 
+## Deep research: residual momentum — 2026-08-07  (`research_deep_strategies.py`)
+Tested the top documented candidate: RESIDUAL (beta-adjusted) momentum — "same return,
+half the vol, ~double Sharpe vs raw momentum" per the literature. 10y, same engine:
+| Strategy | CAGR | Sharpe | MaxDD |
+|---|---|---|---|
+| raw risk-adj momentum | 26.6% | 1.10 | 29.4% |
+| **residual momentum** | 26.6% | 1.12 | **21.8%** |
+| current blend (mom+lowvol) | 18.3% | 1.16 | 14.3% |
+| resid-mom + lowvol blend | 18.3% | 1.17 | 14.6% |
+
+Residual momentum IS a real refinement (same return, lower DD standalone). BUT it
+correlates **0.89** with raw momentum (not a new stream), and in the BLEND the gain
+vanishes (1.17 vs 1.16 — a tie; low-vol already provides the DD control). **VERDICT: keep
+the current blend; residual momentum is not worth the extra complexity here. We are at the
+practical CEILING for price-based daily US-equity strategies.** Bigger gains would require
+genuinely NEW information (fundamentals, alt-data) or a different arena (intraday, more
+asset classes) — each a larger project, not more price backtests. Dual-momentum/GEM skipped
+(fragile in bull markets; our risk-off overlay already covers trend).
+
 ## Multi-strategy diversification — 2026-08-07  (`research_more_strategies.py`)
 Hunt for a small set of validated, LOW-CORRELATION strategies to run together safely.
 Same portfolio engine (top-5, monthly, daily risk-off, costs), 10y:
