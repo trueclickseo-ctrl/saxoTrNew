@@ -23,8 +23,8 @@ from datetime import date
 import pandas as pd
 
 # -- Configuration --------------------------------------------------
-STARTING_CAPITAL_SEK  = 15_000   # HARD TRADING BUDGET (SEK). The bot only ever deploys
-                                 # up to this much; the rest of the real account is untouched.
+STARTING_CAPITAL_SEK  = 10_391_109  # Inception equity (2026-08-07 rebalance baseline).
+                                    # Update whenever a meaningful fresh-start deposit occurs.
 RISK_PER_TRADE_PCT    = 0.01     # risk max 1% of market-group capital per trade
 ATR_STOP_MULTIPLE     = 2.5      # stop = entry - 2.5 * ATR
 MAX_POSITIONS_TOTAL   = 14       # max simultaneous open positions across all markets
@@ -49,11 +49,9 @@ FX_USD_TO_SEK    = 10.5     # rough SEK/USD rate for commission floor (updated d
 def _load_state() -> dict:
     os.makedirs(os.path.dirname(RISK_STATE_FILE), exist_ok=True)
     if not os.path.exists(RISK_STATE_FILE):
-        state = {
-            "available_cash_sek": STARTING_CAPITAL_SEK,
-            "day_start_equity_sek": STARTING_CAPITAL_SEK,
-            "last_reset_date": date.today().isoformat(),
-        }
+        # Don't set last_reset_date here — get_day_start_equity will compute
+        # the real starting equity from open positions on first call.
+        state = {"available_cash_sek": 0}
         _save_state(state)
         return state
     with open(RISK_STATE_FILE) as f:

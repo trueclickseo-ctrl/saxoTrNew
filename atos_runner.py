@@ -372,6 +372,10 @@ def run_cycle():
     # ── 6a. Exits first ───────────────────────────────────────────
     for trade in list(open_trades):
         ticker   = trade["ticker"]
+        # US momentum positions are managed exclusively by run_us_momentum (6c).
+        # Applying generic stops here would conflict with monthly-rebalance logic.
+        if trade.get("strategy") == "US Blend":
+            continue
         decision = decisions.get(ticker)
         if decision is None or decision.action != "EXIT":
             # Also check ATR stop on latest price
@@ -623,8 +627,13 @@ def run_cycle():
     equity_by_mkt: dict[str, float] = {}
     for t in open_trades_now:
         mkt    = t.get("market_group", "Unknown")
+        ticker = t.get("ticker", "")
         shares = t.get("shares", 0) or 0
-        price  = t.get("entry_price", 0) or 0
+        # Use today's close if available; fall back to entry price (cost basis)
+        if ticker in feat_data:
+            price = float(feat_data[ticker]["Close"].iloc[-1])
+        else:
+            price = t.get("entry_price", 0) or 0
         rate   = fx.get_rate_to_sek(_currency_for(mkt))   # FX-convert to SEK
         equity_by_mkt[mkt] = equity_by_mkt.get(mkt, 0.0) + shares * price * rate
 

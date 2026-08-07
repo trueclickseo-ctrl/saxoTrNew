@@ -15,6 +15,7 @@ data/atos_live.db
 data/atos_risk_state.json
 data/daily_state.json
 data/risk_capital.json
+data/us_momentum_state.json
 # strategy monitor state
 data/strategy_monitor.json
 # generated HTML dashboard (was uploaded to namazic.com)
