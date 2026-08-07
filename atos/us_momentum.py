@@ -21,9 +21,8 @@ MOM_N         = 2       # offense: top-2 by risk-adjusted momentum
 LOWVOL_N      = 2       # defense: top-2 by lowest volatility
 TARGET_VOL    = 0.15    # annualized vol target
 REBAL_DAYS    = 28      # calendar days between rebalances (~monthly)
-US_SLEEVE_SEK = 15_000.0  # HARD TRADING BUDGET (SEK). The bot deploys at most this
-                          # much and never reads the real account balance — anything
-                          # above this in the Saxo account stays untouched.
+US_SLEEVE_SEK = 1_095_000.0   # PAPER TRADING: 100,000 EUR → SEK at ~10.95.
+                               # Switch to a hard cap before going live with real money.
 
 
 def _panel(feat_data: dict, us_tickers) -> pd.DataFrame | None:

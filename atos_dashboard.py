@@ -474,16 +474,15 @@ HTML_CONTENT = """<!DOCTYPE html>
                 ATOS <span style="font-weight: 400; font-size: 18px; color: var(--text-secondary)">Algorithmic Trading OS</span>
             </div>
             <div class="header-actions">
+                <div id="worldClock" style="display:flex;gap:16px;align-items:center;"></div>
                 <span class="last-updated" id="lastUpdated">Updating...</span>
-                <button class="theme-toggle" id="themeToggle" title="Toggle Theme">
-                    🌙
-                </button>
+                <button class="theme-toggle" id="themeToggle" title="Toggle Theme">🌙</button>
             </div>
         </header>
 
         <div class="kpi-row delay-1">
             <div class="glass-card kpi-card">
-                <h3>Total Equity</h3>
+                <h3>ATOS Sleeve Equity</h3>
                 <div class="kpi-value" id="kpiEquity">--- SEK</div>
                 <div class="kpi-sub" id="kpiEquitySub">---</div>
             </div>
@@ -494,8 +493,8 @@ HTML_CONTENT = """<!DOCTYPE html>
             </div>
             <div class="glass-card kpi-card">
                 <h3>Open Positions</h3>
-                <div class="kpi-value" id="kpiPositions">0/10</div>
-                <div class="kpi-sub">Active Trades</div>
+                <div class="kpi-value" id="kpiPositions">0/4</div>
+                <div class="kpi-sub">US Blend targets (max 4)</div>
             </div>
             <div class="glass-card kpi-card">
                 <h3>Algorithm Stats</h3>
@@ -504,7 +503,37 @@ HTML_CONTENT = """<!DOCTYPE html>
             </div>
         </div>
 
-        <div class="glass-card" style="margin-bottom:30px;">
+        <div class="glass-card delay-1" style="margin-bottom:24px;">
+            <div class="section-title">Open Positions (Portfolio) — US Blend</div>
+            <div style="margin-bottom:12px;padding:10px 14px;border-radius:8px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.2);font-size:13px;color:var(--text-secondary);">
+                <strong style="color:var(--text-primary);">Exit / Stop-Loss Policy</strong> &nbsp;·&nbsp;
+                <span>Monthly rebalance (Sep 1)</span> — positions outside top ranks are sold.
+                &nbsp;·&nbsp;
+                <span>Market risk-off</span> — if US equal-weight index &lt; 200-day SMA, <em>all</em> positions are liquidated to cash immediately.
+                &nbsp;·&nbsp;
+                <span>No hard per-position stop</span> — momentum strategies exit via rank signal, not a fixed %-loss trigger.
+            </div>
+            <div class="table-container">
+                <table id="openPositionsTable">
+                    <thead>
+                        <tr>
+                            <th>Ticker</th>
+                            <th>Market</th>
+                            <th>Shares</th>
+                            <th>Entry Price</th>
+                            <th>Current Price</th>
+                            <th>Entry Date</th>
+                            <th>P&amp;L</th>
+                            <th>% Chg</th>
+                        </tr>
+                    </thead>
+                    <tbody><tr><td colspan="8" class="empty-state">Loading...</td></tr></tbody>
+                </table>
+            </div>
+            <div id="strategyTargetInfo" style="margin-top:10px;font-size:13px;color:var(--text-secondary);"></div>
+        </div>
+
+        <div class="glass-card" style="margin-bottom:24px;">
             <div class="section-title">Market Status</div>
             <div id="marketStatus" style="display:flex;flex-wrap:wrap;gap:16px;">
                 <div class="empty-state">Loading...</div>
@@ -569,26 +598,6 @@ HTML_CONTENT = """<!DOCTYPE html>
         <div class="glass-card delay-4">
             <div class="section-title">Tradeable Universe (stock-only: US · OMX30 · CPH25)</div>
             <div id="universeContainer"><div class="empty-state">Loading...</div></div>
-        </div>
-
-        <div class="glass-card delay-4">
-            <div class="section-title">Open Positions (Portfolio)</div>
-            <div class="table-container">
-                <table id="openPositionsTable">
-                    <thead>
-                        <tr>
-                            <th>Ticker</th>
-                            <th>Exchange</th>
-                            <th>Shares</th>
-                            <th>Entry Price</th>
-                            <th>Entry Date</th>
-                            <th>P&L</th>
-                            <th>Description</th>
-                        </tr>
-                    </thead>
-                    <tbody><tr><td colspan="7" class="empty-state">Loading...</td></tr></tbody>
-                </table>
-            </div>
         </div>
 
         <div class="glass-card delay-4">
@@ -763,8 +772,8 @@ HTML_CONTENT = """<!DOCTYPE html>
                 const closedData = (closed && closed.data) || [];
                 const signalData = (signals && signals.data) || [];
                 
-                // Use live position count if available, otherwise DB count
-                const positionCount = livePos.length > 0 ? livePos.length : openData.length;
+                // Use DB count for ATOS-tracked positions only (not all Saxo positions)
+                const positionCount = openData.length;
 
                 if (summary && !summary.error) {
                     updateKPIs(summary, positionCount, livePositions && livePositions.summary);
@@ -813,7 +822,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             }
             document.getElementById('kpiEquity').textContent = formatNumber(eq) + ' ' + currency;
 
-            const startingCapital = 15000;
+            const startingCapital = 10942898; // paper trading: full SIM balance
             const pct = eq ? ((eq - startingCapital) / startingCapital) * 100 : 0;
             const sign = pct >= 0 ? '+' : '';
             const cls = pct >= 0 ? 'text-success' : 'text-danger';
@@ -829,7 +838,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             const pnl = data.today_pnl || 0;
             const pnlCls = pnl >= 0 ? 'text-success' : 'text-danger';
             document.getElementById('kpiTodayPnl').innerHTML = `<span class="${pnlCls}">${pnl > 0 ? '+' : ''}${formatNumber(pnl)} ${currency}</span>`;
-            document.getElementById('kpiPositions').textContent = `${openCount}/10`;
+            document.getElementById('kpiPositions').textContent = `${openCount}/4`;
             document.getElementById('kpiWinRate').textContent = data.win_rate ? formatNumber(data.win_rate) + '%' : '---%';
             document.getElementById('kpiProfitFactor').textContent = `PF: ${data.profit_factor ? formatNumber(data.profit_factor) : '---'} | Trades: ${data.trades_count || 0}`;
         }
@@ -910,23 +919,39 @@ HTML_CONTENT = """<!DOCTYPE html>
         function updateLivePositions(liveData) {
             const openBody = document.querySelector('#openPositionsTable tbody');
             const positions = (liveData && liveData.data) || [];
-            
+
             if (positions.length === 0) {
-                // Don't overwrite if we already have DB positions
+                openBody.innerHTML = '<tr><td colspan="8" class="empty-state">No open positions</td></tr>';
                 return;
             }
-            
+
+            // US Blend tickers from DB (so we can highlight them)
+            const US_MKTS = ['US', 'US Equities'];
+
             let rows = positions.map(p => {
-                const pnlCls = p.pnl >= 0 ? 'text-success' : 'text-danger';
+                const pnl    = p.pnl || 0;
+                const pnlPct = p.pnl_pct || 0;
+                const pnlCls = pnl >= 0 ? 'text-success' : 'text-danger';
+                const curPx  = (p.current_price && p.current_price !== 0)
+                    ? p.current_price.toFixed(2) : '—';
+                const entryPx   = p.entry_price ? p.entry_price.toFixed(2) : '—';
+                const entryDate = p.entry_date ? p.entry_date.substring(0, 10) : '—';
+                const isATOS    = US_MKTS.includes(p.market_group);
+                const rowStyle  = isATOS ? '' : 'opacity:0.55;';
+                const tickerLabel = p.ticker.split(':')[0];
+                const badge = isATOS
+                    ? `<span class="badge buy" style="font-size:10px;padding:2px 5px">ATOS</span>`
+                    : `<span class="badge blocked" style="font-size:10px;padding:2px 5px">LEGACY</span>`;
                 return `
-                    <tr>
-                        <td><strong>${p.ticker}</strong></td>
+                    <tr style="${rowStyle}">
+                        <td><strong>${tickerLabel}</strong> ${badge}</td>
                         <td>${p.market_group}</td>
                         <td>${p.shares}</td>
-                        <td>${p.entry_price ? p.entry_price.toFixed(2) : '-'}</td>
-                        <td>${p.entry_date ? p.entry_date.substring(0, 10) : '-'}</td>
-                        <td class="${pnlCls}">${p.pnl >= 0 ? '+' : ''}${formatNumber(p.pnl)} ${p.currency}</td>
-                        <td>${p.description}</td>
+                        <td style="color:var(--text-secondary)">${entryPx}</td>
+                        <td><strong>${curPx}</strong></td>
+                        <td>${entryDate}</td>
+                        <td class="${pnlCls}">${pnl >= 0 ? '+' : ''}${formatNumber(pnl)} ${p.currency}</td>
+                        <td class="${pnlCls}">${pnlPct >= 0 ? '+' : ''}${typeof pnlPct === 'number' ? pnlPct.toFixed(2) : '-'}%</td>
                     </tr>
                 `;
             }).join('');
@@ -936,15 +961,25 @@ HTML_CONTENT = """<!DOCTYPE html>
                 const pnlPct = s.total_invested_sek > 0 ? (s.total_pnl_sek / s.total_invested_sek * 100) : 0;
                 rows += `
                     <tr style="border-top:2px solid var(--border-color);font-weight:700;">
-                        <td>TOTAL</td>
+                        <td colspan="2">TOTAL (${s.count} positions)</td>
                         <td></td>
-                        <td>${s.count}</td>
-                        <td colspan="2">Invested: ${formatNumber(s.total_invested_sek)} SEK</td>
-                        <td class="${pnlCls}">${s.total_pnl_sek >= 0 ? '+' : ''}${formatNumber(s.total_pnl_sek)} SEK (${pnlPct >= 0 ? '+' : ''}${formatNumber(pnlPct)}%)</td>
-                        <td>Market value: ${formatNumber(s.total_value_sek)} SEK</td>
+                        <td style="color:var(--text-secondary)">Cost: ${formatNumber(s.total_invested_sek)} SEK</td>
+                        <td>Value: ${formatNumber(s.total_value_sek)} SEK</td>
+                        <td></td>
+                        <td class="${pnlCls}" colspan="2">${s.total_pnl_sek >= 0 ? '+' : ''}${formatNumber(s.total_pnl_sek)} SEK &nbsp;(${pnlPct >= 0 ? '+' : ''}${formatNumber(pnlPct)}%)</td>
                     </tr>`;
             }
             openBody.innerHTML = rows;
+
+            // Show strategy target info below table
+            const infoEl = document.getElementById('strategyTargetInfo');
+            if (infoEl) {
+                infoEl.innerHTML = `
+                    <strong>Strategy targets up to 4 stocks</strong> (top-2 momentum + top-2 low-vol, above 200-day SMA) &nbsp;·&nbsp;
+                    ${s ? s.count : positions.length} bought &nbsp;·&nbsp;
+                    <span style="color:var(--warning-color)">AMD was 4th target but cash insufficient after 3 fills (price ~$489)</span> &nbsp;·&nbsp;
+                    Next rebalance: <strong>Sep 1</strong>`;
+            }
         }
 
         function updateSignalsTable(signals) {
@@ -1012,22 +1047,25 @@ HTML_CONTENT = """<!DOCTYPE html>
                 }).join('');
             }
 
-            // Open Positions
+            // Open Positions (DB fallback — no live prices)
             const openBody = document.querySelector('#openPositionsTable tbody');
             if (!open || open.length === 0) {
-                openBody.innerHTML = '<tr><td colspan="7" class="empty-state">No open positions</td></tr>';
+                openBody.innerHTML = '<tr><td colspan="8" class="empty-state">No open positions</td></tr>';
             } else {
-                openBody.innerHTML = open.map(p => `
-                    <tr>
-                        <td><strong>${p.ticker}</strong></td>
+                openBody.innerHTML = open.map(p => {
+                    const ep = p.entry_price ? parseFloat(p.entry_price).toFixed(2) : '—';
+                    const badge = `<span class="badge buy" style="font-size:10px;padding:2px 5px">ATOS</span>`;
+                    return `<tr>
+                        <td><strong>${p.ticker}</strong> ${badge}</td>
                         <td>${p.market_group}</td>
                         <td>${p.shares}</td>
-                        <td>${p.entry_price}</td>
-                        <td>${p.entry_date}</td>
-                        <td>${p.entry_score ? p.entry_score.toFixed(2) : '-'}</td>
-                        <td>${generateScorePills(p.d1_trend, p.d2_momentum, p.d3_breakout, p.d4_mean_revert, p.d5_volume)}</td>
-                    </tr>
-                `).join('');
+                        <td style="color:var(--text-secondary)">${ep}</td>
+                        <td style="color:var(--text-secondary)">—</td>
+                        <td>${p.entry_date || '—'}</td>
+                        <td>—</td>
+                        <td>—</td>
+                    </tr>`;
+                }).join('');
             }
 
             // History
@@ -1103,6 +1141,26 @@ HTML_CONTENT = """<!DOCTYPE html>
             }).join('');
         }
 
+        function updateWorldClock() {
+            const zones = [
+                {flag: '🇺🇸', label: 'NY',  tz: 'America/New_York'},
+                {flag: '🇸🇪', label: 'SE',  tz: 'Europe/Stockholm'},
+                {flag: '🇵🇰', label: 'PKT', tz: 'Asia/Karachi'},
+            ];
+            const el = document.getElementById('worldClock');
+            if (!el) return;
+            el.innerHTML = zones.map(z => {
+                const t = new Intl.DateTimeFormat('en-GB', {
+                    timeZone: z.tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+                }).format(new Date());
+                return `<div style="display:flex;align-items:center;gap:5px;padding:4px 10px;border:1px solid var(--border-color);border-radius:6px;font-size:12px;white-space:nowrap;">
+                    <span>${z.flag}</span>
+                    <span style="color:var(--text-secondary)">${z.label}</span>
+                    <span style="font-weight:600;font-variant-numeric:tabular-nums;">${t}</span>
+                </div>`;
+            }).join('');
+        }
+
         // Start
         fetchDashboardData();
         setInterval(fetchDashboardData, 60000);
@@ -1121,6 +1179,8 @@ HTML_CONTENT = """<!DOCTYPE html>
         setInterval(() => fetch('/api/us_momentum').then(r => r.json()).then(updateUsMomentum).catch(() => {}), 60000);
         updateMarketStatus();
         setInterval(updateMarketStatus, 30000);
+        updateWorldClock();
+        setInterval(updateWorldClock, 1000);
     </script>
 </body>
 </html>"""
@@ -1164,13 +1224,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 eq_row = cursor.fetchone()
                 atos_equity = eq_row['total_equity_sek'] if eq_row else 15000.0
 
-                # Cash from the ATOS risk-state file (same source the engine sizes off)
+                # Cash from the US momentum sleeve state (the engine's authoritative source)
                 atos_cash = None
                 try:
-                    _rs = os.path.join(DB_DIR, 'atos_risk_state.json')
-                    if os.path.exists(_rs):
-                        with open(_rs) as _f:
-                            atos_cash = json.load(_f).get('available_cash_sek')
+                    _us = os.path.join(DB_DIR, 'us_momentum_state.json')
+                    if os.path.exists(_us):
+                        with open(_us) as _f:
+                            atos_cash = json.load(_f).get('sleeve_cash')
                 except Exception:
                     atos_cash = None
 
@@ -1264,18 +1324,28 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             mkt = 'DAX'
                         else:
                             mkt = disp.get('Currency', '?')
+                        entry_price = pbase.get('OpenPrice') or 0
+                        shares      = pbase.get('Amount') or 0
+                        pnl         = pview.get('ProfitLossOnTrade') or 0
+                        pnl_pct     = pview.get('ProfitLossOnTradeInPercentage') or 0
+                        saxo_cur_px = pview.get('CurrentPrice') or 0
+                        # Saxo SIM rarely returns CurrentPrice — derive it from P&L
+                        if saxo_cur_px == 0 and shares > 0 and entry_price > 0:
+                            saxo_cur_px = entry_price + (pnl / shares)
+                        if pnl_pct == 0 and entry_price > 0:
+                            pnl_pct = (pnl / (entry_price * shares)) * 100 if shares > 0 else 0
                         formatted.append({
                             'ticker': sym,
                             'description': disp.get('Description', '?'),
                             'market_group': mkt,
-                            'shares': pbase.get('Amount', 0),
-                            'entry_price': pbase.get('OpenPrice', 0),
+                            'shares': shares,
+                            'entry_price': entry_price,
                             'entry_date': pbase.get('ExecutionTimeOpen', '?'),
-                            'current_price': pview.get('CurrentPrice', 0),
-                            'pnl': pview.get('ProfitLossOnTrade', 0),
-                            'pnl_pct': pview.get('ProfitLossOnTradeInPercentage', 0),
+                            'current_price': round(saxo_cur_px, 4),
+                            'pnl': pnl,
+                            'pnl_pct': round(pnl_pct, 2),
                             'currency': disp.get('Currency', '?'),
-                            'market_value': pview.get('MarketValue', 0),
+                            'market_value': pview.get('MarketValue') or round(entry_price * shares + pnl, 2),
                         })
                     # Portfolio totals, each position converted to SEK by its currency.
                     import sys as _sys

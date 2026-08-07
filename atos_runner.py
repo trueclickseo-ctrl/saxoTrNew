@@ -703,6 +703,13 @@ def _save_us_state(state: dict):
     with open(tmp, "w") as f:
         json.dump(state, f, indent=2)
     os.replace(tmp, US_MOMENTUM_STATE)
+    # Ensure user-writable so a non-elevated process can update it next time
+    try:
+        import stat
+        os.chmod(US_MOMENTUM_STATE, stat.S_IRUSR | stat.S_IWUSR |
+                 stat.S_IRGRP | stat.S_IWGRP | stat.S_IROTH | stat.S_IWOTH)
+    except Exception:
+        pass
 
 
 def _place_us(side: str, ticker: str, shares: int, imap: dict,
@@ -835,10 +842,11 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list, dr
         px = _price(tk)
         shares = int(slot_usd / px)
         if shares >= 1:
-            _do("Buy", tk, shares, px)
-            cost = shares * px * fx_usd
-            remaining_sek -= cost
-            deployed_sek  += cost
+            ok = _do("Buy", tk, shares, px)
+            if ok:  # only count cost if order actually filled
+                cost = shares * px * fx_usd
+                remaining_sek -= cost
+                deployed_sek  += cost
         else:
             print(f"  {tag} {tk}: ${slot_usd:.0f}/slot < 1 share (${px:.0f}) — skip")
     print(f"  {tag} deployed ~{deployed_sek:,.0f} of {sleeve_equity:,.0f} SEK; "
