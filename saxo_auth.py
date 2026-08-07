@@ -51,8 +51,8 @@ TOKEN_ENDPOINT = "https://sim.logonvalidation.net/token"
 # ── Your app's details ──────────────────────────────────────────────────
 # App Key is not secret for a PKCE app — fine as a plain default, but env
 # var override is supported if you'd rather not have it in the file.
-APP_KEY = os.environ.get("SAXO_APP_KEY", "16ede6a528b745e1afcf054be485a2eb")
-REDIRECT_URL = os.environ.get("SAXO_REDIRECT_URL", "https://localhost/redirect")
+APP_KEY = os.environ.get("SAXO_APP_KEY", "60d308f45fc34cc2913ae5f3692a94ba")
+REDIRECT_URL = os.environ.get("SAXO_REDIRECT_URL", "http://localhost/redirect")
 
 TOKEN_FILE = "saxo_token.json"
 

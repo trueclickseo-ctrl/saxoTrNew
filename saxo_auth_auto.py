@@ -51,7 +51,7 @@ AUTHORIZATION_ENDPOINT = "https://sim.logonvalidation.net/authorize"
 TOKEN_ENDPOINT         = "https://sim.logonvalidation.net/token"
 
 # ── App details ───────────────────────────────────────────────────
-APP_KEY = os.environ.get("SAXO_APP_KEY", "16ede6a528b745e1afcf054be485a2eb")
+APP_KEY = os.environ.get("SAXO_APP_KEY", "60d308f45fc34cc2913ae5f3692a94ba")
 
 # ── Callback server config ────────────────────────────────────────
 CALLBACK_PORT = 8071          # port for the temporary callback server
