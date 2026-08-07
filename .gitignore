@@ -11,6 +11,11 @@ config/deploy.json
 # SQLite databases (large, machine-local)
 data/atos.db
 data/atos_live.db
+data/atos_live.db-shm
+data/atos_live.db-wal
+# Log files
+data/monitor_log.txt
+data/*.log
 # risk / daily capital trackers (regenerate automatically)
 data/atos_risk_state.json
 data/daily_state.json
