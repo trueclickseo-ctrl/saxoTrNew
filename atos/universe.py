@@ -10,34 +10,34 @@ legacy single-strategy bot's universe.
 """
 
 # ── TIER 1: US Large-Cap Equities ─────────────────────────────────
-# S&P 500 top names by liquidity + sector diversification.
-# Best trend-following market in the world — highest historical Sharpe.
+# ~60 S&P 500 names across all 11 sectors — liquid, well-covered, strong trends.
+# Each week the momentum engine filters this list down to the best 4:
+#   • Offense (top-2): highest risk-adjusted 6-month momentum above EMA200
+#   • Defense (top-2): lowest 60-day volatility above EMA200
+# More candidates = better chance of finding truly strong momentum each week.
 SP500_TICKERS = [
-    # Mega-cap tech (highest liquidity, cleanest trends)
-    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "AVGO",
-    # Financials (trend independently of tech)
-    "JPM", "V", "MA", "BAC", "GS",
-    # Healthcare (counter-cyclical, diversifier)
-    "LLY", "UNH", "JNJ", "ABBV", "MRK",
-    # Energy (correlated with oil — provides hedge)
+    # ── Technology (highest Sharpe sector historically) ───────────
+    "AAPL", "MSFT", "NVDA", "AVGO", "ORCL", "CSCO", "ADBE", "CRM", "NOW", "INTU",
+    # ── Consumer Discretionary ────────────────────────────────────
+    "AMZN", "TSLA", "HD", "MCD", "COST", "NKE", "BKNG", "TJX", "SBUX",
+    # ── Communication Services ────────────────────────────────────
+    "GOOGL", "META", "NFLX", "DIS",
+    # ── Financials ────────────────────────────────────────────────
+    "JPM", "V", "MA", "BAC", "GS", "MS", "BLK", "AXP", "SPGI", "CB",
+    # ── Healthcare ────────────────────────────────────────────────
+    "LLY", "UNH", "JNJ", "ABBV", "MRK", "TMO", "ISRG", "DHR", "MDT",
+    # ── Industrials ───────────────────────────────────────────────
+    "CAT", "HON", "RTX", "DE", "UPS", "EMR", "ITW",
+    # ── Energy ────────────────────────────────────────────────────
     "XOM", "CVX", "COP",
-    # Consumer + Industrial (different economic cycle)
-    "HD", "MCD", "COST", "CAT", "HON",
-    # Semiconductors (high-beta tech, different from FAANG)
-    "AMD", "QCOM", "MU", "AMAT",
-    # Other diversifiers
-    "NFLX", "ADBE", "CRM", "DIS", "BA",
-]
-
-# NASDAQ 100 focused — high-beta tech, strong trending behavior
-NASDAQ100_TICKERS = [
-    "TSLA", "ASML", "CSCO", "INTC", "WMT",
-    # Note: AAPL, MSFT, NVDA, AMZN, GOOGL, META, AVGO already in SP500_TICKERS
-    # These are added as they're NASDAQ-specific or not in SP500 selection
+    # ── Semiconductors (sub-sector, high beta) ────────────────────
+    "AMD", "QCOM", "MU", "AMAT", "ASML",
+    # ── Consumer Staples (defensive, low-vol sleeve candidates) ───
+    "WMT", "PG", "KO", "PEP",
 ]
 
 # Combined US universe (deduplicated)
-US_TICKERS = list(dict.fromkeys(SP500_TICKERS + NASDAQ100_TICKERS))
+US_TICKERS = list(dict.fromkeys(SP500_TICKERS))
 
 # ── TIER 2: European Equities ──────────────────────────────────────
 # Top 15 most liquid OMX30 stocks (quality > quantity)

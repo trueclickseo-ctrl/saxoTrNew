@@ -15,12 +15,17 @@ The runner calls these and executes the actions through the normal order path.
 import numpy as np
 import pandas as pd
 
-LOOKBACK      = 120     # ~6-month momentum
+LOOKBACK      = 120     # ~6-month momentum signal window
 # BLEND: two low-correlation sleeves (validated Sharpe 1.16, DD 14.3% — the safest).
-MOM_N         = 2       # offense: top-2 by risk-adjusted momentum
-LOWVOL_N      = 2       # defense: top-2 by lowest volatility
+MOM_N         = 2       # offense: top-2 by risk-adjusted momentum (return / vol)
+LOWVOL_N      = 2       # defense: top-2 by lowest 60-day volatility
 TARGET_VOL    = 0.15    # annualized vol target
-REBAL_DAYS    = 28      # calendar days between rebalances (~monthly)
+REBAL_DAYS    = 7       # calendar days between rebalances (weekly — was 28/monthly)
+                        # Selection from full US_TICKERS universe each week:
+                        #   Step 1 — filter: price > EMA200 AND 6-month return > 0
+                        #   Step 2 — rank offense: top-2 by (6m return / 60d vol)
+                        #   Step 3 — rank defense: top-2 by lowest 60d vol
+                        #   Step 4 — combine + deduplicate → max 4 positions
 US_SLEEVE_SEK = 1_095_000.0   # PAPER TRADING: 100,000 EUR → SEK at ~10.95.
                                # Switch to a hard cap before going live with real money.
 
