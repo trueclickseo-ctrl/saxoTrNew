@@ -166,6 +166,23 @@ monthly rebalance, per-stock EMA200 filter, daily market-regime risk-off (equal-
 Two dials for the user: *max return* (top10 base: CAGR 35%, DD 31%) vs *smoothest*
 (top10+risk-off+VT: CAGR 24%, DD 21%). Both are legit; default to the smoother one.
 
+## Classic technical analysis head-to-head — 2026-08-07  (`research_technical_analysis.py`)
+Ran the classic TA signals through the same portfolio engine (top-5, monthly, risk-off, 10y):
+| TA signal | CAGR | Sharpe | MaxDD | type |
+|---|---|---|---|---|
+| MACD histogram | 26.3% | **1.17** | 22.1% | trend |
+| Momentum (current) | 26.6% | 1.10 | 29.4% | trend |
+| Bollinger %b | 19.0% | 1.02 | 24.3% | mean-rev |
+| MA golden-cross | 27.0% | 0.94 | 32.5% | trend |
+| RSI oversold | 16.1% | 0.92 | 19.5% | mean-rev |
+
+**CLEAR PATTERN: trend/momentum TA works (MACD, MA-cross, momentum); mean-reversion TA
+(RSI, Bollinger) is weak.** MACD edged momentum (1.17 vs 1.10) but is just another
+momentum flavour — not a new edge; blended w/ low-vol it lands at the same ~1.17 ceiling.
+So we HAVE tested traditional TA thoroughly (here + backtest_strategies.py + the 8-detector
+engine + the ML on TA features which was AUC 0.52). Conclusion: the ONLY TA with edge is
+trend/momentum as a PORTFOLIO factor — which is exactly what the live blend trades. Keep it.
+
 ## Deep research: residual momentum — 2026-08-07  (`research_deep_strategies.py`)
 Tested the top documented candidate: RESIDUAL (beta-adjusted) momentum — "same return,
 half the vol, ~double Sharpe vs raw momentum" per the literature. 10y, same engine:
