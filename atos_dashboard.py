@@ -620,16 +620,17 @@ HTML_CONTENT = """<!DOCTYPE html>
                     <thead>
                         <tr>
                             <th>Ticker</th>
-                            <th>Market</th>
                             <th>Entry Date</th>
                             <th>Exit Date</th>
+                            <th>Held</th>
+                            <th>Buy Price</th>
+                            <th>Sell Price</th>
+                            <th>% Change</th>
                             <th>Shares</th>
-                            <th>P&L</th>
-                            <th>Exit Reason</th>
-                            <th>D1-D5 Breakdown</th>
+                            <th>P&amp;L (SEK)</th>
                         </tr>
                     </thead>
-                    <tbody><tr><td colspan="8" class="empty-state">Loading...</td></tr></tbody>
+                    <tbody><tr><td colspan="9" class="empty-state">Loading...</td></tr></tbody>
                 </table>
             </div>
         </div>
@@ -974,11 +975,11 @@ HTML_CONTENT = """<!DOCTYPE html>
             // Show strategy target info below table
             const infoEl = document.getElementById('strategyTargetInfo');
             if (infoEl) {
+                const held = s ? s.count : positions.length;
                 infoEl.innerHTML = `
-                    <strong>Strategy targets up to 4 stocks</strong> (top-2 momentum + top-2 low-vol, above 200-day SMA) &nbsp;·&nbsp;
-                    ${s ? s.count : positions.length} bought &nbsp;·&nbsp;
-                    <span style="color:var(--warning-color)">AMD was 4th target but cash insufficient after 3 fills (price ~$489)</span> &nbsp;·&nbsp;
-                    Next rebalance: <strong>Sep 1</strong>`;
+                    <strong>Dynamic 2–8 positions</strong> (up to 6 momentum + 2 low-vol, above EMA200) &nbsp;·&nbsp;
+                    ${held} position${held !== 1 ? 's' : ''} currently open &nbsp;·&nbsp;
+                    Weekly rebalance every 7 days`;
             }
         }
 
@@ -1003,26 +1004,56 @@ HTML_CONTENT = """<!DOCTYPE html>
             }
         }
 
+        function pnlBar(pnl) {
+            if (pnl == null) return '';
+            const maxBar = 150; // SEK — scale bar width relative to this
+            const pct = Math.min(Math.abs(pnl) / maxBar * 100, 100);
+            const color = pnl >= 0 ? '#10b981' : '#ef4444';
+            return `<div style="display:flex;align-items:center;gap:6px;">
+                        <div style="width:60px;height:8px;background:rgba(255,255,255,0.08);border-radius:4px;overflow:hidden;">
+                            <div style="width:${pct}%;height:100%;background:${color};border-radius:4px;"></div>
+                        </div>
+                        <span style="color:${color};font-weight:600;">${pnl >= 0 ? '+' : ''}${formatNumber(pnl)} SEK</span>
+                    </div>`;
+        }
+
+        function tradeHistoryRow(t) {
+            const pnlCls = (t.pnl_sek >= 0) ? 'text-success' : 'text-danger';
+            const ep  = t.entry_price ? parseFloat(t.entry_price).toFixed(2) : '—';
+            const xp  = t.exit_price  ? parseFloat(t.exit_price).toFixed(2)  : '—';
+            const chg = (t.entry_price && t.exit_price)
+                ? ((t.exit_price - t.entry_price) / t.entry_price * 100).toFixed(2)
+                : null;
+            const chgTxt = chg != null
+                ? `<span style="color:${chg>=0?'#10b981':'#ef4444'}">${chg>=0?'+':''}${chg}%</span>`
+                : '—';
+            // Days held: from entry_date to exit_date
+            let daysHeld = '—';
+            if (t.entry_date && t.exit_date) {
+                const d = Math.round((new Date(t.exit_date) - new Date(t.entry_date)) / 86400000);
+                daysHeld = d === 0 ? 'same day' : d + 'd';
+            }
+            return `<tr>
+                <td><strong>${t.ticker}</strong>
+                    <span style="font-size:10px;color:var(--text-secondary);margin-left:4px">${t.strategy||'US Blend'}</span>
+                </td>
+                <td style="color:var(--text-secondary)">${t.entry_date ? t.entry_date.slice(0,10) : '—'}</td>
+                <td style="color:var(--text-secondary)">${t.exit_date  ? t.exit_date.slice(0,10)  : '—'}</td>
+                <td style="color:var(--text-secondary)">${daysHeld}</td>
+                <td>${ep}</td>
+                <td>${xp}</td>
+                <td>${chgTxt}</td>
+                <td>${t.shares}</td>
+                <td>${pnlBar(t.pnl_sek)}</td>
+            </tr>`;
+        }
+
         function updateClosedTradesTable(closed) {
             const histBody = document.querySelector('#tradeHistoryTable tbody');
             if (!closed || closed.length === 0) {
-                histBody.innerHTML = '<tr><td colspan="8" class="empty-state">No closed trades yet</td></tr>';
+                histBody.innerHTML = '<tr><td colspan="9" class="empty-state">No closed trades yet</td></tr>';
             } else {
-                histBody.innerHTML = closed.map(t => {
-                    const pnlCls = t.pnl_sek >= 0 ? 'text-success' : 'text-danger';
-                    return `
-                        <tr>
-                            <td><strong>${t.ticker}</strong></td>
-                            <td>${t.market_group}</td>
-                            <td>${t.entry_date}</td>
-                            <td>${t.exit_date}</td>
-                            <td>${t.shares}</td>
-                            <td class="${pnlCls}">${t.pnl_sek > 0 ? '+' : ''}${formatNumber(t.pnl_sek)}</td>
-                            <td>${t.exit_reason || '-'}</td>
-                            <td>${generateScorePills(t.d1_trend, t.d2_momentum, t.d3_breakout, t.d4_mean_revert, t.d5_volume)}</td>
-                        </tr>
-                    `;
-                }).join('');
+                histBody.innerHTML = closed.map(tradeHistoryRow).join('');
             }
         }
 
@@ -1071,23 +1102,9 @@ HTML_CONTENT = """<!DOCTYPE html>
             // History
             const histBody = document.querySelector('#tradeHistoryTable tbody');
             if (!closed || closed.length === 0) {
-                histBody.innerHTML = '<tr><td colspan="8" class="empty-state">No closed trades yet</td></tr>';
+                histBody.innerHTML = '<tr><td colspan="9" class="empty-state">No closed trades yet</td></tr>';
             } else {
-                histBody.innerHTML = closed.map(t => {
-                    const pnlCls = t.pnl_sek >= 0 ? 'text-success' : 'text-danger';
-                    return `
-                        <tr>
-                            <td><strong>${t.ticker}</strong></td>
-                            <td>${t.market_group}</td>
-                            <td>${t.entry_date}</td>
-                            <td>${t.exit_date}</td>
-                            <td>${t.shares}</td>
-                            <td class="${pnlCls}">${t.pnl_sek > 0 ? '+' : ''}${formatNumber(t.pnl_sek)}</td>
-                            <td>${t.exit_reason || '-'}</td>
-                            <td>${generateScorePills(t.d1_trend, t.d2_momentum, t.d3_breakout, t.d4_mean_revert, t.d5_volume)}</td>
-                        </tr>
-                    `;
-                }).join('');
+                histBody.innerHTML = closed.map(tradeHistoryRow).join('');
             }
         }
 
@@ -1169,7 +1186,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             if (!d) { el.textContent = 'Unavailable'; return; }
             const names = (d.holdings || []).map(h => `${h.ticker} (${h.shares})`).join(', ') || 'none yet';
             el.innerHTML = `Last rebalance: <strong>${d.last_rebalance || 'never'}</strong> &nbsp;·&nbsp; ` +
-                `Next rebalance: <strong>${d.next_rebalance}</strong> (first trading day of month) &nbsp;·&nbsp; ` +
+                `Next rebalance: <strong>${d.next_rebalance}</strong> (weekly, every 7 days) &nbsp;·&nbsp; ` +
                 `Holdings (${d.holdings_count}): ${names}`;
         }
 
@@ -1450,9 +1467,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 except Exception:
                     last = None
                 today = _date.today()
-                ny = today.year + (1 if today.month == 12 else 0)
-                nm = 1 if today.month == 12 else today.month + 1
-                next_rebal = _date(ny, nm, 1).isoformat() if last else "next engine run (first rebalance)"
+                try:
+                    from atos import us_momentum as _USM
+                    rebal_days = _USM.REBAL_DAYS
+                except Exception:
+                    rebal_days = 7
+                if last:
+                    from datetime import timedelta as _td
+                    next_rebal = (_date.fromisoformat(last) + _td(days=rebal_days)).isoformat()
+                else:
+                    next_rebal = "next engine run (first rebalance)"
                 cursor.execute("SELECT ticker, shares, entry_price FROM trades "
                                "WHERE strategy='US Blend' AND exit_date IS NULL ORDER BY ticker")
                 holds = [dict(r) for r in cursor.fetchall()]
