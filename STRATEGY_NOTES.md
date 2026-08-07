@@ -3,6 +3,38 @@
 Running log of strategy design, backtests, findings, and dead-ends — so we don't
 repeat work. Update this every time a strategy or its parameters change.
 
+---
+
+## SUMMARY / SCOREBOARD  (as of 2026-08-07)
+
+**How many strategies did we find?** We tested **~a dozen** configurations. **4 validated**
+(cleared 10y / real-cost / beats-benchmark bar); **1 is running live** (the blend).
+
+### ✅ Validated (real, robust edge)
+| Strategy | Sharpe | MaxDD | Role |
+|---|---|---|---|
+| **BLEND: momentum + low-vol**  ← **LIVE** | **1.16** | **14.3%** | production (safest) |
+| Risk-adjusted momentum | 1.10–1.22 | ~23–29% | offense |
+| Low-volatility | 0.80–1.05 | ~14–17% | defense |
+| Short-term reversal (10d) | 1.00 | 22.5% | optional 3rd |
+
+**LIVE STRATEGY: the US Momentum+Low-Vol Blend** (top-2 momentum + top-2 low-vol,
+compounding 15k sleeve, monthly rebalance + daily risk-off). It beats every single
+strategy on risk-adjusted return because momentum & low-vol only correlate 0.44.
+
+### ❌ Tested and rejected (don't revisit)
+- Per-market signal strategies (US Breakout / OMX Momentum / CPH Mean-Reversion) — weak.
+- OMX30 & CPH25 markets — no edge (3y looked good, 10y exposed it as a bull mirage).
+- Plain momentum / mom252 / 52-week-high — all beaten by risk-adjusted momentum.
+- ML probability model (triple-barrier + gradient boosting) — OOS AUC 0.52, coin flip.
+
+### Verdict
+US equities is the only market with edge. One diversified, validated, drawdown-controlled
+strategy (the blend) is live. Finding 1 keeper out of ~12 is a healthy quant hit rate, and
+we know the rejects are dead ends — recorded so nobody re-runs them.
+
+---
+
 **How to measure:** `py -3 -X utf8 backtest_strategies.py`
 (2y daily bars, commission 0.08% + slippage 0.03%, ATR 1%-risk sizing, no look-ahead,
 runs each market's strategy across ALL its instruments and aggregates.)
