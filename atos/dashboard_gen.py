@@ -221,7 +221,7 @@ def generate(
           <td class="muted">{mkt}</td>
           <td>{shares}</td>
           <td>{entry:.3f}</td>
-          <td style="color:#f87171">{stop:.3f if stop else "—"}</td>
+          <td style="color:#f87171">{f'{stop:.3f}' if stop else '—'}</td>
           <td class="muted">{entry_date}</td>
           <td><span class="score-pill" style="background:{_score_color(score)}">{score}</span></td>
         </tr>"""
