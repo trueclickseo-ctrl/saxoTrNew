@@ -1,4 +1,4 @@
-"""
+﻿"""
 backtest_us_reversion.py
 -------------------------
 Walk-forward backtest for the US Mean Reversion strategy.
@@ -6,7 +6,7 @@ Walk-forward backtest for the US Mean Reversion strategy.
 Run (single pass with current parameters):
     python backtest_us_reversion.py
 
-Run (full parameter grid search — resumes from data/grid_results.csv if stopped):
+Run (full parameter grid search -- resumes from data/grid_results.csv if stopped):
     python backtest_us_reversion.py --grid
 
 Run (print ranked summary from previous grid results):
@@ -56,7 +56,7 @@ CSV_FIELDS = ["RSI_ENTRY", "DIP_PCT", "VOL_MULT", "STOP_PCT", "MAX_POSITIONS",
 
 def _download_raw() -> tuple[pd.DataFrame, pd.DataFrame]:
     start = (date.today() - timedelta(days=BACKTEST_YEARS * 365 + 60)).isoformat()
-    print(f"Downloading {len(ALL_TICKERS)} tickers from {start}…")
+    print(f"Downloading {len(ALL_TICKERS)} tickers from {start}...")
     raw   = yf.download(ALL_TICKERS, start=start, auto_adjust=True, progress=False)
     close = raw["Close"].ffill()
     vol   = raw["Volume"].ffill()
@@ -91,10 +91,10 @@ def _rsi_series(c: pd.Series) -> pd.Series:
 
 
 def _precompute(close: pd.DataFrame, vol: pd.DataFrame) -> dict:
-    """Pre-compute RSI, SMA20, EMA200, vol_ratio for every ticker × date.
-    These are parameter-independent — computed once, reused across all 486 combos."""
+    """Pre-compute RSI, SMA20, EMA200, vol_ratio for every ticker x date.
+    These are parameter-independent -- computed once, reused across all 486 combos."""
     tickers = [t for t in US_TICKERS if t in close.columns]
-    print(f"Pre-computing indicators for {len(tickers)} tickers…", flush=True)
+    print(f"Pre-computing indicators for {len(tickers)} tickers...", flush=True)
 
     rsi_df   = pd.DataFrame(index=close.index, columns=tickers, dtype=float)
     sma20_df = pd.DataFrame(index=close.index, columns=tickers, dtype=float)
@@ -297,12 +297,12 @@ def print_result(params, r, close_df, dates, verbose=True) -> bool:
 
     if verbose:
         print("=" * 62)
-        print("  US MEAN REVERSION — BACKTEST RESULTS")
+        print("  US MEAN REVERSION -- BACKTEST RESULTS")
         print("=" * 62)
         print(f"  Params:  RSI<{params['RSI_ENTRY']}  Dip>{params['DIP_PCT']*100:.0f}%  "
-              f"Vol>{params['VOL_MULT']}×  Stop{params['STOP_PCT']*100:.0f}%  "
+              f"Vol>{params['VOL_MULT']}x  Stop{params['STOP_PCT']*100:.0f}%  "
               f"MaxPos{params['MAX_POSITIONS']}  DDcap{params['SLEEVE_DD_CAP']*100:.0f}%")
-        print(f"  Period:  {dates[start_idx].date()} → {dates[-1].date()} ({years:.1f}y)")
+        print(f"  Period:  {dates[start_idx].date()} -> {dates[-1].date()} ({years:.1f}y)")
         if len(df):
             print(f"  Trades:  {len(df)} ({len(wins)} wins / {len(loss)} losses)")
             print(f"  Win rate:      {r['win_rate']*100:.1f}%")
@@ -313,7 +313,7 @@ def print_result(params, r, close_df, dates, verbose=True) -> bool:
         print(f"  CAGR:          {r['cagr']*100:.1f}%" +
               (f"  (SPY: {spy_cagr*100:.1f}%)" if spy_cagr else ""))
         print(f"  Sharpe:        {r['sharpe']:.2f}")
-        dd_flag = "" if r["max_dd"] < 0.20 else "  ← ABOVE 20% target"
+        dd_flag = "" if r["max_dd"] < 0.20 else "  <- ABOVE 20% target"
         print(f"  Max drawdown:  {r['max_dd']*100:.1f}%{dd_flag}")
 
         if len(df) >= 5:
@@ -333,10 +333,10 @@ def print_result(params, r, close_df, dates, verbose=True) -> bool:
     if verbose:
         print()
         print(f"  VERDICT: {'ENABLE' if passed else 'DO NOT ENABLE'}")
-        print(f"  Sharpe>=0.8 {'✓' if r['sharpe']>=0.8 else '✗'}  "
-              f"WinRate>=50% {'✓' if r['win_rate']>=0.5 else '✗'}  "
-              f"MaxDD<20% {'✓' if r['max_dd']<0.20 else '✗'}  "
-              f"Trades>=15 {'✓' if len(df)>=15 else '✗'}")
+        print(f"  Sharpe>=0.8 {'OK' if r['sharpe']>=0.8 else 'X'}  "
+              f"WinRate>=50% {'OK' if r['win_rate']>=0.5 else 'X'}  "
+              f"MaxDD<20% {'OK' if r['max_dd']<0.20 else 'X'}  "
+              f"Trades>=15 {'OK' if len(df)>=15 else 'X'}")
         print("=" * 62)
     return passed
 
@@ -395,7 +395,7 @@ def run_grid(close_df, ind, dates):
         print(f"Resuming: {len(done_keys)} combos already done, "
               f"{len(remaining)} remaining of {total}.\n")
     else:
-        print(f"Grid search: {total} combinations…\n")
+        print(f"Grid search: {total} combinations...\n")
 
     for i, params in remaining:
         r       = simulate(close_df, ind, params)
@@ -405,7 +405,7 @@ def run_grid(close_df, ind, dates):
         tag     = "PASS" if passed else "----"
         print(f"  [{i:>3}/{total}] {tag}  "
               f"RSI<{params['RSI_ENTRY']} Dip>{params['DIP_PCT']*100:.0f}% "
-              f"Vol>{params['VOL_MULT']}× Stop{params['STOP_PCT']*100:.0f}% "
+              f"Vol>{params['VOL_MULT']}x Stop{params['STOP_PCT']*100:.0f}% "
               f"Pos{params['MAX_POSITIONS']} DD{params['SLEEVE_DD_CAP']*100:.0f}%  |  "
               f"Sharpe={r['sharpe']:.2f} WR={r['win_rate']*100:.0f}% "
               f"DD={r['max_dd']*100:.1f}% CAGR={r['cagr']*100:.0f}% N={n}",
@@ -425,7 +425,7 @@ def print_summary():
     passing = df[df["passed"] == 1].copy()
 
     print(f"\n{'='*62}")
-    print(f"  GRID SUMMARY — {total} combos evaluated, {len(passing)} passed all criteria")
+    print(f"  GRID SUMMARY -- {total} combos evaluated, {len(passing)} passed all criteria")
     print(f"{'='*62}")
 
     if passing.empty:
@@ -437,7 +437,7 @@ def print_summary():
         print("\n  Top 5 closest misses:")
         for _, r in misses.iterrows():
             print(f"    RSI<{r['RSI_ENTRY']} Dip>{r['DIP_PCT']*100:.0f}% "
-                  f"Vol>{r['VOL_MULT']}× Stop{r['STOP_PCT']*100:.0f}% "
+                  f"Vol>{r['VOL_MULT']}x Stop{r['STOP_PCT']*100:.0f}% "
                   f"Pos{int(r['MAX_POSITIONS'])} DD{r['SLEEVE_DD_CAP']*100:.0f}%  "
                   f"Sharpe={r['sharpe']:.2f} WR={r['win_rate']*100:.0f}% "
                   f"DD={r['max_dd']*100:.1f}% N={int(r['n_trades'])}")
@@ -451,7 +451,7 @@ def print_summary():
     for rank, (_, r) in enumerate(passing.iterrows(), 1):
         print(f"  {rank:<4} RSI<{r['RSI_ENTRY']} "
               f"Dip>{r['DIP_PCT']*100:.0f}% "
-              f"Vol>{r['VOL_MULT']}× "
+              f"Vol>{r['VOL_MULT']}x "
               f"Stop{r['STOP_PCT']*100:.0f}% "
               f"Pos{int(r['MAX_POSITIONS'])} "
               f"DD{r['SLEEVE_DD_CAP']*100:.0f}%  "
@@ -463,7 +463,7 @@ def print_summary():
 
     best = passing.iloc[0]
     print(f"\n  BEST (by Sharpe): RSI<{best['RSI_ENTRY']} "
-          f"Dip>{best['DIP_PCT']*100:.0f}% Vol>{best['VOL_MULT']}× "
+          f"Dip>{best['DIP_PCT']*100:.0f}% Vol>{best['VOL_MULT']}x "
           f"Stop{best['STOP_PCT']*100:.0f}% Pos{int(best['MAX_POSITIONS'])} "
           f"DDcap{best['SLEEVE_DD_CAP']*100:.0f}%")
     print(f"    Sharpe={best['sharpe']:.2f}  WR={best['win_rate']*100:.0f}%  "
@@ -473,7 +473,7 @@ def print_summary():
     # Consensus: which param values appear most in top-10 passing?
     top10 = passing.head(10)
     print(f"\n  CONSENSUS (top-{min(10, len(passing))} passing combos):")
-    for col, label in [("RSI_ENTRY","RSI"), ("DIP_PCT","Dip%"), ("VOL_MULT","Vol×"),
+    for col, label in [("RSI_ENTRY","RSI"), ("DIP_PCT","Dip%"), ("VOL_MULT","Volx"),
                        ("STOP_PCT","Stop%"), ("MAX_POSITIONS","MaxPos"),
                        ("SLEEVE_DD_CAP","DDcap")]:
         mode = top10[col].mode().iloc[0]
@@ -524,3 +524,4 @@ if __name__ == "__main__":
             print("\n  All criteria met. Set US_REVERSION_ENABLED = True in atos_runner.py")
         else:
             print("\n  Run:  python backtest_us_reversion.py --grid")
+

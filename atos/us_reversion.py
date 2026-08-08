@@ -57,6 +57,7 @@ MAX_HOLD_DAYS        = CAP.reversion_max_hold_days()
 MAX_UNIVERSE_PCT     = CAP.reversion_max_universe_pct()
 SLEEVE_DD_CAP        = CAP.reversion_sleeve_dd_cap()
 REVERSION_SLEEVE_SEK = CAP.reversion_fallback_sleeve_sek()
+MAX_POSITIONS        = CAP.reversion_min_slots()
 # ─────────────────────────────────────────────────────────────────────────
 
 
