@@ -10,6 +10,6 @@
   "smtp_host": "smtp.gmail.com",
   "smtp_port": 587,
   "sender_email": "heyitskaxhif@gmail.com",
-  "sender_password": "PASTE_16_CHAR_APP_PASSWORD_HERE",
+  "sender_password": "xxxx xxxx xxxx xxxx",
   "recipient_email": "heyitskaxhif@gmail.com"
 }

@@ -1,6 +1,6 @@
 # ATOS — Algorithmic Trading Operating System
 ## Agent Handover & Project State Document
-### Last Updated: 2026-08-08 | Updated by: Agent #4 (Kwaseem)
+### Last Updated: 2026-08-08 | Updated by: Agent #4 (Kwaseem) — v2
 
 ---
 
@@ -37,9 +37,9 @@ account via the official Saxo OpenAPI.
 
 **Paper money only. No real money at risk.**
 
-The system runs two validated US equity strategies on 61 S&P 500 stocks, with a weekly
-momentum rebalance, an intraday mean-reversion scanner, and a real-time 1-second
-stop-loss monitor.
+The system runs two validated US equity strategies on **108 S&P 500 blue-chip stocks**,
+with a weekly momentum rebalance, an intraday mean-reversion scanner, a real-time 1-second
+stop-loss monitor, and **automatic email notifications** on every trade and weekly P&L report.
 
 ---
 
@@ -64,17 +64,14 @@ Dashboard:    python atos_dashboard.py  ->  http://localhost:8070
 | **US Mean Reversion** | LIVE ON SIM | 50% of live SIM cash | `atos/us_reversion.py` |
 | OMX30 / CPH25 | PAUSED | — | `atos_runner.py` |
 
-### Live Open Positions (as of 2026-08-08)
+### Universe (2026-08-08)
 
-| Strategy | Tickers | Shares |
-|---|---|---|
-| US Blend | AMD, UNH, BAC, V | 571 / 670 / 4352 / 756 |
-| US Reversion | None — no signal yet | Waiting for RSI<33 dip |
+**108 S&P 500 blue-chip stocks** — solid companies, daily dollar volume >$200M, market cap >$30B.
+Sectors: Tech, Comm, Cons Disc, Cons Staples, Financials, Healthcare, Industrials, Energy, Semis, Materials, Utilities.
+REITs, small E&P, small materials, and speculative biotech **removed** (delist/low-volume risk).
 
-**Why Reversion has 0 positions:** The market is in a strong uptrend. No stock in the
-61-stock universe triggered all 4 entry conditions (RSI<33 + dip>5% below SMA20 +
-volume spike + above EMA200) as of the last scan. The intraday scanner will catch the
-next dip during US market hours.
+### Live Open Positions
+Check the dashboard (`python atos_dashboard.py` → http://localhost:8070) for current state.
 
 ### Processes
 
@@ -218,7 +215,7 @@ Loaded via `atos/capital_config.py`. Printed at startup of every run.
 
 | Parameter | Value |
 |---|---|
-| Universe | 61 S&P 500 stocks (`atos/universe.py` -> `US_TICKERS`) |
+| Universe | 108 S&P 500 stocks (`atos/universe.py` -> `US_TICKERS`) |
 | Lookback | 120 trading days (~6 months) |
 | Offense | Up to 6 stocks: return > 5%, ranked by return/vol ratio |
 | Defense | Always 2 stocks: lowest 60d vol above EMA200 |
@@ -268,7 +265,8 @@ Verdict: 5/5 — edge survives clean OOS test.
 | `atos/intraday_reversion.py` | Intraday scanner with bad-news + keyword filters |
 | `atos/capital_config.py` | Loads config/capital.json, typed getters for all allocation values |
 | `atos/corporate_events.py` | Ex-dividend + earnings checker (yfinance) |
-| `atos/universe.py` | 61-stock US universe + OMX30/CPH25 definitions |
+| `atos/universe.py` | 108-stock US blue-chip universe (S&P 500 solid names only) |
+| `atos/notifier.py` | Email notification module — all 5 email types |
 | `atos/features.py` | Technical indicators: EMA, ATR, RSI, MACD, Bollinger, Donchian |
 | `atos/decision_engine.py` | 8-detector consensus engine |
 | `atos/risk.py` | Risk gates, ATR sizing, kill switch, daily loss cap |
@@ -306,6 +304,9 @@ Verdict: 5/5 — edge survives clean OOS test.
 | `saxo_client.py` | All Saxo API calls |
 | `saxo_token.json` | OAuth token — **gitignored, never commit** |
 | `config/deploy.json` | FTP credentials — **gitignored, never commit** |
+| `config/email.json` | Gmail App Password config — **gitignored, never commit** |
+| `config/email.json.template` | Setup template for email.json (no real secrets) |
+| `send_test_email.py` | Test email system — run once to verify notifications work |
 | `instrument_map.py` | Load `data/instrument_map.csv` (Yahoo ticker -> Saxo UIC) |
 | `fx.py` | USD/SEK and other FX rate fetcher |
 
@@ -350,7 +351,47 @@ News filter:     Gap-down >8% or 24h keyword match -> skip intraday entry
 
 ---
 
-## 12. Task Scheduler Setup (pending if not done)
+## 12. Email Notifications
+
+ATOS sends automatic email notifications to `heyitskaxhif@gmail.com` for every
+significant event. No manual action needed — emails fire from `atos_runner.py`
+whenever the relevant event occurs.
+
+### Email types
+
+| Trigger | Subject example | Contents |
+|---|---|---|
+| **Blend rebalance** (weekly) | `ATOS Blend — Targets: AAPL, MSFT... [date]` | Full target list, offense/defense split, risk-off flag, sleeve value |
+| **Reversion entry signal** | `ATOS Reversion Signal — 3 Candidates [date]` | Table of RSI / Dip% / Vol / Price per ticker, BUY vs QUEUED |
+| **Reversion exit** | `ATOS Reversion Exit — NVDA +2.3% [date]` | Ticker, P&L %, P&L SEK, hold days, exit reason, account balance |
+| **Any BUY executed** | `ATOS BUY — AAPL 18 shares [date]` | Strategy, shares, price USD, value SEK, account balance |
+| **Any SELL executed** | `ATOS SELL — AAPL +1,240 SEK [date]` | Strategy, shares, price USD, P&L SEK, account balance |
+| **Weekly P&L report** (Fridays) | `ATOS Weekly Report — Week ending [date]` | Total equity, week P&L, open positions, closed trades table, SVG bar chart |
+
+### Setup (one-time)
+
+```powershell
+# 1. Enable Google 2-Step Verification (if not already done)
+#    https://myaccount.google.com/security
+
+# 2. Create a Gmail App Password
+#    https://myaccount.google.com/apppasswords
+#    App name: "ATOS Trading"  -> copy the 16-character password
+
+# 3. Create config/email.json from the template
+Copy-Item config\email.json.template config\email.json
+
+# 4. Edit config/email.json — paste the 16-char password into sender_password
+
+# 5. Test it
+python send_test_email.py
+```
+
+`config/email.json` is gitignored and will never be committed.
+
+---
+
+## 13. Task Scheduler Setup (pending if not done)
 
 ```
 Task 1 — Daily cycle
@@ -395,7 +436,7 @@ Tasks 3-7 — Intraday reversion scans
 
 ### US Momentum Blend — LIVE
 ```
-Universe:  61 stocks (S&P 500 representative)
+Universe:  108 stocks (S&P 500 blue-chip, market cap >$30B, daily vol >$200M)
 Rebalance: Weekly (REBAL_DAYS=7)
 Config:    Top-6 momentum + 2 low-vol, daily risk-off, vol-target 15%
 CAGR:      24.4% | Sharpe: 1.30 | MaxDD: 21.3%
@@ -404,11 +445,11 @@ VERDICT:   LIVE
 
 ### US Mean Reversion — LIVE ON SIM
 ```
-Universe:  61 stocks (same as Blend)
+Universe:  108 stocks (same as Blend)
 Hold:      3-10 trading days
 Config:    RSI<33, Dip>5%, Vol>1.5x, Stop4%, 6 max slots (10% of universe)
-Full grid: Sharpe 2.08, WR 66%, N=64 (IS, full sample)
-Honest OOS: Sharpe 2.39, WR 70%, MaxDD 5.9%, N=23
+108-stock backtest: Sharpe 1.11, WR 62.5%, MaxDD 10.3%, CAGR 13.2%, N=24
+Honest OOS (61-stock): Sharpe 2.39, WR 70%, MaxDD 5.9%, N=23
 VERDICT:   LIVE ON SIM — watch 6-8 weeks before real capital
 ```
 
@@ -434,9 +475,10 @@ VERDICT:   LIVE ON SIM — watch 6-8 weeks before real capital
 | Agent #6 | 2026-08-06 | Pre-live audit: fixed cycle-crash, phantom trades, wrong-currency mapping |
 | Agent #7 | 2026-08-08 | Strategy pivot: US Blend LIVE (61 stocks, weekly, dynamic 2-8). Intraday stop-loss monitor. Corporate events module. US Reversion: coded, backtested. |
 | **Agent #4** | **2026-08-08** | **Honest OOS validation (Sharpe 2.39 OOS). Enabled Reversion on SIM. Trade log CSV + strategy labels. Dynamic capital allocation (50/50). Central config/capital.json. Strategy comparison chart + terminal scorecard. Percentage-based Reversion positions (MAX_UNIVERSE_PCT=0.10). Intraday scanner (atos/intraday_reversion.py) with bad-news + keyword news filters. run_intraday_cycle().** |
+| **Agent #4 (cont)** | **2026-08-08** | **Expanded US universe 61->108 solid S&P 500 blue-chips (removed REITs, small E&P, speculative biotech, smaller names). Replaced 3 delisted tickers (HES->APA, K->CAG, BK->TROW). Email notification system (atos/notifier.py): BUY/SELL emails with account balance, weekly Blend rebalance email, Reversion signal email, exit email, Friday P&L report with SVG chart. Signal tickers on dashboard (dashboard_gen.py). Verified email delivery.** |
 
 **Next agent:** You are Agent #8 (or continuing Agent #4).
-Priority: Set up Task Scheduler intraday scan entries, map missing UICs in instrument_map.csv, watch SIM results.
+Priority: Monday — issue new Saxo token (`python set_token.py`), run `python lookup_instruments.py` to map new tickers in instrument_map.csv. Then set up Task Scheduler intraday scan entries, watch SIM results.
 
 ---
 
@@ -448,5 +490,5 @@ Python:      3.11 (python or py -3)
 Working dir: E:\SaxoTrNew\SaxoTrNew\
 Git:         github.com/trueclickseo-ctrl/saxoTrNew.git (main)
 Terminal:    PowerShell (primary) + Git Bash available
-Never commit: saxo_token.json, config/deploy.json, data/*_state.json, data/*.db, data/*.log
+Never commit: saxo_token.json, config/deploy.json, config/email.json, data/*_state.json, data/*.db, data/*.log
 ```

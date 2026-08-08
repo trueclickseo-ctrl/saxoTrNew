@@ -250,11 +250,15 @@ def notify_reversion_signal(
     _send(subject, _wrap("Mean Reversion — Entry Signal", body))
 
 
-def notify_reversion_exit(ticker: str, pnl_sek: float, reason: str, hold_days: int) -> None:
+def notify_reversion_exit(ticker: str, pnl_sek: float, reason: str, hold_days: int,
+                          account_balance_sek: float = 0) -> None:
     """Send email when a Mean Reversion position exits."""
     today    = date.today().isoformat()
     pnl_col  = "#4ade80" if pnl_sek >= 0 else "#f87171"
     pnl_sign = "+" if pnl_sek >= 0 else ""
+    bal_html = (f'<div class="metric"><div class="label">Account Balance</div>'
+                f'<div class="value" style="color:#60a5fa">{account_balance_sek:,.0f} SEK</div></div>'
+                if account_balance_sek > 0 else "")
 
     body = f"""
     <span class="badge {'buy' if pnl_sek >= 0 else 'sell'}">
@@ -273,9 +277,210 @@ def notify_reversion_exit(ticker: str, pnl_sek: float, reason: str, hold_days: i
         <div class="label">Hold</div>
         <div class="value">{hold_days}d</div>
       </div>
+      {bal_html}
     </div>
     <p style="color:#94a3b8; margin-top:12px">Exit reason: <strong>{reason}</strong></p>
     """
 
     subject = f"ATOS Reversion EXIT — {ticker}  {pnl_sign}{pnl_sek:,.0f} SEK [{today}]"
     _send(subject, _wrap("Mean Reversion — Position Closed", body))
+
+
+def notify_trade_executed(
+    side: str,               # "BUY" or "SELL"
+    ticker: str,
+    shares: int,
+    price_usd: float,
+    value_sek: float,
+    strategy: str,           # "US Blend" or "US Reversion"
+    account_balance_sek: float,
+    pnl_sek: float = None,   # SELL only
+    reason: str = "",
+) -> None:
+    """Send email on every executed BUY or SELL with account balance."""
+    today    = date.today().isoformat()
+    is_buy   = side.upper() == "BUY"
+    badge_cls = "buy" if is_buy else "sell"
+    badge_lbl = "BUY EXECUTED" if is_buy else "SELL EXECUTED"
+
+    pnl_html = ""
+    if not is_buy and pnl_sek is not None:
+        pnl_col  = "#4ade80" if pnl_sek >= 0 else "#f87171"
+        pnl_sign = "+" if pnl_sek >= 0 else ""
+        pnl_html = f'''<div class="metric">
+          <div class="label">Realised P&amp;L</div>
+          <div class="value" style="color:{pnl_col}">{pnl_sign}{pnl_sek:,.0f} SEK</div>
+        </div>'''
+
+    body = f"""
+    <span class="badge {badge_cls}">{badge_lbl}</span>
+    <div class="metric-row" style="margin-top:16px">
+      <div class="metric">
+        <div class="label">Ticker</div>
+        <div class="value">{ticker}</div>
+      </div>
+      <div class="metric">
+        <div class="label">Shares</div>
+        <div class="value">{shares}</div>
+      </div>
+      <div class="metric">
+        <div class="label">Price</div>
+        <div class="value">${price_usd:.2f}</div>
+      </div>
+      <div class="metric">
+        <div class="label">Value</div>
+        <div class="value">{value_sek:,.0f} SEK</div>
+      </div>
+      {pnl_html}
+    </div>
+    <div class="metric-row">
+      <div class="metric">
+        <div class="label">Strategy</div>
+        <div class="value" style="font-size:14px">{strategy}</div>
+      </div>
+      <div class="metric">
+        <div class="label">Account Balance</div>
+        <div class="value" style="color:#60a5fa">{account_balance_sek:,.0f} SEK</div>
+      </div>
+      <div class="metric">
+        <div class="label">Date</div>
+        <div class="value" style="font-size:14px">{today}</div>
+      </div>
+    </div>
+    {"<p style='color:#94a3b8'>Reason: " + reason + "</p>" if reason else ""}
+    """
+
+    action_word = "Bought" if is_buy else "Sold"
+    subject = f"ATOS {side.upper()} — {action_word} {shares} {ticker} @ ${price_usd:.2f}  |  Balance: {account_balance_sek:,.0f} SEK"
+    _send(subject, _wrap(f"{strategy} — {side.upper()} Order Executed", body))
+
+
+def notify_weekly_report(
+    total_equity_sek:  float,
+    week_pnl_sek:      float,
+    open_trades:       list,   # list of dicts: ticker, strategy, entry_price, shares, entry_date
+    closed_this_week:  list,   # list of dicts: ticker, strategy, pnl_sek, exit_date, days_held
+    blend_stats:       dict,   # keys: n, wr, total_pnl
+    reversion_stats:   dict,   # keys: n, wr, total_pnl
+    starting_capital:  float = 300_000,
+) -> None:
+    """Send Friday weekly performance report with tables and inline charts."""
+    today     = date.today().isoformat()
+    pnl_col   = "#4ade80" if week_pnl_sek >= 0 else "#f87171"
+    pnl_sign  = "+" if week_pnl_sek >= 0 else ""
+    gain_pct  = (total_equity_sek - starting_capital) / starting_capital * 100
+
+    # ── Closed trades table ──────────────────────────────────────────
+    if closed_this_week:
+        rows = ""
+        for t in closed_this_week:
+            p      = t.get("pnl_sek", 0) or 0
+            pc     = "#4ade80" if p >= 0 else "#f87171"
+            ps     = "+" if p >= 0 else ""
+            rows += (f"<tr><td style='font-weight:700'>{t.get('ticker','')}</td>"
+                     f"<td style='color:#94a3b8'>{t.get('strategy','')}</td>"
+                     f"<td style='color:#94a3b8'>{t.get('days_held',0)}d</td>"
+                     f"<td style='color:{pc};font-weight:700'>{ps}{p:,.0f} SEK</td></tr>")
+        closed_html = f"""
+        <h3 style="color:#f1f5f9;font-size:15px;margin:20px 0 8px">
+          Trades Closed This Week ({len(closed_this_week)})
+        </h3>
+        <table>
+          <thead><tr>
+            <th>Ticker</th><th>Strategy</th><th>Hold</th><th>P&amp;L</th>
+          </tr></thead>
+          <tbody>{rows}</tbody>
+        </table>"""
+    else:
+        closed_html = "<p style='color:#64748b;margin-top:16px'>No closed trades this week.</p>"
+
+    # ── Open positions table ─────────────────────────────────────────
+    if open_trades:
+        op_rows = ""
+        for t in open_trades:
+            op_rows += (f"<tr><td style='font-weight:700'>{t.get('ticker','')}</td>"
+                        f"<td style='color:#94a3b8'>{t.get('strategy','')}</td>"
+                        f"<td style='color:#94a3b8'>${t.get('entry_price',0):.2f}</td>"
+                        f"<td style='color:#94a3b8'>{t.get('shares',0)}</td>"
+                        f"<td style='color:#94a3b8'>{t.get('entry_date','')}</td></tr>")
+        open_html = f"""
+        <h3 style="color:#f1f5f9;font-size:15px;margin:20px 0 8px">
+          Open Positions ({len(open_trades)})
+        </h3>
+        <table>
+          <thead><tr>
+            <th>Ticker</th><th>Strategy</th><th>Entry</th><th>Shares</th><th>Date</th>
+          </tr></thead>
+          <tbody>{op_rows}</tbody>
+        </table>"""
+    else:
+        open_html = "<p style='color:#64748b;margin-top:16px'>No open positions.</p>"
+
+    # ── Strategy comparison inline SVG bar chart ──────────────────────
+    b_pnl  = blend_stats.get("total_pnl", 0)
+    r_pnl  = reversion_stats.get("total_pnl", 0)
+    max_v  = max(abs(b_pnl), abs(r_pnl), 1)
+    b_w    = min(int(abs(b_pnl) / max_v * 180), 180)
+    r_w    = min(int(abs(r_pnl) / max_v * 180), 180)
+    b_col  = "#60a5fa" if b_pnl >= 0 else "#f87171"
+    r_col  = "#fb923c" if r_pnl >= 0 else "#f87171"
+    b_sign = "+" if b_pnl >= 0 else ""
+    r_sign = "+" if r_pnl >= 0 else ""
+
+    chart_svg = f"""
+    <svg viewBox="0 0 400 90" xmlns="http://www.w3.org/2000/svg"
+         style="width:100%;max-width:400px;margin:12px 0">
+      <text x="0"  y="22" fill="#94a3b8" font-size="12" font-family="sans-serif">US Blend</text>
+      <rect x="90" y="8"  width="{b_w}" height="20" rx="4" fill="{b_col}" opacity="0.85"/>
+      <text x="{95+b_w}" y="22" fill="{b_col}" font-size="12" font-family="sans-serif">
+        {b_sign}{b_pnl:,.0f} SEK
+      </text>
+      <text x="0"  y="62" fill="#94a3b8" font-size="12" font-family="sans-serif">Reversion</text>
+      <rect x="90" y="48" width="{r_w}" height="20" rx="4" fill="{r_col}" opacity="0.85"/>
+      <text x="{95+r_w}" y="62" fill="{r_col}" font-size="12" font-family="sans-serif">
+        {r_sign}{r_pnl:,.0f} SEK
+      </text>
+      <text x="0" y="85" fill="#475569" font-size="10" font-family="sans-serif">
+        Blend WR {blend_stats.get('wr',0):.0f}% ({blend_stats.get('n',0)} trades)
+        &nbsp;|&nbsp;
+        Reversion WR {reversion_stats.get('wr',0):.0f}% ({reversion_stats.get('n',0)} trades)
+      </text>
+    </svg>"""
+
+    body = f"""
+    <div class="metric-row">
+      <div class="metric">
+        <div class="label">Account Balance</div>
+        <div class="value" style="color:#60a5fa">{total_equity_sek:,.0f} SEK</div>
+      </div>
+      <div class="metric">
+        <div class="label">Week P&amp;L</div>
+        <div class="value" style="color:{pnl_col}">{pnl_sign}{week_pnl_sek:,.0f} SEK</div>
+      </div>
+      <div class="metric">
+        <div class="label">Total Return</div>
+        <div class="value" style="color:{'#4ade80' if gain_pct>=0 else '#f87171'}">
+          {'+' if gain_pct>=0 else ''}{gain_pct:.1f}%
+        </div>
+      </div>
+      <div class="metric">
+        <div class="label">Open Positions</div>
+        <div class="value">{len(open_trades)}</div>
+      </div>
+    </div>
+
+    <h3 style="color:#f1f5f9;font-size:15px;margin:20px 0 8px">
+      All-Time Strategy P&amp;L
+    </h3>
+    {chart_svg}
+
+    {closed_html}
+    {open_html}
+
+    <p class="muted" style="margin-top:16px">
+      Next report: next Friday &nbsp;·&nbsp; Starting capital: {starting_capital:,.0f} SEK
+    </p>
+    """
+
+    subject = f"ATOS Weekly Report — Balance: {total_equity_sek:,.0f} SEK  |  Week: {pnl_sign}{week_pnl_sek:,.0f} SEK  [{today}]"
+    _send(subject, _wrap("Weekly Performance Report", body))

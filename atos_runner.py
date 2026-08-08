@@ -839,7 +839,42 @@ def run_cycle():
     print(f"  Dashboard saved: {html_file}")
     upload_dashboard(html_file)
 
+    # ── 11. Weekly report email (Fridays only) ────────────────────
+    if date.today().weekday() == 4:  # Friday
+        try:
+            _send_weekly_report(total_equity, day_start, open_trades_now)
+        except Exception as e:
+            print(f"  [notifier] weekly report failed: {e}")
+
     print("\nCycle complete.\n")
+
+
+def _send_weekly_report(total_equity: float, day_start: float, open_trades: list) -> None:
+    """Build and send the Friday weekly P&L email."""
+    from datetime import timedelta
+    week_ago    = (date.today() - timedelta(days=7)).isoformat()
+    closed_all  = db.get_all_closed_trades()
+    closed_week = [t for t in closed_all if (t.get("exit_date") or "") >= week_ago]
+    week_pnl    = sum(t.get("pnl_sek", 0) or 0 for t in closed_week)
+
+    def _stats(strategy):
+        trades = [t for t in closed_all if t.get("strategy") == strategy]
+        wins   = [t for t in trades if (t.get("pnl_sek") or 0) > 0]
+        return {
+            "n":         len(trades),
+            "wr":        len(wins) / len(trades) * 100 if trades else 0,
+            "total_pnl": sum(t.get("pnl_sek", 0) or 0 for t in trades),
+        }
+
+    notifier.notify_weekly_report(
+        total_equity_sek = total_equity,
+        week_pnl_sek     = week_pnl,
+        open_trades      = open_trades,
+        closed_this_week = closed_week,
+        blend_stats      = _stats("US Blend"),
+        reversion_stats  = _stats("US Reversion"),
+        starting_capital = STARTING_CAPITAL_SEK,
+    )
 
 
 TRADE_LOG_CSV = os.path.join(BASE_DIR, "data", "trade_log.csv")
@@ -947,6 +982,12 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
         todays_actions.append({"action": "BUY", "ticker": ticker, "market_group": "US Equities",
                                "strategy": "US Blend", "score": 0, "shares": shares,
                                "price": price, "reason": "US momentum", "pnl_sek": None})
+        notifier.notify_trade_executed(
+            side="BUY", ticker=ticker, shares=shares, price_usd=price,
+            value_sek=shares * price_sek, strategy="US Blend",
+            account_balance_sek=get_total_equity(db.get_open_trades()),
+            reason="Weekly momentum rebalance",
+        )
     else:  # Sell (full close of the tracked position)
         comm = commission_sek(shares, price_sek)
         pnl = None
@@ -961,6 +1002,12 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
         todays_actions.append({"action": "EXIT", "ticker": ticker, "market_group": "US Equities",
                                "strategy": "US Blend", "score": 0, "shares": shares,
                                "price": price, "reason": "US momentum exit", "pnl_sek": pnl})
+        notifier.notify_trade_executed(
+            side="SELL", ticker=ticker, shares=shares, price_usd=price,
+            value_sek=shares * price_sek, strategy="US Blend",
+            account_balance_sek=get_total_equity(db.get_open_trades()),
+            pnl_sek=pnl, reason="Weekly momentum rebalance exit",
+        )
     return True
 
 
@@ -1224,6 +1271,7 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
                     notifier.notify_reversion_exit(
                         ticker=ticker, pnl_sek=pnl_sek,
                         reason=reason, hold_days=held_d,
+                        account_balance_sek=get_total_equity(db.get_open_trades()),
                     )
                 except Exception as e:
                     print(f"  {tag} sell {ticker} FAILED: {e}")
@@ -1319,9 +1367,15 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
                 "strategy": "US Reversion", "score": cand["score"],
                 "shares": shares, "price": price,
                 "reason": (f"[US Reversion] RSI {cand['rsi']}, "
-                           f"dip {cand['dip_pct']}%, vol {cand['vol_ratio']}×"),
+                           f"dip {cand['dip_pct']}%, vol {cand['vol_ratio']}x"),
                 "pnl_sek": None,
             })
+            notifier.notify_trade_executed(
+                side="BUY", ticker=ticker, shares=shares, price_usd=price,
+                value_sek=cost_sek, strategy="US Reversion",
+                account_balance_sek=get_total_equity(db.get_open_trades()),
+                reason=f"RSI {cand['rsi']:.1f} | Dip {cand['dip_pct']}% | Vol {cand['vol_ratio']}x",
+            )
         except Exception as e:
             print(f"  {tag} buy {ticker} FAILED: {e}")
 
