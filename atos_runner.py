@@ -78,6 +78,7 @@ from atos.risk import (
     STARTING_CAPITAL_SEK,
 )
 from atos.dashboard_gen import generate as gen_dashboard
+import atos.capital_config as CAP
 from atos.corporate_events import get_exit_flags, tickers_to_avoid as corp_avoid
 
 # ── Existing infrastructure (unchanged) ───────────────────────────
@@ -115,14 +116,10 @@ US_MOMENTUM_ENABLED = True
 # Then flip this to True when the verdict is ENABLE.
 US_REVERSION_ENABLED = True   # SIM enabled 2026-08-08 — honest OOS validated (Sharpe 2.39, WR 70%)
 
-# ── Dynamic capital allocation (SIM testing) ───────────────────────────────
-# Each strategy claims a % of the live Saxo SIM cash balance, so position
-# sizes scale with the full account rather than a small fixed sleeve.
-#   BLEND_CASH_PCT  — share of available cash given to US Blend
-#   REV_CASH_PCT    — share of available cash given to US Reversion
-#   The remaining 10% stays as a cash buffer (costs + new signals).
-BLEND_CASH_PCT = 0.50   # 50% of SIM cash → US Blend momentum (up to 8 positions)
-REV_CASH_PCT   = 0.50   # 50% of SIM cash → US Reversion (split across 2 slots = 25% each)
+# ── Dynamic capital allocation — loaded from config/capital.json ──────────
+# Edit config/capital.json to change percentages; no code change needed.
+BLEND_CASH_PCT = CAP.blend_allocation_pct()
+REV_CASH_PCT   = CAP.reversion_allocation_pct()
 
 STRATEGY_INSTANCE_FOR_MARKET = {
     # "OMX30": S5_MomentumAccel(), "CPH25": S3_MeanReversion(),  # paused: unvalidated
@@ -435,6 +432,7 @@ def print_banner(total_equity: float, day_start: float, open_count: int,
 def run_cycle():
     log_path = _setup_logging()
     print(f"\n{'='*60}\nATOS Daily Cycle — {datetime.now():%Y-%m-%d %H:%M:%S}\n{'='*60}")
+    print(CAP.summary())
     print(f"Log: {log_path}")
 
     # ── 0. Init DB ────────────────────────────────────────────────

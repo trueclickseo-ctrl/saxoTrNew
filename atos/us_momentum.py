@@ -27,16 +27,17 @@ The runner calls these and executes the actions through the normal order path.
 """
 import numpy as np
 import pandas as pd
+import atos.capital_config as CAP
 
 LOOKBACK       = 120    # ~6-month momentum signal window
 MOM_THRESHOLD  = 0.05   # minimum 6-month return to qualify for offense (5%)
-                        # stocks barely moving don't get a slot
-MOM_N_MAX      = 6      # max offense positions (dynamic: fewer when fewer qualify)
-LOWVOL_N       = 2      # defense positions (always 2 — steadiest stocks above EMA200)
 TARGET_VOL     = 0.15   # annualized vol target
 REBAL_DAYS     = 7      # calendar days between rebalances (weekly)
-US_SLEEVE_SEK = 1_095_000.0   # PAPER TRADING: 100,000 EUR → SEK at ~10.95.
-                               # Switch to a hard cap before going live with real money.
+US_SLEEVE_SEK  = 1_095_000.0   # fallback fixed sleeve (overridden by dynamic cash %)
+
+# Position slots — loaded from config/capital.json
+MOM_N_MAX = CAP.blend_offense_slots()   # max offense positions
+LOWVOL_N  = CAP.blend_defense_slots()  # defense positions
 
 
 def _panel(feat_data: dict, us_tickers) -> pd.DataFrame | None:

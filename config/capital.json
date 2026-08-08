@@ -1,0 +1,31 @@
+{
+  "_comment": "Capital and allocation config. Edit this file to adjust strategy budgets and position sizing. Restart atos_runner.py for changes to take effect.",
+
+  "account": {
+    "starting_capital_sek": 300000,
+    "max_deploy_pct": 0.90,
+    "cash_buffer_pct": 0.10
+  },
+
+  "strategies": {
+
+    "us_blend": {
+      "enabled": true,
+      "allocation_pct": 0.50,
+      "offense_slots": 6,
+      "defense_slots": 2
+    },
+
+    "us_reversion": {
+      "enabled": true,
+      "allocation_pct": 0.50,
+      "max_universe_pct": 0.10,
+      "min_slots": 2,
+      "stop_pct": 0.04,
+      "max_hold_days": 10,
+      "sleeve_dd_cap": 0.10,
+      "fallback_sleeve_sek": 300000
+    }
+
+  }
+}

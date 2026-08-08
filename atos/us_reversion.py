@@ -44,18 +44,19 @@ The runner executes orders and manages state.
 """
 import numpy as np
 import pandas as pd
+import atos.capital_config as CAP
 
-# ── Strategy parameters ───────────────────────────────────────────────────
+# ── Strategy parameters — loaded from config/capital.json ─────────────────
 RSI_ENTRY     = 33     # RSI below this → oversold  [full 486-combo grid: top-10 unanimous]
 RSI_EXIT      = 60     # RSI above this → recovery complete, exit
 DIP_PCT       = 0.05   # Price must be >= 5% below 20-day SMA  [full grid winner]
 VOL_MULT      = 1.5    # Today's volume >= 1.5x 20-day avg volume  [full grid: top-10 unanimous]
-STOP_PCT             = 0.04   # Hard stop-loss: 4% below entry  [IS-only grid winner]
-MAX_HOLD_DAYS        = 10     # Time-stop: exit after 10 trading days regardless
-MAX_UNIVERSE_PCT     = 0.10   # Max concurrent positions as % of universe size
-                              # e.g. 61 stocks × 10% = 6 max slots (never < 2)
-SLEEVE_DD_CAP        = 0.10   # Pause new entries if sleeve equity drops >10% from peak
-REVERSION_SLEEVE_SEK = 300_000.0   # Fallback fixed sleeve (overridden by dynamic cash %)
+
+STOP_PCT             = CAP.reversion_stop_pct()
+MAX_HOLD_DAYS        = CAP.reversion_max_hold_days()
+MAX_UNIVERSE_PCT     = CAP.reversion_max_universe_pct()
+SLEEVE_DD_CAP        = CAP.reversion_sleeve_dd_cap()
+REVERSION_SLEEVE_SEK = CAP.reversion_fallback_sleeve_sek()
 # ─────────────────────────────────────────────────────────────────────────
 
 
