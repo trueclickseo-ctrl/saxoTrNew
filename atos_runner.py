@@ -80,6 +80,7 @@ from atos.risk import (
 from atos.dashboard_gen import generate as gen_dashboard
 import atos.capital_config as CAP
 from atos.corporate_events import get_exit_flags, tickers_to_avoid as corp_avoid
+from atos.intraday_reversion import intraday_scan, us_market_is_open, next_scan_description
 
 # ── Existing infrastructure (unchanged) ───────────────────────────
 import saxo_client
@@ -1299,5 +1300,170 @@ def _currency_for(market_group: str) -> str:
     }.get(market_group, "USD")
 
 
+def run_intraday_cycle():
+    """Intraday reversion scanner — runs every ~90 min during US market hours.
+
+    Scans the 61-stock universe using live 5-minute bars. If a stock passes
+    all four reversion conditions (EMA200, RSI<33, dip>5%, volume spike) AND
+    passes the bad-news filter (gap-down < 8%), it places a buy order.
+
+    Call this from Task Scheduler at:
+      19:00, 20:30, 22:00, 23:30, 00:30 PKT  (10:00 AM – 3:30 PM ET)
+    """
+    print(f"\n{'='*60}")
+    print(f"ATOS Intraday Reversion Scan — {datetime.now():%Y-%m-%d %H:%M:%S PKT}")
+    print(f"{'='*60}")
+    print(next_scan_description())
+
+    if not us_market_is_open():
+        print("  US market not in tradeable window (ET 10:00-15:30). Exiting.")
+        return
+
+    if kill_switch_active():
+        print("  STOP_TRADING file present — halted.")
+        return
+
+    db.init_db()
+
+    # ── 1. Check how many reversion slots are already filled ──────────
+    open_trades   = db.get_open_trades()
+    rev_open_now  = [t for t in open_trades if "Reversion" in (t.get("strategy") or "")]
+    max_positions = max(
+        CAP.reversion_min_slots(),
+        round(len(US_TICKERS) * CAP.reversion_max_universe_pct())
+    )
+    slots_free = max_positions - len(rev_open_now)
+    if slots_free <= 0:
+        print(f"  Reversion full ({max_positions}/{max_positions} slots). Nothing to do.")
+        return
+
+    # ── 2. Fetch historical data for daily indicators ─────────────────
+    print("  Downloading daily history for indicators...")
+    try:
+        import yfinance as yf
+        raw = yf.download(
+            US_TICKERS,
+            period=f"{HISTORY_DAYS}d",
+            interval="1d",
+            group_by="ticker",
+            auto_adjust=True,
+            progress=False,
+            threads=True,
+        )
+        feat_data = {}
+        for ticker in US_TICKERS:
+            try:
+                df = raw[ticker] if len(US_TICKERS) > 1 else raw
+                if df is not None and not df.empty:
+                    feat_data[ticker] = df
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"  Failed to download daily history: {e}")
+        return
+
+    if not feat_data:
+        print("  No feature data available. Aborting.")
+        return
+
+    # Build prev_close map (yesterday's close for the bad-news gap filter)
+    prev_close = {}
+    for ticker, df in feat_data.items():
+        try:
+            closes = df["Close"].dropna()
+            if len(closes) >= 2:
+                prev_close[ticker] = float(closes.iloc[-1])
+        except Exception:
+            pass
+
+    # ── 3. Run intraday scanner ───────────────────────────────────────
+    print("  Running intraday reversion scan...")
+    candidates = intraday_scan(feat_data, US_TICKERS, prev_close_override=prev_close)
+
+    if not candidates:
+        print("  No intraday reversion signals. Nothing to do.")
+        return
+
+    print(f"  {len(candidates)} signal(s) found. {slots_free} slot(s) free.")
+
+    # ── 4. Determine budget and slot size ─────────────────────────────
+    try:
+        balances   = saxo_client.get_balances()
+        cash_sek   = float(balances.get("CashBalance", 0))
+        fx_usd     = fx.get_usd_rate()
+    except Exception as e:
+        print(f"  Cannot fetch account balance: {e}. Aborting.")
+        return
+
+    rev_budget = cash_sek * CAP.reversion_allocation_pct()
+    slot_sek   = rev_budget / max_positions
+    print(f"  Rev budget: {rev_budget:,.0f} SEK | slot: {slot_sek:,.0f} SEK each")
+
+    # ── 5. Place orders for top signals (up to slots_free) ───────────
+    todays_actions = []
+    already_held   = {t.get("ticker") for t in rev_open_now}
+    placed         = 0
+
+    for cand in candidates[:slots_free]:
+        ticker = cand["ticker"]
+        if ticker in already_held:
+            continue
+        price_usd = cand["price"]
+        shares    = int(slot_sek / (price_usd * fx_usd))
+        if shares < 1:
+            print(f"  {ticker}: slot {slot_sek:,.0f} SEK too small for 1 share at ${price_usd:.2f}. Skip.")
+            continue
+
+        value_sek = shares * price_usd * fx_usd
+        print(f"  BUY {ticker}: {shares} sh @ ${price_usd:.2f}  = {value_sek:,.0f} SEK  "
+              f"[RSI={cand['rsi']} dip={cand['dip_pct']}% vol={cand['vol_ratio']}x  "
+              f"gap={cand['gap_pct']}%  intraday]")
+
+        try:
+            uic = _get_uic(ticker, "US Equities")
+            if uic:
+                saxo_client.place_order(uic=uic, buy_sell="Buy", quantity=shares)
+                db.record_trade(
+                    strategy="US Reversion",
+                    market_group="US Equities",
+                    ticker=ticker,
+                    direction="BUY",
+                    entry_price=price_usd,
+                    shares=float(shares),
+                    commission_sek=commission_sek(value_sek),
+                )
+                _append_trade_log(
+                    strategy="US Reversion",
+                    action="BUY",
+                    ticker=ticker,
+                    shares=shares,
+                    price_usd=price_usd,
+                    value_sek=value_sek,
+                    pnl_sek=None,
+                    reason=f"intraday dip {cand['dip_pct']}%",
+                )
+                todays_actions.append({
+                    "action": "BUY", "ticker": ticker,
+                    "strategy": "US Reversion",
+                    "reason": f"intraday dip {cand['dip_pct']}%",
+                })
+                placed += 1
+                already_held.add(ticker)
+            else:
+                print(f"  {ticker}: no UIC found — skipping order")
+        except Exception as e:
+            print(f"  {ticker}: order failed: {e}")
+
+    print(f"\n  Intraday scan complete. {placed} order(s) placed.")
+    if todays_actions:
+        print("  Orders:")
+        for a in todays_actions:
+            print(f"    {a['action']} {a['ticker']} [{a['strategy']}] — {a['reason']}")
+
+
 if __name__ == "__main__":
-    run_cycle()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "intraday":
+        run_intraday_cycle()
+    else:
+        run_cycle()
