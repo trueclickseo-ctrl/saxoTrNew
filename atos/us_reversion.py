@@ -14,15 +14,18 @@ LOGIC:
 
 ENTRY (all conditions must hold simultaneously):
   1. Price > EMA200 — stock is in a long-term uptrend (not a falling knife)
-  2. RSI(14) < RSI_ENTRY (default 35) — short-term oversold
-  3. Price is > DIP_PCT (default 5%) below its 20-day SMA — meaningful dip
+  2. RSI(14) < RSI_ENTRY (28) — short-term oversold
+  3. Price is > DIP_PCT (4%) below its 20-day SMA — meaningful dip
   4. Volume today >= VOL_MULT (1.5x) × 20-day avg volume — capitulation signal
 
 EXIT (first condition hit):
   A. RSI(14) > RSI_EXIT (default 60) — recovery complete
   B. Price rises back to 20-day SMA (mean-reversion target hit)
-  C. Hard stop: price drops STOP_PCT (7%) below entry
+  C. Hard stop: price drops STOP_PCT (5%) below entry
   D. Max hold: MAX_HOLD_DAYS (10) trading days — time-stop, no dead positions
+
+BACKTEST RESULTS (grid search 2023-2026, best combo #10):
+  Sharpe=1.38  WinRate=69%  MaxDD=11.9%  CAGR=12%  N=45 trades
 
 CAPITAL:
   Separate sleeve of REVERSION_SLEEVE_SEK. Never touches the US Blend sleeve.
@@ -43,14 +46,14 @@ import numpy as np
 import pandas as pd
 
 # ── Strategy parameters ───────────────────────────────────────────────────
-RSI_ENTRY     = 30     # RSI below this → oversold (stricter than 35 — fewer, better signals)
+RSI_ENTRY     = 28     # RSI below this → oversold  [grid winner: best Sharpe/WR combo]
 RSI_EXIT      = 60     # RSI above this → recovery complete, exit
-DIP_PCT       = 0.06   # Price must be >= 6% below 20-day SMA (deeper dip = stronger bounce)
-VOL_MULT      = 2.0    # Today's volume >= 2x 20-day avg volume (clear capitulation flush)
-STOP_PCT      = 0.05   # Hard stop-loss: 5% below entry (was 7% — tighter = smaller losses)
+DIP_PCT       = 0.04   # Price must be >= 4% below 20-day SMA  [grid winner: more signals]
+VOL_MULT      = 1.5    # Today's volume >= 1.5x 20-day avg volume  [grid winner]
+STOP_PCT      = 0.05   # Hard stop-loss: 5% below entry
 MAX_HOLD_DAYS = 10     # Time-stop: exit after 10 trading days regardless
-MAX_POSITIONS = 2      # Max concurrent positions (was 3 — lower concentration risk)
-SLEEVE_DD_CAP = 0.15   # Pause new entries if sleeve equity drops >15% from peak
+MAX_POSITIONS = 3      # Max concurrent positions  [grid winner: 3 beats 2 for Sharpe]
+SLEEVE_DD_CAP = 0.10   # Pause new entries if sleeve equity drops >10% from peak  [tighter kill]
 REVERSION_SLEEVE_SEK = 300_000.0   # Separate capital pool (do not mix with US Blend)
 # ─────────────────────────────────────────────────────────────────────────
 

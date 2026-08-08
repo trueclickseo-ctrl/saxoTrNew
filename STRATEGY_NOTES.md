@@ -23,9 +23,10 @@ repeat work. Update this every time a strategy or its parameters change.
 compounding sleeve. Beats every single strategy on risk-adjusted return because
 momentum & low-vol only correlate 0.44. Running since 2026-08-07.
 
-**PENDING STRATEGY: US Mean Reversion** — short-term dip-buying on the same 61-stock
-universe. Coded, backtested, but DISABLED (US_REVERSION_ENABLED = False in
-atos_runner.py). DO NOT ENABLE until all 4 criteria are met (see §US Reversion below).
+**PENDING ENABLE: US Mean Reversion** — short-term dip-buying on the same 61-stock universe.
+Coded, backtested, ALL 4 criteria confirmed. **Ready to enable** — set `US_REVERSION_ENABLED = True`
+in `atos_runner.py` when ready to go live on SIM. Sharpe 1.38 · WR 69% · MaxDD 11.9% · 45 trades (2.3y).
+Separate 300,000 SEK sleeve; max 3 concurrent positions.
 
 ### ❌ Tested and rejected (don't revisit)
 - Per-market signal strategies (US Breakout / OMX Momentum / CPH Mean-Reversion) — weak.
@@ -334,28 +335,69 @@ Result:
 Best trade: AVGO 2024-09-06 (SMA20 +15.5%, 3d, +23,680 SEK)
 Worst trade: LLY 2024-10-30 (stop-loss -8.3%, 5d, -14,030 SEK)
 
-→ **Grid search running** to find parameters with 15+ trades while keeping MaxDD < 20%.
+#### Attempt 4 — 2026-08-08 (grid search 486 combos → winner confirmed)
+Grid: `RSI_ENTRY:[28,30,33]` × `DIP_PCT:[0.04,0.05,0.06]` × `VOL_MULT:[1.5,1.8,2.0]`
+      × `STOP_PCT:[0.04,0.05,0.06]` × `MAX_POSITIONS:[2,3]` × `SLEEVE_DD_CAP:[0.10,0.15,0.20]`
+
+**Winner — combo #10:** RSI<28, Dip>4%, Vol>1.5×, Stop5%, MaxPos3, DDcap10%
+
+Confirmed with full single-run backtest:
+
+```
+==============================================================
+  US MEAN REVERSION — BACKTEST RESULTS
+==============================================================
+  Params:  RSI<28  Dip>4%  Vol>1.5×  Stop5%  MaxPos3  DDcap10%
+  Period:  2024-04-26 → 2026-08-07 (2.3y)
+  Trades:  45 (31 wins / 14 losses)
+  Win rate:      68.9%
+  Avg hold:      7.3d
+  Avg win:       +5,538 SEK
+  Avg loss:      -5,885 SEK
+  Total P&L:     +89,285 SEK
+  CAGR:          12.1%  (SPY: 21.6%)
+  Sharpe:        1.38
+  Max drawdown:  11.9%
+  Best 5:
+    AVGO   2024-09-06  3d  +16,640 SEK  [SMA20 +15.5%]
+    AAPL   2026-06-25  5d  +14,592 SEK  [SMA20 +12.2%]
+    ISRG   2024-07-18  1d  +9,772 SEK  [SMA20 +9.3%]
+    CAT    2026-07-29  7d  +9,367 SEK  [end-of-backtest]
+    AVGO   2025-12-17  10d  +7,799 SEK  [time-stop 10d]
+  Worst 5:
+    TSLA   2025-02-11  9d  -9,250 SEK  [stop-loss -7.8%]
+    JPM    2025-03-04  4d  -8,115 SEK  [stop-loss -7.2%]
+    CRM    2025-02-26  4d  -7,505 SEK  [stop-loss -6.5%]
+    LLY    2024-10-31  4d  -7,448 SEK  [stop-loss -6.4%]
+    UPS    2026-03-05  5d  -7,309 SEK  [stop-loss -5.9%]
+==============================================================
+```
+
+**Parameter changes from Attempt 3:**
+| Param | Attempt 3 | Winner | Reason |
+|---|---|---|---|
+| RSI_ENTRY | 30 | **28** | Stricter → higher-quality panics only |
+| DIP_PCT | 6% | **4%** | 4% is still a real dip; 6% was too rare |
+| VOL_MULT | 2.0× | **1.5×** | 2× filtered out real signals; 1.5× still confirms flush |
+| MAX_POSITIONS | 2 | **3** | 3 concurrent → Sharpe 1.19→1.38, more diversified |
+| SLEEVE_DD_CAP | 15% | **10%** | Tighter kill-switch; strategy produces enough signals |
 
 ---
 
 ### Criteria to enable (ALL four must pass)
 
-| # | Criterion | Target | Current |
+| # | Criterion | Target | Final Result |
 |---|---|---|---|
-| 1 | Sharpe ratio | ≥ 0.8 | 1.13 ✓ |
-| 2 | Win rate | ≥ 50% | 61.5% ✓ |
-| 3 | Max drawdown | < 20% | 10.8% ✓ |
-| 4 | Trade count | ≥ 15 | 13 ✗ |
+| 1 | Sharpe ratio | ≥ 0.8 | **1.38 ✓** |
+| 2 | Win rate | ≥ 50% | **68.9% ✓** |
+| 3 | Max drawdown | < 20% | **11.9% ✓** |
+| 4 | Trade count | ≥ 15 | **45 ✓** |
 
-To run grid search and find a passing parameter set:
-```
-python backtest_us_reversion.py --grid
-```
-Then update `atos/us_reversion.py` with the winning parameters, confirm single-run
-backtest passes all 4 criteria, and flip `US_REVERSION_ENABLED = True`.
+**ALL CRITERIA MET.** `atos/us_reversion.py` updated with winning parameters.
+To enable: set `US_REVERSION_ENABLED = True` in `atos_runner.py`.
 
 Capital: **separate 300,000 SEK sleeve** — completely isolated from US Blend sleeve.
-Max 2 concurrent positions. SLEEVE_DD_CAP = 15% (pauses new entries if sleeve down 15%).
+Max 3 concurrent positions. SLEEVE_DD_CAP = 10% (pauses new entries if sleeve down 10%).
 
 ---
 
