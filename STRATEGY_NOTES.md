@@ -24,8 +24,8 @@ compounding sleeve. Beats every single strategy on risk-adjusted return because
 momentum & low-vol only correlate 0.44. Running since 2026-08-07.
 
 **PENDING ENABLE: US Mean Reversion** — short-term dip-buying on the same 61-stock universe.
-Coded, backtested, ALL 4 criteria confirmed. **Ready to enable** — set `US_REVERSION_ENABLED = True`
-in `atos_runner.py` when ready to go live on SIM. Sharpe 1.38 · WR 69% · MaxDD 11.9% · 45 trades (2.3y).
+Full 486-combo grid complete. ALL 4 criteria confirmed. **Ready to enable** — set `US_REVERSION_ENABLED = True`
+in `atos_runner.py` when ready to go live on SIM. **Sharpe 2.08 · WR 66% · MaxDD 12.5% · 64 trades (2.3y) · CAGR 30%.**
 Separate 300,000 SEK sleeve; max 3 concurrent positions.
 
 ### ❌ Tested and rejected (don't revisit)
@@ -335,52 +335,73 @@ Result:
 Best trade: AVGO 2024-09-06 (SMA20 +15.5%, 3d, +23,680 SEK)
 Worst trade: LLY 2024-10-30 (stop-loss -8.3%, 5d, -14,030 SEK)
 
-#### Attempt 4 — 2026-08-08 (grid search 486 combos → winner confirmed)
-Grid: `RSI_ENTRY:[28,30,33]` × `DIP_PCT:[0.04,0.05,0.06]` × `VOL_MULT:[1.5,1.8,2.0]`
-      × `STOP_PCT:[0.04,0.05,0.06]` × `MAX_POSITIONS:[2,3]` × `SLEEVE_DD_CAP:[0.10,0.15,0.20]`
+#### Attempt 4 — 2026-08-08 (partial grid 81/486 → preliminary winner RSI<28)
+First grid run stopped at 81/486 due to timeout. Preliminary winner: RSI<28, Dip>4%, Vol>1.5×,
+Stop5%, Pos3, DDcap10% — Sharpe 1.38, N=45. Treated as valid but noted as incomplete.
 
-**Winner — combo #10:** RSI<28, Dip>4%, Vol>1.5×, Stop5%, MaxPos3, DDcap10%
+#### Attempt 5 — 2026-08-08 (FULL 486-combo grid — complete picture)
+Rewrote backtest with pre-computed indicators (RSI/SMA/EMA computed once, reused across all combos)
+and disk cache. Full grid completed in a single run. **190 out of 486 combinations passed all criteria.**
 
-Confirmed with full single-run backtest:
+**Top-10 ranked by Sharpe (from 190 passing):**
+
+| Rank | RSI | Dip | Vol | Stop | Pos | DDcap | Sharpe | WR | MaxDD | CAGR | N |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| **1** | **<33** | **5%** | **1.5×** | **5%** | **3** | **15%** | **2.08** | **66%** | **12.5%** | **30%** | **64** |
+| 2 | <33 | 5% | 1.5× | 5% | 3 | 20% | 2.08 | 66% | 12.5% | 30% | 64 |
+| 3 | <33 | 5% | 1.5× | 6% | 3 | 20% | 1.93 | 64% | 12.5% | 27% | 62 |
+| 4 | <33 | 5% | 1.5× | 6% | 3 | 15% | 1.93 | 64% | 12.5% | 27% | 62 |
+| 5 | <33 | 4% | 1.5× | 5% | 3 | 20% | 1.77 | 64% | 12.5% | 27% | 77 |
+| 6 | <33 | 4% | 1.5× | 5% | 3 | 15% | 1.77 | 64% | 12.5% | 27% | 77 |
+| 7 | <33 | 6% | 1.5× | 5% | 3 | 15% | 1.76 | 66% | 13.7% | 27% | 53 |
+| 8 | <33 | 6% | 1.5× | 5% | 3 | 20% | 1.76 | 66% | 13.7% | 27% | 53 |
+| 9 | <33 | 6% | 1.5× | 6% | 3 | 20% | 1.70 | 66% | 13.7% | 26% | 53 |
+| 10 | <33 | 6% | 1.5× | 6% | 3 | 15% | 1.70 | 66% | 13.7% | 26% | 53 |
+
+**Consensus across top-10:** RSI=33 (10/10), Vol=1.5× (10/10), MaxPos=3 (10/10). Unambiguous.
+Full results saved to `data/grid_results.csv`.
+
+**Parameter changes from preliminary (Attempt 4 → final):**
+| Param | Prelim (81 combos) | Final (486 combos) | Reason |
+|---|---|---|---|
+| RSI_ENTRY | 28 | **33** | Full grid shows RSI<33 dominates all top-10 |
+| DIP_PCT | 4% | **5%** | 5% appears in top-4; better quality vs quantity |
+| VOL_MULT | 1.5× | **1.5×** | Unchanged — unanimous |
+| STOP_PCT | 5% | **5%** | Unchanged |
+| MAX_POSITIONS | 3 | **3** | Unchanged — unanimous |
+| SLEEVE_DD_CAP | 10% | **15%** | 15% appears in top combo; 10% was too tight |
+
+**Confirmed single backtest with final parameters:**
 
 ```
 ==============================================================
   US MEAN REVERSION — BACKTEST RESULTS
 ==============================================================
-  Params:  RSI<28  Dip>4%  Vol>1.5×  Stop5%  MaxPos3  DDcap10%
+  Params:  RSI<33  Dip>5%  Vol>1.5×  Stop5%  MaxPos3  DDcap15%
   Period:  2024-04-26 → 2026-08-07 (2.3y)
-  Trades:  45 (31 wins / 14 losses)
-  Win rate:      68.9%
-  Avg hold:      7.3d
-  Avg win:       +5,538 SEK
-  Avg loss:      -5,885 SEK
-  Total P&L:     +89,285 SEK
-  CAGR:          12.1%  (SPY: 21.6%)
-  Sharpe:        1.38
-  Max drawdown:  11.9%
+  Trades:  64 (42 wins / 22 losses)
+  Win rate:      65.6%
+  Avg hold:      7.1d
+  Avg win:       +9,238 SEK
+  Avg loss:      -6,292 SEK
+  Total P&L:     +249,561 SEK
+  CAGR:          30.4%  (SPY: 21.6%)
+  Sharpe:        2.08
+  Max drawdown:  12.5%
   Best 5:
-    AVGO   2024-09-06  3d  +16,640 SEK  [SMA20 +15.5%]
-    AAPL   2026-06-25  5d  +14,592 SEK  [SMA20 +12.2%]
-    ISRG   2024-07-18  1d  +9,772 SEK  [SMA20 +9.3%]
-    CAT    2026-07-29  7d  +9,367 SEK  [end-of-backtest]
-    AVGO   2025-12-17  10d  +7,799 SEK  [time-stop 10d]
+    MU     2026-03-30  6d  +38,119 SEK  [SMA20 +26.4%]
+    MU     2026-07-29  7d  +31,299 SEK  [end-of-backtest]
+    TSLA   2024-10-11  9d  +22,079 SEK  [SMA20 +19.6%]
+    AAPL   2026-06-25  5d  +19,015 SEK  [SMA20 +12.2%]
+    AVGO   2025-01-27  7d  +18,569 SEK  [SMA20 +14.8%]
   Worst 5:
-    TSLA   2025-02-11  9d  -9,250 SEK  [stop-loss -7.8%]
-    JPM    2025-03-04  4d  -8,115 SEK  [stop-loss -7.2%]
-    CRM    2025-02-26  4d  -7,505 SEK  [stop-loss -6.5%]
-    LLY    2024-10-31  4d  -7,448 SEK  [stop-loss -6.4%]
-    UPS    2026-03-05  5d  -7,309 SEK  [stop-loss -5.9%]
+    TSLA   2025-02-11  9d  -10,770 SEK  [stop-loss -7.8%]
+    LLY    2024-10-30  5d  -10,062 SEK  [stop-loss -8.3%]
+    BKNG   2024-08-01  1d  -9,829 SEK  [stop-loss -9.2%]
+    JPM    2025-03-04  4d  -9,419 SEK  [stop-loss -7.2%]
+    WMT    2026-05-21  6d  -9,132 SEK  [stop-loss -5.6%]
 ==============================================================
 ```
-
-**Parameter changes from Attempt 3:**
-| Param | Attempt 3 | Winner | Reason |
-|---|---|---|---|
-| RSI_ENTRY | 30 | **28** | Stricter → higher-quality panics only |
-| DIP_PCT | 6% | **4%** | 4% is still a real dip; 6% was too rare |
-| VOL_MULT | 2.0× | **1.5×** | 2× filtered out real signals; 1.5× still confirms flush |
-| MAX_POSITIONS | 2 | **3** | 3 concurrent → Sharpe 1.19→1.38, more diversified |
-| SLEEVE_DD_CAP | 15% | **10%** | Tighter kill-switch; strategy produces enough signals |
 
 ---
 
@@ -388,16 +409,17 @@ Confirmed with full single-run backtest:
 
 | # | Criterion | Target | Final Result |
 |---|---|---|---|
-| 1 | Sharpe ratio | ≥ 0.8 | **1.38 ✓** |
-| 2 | Win rate | ≥ 50% | **68.9% ✓** |
-| 3 | Max drawdown | < 20% | **11.9% ✓** |
-| 4 | Trade count | ≥ 15 | **45 ✓** |
+| 1 | Sharpe ratio | ≥ 0.8 | **2.08 ✓** |
+| 2 | Win rate | ≥ 50% | **65.6% ✓** |
+| 3 | Max drawdown | < 20% | **12.5% ✓** |
+| 4 | Trade count | ≥ 15 | **64 ✓** |
 
-**ALL CRITERIA MET.** `atos/us_reversion.py` updated with winning parameters.
+**ALL CRITERIA MET.** `atos/us_reversion.py` updated with final winning parameters.
+Full grid results saved to `data/grid_results.csv` (190 passing combinations).
 To enable: set `US_REVERSION_ENABLED = True` in `atos_runner.py`.
 
 Capital: **separate 300,000 SEK sleeve** — completely isolated from US Blend sleeve.
-Max 3 concurrent positions. SLEEVE_DD_CAP = 10% (pauses new entries if sleeve down 10%).
+Max 3 concurrent positions. SLEEVE_DD_CAP = 15% (pauses new entries if sleeve down 15%).
 
 ---
 

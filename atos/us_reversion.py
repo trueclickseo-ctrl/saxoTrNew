@@ -24,8 +24,8 @@ EXIT (first condition hit):
   C. Hard stop: price drops STOP_PCT (5%) below entry
   D. Max hold: MAX_HOLD_DAYS (10) trading days — time-stop, no dead positions
 
-BACKTEST RESULTS (grid search 2023-2026, best combo #10):
-  Sharpe=1.38  WinRate=69%  MaxDD=11.9%  CAGR=12%  N=45 trades
+BACKTEST RESULTS (full 486-combo grid, 2023-2026, rank #1):
+  Sharpe=2.08  WinRate=66%  MaxDD=12.5%  CAGR=30%  N=64 trades
 
 CAPITAL:
   Separate sleeve of REVERSION_SLEEVE_SEK. Never touches the US Blend sleeve.
@@ -46,14 +46,14 @@ import numpy as np
 import pandas as pd
 
 # ── Strategy parameters ───────────────────────────────────────────────────
-RSI_ENTRY     = 28     # RSI below this → oversold  [grid winner: best Sharpe/WR combo]
+RSI_ENTRY     = 33     # RSI below this → oversold  [full 486-combo grid: top-10 unanimous]
 RSI_EXIT      = 60     # RSI above this → recovery complete, exit
-DIP_PCT       = 0.04   # Price must be >= 4% below 20-day SMA  [grid winner: more signals]
-VOL_MULT      = 1.5    # Today's volume >= 1.5x 20-day avg volume  [grid winner]
+DIP_PCT       = 0.05   # Price must be >= 5% below 20-day SMA  [full grid winner]
+VOL_MULT      = 1.5    # Today's volume >= 1.5x 20-day avg volume  [full grid: top-10 unanimous]
 STOP_PCT      = 0.05   # Hard stop-loss: 5% below entry
 MAX_HOLD_DAYS = 10     # Time-stop: exit after 10 trading days regardless
-MAX_POSITIONS = 3      # Max concurrent positions  [grid winner: 3 beats 2 for Sharpe]
-SLEEVE_DD_CAP = 0.10   # Pause new entries if sleeve equity drops >10% from peak  [tighter kill]
+MAX_POSITIONS = 3      # Max concurrent positions  [full grid: top-10 unanimous]
+SLEEVE_DD_CAP = 0.15   # Pause new entries if sleeve equity drops >15% from peak
 REVERSION_SLEEVE_SEK = 300_000.0   # Separate capital pool (do not mix with US Blend)
 # ─────────────────────────────────────────────────────────────────────────
 
