@@ -290,6 +290,43 @@ def _read_recent_trades(n: int = 5) -> list[dict]:
         return []
 
 
+def _strategy_scorecard() -> dict:
+    """Return per-strategy stats from trade_log.csv for terminal display."""
+    import csv as _csv
+    path = os.path.join(BASE_DIR, "data", "trade_log.csv")
+    result = {}
+    if not os.path.exists(path):
+        return result
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            rows = list(_csv.DictReader(f))
+    except Exception:
+        return result
+
+    for strat_key, label in [("Blend", "US Blend"), ("Reversion", "US Reversion")]:
+        sells = [r for r in rows
+                 if strat_key in (r.get("strategy") or "")
+                 and r.get("action") == "SELL"]
+        n = len(sells)
+        pnls = []
+        for r in sells:
+            try:
+                pnls.append(float(r.get("pnl_sek") or 0))
+            except (ValueError, TypeError):
+                pass
+        wins = [p for p in pnls if p > 0]
+        losses = [p for p in pnls if p <= 0]
+        total_pnl = sum(pnls)
+        wr = len(wins) / n * 100 if n > 0 else 0
+        avg_win  = sum(wins) / len(wins) if wins else 0
+        avg_loss = sum(losses) / len(losses) if losses else 0
+        result[label] = {
+            "n": n, "wr": wr, "total_pnl": total_pnl,
+            "avg_win": avg_win, "avg_loss": avg_loss,
+        }
+    return result
+
+
 def print_banner(total_equity: float, day_start: float, open_count: int,
                  weights: dict, todays_actions: list, learning_result: dict,
                  current_regime: str = "unknown"):
@@ -314,7 +351,7 @@ def print_banner(total_equity: float, day_start: float, open_count: int,
 ╠══════════════════════════════════════════════════════════════════╣
 ║  STRATEGY STATUS                                                 ║
 ║  US Blend     (momentum)   — {blend_open} positions open                ║
-║  US Reversion (mean-rev)   — {rev_open}/2 slots used  stop:-4%  hold:≤10d ║
+║  US Reversion (mean-rev)   — {rev_open} slots used  stop:-4%  hold:≤10d   ║
 ╠══════════════════════════════════════════════════════════════════╣
 ║  MARKET REGIME: {current_regime:<49}║
 ╠══════════════════════════════════════════════════════════════════╣
@@ -357,6 +394,33 @@ def print_banner(total_equity: float, day_start: float, open_count: int,
                 pnl_disp = "—"
             reason_r = r.get("reason", "")[:18]
             print(f"║  {dt}  {act:<4}  {tk:<7}  [{strat:<12}]  {pnl_disp:<13}  {reason_r:<18}║")
+
+    # Strategy comparison scorecard
+    sc = _strategy_scorecard()
+    if sc:
+        blend_s = sc.get("US Blend", {})
+        rev_s   = sc.get("US Reversion", {})
+        b_n     = blend_s.get("n", 0)
+        r_n     = rev_s.get("n", 0)
+        b_wr    = blend_s.get("wr", 0)
+        r_wr    = rev_s.get("wr", 0)
+        b_pnl   = blend_s.get("total_pnl", 0)
+        r_pnl   = rev_s.get("total_pnl", 0)
+        b_aw    = blend_s.get("avg_win", 0)
+        r_aw    = rev_s.get("avg_win", 0)
+        b_al    = blend_s.get("avg_loss", 0)
+        r_al    = rev_s.get("avg_loss", 0)
+        winner_pnl = "🔵 Blend" if b_pnl > r_pnl else ("🟠 Revers" if r_pnl > b_pnl else "—   Tie")
+        winner_wr  = "🔵 Blend" if b_wr  > r_wr  else ("🟠 Revers" if r_wr  > b_wr  else "—   Tie")
+        print("╠══════════════════════════════════════════════════════════════════╣")
+        print("║  STRATEGY HEAD-TO-HEAD                                           ║")
+        print(f"║  {'Metric':<16}  {'US Blend':>12}  {'US Reversion':>12}  {'Leader':<9}║")
+        print(f"║  {'─'*16}  {'─'*12}  {'─'*12}  {'─'*9}║")
+        print(f"║  {'Trades':<16}  {b_n:>12}  {r_n:>12}  {'':9}║")
+        print(f"║  {'Win Rate':<16}  {b_wr:>11.1f}%  {r_wr:>11.1f}%  {winner_wr:<9}║")
+        print(f"║  {'Total P&L (SEK)':<16}  {b_pnl:>+12,.0f}  {r_pnl:>+12,.0f}  {winner_pnl:<9}║")
+        print(f"║  {'Avg Win (SEK)':<16}  {b_aw:>+12,.0f}  {r_aw:>+12,.0f}  {'':9}║")
+        print(f"║  {'Avg Loss (SEK)':<16}  {b_al:>+12,.0f}  {r_al:>+12,.0f}  {'':9}║")
 
     new_t = learning_result.get("new_trades_processed", 0)
     print(f"""╠══════════════════════════════════════════════════════════════════╣
@@ -1135,18 +1199,24 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
                 except Exception as e:
                     print(f"  {tag} sell {ticker} FAILED: {e}")
 
+    # ── Max positions: percentage of universe (never < 2) ────────────
+    # USR.MAX_UNIVERSE_PCT × len(US_TICKERS) scales with the universe so
+    # nothing is hardcoded. e.g. 61 stocks × 10% = 6 max concurrent slots.
+    max_positions = max(2, round(len(US_TICKERS) * USR.MAX_UNIVERSE_PCT))
+
     # ── Entry scan — only if slots are available ───────────────────
     # Re-read open trades after exits (some may have just been closed)
     rev_open_now = {t["ticker"]: t for t in db.get_open_trades()
                     if t.get("strategy") == "US Reversion"}
-    slots_free = USR.MAX_POSITIONS - len(rev_open_now)
+    slots_free = max_positions - len(rev_open_now)
     if slots_free <= 0:
-        print(f"  {tag} full ({USR.MAX_POSITIONS}/{USR.MAX_POSITIONS} positions)")
+        print(f"  {tag} full ({max_positions}/{max_positions} positions, "
+              f"{USR.MAX_UNIVERSE_PCT*100:.0f}% of {len(US_TICKERS)}-stock universe)")
         return
 
     # ── Sleeve size: dynamic (% of SIM cash) or fixed fallback ───────
     sleeve_base = available_cash_sek if available_cash_sek > 0 else USR.REVERSION_SLEEVE_SEK
-    slot_sek    = sleeve_base / USR.MAX_POSITIONS
+    slot_sek    = sleeve_base / max_positions
 
     # ── Sleeve DD cap check (mirrors backtest logic) ───────────────
     open_value_sek = sum(
@@ -1170,8 +1240,9 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
         print(f"  {tag} no entry signals today")
         return
 
-    print(f"  {tag} {len(candidates)} candidate(s), {slots_free} slot(s) free | "
-          f"slot size: {slot_sek:,.0f} SEK each")
+    print(f"  {tag} {len(candidates)} signal(s) | {slots_free} slot(s) free of {max_positions} "
+          f"({USR.MAX_UNIVERSE_PCT*100:.0f}% of {len(US_TICKERS)}) | "
+          f"slot: {slot_sek:,.0f} SEK each")
 
     for cand in candidates[:slots_free]:
         ticker = cand["ticker"]

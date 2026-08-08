@@ -103,21 +103,51 @@ def generate(
     def _strat_stats(name_fragment):
         trades = [t for t in closed if name_fragment in (t.get("strategy") or "")]
         if not trades:
-            return 0, 0.0, 0.0
-        w = [t for t in trades if (t.get("pnl_sek") or 0) > 0]
-        pnl = sum((t.get("pnl_sek") or 0) for t in trades)
-        return len(trades), len(w) / len(trades) * 100, pnl
+            return dict(n=0, wr=0.0, pnl=0.0, avg_win=0.0, avg_loss=0.0, best=0.0, worst=0.0)
+        wins   = [t for t in trades if (t.get("pnl_sek") or 0) > 0]
+        losses = [t for t in trades if (t.get("pnl_sek") or 0) <= 0]
+        pnl_list = [(t.get("pnl_sek") or 0) for t in trades]
+        return dict(
+            n     = len(trades),
+            wr    = len(wins) / len(trades) * 100,
+            pnl   = sum(pnl_list),
+            avg_win  = sum(t["pnl_sek"] for t in wins)   / max(len(wins), 1),
+            avg_loss = sum(t["pnl_sek"] for t in losses)  / max(len(losses), 1),
+            best  = max(pnl_list) if pnl_list else 0,
+            worst = min(pnl_list) if pnl_list else 0,
+        )
 
-    blend_n,    blend_wr,    blend_pnl    = _strat_stats("Blend")
-    rev_n,      rev_wr,      rev_pnl      = _strat_stats("Reversion")
+    blend_s = _strat_stats("Blend")
+    rev_s   = _strat_stats("Reversion")
+    blend_n, blend_wr, blend_pnl = blend_s["n"], blend_s["wr"], blend_s["pnl"]
+    rev_n,   rev_wr,   rev_pnl   = rev_s["n"],   rev_s["wr"],   rev_s["pnl"]
+
+    # ── Cumulative P&L per strategy from trade_log.csv ────────────
+    all_log = _read_trade_log(500)   # all available history
+    def _cumulative_pnl(name_fragment):
+        rows = [r for r in reversed(all_log)   # all_log is newest-first
+                if name_fragment in (r.get("strategy") or "")
+                and r.get("action") == "SELL"]
+        dates, cum = [], []
+        running = 0.0
+        for r in rows:
+            try:
+                running += float(r.get("pnl_sek") or 0)
+                dates.append(r.get("date", ""))
+                cum.append(round(running, 2))
+            except (ValueError, TypeError):
+                pass
+        return dates, cum
+
+    blend_pnl_dates, blend_pnl_cum = _cumulative_pnl("Blend")
+    rev_pnl_dates,   rev_pnl_cum   = _cumulative_pnl("Reversion")
 
     # Sleeve status
-    rev_open = [t for t in open_trades if "Reversion" in (t.get("strategy") or "")]
+    rev_open   = [t for t in open_trades if "Reversion" in (t.get("strategy") or "")]
     blend_open = [t for t in open_trades if "Blend" in (t.get("strategy") or "")
-                  or t.get("market_group") == "US Equities" and "Reversion" not in (t.get("strategy") or "")]
+                  or t.get("market_group") == "US Equities"
+                  and "Reversion" not in (t.get("strategy") or "")]
     rev_slots_used = len(rev_open)
-    rev_sleeve_sek = 300_000
-    blend_sleeve_approx = 1_095_000
 
     # ── Chart data ─────────────────────────────────────────────────
     eq_labels = [r["snap_date"] for r in equity_curve]
@@ -466,6 +496,36 @@ def generate(
     </div>
   </div>
 
+  <!-- Strategy Head-to-Head -->
+  <div class="card" style="margin-bottom:20px">
+    <div class="section-title">⚔️ Strategy Comparison</div>
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+      <div>
+        <table>
+          <thead><tr>
+            <th>Metric</th>
+            <th style="color:var(--blue)">US Blend</th>
+            <th style="color:var(--orange)">US Reversion</th>
+            <th>Better</th>
+          </tr></thead>
+          <tbody>
+            {_cmp_row("Closed Trades", blend_s["n"], rev_s["n"], higher=True, fmt="{:.0f}")}
+            {_cmp_row("Win Rate", blend_s["wr"], rev_s["wr"], higher=True, fmt="{:.1f}%")}
+            {_cmp_row("Total P&L (SEK)", blend_s["pnl"], rev_s["pnl"], higher=True, fmt="{:+,.0f}")}
+            {_cmp_row("Avg Win (SEK)", blend_s["avg_win"], rev_s["avg_win"], higher=True, fmt="{:+,.0f}")}
+            {_cmp_row("Avg Loss (SEK)", blend_s["avg_loss"], rev_s["avg_loss"], higher=False, fmt="{:,.0f}")}
+            {_cmp_row("Best Trade (SEK)", blend_s["best"], rev_s["best"], higher=True, fmt="{:+,.0f}")}
+            {_cmp_row("Worst Trade (SEK)", blend_s["worst"], rev_s["worst"], higher=False, fmt="{:,.0f}")}
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <div class="card-title">Cumulative P&L per Strategy</div>
+        <canvas id="pnlChart" style="max-height:220px"></canvas>
+      </div>
+    </div>
+  </div>
+
   <!-- Equity Curve + Weights -->
   <div class="grid-3">
     <div class="card">
@@ -537,6 +597,40 @@ const wh_mom     = {json.dumps(wh_momentum)};
 const wh_break   = {json.dumps(wh_breakout)};
 const wh_mr      = {json.dumps(wh_meanrev)};
 const wh_vol     = {json.dumps(wh_volume)};
+const blend_pnl_dates = {json.dumps(blend_pnl_dates)};
+const blend_pnl_cum   = {json.dumps(blend_pnl_cum)};
+const rev_pnl_dates   = {json.dumps(rev_pnl_dates)};
+const rev_pnl_cum     = {json.dumps(rev_pnl_cum)};
+
+// Cumulative P&L per strategy
+if (blend_pnl_dates.length > 0 || rev_pnl_dates.length > 0) {{
+  const pnlDatasets = [];
+  if (blend_pnl_cum.length > 0) pnlDatasets.push({{
+    label: 'US Blend', data: blend_pnl_cum, borderColor: '#60a5fa',
+    backgroundColor: 'rgba(96,165,250,0.08)', fill: true,
+    tension: 0.3, pointRadius: 3, borderWidth: 2,
+  }});
+  if (rev_pnl_cum.length > 0) pnlDatasets.push({{
+    label: 'US Reversion', data: rev_pnl_cum, borderColor: '#fb923c',
+    backgroundColor: 'rgba(251,146,60,0.08)', fill: true,
+    tension: 0.3, pointRadius: 3, borderWidth: 2,
+  }});
+  // Merge + sort labels
+  const allDates = [...new Set([...blend_pnl_dates, ...rev_pnl_dates])].sort();
+  new Chart(document.getElementById('pnlChart'), {{
+    type: 'line',
+    data: {{ labels: allDates, datasets: pnlDatasets }},
+    options: {{
+      responsive: true, maintainAspectRatio: true,
+      plugins: {{ legend: {{ labels: {{ color:'#8892aa', boxWidth:12, font:{{size:11}} }} }} }},
+      scales: {{
+        x: {{ ticks: {{ color:'#8892aa', maxTicksLimit:6 }}, grid: {{ color:'rgba(255,255,255,0.04)' }} }},
+        y: {{ ticks: {{ color:'#8892aa', callback: v => v.toLocaleString() + ' SEK' }},
+              grid: {{ color:'rgba(255,255,255,0.04)' }} }}
+      }}
+    }}
+  }});
+}}
 
 // Equity chart
 if (eq_labels.length > 1) {{
@@ -598,6 +692,19 @@ if (wh_labels.length > 1) {{
         f.write(html)
 
     return DASHBOARD_FILE
+
+
+def _cmp_row(label: str, a: float, b: float, higher: bool, fmt: str = "{:.2f}") -> str:
+    """Single comparison table row: label | blend value | rev value | winner badge."""
+    a_wins = (a > b) if higher else (a < b)
+    b_wins = (b > a) if higher else (b < a)
+    a_col  = "var(--green)" if a_wins else ("var(--red)" if b_wins else "var(--muted)")
+    b_col  = "var(--green)" if b_wins else ("var(--red)" if a_wins else "var(--muted)")
+    winner = ("🔵 Blend" if a_wins else ("🟠 Reversion" if b_wins else "—"))
+    return (f'<tr><td class="muted small">{label}</td>'
+            f'<td style="color:{a_col};font-weight:700">{fmt.format(a)}</td>'
+            f'<td style="color:{b_col};font-weight:700">{fmt.format(b)}</td>'
+            f'<td class="small">{winner}</td></tr>')
 
 
 def _score_color(score: float) -> str:
