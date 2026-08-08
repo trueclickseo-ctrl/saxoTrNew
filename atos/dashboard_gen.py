@@ -8,6 +8,7 @@ All charts use Chart.js (loaded from CDN when online, graceful fallback offline)
 All data is baked directly into the HTML — no database connection from browser.
 """
 
+import csv
 import json
 import os
 from datetime import datetime
@@ -18,6 +19,7 @@ from .universe import MARKET_GROUPS
 
 DASHBOARD_DIR  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "dashboard")
 DASHBOARD_FILE = os.path.join(DASHBOARD_DIR, "index.html")
+TRADE_LOG_CSV  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "trade_log.csv")
 
 
 def _pct(value: float, reference: float) -> str:
@@ -32,6 +34,27 @@ def _color(value: float) -> str:
     return "#4ade80" if value >= 0 else "#f87171"
 
 
+def _read_trade_log(n: int = 30) -> list[dict]:
+    """Read last n rows from data/trade_log.csv. Returns [] if file missing."""
+    if not os.path.exists(TRADE_LOG_CSV):
+        return []
+    try:
+        with open(TRADE_LOG_CSV, newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        return rows[-n:][::-1]  # most recent first
+    except Exception:
+        return []
+
+
+def _strategy_badge(strategy: str) -> str:
+    s = strategy or "ATOS"
+    if "Reversion" in s:
+        return f'<span class="badge badge-rev">{s}</span>'
+    elif "Blend" in s or "Momentum" in s:
+        return f'<span class="badge badge-blend">{s}</span>'
+    return f'<span class="badge badge-atos">{s}</span>'
+
+
 def generate(
     todays_actions: list[dict],
     open_trades:    list[dict],
@@ -43,7 +66,7 @@ def generate(
     Parameters
     ----------
     todays_actions : list of dicts with keys:
-        action, ticker, market_group, score, shares, price, reason, pnl_sek
+        action, ticker, market_group, strategy, score, shares, price, reason, pnl_sek
     open_trades    : list of open trade dicts from DB
     run_summary    : dict with keys:
         total_equity_sek, day_start_equity, trades_today, errors
@@ -54,6 +77,7 @@ def generate(
     equity_curve = db.get_equity_curve(days=90)
     closed       = db.get_all_closed_trades()
     weight_hist  = db.get_weight_history()
+    trade_log    = _read_trade_log(30)
 
     starting_cap = 10_000  # from risk.py STARTING_CAPITAL_SEK
     total_equity = run_summary.get("total_equity_sek", starting_cap)
@@ -65,7 +89,6 @@ def generate(
     # ── Compute stats ──────────────────────────────────────────────
     total_pnl_pct = _pct(total_equity, starting_cap)
     day_pnl_color = _color(today_pnl)
-    total_color   = _color(total_equity - starting_cap)
 
     win_rate = profit_factor = 0.0
     if closed:
@@ -75,6 +98,26 @@ def generate(
         avg_win  = sum(t["pnl_sek"] for t in wins)   / max(len(wins),   1)
         avg_loss = abs(sum(t["pnl_sek"] for t in losses)) / max(len(losses), 1)
         profit_factor = avg_win / avg_loss if avg_loss else 0
+
+    # ── Per-strategy stats ─────────────────────────────────────────
+    def _strat_stats(name_fragment):
+        trades = [t for t in closed if name_fragment in (t.get("strategy") or "")]
+        if not trades:
+            return 0, 0.0, 0.0
+        w = [t for t in trades if (t.get("pnl_sek") or 0) > 0]
+        pnl = sum((t.get("pnl_sek") or 0) for t in trades)
+        return len(trades), len(w) / len(trades) * 100, pnl
+
+    blend_n,    blend_wr,    blend_pnl    = _strat_stats("Blend")
+    rev_n,      rev_wr,      rev_pnl      = _strat_stats("Reversion")
+
+    # Sleeve status
+    rev_open = [t for t in open_trades if "Reversion" in (t.get("strategy") or "")]
+    blend_open = [t for t in open_trades if "Blend" in (t.get("strategy") or "")
+                  or t.get("market_group") == "US Equities" and "Reversion" not in (t.get("strategy") or "")]
+    rev_slots_used = len(rev_open)
+    rev_sleeve_sek = 300_000
+    blend_sleeve_approx = 1_095_000
 
     # ── Chart data ─────────────────────────────────────────────────
     eq_labels = [r["snap_date"] for r in equity_curve]
@@ -87,30 +130,23 @@ def generate(
     wh_meanrev  = [r["w_mean_revert"] for r in weight_hist]
     wh_volume   = [r["w_volume"]      for r in weight_hist]
 
-    # ── Per-market equity ──────────────────────────────────────────
-    mkt_equity = {}
-    for t in open_trades:
-        mkt = t.get("market_group", "Unknown")
-        val = (t.get("shares", 0) or 0) * (t.get("entry_price", 0) or 0)
-        mkt_equity[mkt] = mkt_equity.get(mkt, 0) + val
-
     # ── Build actions HTML ─────────────────────────────────────────
     action_rows = ""
     for a in todays_actions:
-        action  = a.get("action", "")
-        ticker  = a.get("ticker", "")
-        score   = a.get("score", 0)
-        shares  = a.get("shares", 0)
-        price   = a.get("price", 0)
-        reason  = a.get("reason", "")
-        pnl     = a.get("pnl_sek")
-        mkt     = a.get("market_group", "")
+        action   = a.get("action", "")
+        ticker   = a.get("ticker", "")
+        score    = a.get("score", 0)
+        shares   = a.get("shares", 0)
+        price    = a.get("price", 0)
+        reason   = a.get("reason", "")
+        pnl      = a.get("pnl_sek")
+        mkt      = a.get("market_group", "")
+        strategy = a.get("strategy", "ATOS")
 
         if action == "BUY":
             badge = '<span class="badge badge-buy">BUY</span>'
-        elif action == "EXIT":
-            pnl_str = f'<span style="color:{_color(pnl or 0)}">{("+" if (pnl or 0)>=0 else "")}{(pnl or 0):.0f} SEK</span>'
-            badge = f'<span class="badge badge-exit">EXIT</span>'
+        elif action in ("EXIT", "SELL"):
+            badge = '<span class="badge badge-exit">SELL</span>'
         elif action == "BLOCKED":
             badge = '<span class="badge badge-blocked">BLOCKED</span>'
         else:
@@ -126,6 +162,7 @@ def generate(
         <tr>
           <td>{badge}</td>
           <td><strong>{ticker}</strong></td>
+          <td>{_strategy_badge(strategy)}</td>
           <td class="muted">{mkt}</td>
           <td><span class="score-pill" style="background:{_score_color(score)}">{score}</span></td>
           <td>{shares} sh @ {price:.2f}</td>
@@ -134,7 +171,7 @@ def generate(
         </tr>"""
 
     if not action_rows:
-        action_rows = '<tr><td colspan="7" class="muted" style="text-align:center">No actions today</td></tr>'
+        action_rows = '<tr><td colspan="8" class="muted" style="text-align:center">No actions today</td></tr>'
 
     # ── Open positions HTML ────────────────────────────────────────
     pos_rows = ""
@@ -146,19 +183,71 @@ def generate(
         entry_date = t.get("entry_date", "")
         mkt        = t.get("market_group", "")
         score      = t.get("entry_score", 0) or 0
+        strategy   = t.get("strategy", "ATOS")
         pos_rows += f"""
         <tr>
           <td><strong>{ticker}</strong></td>
+          <td>{_strategy_badge(strategy)}</td>
           <td class="muted">{mkt}</td>
           <td>{shares}</td>
           <td>{entry:.3f}</td>
-          <td style="color:#f87171">{stop:.3f}</td>
+          <td style="color:#f87171">{stop:.3f if stop else "—"}</td>
           <td class="muted">{entry_date}</td>
           <td><span class="score-pill" style="background:{_score_color(score)}">{score}</span></td>
         </tr>"""
 
     if not pos_rows:
-        pos_rows = '<tr><td colspan="7" class="muted" style="text-align:center">No open positions</td></tr>'
+        pos_rows = '<tr><td colspan="8" class="muted" style="text-align:center">No open positions</td></tr>'
+
+    # ── Trade history from CSV ─────────────────────────────────────
+    hist_rows = ""
+    for row in trade_log:
+        action   = row.get("action", "")
+        ticker   = row.get("ticker", "")
+        strategy = row.get("strategy", "")
+        shares   = row.get("shares", "")
+        price    = row.get("price_usd", "")
+        val      = row.get("value_sek", "")
+        pnl_raw  = row.get("pnl_sek", "")
+        reason   = row.get("reason", "")
+        date_s   = row.get("date", "")
+        held     = row.get("days_held", "")
+
+        if action == "BUY":
+            abadge = '<span class="badge badge-buy">BUY</span>'
+        else:
+            abadge = '<span class="badge badge-exit">SELL</span>'
+
+        try:
+            pnl_f = float(pnl_raw) if pnl_raw else None
+        except ValueError:
+            pnl_f = None
+
+        if pnl_f is not None:
+            pnl_cell = f'<td style="color:{_color(pnl_f)}">{("+" if pnl_f>=0 else "")}{pnl_f:,.0f} SEK</td>'
+        else:
+            pnl_cell = "<td>—</td>"
+
+        try:
+            val_fmt = f"{float(val):,.0f}" if val else "—"
+        except ValueError:
+            val_fmt = val
+
+        hist_rows += f"""
+        <tr>
+          <td class="muted small">{date_s}</td>
+          <td>{abadge}</td>
+          <td><strong>{ticker}</strong></td>
+          <td>{_strategy_badge(strategy)}</td>
+          <td class="muted">{shares} sh @ ${price}</td>
+          <td class="muted">{val_fmt} SEK</td>
+          {pnl_cell}
+          <td class="muted small">{held}d</td>
+          <td class="muted small">{reason[:40]}</td>
+        </tr>"""
+
+    if not hist_rows:
+        hist_rows = '<tr><td colspan="9" class="muted" style="text-align:center">No trade history yet</td></tr>'
 
     # ── Weight bars ────────────────────────────────────────────────
     def wbar(name, key, emoji):
@@ -181,6 +270,10 @@ def generate(
         wbar("Volume",      "w_volume",      "📊")
     )
 
+    # ── Strategy sleeve cards ──────────────────────────────────────
+    blend_pnl_s = f'{"+" if blend_pnl>=0 else ""}{blend_pnl:,.0f} SEK'
+    rev_pnl_s   = f'{"+" if rev_pnl>=0 else ""}{rev_pnl:,.0f} SEK'
+
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -201,6 +294,7 @@ def generate(
       --blue:     #60a5fa;
       --purple:   #a78bfa;
       --yellow:   #fbbf24;
+      --orange:   #fb923c;
       --accent:   #7c3aed;
     }}
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
@@ -242,9 +336,12 @@ def generate(
     tr:hover td {{ background: rgba(255,255,255,0.02); }}
     .badge {{ display: inline-block; padding: 2px 10px; border-radius: 20px;
               font-size: 11px; font-weight: 700; letter-spacing: 0.5px; }}
-    .badge-buy     {{ background: rgba(74,222,128,0.15); color: var(--green); border: 1px solid rgba(74,222,128,0.3); }}
-    .badge-exit    {{ background: rgba(248,113,113,0.15); color: var(--red);   border: 1px solid rgba(248,113,113,0.3); }}
-    .badge-blocked {{ background: rgba(251,191,36,0.15);  color: var(--yellow);border: 1px solid rgba(251,191,36,0.3); }}
+    .badge-buy     {{ background: rgba(74,222,128,0.15);  color: var(--green);  border: 1px solid rgba(74,222,128,0.3); }}
+    .badge-exit    {{ background: rgba(248,113,113,0.15); color: var(--red);    border: 1px solid rgba(248,113,113,0.3); }}
+    .badge-blocked {{ background: rgba(251,191,36,0.15);  color: var(--yellow); border: 1px solid rgba(251,191,36,0.3); }}
+    .badge-blend   {{ background: rgba(96,165,250,0.15);  color: var(--blue);   border: 1px solid rgba(96,165,250,0.3); }}
+    .badge-rev     {{ background: rgba(251,146,60,0.15);  color: var(--orange); border: 1px solid rgba(251,146,60,0.3); }}
+    .badge-atos    {{ background: rgba(167,139,250,0.15); color: var(--purple); border: 1px solid rgba(167,139,250,0.3); }}
     .score-pill {{ display: inline-block; padding: 2px 8px; border-radius: 12px;
                    font-size: 12px; font-weight: 700; color: #fff; }}
     .weight-row {{ display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }}
@@ -260,9 +357,14 @@ def generate(
     .status-dot {{ display: inline-block; width: 8px; height: 8px; border-radius: 50%;
                    background: var(--green); margin-right: 6px;
                    box-shadow: 0 0 6px var(--green); animation: pulse 2s infinite; }}
+    .sleeve-dot-blue   {{ background: var(--blue);   box-shadow: 0 0 6px var(--blue); }}
+    .sleeve-dot-orange {{ background: var(--orange); box-shadow: 0 0 6px var(--orange); }}
     @keyframes pulse {{ 0%,100%{{opacity:1}} 50%{{opacity:.4}} }}
     .section-title {{ font-size: 15px; font-weight: 700; margin-bottom: 14px;
                       color: var(--text); display: flex; align-items: center; gap: 8px; }}
+    .sleeve-bar-bg {{ background: var(--surface2); border-radius: 6px; height: 6px; margin-top: 8px; }}
+    .sleeve-bar-fill-blue   {{ height: 6px; border-radius: 6px; background: var(--blue); }}
+    .sleeve-bar-fill-orange {{ height: 6px; border-radius: 6px; background: var(--orange); }}
     @media(max-width:900px){{.grid-4,.grid-2,.grid-3{{grid-template-columns:1fr;}}}}
   </style>
 </head>
@@ -293,13 +395,74 @@ def generate(
     <div class="card">
       <div class="card-title">Open Positions</div>
       <div class="metric blue">{len(open_trades)}</div>
-      <div class="metric-sub">of 10 max slots used</div>
+      <div class="metric-sub">{len(blend_open)} blend &nbsp;·&nbsp; {len(rev_open)} reversion</div>
     </div>
     <div class="card">
       <div class="card-title">Algorithm Progress</div>
       <div class="metric" style="color:var(--purple)">{num_trades}</div>
-      <div class="metric-sub">trades learned from &nbsp;·&nbsp;
-        WR {win_rate:.0f}% &nbsp;·&nbsp; PF {profit_factor:.2f}</div>
+      <div class="metric-sub">trades learned &nbsp;·&nbsp; WR {win_rate:.0f}% &nbsp;·&nbsp; PF {profit_factor:.2f}</div>
+    </div>
+  </div>
+
+  <!-- Strategy Sleeve Status -->
+  <div class="grid-2">
+    <div class="card">
+      <div class="section-title">
+        <span class="status-dot sleeve-dot-blue"></span>
+        US Blend — Momentum Strategy
+      </div>
+      <div style="display:flex; gap:32px;">
+        <div>
+          <div class="card-title">Closed Trades</div>
+          <div style="font-size:22px; font-weight:700; color:var(--blue)">{blend_n}</div>
+        </div>
+        <div>
+          <div class="card-title">Win Rate</div>
+          <div style="font-size:22px; font-weight:700; color:{'var(--green)' if blend_wr>=50 else 'var(--red)'}">
+            {blend_wr:.0f}%</div>
+        </div>
+        <div>
+          <div class="card-title">Total P&L</div>
+          <div style="font-size:22px; font-weight:700; color:{_color(blend_pnl)}">{blend_pnl_s}</div>
+        </div>
+        <div>
+          <div class="card-title">Open Positions</div>
+          <div style="font-size:22px; font-weight:700; color:var(--blue)">{len(blend_open)}</div>
+        </div>
+      </div>
+      <div class="sleeve-bar-bg" style="margin-top:14px">
+        <div class="sleeve-bar-fill-blue" style="width:{min(len(blend_open)/8*100,100):.0f}%"></div>
+      </div>
+      <div class="muted small" style="margin-top:4px">~1,095,000 SEK sleeve &nbsp;·&nbsp; weekly rebalance</div>
+    </div>
+    <div class="card">
+      <div class="section-title">
+        <span class="status-dot sleeve-dot-orange"></span>
+        US Reversion — Mean Reversion Strategy
+      </div>
+      <div style="display:flex; gap:32px;">
+        <div>
+          <div class="card-title">Closed Trades</div>
+          <div style="font-size:22px; font-weight:700; color:var(--orange)">{rev_n}</div>
+        </div>
+        <div>
+          <div class="card-title">Win Rate</div>
+          <div style="font-size:22px; font-weight:700; color:{'var(--green)' if rev_wr>=50 else 'var(--red)'}">
+            {rev_wr:.0f}%</div>
+        </div>
+        <div>
+          <div class="card-title">Total P&L</div>
+          <div style="font-size:22px; font-weight:700; color:{_color(rev_pnl)}">{rev_pnl_s}</div>
+        </div>
+        <div>
+          <div class="card-title">Slots Used</div>
+          <div style="font-size:22px; font-weight:700; color:var(--orange)">{rev_slots_used}/2</div>
+        </div>
+      </div>
+      <div class="sleeve-bar-bg" style="margin-top:14px">
+        <div class="sleeve-bar-fill-orange" style="width:{rev_slots_used/2*100:.0f}%"></div>
+      </div>
+      <div class="muted small" style="margin-top:4px">300,000 SEK sleeve &nbsp;·&nbsp; RSI&lt;33 dip-buy &nbsp;·&nbsp; max 10d hold</div>
     </div>
   </div>
 
@@ -326,8 +489,8 @@ def generate(
     <div class="section-title">⚡ Today's Actions</div>
     <table>
       <thead><tr>
-        <th>Action</th><th>Ticker</th><th>Market</th>
-        <th>Score</th><th>Size</th><th>P&L</th><th>Reason</th>
+        <th>Action</th><th>Ticker</th><th>Strategy</th><th>Market</th>
+        <th>Score</th><th>Size</th><th>P&L</th><th>Signal</th>
       </tr></thead>
       <tbody>{action_rows}</tbody>
     </table>
@@ -338,10 +501,22 @@ def generate(
     <div class="section-title">📂 Open Positions ({len(open_trades)})</div>
     <table>
       <thead><tr>
-        <th>Ticker</th><th>Market</th><th>Shares</th>
-        <th>Entry Price</th><th>Stop Loss</th><th>Entry Date</th><th>Score at Entry</th>
+        <th>Ticker</th><th>Strategy</th><th>Market</th><th>Shares</th>
+        <th>Entry Price</th><th>Stop Loss</th><th>Entry Date</th><th>Score</th>
       </tr></thead>
       <tbody>{pos_rows}</tbody>
+    </table>
+  </div>
+
+  <!-- Trade History -->
+  <div class="card" style="margin-bottom:20px">
+    <div class="section-title">📋 Trade History (last 30)</div>
+    <table>
+      <thead><tr>
+        <th>Date</th><th>Action</th><th>Ticker</th><th>Strategy</th>
+        <th>Size</th><th>Value</th><th>P&L</th><th>Held</th><th>Reason</th>
+      </tr></thead>
+      <tbody>{hist_rows}</tbody>
     </table>
   </div>
 

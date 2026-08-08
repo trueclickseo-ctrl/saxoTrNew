@@ -267,22 +267,45 @@ def upload_dashboard(local_file: str):
 # Terminal Dashboard
 # ══════════════════════════════════════════════════════════════════
 
+def _read_recent_trades(n: int = 5) -> list[dict]:
+    """Read last n rows from trade_log.csv for the terminal banner."""
+    import csv as _csv
+    path = os.path.join(BASE_DIR, "data", "trade_log.csv")
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            rows = list(_csv.DictReader(f))
+        return rows[-n:][::-1]
+    except Exception:
+        return []
+
+
 def print_banner(total_equity: float, day_start: float, open_count: int,
                  weights: dict, todays_actions: list, learning_result: dict,
                  current_regime: str = "unknown"):
-    pct = (total_equity - STARTING_CAPITAL_SEK) / STARTING_CAPITAL_SEK * 100
+    pct     = (total_equity - STARTING_CAPITAL_SEK) / STARTING_CAPITAL_SEK * 100
     day_pnl = total_equity - day_start
     sign    = "+" if pct >= 0 else ""
     dpnl_s  = ("+" if day_pnl >= 0 else "") + f"{day_pnl:,.0f}"
     num_t   = weights.get("num_trades", 0)
+
+    # Per-strategy open counts
+    open_trades_now = db.get_open_trades()
+    blend_open = sum(1 for t in open_trades_now if "Blend" in (t.get("strategy") or ""))
+    rev_open   = sum(1 for t in open_trades_now if "Reversion" in (t.get("strategy") or ""))
 
     w = weights
     print(f"""
 ╔══════════════════════════════════════════════════════════════════╗
 ║   ATOS Daily Run — {datetime.now().strftime('%a %Y-%m-%d  %H:%M PKT'):<38}║
 ╠══════════════════════════════════════════════════════════════════╣
-║  Total Equity:  {total_equity:>8,.0f} SEK  ({sign}{pct:.2f}%)   Open: {open_count}/10     ║
+║  Total Equity:  {total_equity:>8,.0f} SEK  ({sign}{pct:.2f}%)   Open: {open_count}          ║
 ║  Today's P&L:   {dpnl_s:>10} SEK                                 ║
+╠══════════════════════════════════════════════════════════════════╣
+║  STRATEGY STATUS                                                 ║
+║  US Blend     (momentum)   — {blend_open} positions open                ║
+║  US Reversion (mean-rev)   — {rev_open}/2 slots used  stop:-4%  hold:≤10d ║
 ╠══════════════════════════════════════════════════════════════════╣
 ║  MARKET REGIME: {current_regime:<49}║
 ╠══════════════════════════════════════════════════════════════════╣
@@ -292,23 +315,39 @@ def print_banner(total_equity: float, day_start: float, open_count: int,
 ║  Breakout   {format_weight_bar(w.get('w_breakout',1.0))}  {w.get('w_breakout',1.0):.3f}                           ║
 ║  Mean Rev   {format_weight_bar(w.get('w_mean_revert',1.0))}  {w.get('w_mean_revert',1.0):.3f}                           ║
 ║  Volume     {format_weight_bar(w.get('w_volume',1.0))}  {w.get('w_volume',1.0):.3f}                           ║
-║  SmartMoney {format_weight_bar(w.get('w_smart_money',1.0))}  {w.get('w_smart_money',1.0):.3f}                           ║
-║  MomQuality {format_weight_bar(w.get('w_mom_quality',1.0))}  {w.get('w_mom_quality',1.0):.3f}                           ║
-║  Regime     {format_weight_bar(w.get('w_regime',1.0))}  {w.get('w_regime',1.0):.3f}                           ║
 ╠══════════════════════════════════════════════════════════════════╣
 ║  TODAY'S ACTIONS                                                 ║""")
 
     if todays_actions:
         for a in todays_actions[:8]:
-            action = a.get("action","")
-            ticker = a.get("ticker","")[:8]
-            score  = a.get("score", 0)
-            reason = a.get("reason","")[:25]
-            pnl    = a.get("pnl_sek")
-            pnl_s  = f"+{pnl:.0f}" if pnl and pnl >= 0 else (f"{pnl:.0f}" if pnl else "")
-            print(f"║  {action:<5}  {ticker:<10}  Score:{score:<5}  {reason:<26}  {pnl_s:<8}║")
+            action   = a.get("action", "")
+            ticker   = a.get("ticker", "")[:8]
+            strategy = (a.get("strategy") or "")[:12]
+            reason   = a.get("reason", "")[:20]
+            pnl      = a.get("pnl_sek")
+            pnl_s    = f"+{pnl:.0f}" if pnl and pnl >= 0 else (f"{pnl:.0f}" if pnl else "")
+            print(f"║  {action:<5}  {ticker:<8}  [{strategy:<12}]  {reason:<21}  {pnl_s:<7}║")
     else:
         print("║  No actions taken today                                          ║")
+
+    # Last 5 trades from CSV
+    recent = _read_recent_trades(5)
+    if recent:
+        print("╠══════════════════════════════════════════════════════════════════╣")
+        print("║  RECENT TRADE HISTORY                                            ║")
+        for r in recent:
+            act  = r.get("action", "")[:4]
+            tk   = r.get("ticker", "")[:7]
+            strat = (r.get("strategy") or "")[:12]
+            dt   = r.get("date", "")[:10]
+            pnl_r = r.get("pnl_sek", "")
+            try:
+                pnl_f = float(pnl_r)
+                pnl_disp = f'{"+" if pnl_f>=0 else ""}{pnl_f:,.0f} SEK'
+            except (ValueError, TypeError):
+                pnl_disp = "—"
+            reason_r = r.get("reason", "")[:18]
+            print(f"║  {dt}  {act:<4}  {tk:<7}  [{strat:<12}]  {pnl_disp:<13}  {reason_r:<18}║")
 
     new_t = learning_result.get("new_trades_processed", 0)
     print(f"""╠══════════════════════════════════════════════════════════════════╣
