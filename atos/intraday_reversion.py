@@ -58,6 +58,57 @@ CATASTROPHIC_DROP  = 0.15   # >15% total drop today → too extreme, skip
 VOLUME_SCALE       = True   # Scale partial volume to full-session equivalent
 SESSION_MINUTES    = 390    # 9:30 AM – 4:00 PM ET = 390 trading minutes
 
+# ── News keyword filter ───────────────────────────────────────────────────
+# Words in a headline that indicate a FUNDAMENTAL problem (not a technical dip).
+# Source: yfinance ticker.news (free, no API key required).
+# If any headline from the last 24h contains one of these → skip the ticker.
+_BAD_NEWS_KEYWORDS = {
+    # Fraud / legal
+    "fraud", "sec investigation", "sec charges", "class action", "lawsuit",
+    "indicted", "arrested", "criminal", "scandal", "accounting irregularit",
+    "restatement", "restate",
+    # Business distress
+    "bankruptcy", "chapter 11", "chapter 7", "insolvency", "liquidat",
+    "delisted", "delist", "going concern",
+    # Guidance / earnings disaster
+    "earnings miss", "guidance cut", "guidance withdraw", "suspended dividend",
+    "dividend cut", "dividend eliminat",
+    # CEO / leadership (sudden departures are red flags)
+    "ceo resign", "ceo fired", "ceo ousted", "cfo resign", "cfo fired",
+    # Product / safety
+    "recall", "fda warning", "fda reject", "clinical trial fail",
+    "product defect",
+}
+
+
+# ── News filter ──────────────────────────────────────────────────────────
+
+def _bad_news_detected(ticker: str, lookback_hours: int = 24) -> tuple[bool, str]:
+    """Check yfinance news headlines for fundamental red-flag keywords.
+
+    Returns (flagged: bool, matching_headline: str).
+    Uses yfinance's free `.news` endpoint — no API key needed.
+    Only checks headlines published in the last `lookback_hours` hours.
+    """
+    import time as _time
+    try:
+        import yfinance as yf
+        info = yf.Ticker(ticker).news
+        if not info:
+            return False, ""
+        cutoff = _time.time() - lookback_hours * 3600
+        for article in info:
+            pub = article.get("providerPublishTime", 0)
+            if pub < cutoff:
+                continue
+            title = (article.get("title") or "").lower()
+            for kw in _BAD_NEWS_KEYWORDS:
+                if kw in title:
+                    return True, article.get("title", "")
+    except Exception:
+        pass   # if news fetch fails, don't block the scan
+    return False, ""
+
 
 # ── RSI helper (same formula as us_reversion.py) ─────────────────────────
 
@@ -220,6 +271,13 @@ def intraday_scan(
         if total_drop > CATASTROPHIC_DROP:
             print(f"  [intraday] {ticker} skipped — total drop {total_drop*100:.1f}% "
                   f"(>{CATASTROPHIC_DROP*100:.0f}%, too extreme)")
+            continue
+
+        # 3. News keyword filter: check last 24h headlines via yfinance
+        flagged, headline = _bad_news_detected(ticker)
+        if flagged:
+            short = headline[:80] + ("..." if len(headline) > 80 else "")
+            print(f"  [intraday] {ticker} skipped — bad news: \"{short}\"")
             continue
 
         # ── RSI using today's live price as the 14th data point ───────
