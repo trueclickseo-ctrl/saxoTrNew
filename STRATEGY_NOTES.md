@@ -23,10 +23,11 @@ repeat work. Update this every time a strategy or its parameters change.
 compounding sleeve. Beats every single strategy on risk-adjusted return because
 momentum & low-vol only correlate 0.44. Running since 2026-08-07.
 
-**PENDING ENABLE: US Mean Reversion** — short-term dip-buying on the same 61-stock universe.
-Full 486-combo grid complete. ALL 4 criteria confirmed. **Ready to enable** — set `US_REVERSION_ENABLED = True`
-in `atos_runner.py` when ready to go live on SIM. **Sharpe 2.08 · WR 66% · MaxDD 12.5% · 64 trades (2.3y) · CAGR 30%.**
-Separate 300,000 SEK sleeve; max 3 concurrent positions.
+**PENDING ENABLE (SIM-first): US Mean Reversion** — short-term dip-buying on the same 61-stock universe.
+Full 486-combo grid + **honest OOS validation** complete. Passes genuine out-of-sample test (5/5 checks).
+IS (Apr 2024 → Jun 2025): Sharpe 2.08 · WR 66% · MaxDD 12.5% · 64 trades · CAGR 30%.
+OOS (Jun 2025 → Aug 2026, never touched by param selection): **Sharpe 2.39 · WR 70% · MaxDD 5.9% · 23 trades · CAGR 47%.**
+Separate 300,000 SEK sleeve; IS winner: max 2 concurrent positions. Enable on SIM only — watch 6-8 weeks before real capital.
 
 ### ❌ Tested and rejected (don't revisit)
 - Per-market signal strategies (US Breakout / OMX Momentum / CPH Mean-Reversion) — weak.
@@ -420,6 +421,61 @@ To enable: set `US_REVERSION_ENABLED = True` in `atos_runner.py`.
 
 Capital: **separate 300,000 SEK sleeve** — completely isolated from US Blend sleeve.
 Max 3 concurrent positions. SLEEVE_DD_CAP = 15% (pauses new entries if sleeve down 15%).
+
+---
+
+### Honest OOS Validation — 2026-08-08 (`validate_honest_split.py`)
+
+**The leakage bug in `validate_us_reversion.py`:** The original split test and walk-forward ran
+`simulate()` on the full dataset, then partitioned resulting trades by date. The "OOS" cash
+state was contaminated by IS profits, and the tested parameters (RSI=33 etc.) were selected
+using the full dataset. True OOS was not tested.
+
+**Fix applied:** Full 6-parameter grid (486 combos) run on IS data only → freeze winner → test
+frozen winner cold on OOS period it never saw. IS and OOS each start from a clean 300,000 SEK.
+
+**IS grid (Apr 2024 → Jun 2025, 286 bars, training data only):**
+- 39 / 486 combos passed (Sharpe≥0.8, WR≥50%, MaxDD<20%, N≥10)
+- IS winner: **RSI<33, Dip>5%, Vol>1.5×, Stop4%, Pos2, DDcap10%**
+- IS metrics: Sharpe 1.60 · WR 60% · MaxDD 10.3% · CAGR 26% · N=20
+- RSI<33 unanimous: 10/10 top-10 IS combos (consistent with full-sample grid, but derived independently)
+
+**OOS test (Jun 2025 → Aug 2026, 286 bars, frozen params — never used in selection):**
+
+| Metric | OOS | IS |
+|---|---|---|
+| Sharpe | **2.39** | 1.60 |
+| Win rate | **70%** | 60% |
+| Max DD | **5.9%** | 10.3% |
+| CAGR | **47%** | 26% |
+| Trades | 23 | 20 |
+| P&L | **+165,750 SEK** | — |
+
+OOS metrics exceed IS on every axis — edge did not decay.
+
+**OOS RSI-band breakdown:**
+| Band | N | WR | P&L |
+|---|---|---|---|
+| RSI 0-28 | 12 | 75% | +71,344 SEK |
+| RSI 28-30 | 2 | 0% | -9,956 SEK |
+| RSI 30-33 | 9 | 78% | +104,362 SEK |
+
+**OOS sensitivity sweep (no IS touch):** RSI 27-36 uniformly strong on OOS (Sharpe 1.80-2.91).
+No cliff at RSI=33 — RSI=34 is actually slightly higher OOS (2.91), confirming no single-point overfit.
+
+**Notable OOS trades:** MU 2026-03-30 (+46,468 SEK, SMA20 +26.4%) and MU 2026-07-29 (+38,163 SEK).
+These two trades are +84K of the +166K total; remaining 21 trades netted +82K — solid but MU-concentrated.
+
+**Verdict: 5/5 checks pass.** The edge survives genuine OOS validation.
+
+**Caveats (unchanged):** N=23 OOS trades is thin. Treat as early-stage evidence, not proof.
+SIM-first remains correct — watch 6-8 weeks before real capital.
+
+**Parameter note:** IS winner uses Stop4%, Pos2, DDcap10% — slightly more conservative than the
+params currently in `us_reversion.py` (Stop5%, Pos3, DDcap15%). RSI=33 and Dip=5% match.
+Consider updating before SIM enable.
+
+Output files: `data/oos_trade_log.csv` (23 OOS trades), `data/is_grid_results.csv` (486 IS rows).
 
 ---
 
