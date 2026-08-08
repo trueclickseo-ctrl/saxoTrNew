@@ -6,6 +6,8 @@ saxo_token.json
 *.env
 # FTP credentials for the (legacy) dashboard upload
 config/deploy.json
+# Email credentials (Gmail app password) — copy email.json.template -> email.json to enable
+config/email.json
 
 # ── Runtime state / databases — local only, not history ──────────
 # SQLite databases (large, machine-local)

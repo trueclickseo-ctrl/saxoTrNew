@@ -55,6 +55,69 @@ def _strategy_badge(strategy: str) -> str:
     return f'<span class="badge badge-atos">{s}</span>'
 
 
+def _signal_panel(run_summary: dict) -> str:
+    """Render the live signal tickers card (Blend targets + Reversion candidates)."""
+    blend_targets   = run_summary.get("blend_targets", [])
+    blend_risk_off  = run_summary.get("blend_risk_off", False)
+    rev_cands       = run_summary.get("reversion_candidates", [])
+
+    # Blend section
+    if blend_risk_off:
+        blend_html = '<span style="color:var(--red);font-weight:600">RISK OFF — holding cash</span>'
+    elif blend_targets:
+        chips = "".join(
+            f'<span style="display:inline-block;background:var(--blue-dim);color:var(--blue);'
+            f'border:1px solid var(--blue);border-radius:6px;padding:6px 14px;'
+            f'font-weight:700;font-size:15px;margin:4px">{t}</span>'
+            for t in blend_targets
+        )
+        blend_html = f'<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">{chips}</div>'
+    else:
+        blend_html = '<span style="color:var(--muted)">No rebalance data yet — runs weekly (Friday)</span>'
+
+    # Reversion section
+    if rev_cands:
+        rows = ""
+        for c in rev_cands:
+            rsi = c.get("rsi", 0)
+            dip = c.get("dip_pct", 0) * 100
+            vol = c.get("vol_ratio", 0)
+            px  = c.get("price", 0)
+            rows += (
+                f'<tr><td style="font-weight:700;color:var(--text)">{c["ticker"]}</td>'
+                f'<td style="color:var(--red)">{rsi:.1f}</td>'
+                f'<td style="color:var(--orange)">{dip:.1f}%</td>'
+                f'<td style="color:var(--green)">{vol:.1f}x</td>'
+                f'<td>${px:.2f}</td></tr>'
+            )
+        rev_html = f'''<table style="width:100%;margin-top:8px">
+          <thead><tr>
+            <th>Ticker</th><th>RSI</th><th>Dip%</th><th>Vol</th><th>Price</th>
+          </tr></thead>
+          <tbody>{rows}</tbody>
+        </table>'''
+    else:
+        rev_html = '<span style="color:var(--muted)">No entry signals — RSI&lt;33, dip&gt;5%, vol&gt;1.5x all needed simultaneously</span>'
+
+    return f'''
+  <div class="grid-2" style="margin-bottom:20px">
+    <div class="card">
+      <div class="section-title">
+        <span class="status-dot sleeve-dot-blue"></span>
+        Blend — This Week\'s Target Tickers
+      </div>
+      {blend_html}
+    </div>
+    <div class="card">
+      <div class="section-title">
+        <span class="status-dot sleeve-dot-orange"></span>
+        Reversion — Live Entry Signals
+      </div>
+      {rev_html}
+    </div>
+  </div>'''
+
+
 def generate(
     todays_actions: list[dict],
     open_trades:    list[dict],
@@ -69,7 +132,9 @@ def generate(
         action, ticker, market_group, strategy, score, shares, price, reason, pnl_sek
     open_trades    : list of open trade dicts from DB
     run_summary    : dict with keys:
-        total_equity_sek, day_start_equity, trades_today, errors
+        total_equity_sek, day_start_equity, trades_today, errors,
+        blend_targets (optional list of tickers), blend_risk_off (optional bool),
+        reversion_candidates (optional list of dicts with ticker/rsi/dip_pct/vol_ratio/price)
     """
     os.makedirs(DASHBOARD_DIR, exist_ok=True)
 
@@ -495,6 +560,9 @@ def generate(
       <div class="muted small" style="margin-top:4px">300,000 SEK sleeve &nbsp;·&nbsp; RSI&lt;33 dip-buy &nbsp;·&nbsp; max 10d hold</div>
     </div>
   </div>
+
+  <!-- Signal Ticker Panel -->
+  {_signal_panel(run_summary)}
 
   <!-- Strategy Head-to-Head -->
   <div class="card" style="margin-bottom:20px">

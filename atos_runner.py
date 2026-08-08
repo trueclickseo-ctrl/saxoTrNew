@@ -78,6 +78,7 @@ from atos.risk import (
     STARTING_CAPITAL_SEK,
 )
 from atos.dashboard_gen import generate as gen_dashboard
+from atos import notifier
 import atos.capital_config as CAP
 from atos.corporate_events import get_exit_flags, tickers_to_avoid as corp_avoid
 from atos.intraday_reversion import intraday_scan, us_market_is_open, next_scan_description
@@ -116,6 +117,10 @@ US_MOMENTUM_ENABLED = True
 # Run:  python backtest_us_reversion.py
 # Then flip this to True when the verdict is ENABLE.
 US_REVERSION_ENABLED = True   # SIM enabled 2026-08-08 — honest OOS validated (Sharpe 2.39, WR 70%)
+
+# ── Signal caches — written by run_us_momentum/run_us_reversion, read by dashboard ──
+_blend_signal: dict  = {}   # keys: targets, risk_off, reason, momentum, lowvol
+_rev_signals:  list  = []   # list of candidate dicts from USR.scan()
 
 # ── Dynamic capital allocation — loaded from config/capital.json ──────────
 # Edit config/capital.json to change percentages; no code change needed.
@@ -822,10 +827,13 @@ def run_cycle():
         todays_actions = todays_actions,
         open_trades    = open_trades_now,
         run_summary    = {
-            "total_equity_sek": total_equity,
-            "day_start_equity": day_start,
-            "trades_today":     len([a for a in todays_actions if a["action"] in ("BUY","EXIT")]),
-            "errors":           [],
+            "total_equity_sek":      total_equity,
+            "day_start_equity":      day_start,
+            "trades_today":          len([a for a in todays_actions if a["action"] in ("BUY","EXIT")]),
+            "errors":                [],
+            "blend_targets":         _blend_signal.get("targets", []),
+            "blend_risk_off":        _blend_signal.get("risk_off", False),
+            "reversion_candidates":  _rev_signals,
         },
     )
     print(f"  Dashboard saved: {html_file}")
@@ -976,6 +984,24 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
     tag = "[US momentum DRY-RUN]" if dry_run else "[US momentum]"
     print(f"  {tag} risk_off={tgt['risk_off']} | {tgt.get('reason')} | targets={tgt['targets']}")
     fx_usd = fx.get_rate_to_sek("USD")
+
+    if not dry_run:
+        global _blend_signal
+        _blend_signal = {
+            "targets":  tgt.get("targets", []),
+            "risk_off": tgt.get("risk_off", False),
+            "reason":   tgt.get("reason", ""),
+            "momentum": tgt.get("momentum", []),
+            "lowvol":   tgt.get("lowvol", []),
+        }
+        notifier.notify_blend_targets(
+            targets          = tgt.get("targets", []),
+            risk_off         = tgt.get("risk_off", False),
+            reason           = tgt.get("reason", ""),
+            momentum_tickers = tgt.get("momentum", []),
+            lowvol_tickers   = tgt.get("lowvol", []),
+            sleeve_sek       = available_cash_sek or CAP.blend_allocation_pct() * CAP.starting_capital_sek(),
+        )
 
     def _price(tk, fallback=0):
         return float(feat_data[tk]["Close"].iloc[-1]) if tk in feat_data else fallback
@@ -1195,6 +1221,10 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
                         "price": cur_price, "reason": f"reversion exit: {reason}",
                         "pnl_sek": pnl_sek,
                     })
+                    notifier.notify_reversion_exit(
+                        ticker=ticker, pnl_sek=pnl_sek,
+                        reason=reason, hold_days=held_d,
+                    )
                 except Exception as e:
                     print(f"  {tag} sell {ticker} FAILED: {e}")
 
@@ -1242,6 +1272,14 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
     print(f"  {tag} {len(candidates)} signal(s) | {slots_free} slot(s) free of {max_positions} "
           f"({USR.MAX_UNIVERSE_PCT*100:.0f}% of {len(US_TICKERS)}) | "
           f"slot: {slot_sek:,.0f} SEK each")
+
+    global _rev_signals
+    _rev_signals = list(candidates)
+    notifier.notify_reversion_signal(
+        candidates = candidates,
+        slots_free = slots_free,
+        sleeve_sek = slot_sek * max_positions,
+    )
 
     for cand in candidates[:slots_free]:
         ticker = cand["ticker"]

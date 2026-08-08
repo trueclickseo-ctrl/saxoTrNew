@@ -1,0 +1,15 @@
+{
+  "_setup": [
+    "1. Enable 2-Factor Authentication on Google Account",
+    "2. Go to: https://myaccount.google.com/apppasswords",
+    "3. Click 'Select app' -> Other -> type 'ATOS Trading' -> Generate",
+    "4. Copy the 16-character app password shown",
+    "5. Rename this file to email.json and fill in sender_password below",
+    "6. email.json is gitignored — it will never be committed"
+  ],
+  "smtp_host": "smtp.gmail.com",
+  "smtp_port": 587,
+  "sender_email": "heyitskaxhif@gmail.com",
+  "sender_password": "PASTE_16_CHAR_APP_PASSWORD_HERE",
+  "recipient_email": "heyitskaxhif@gmail.com"
+}
