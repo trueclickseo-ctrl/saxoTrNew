@@ -26,27 +26,36 @@ The **ATOS Local Dashboard** is a standalone, web-based monitoring interface des
 ## Key Dashboard Sections
 
 1. **KPI Cards**
-   - Displays core portfolio metrics: current portfolio equity, total P&L (currency and percentage), count of open positions, and key algorithm performance statistics.
+   - Current portfolio equity, total P&L (currency and percentage), open position count.
 
-2. **Equity Curve**
-   - Interactive 90-day chart tracking cumulative account equity and P&L progression over time.
+2. **Strategy Sleeve Cards**
+   - US Blend (blue) and US Reversion (orange) cards showing open positions per strategy.
 
-3. **Algorithm Brain**
-   - Visual breakdown of adaptive detector weights (Trend, Momentum, Breakout, Mean Reversion, Volume).
-   - Includes real-time detector weight visual bars and historical evolution charts tracking model adaptation.
+3. **Strategy Head-to-Head Table**
+   - Side-by-side comparison: N trades, win rate, total P&L, avg win, avg loss, winner per metric.
+   - Updates automatically as trades accumulate in `data/trade_log.csv`.
 
-4. **Today's Signals**
-   - Complete record of generated signals for the current trading day (`BUY`, `EXIT`, `BLOCKED`).
-   - Detailed breakdown of sub-scores across all 5 detectors (D1 to D5).
+4. **Cumulative P&L Chart (per strategy)**
+   - Line chart: US Blend (blue) vs US Reversion (orange) cumulative realised P&L over time.
+   - Built from SELL rows in `data/trade_log.csv`.
 
-5. **Open Positions (Portfolio)**
-   - Active holdings detailing entry price, current price, unrealized P&L, position size, and detector breakdown per active trade.
+5. **Equity Curve**
+   - 90-day account equity progression.
 
-6. **Trade History**
-   - Archive of closed trades with realized P&L, exit reason (e.g., stop loss, take profit, signal exit), holding duration, and algorithm entry/exit scores.
+6. **Algorithm Brain**
+   - Adaptive detector weights (Trend, Momentum, Breakout, Mean Reversion, Volume).
 
-7. **Market Allocation**
-   - Interactive donut chart visualizing capital allocation across the 5 markets (US Equities, OMX30, DAX40, Commodities, Forex).
+7. **Today's Actions**
+   - BUY / SELL / BLOCKED signals with strategy column (which strategy placed each trade).
+
+8. **Open Positions**
+   - Entry price, current price, unrealised P&L, strategy label.
+
+9. **Trade History (last 30)**
+   - Closed trades from `data/trade_log.csv` — strategy, entry/exit, P&L, reason, days held.
+
+10. **Market Allocation**
+    - Donut chart of capital across market groups.
 
 8. **Signal Log**
    - Searchable and filterable log of all historical signals evaluated by the system.

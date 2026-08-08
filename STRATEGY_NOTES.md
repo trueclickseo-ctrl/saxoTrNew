@@ -266,21 +266,22 @@ less drawdown — the real value of the strategy is DD reduction, not beating B&
 
 **LIVE CONFIG — 2026-08-08 (updated 2026-08-08):**
 
-| Parameter | Value | Notes |
+| Parameter | Value | Config source |
 |---|---|---|
-| Universe (scan) | 61 stocks | S&P500 across all 11 sectors — scanned daily for signals |
-| Rebalance | Every 7 calendar days | Retries next trading day if market closed |
-| Offense | Up to 6 stocks | RSI-adj momentum > 5% 6-month return, ranked by return/vol |
-| Defense | Always 2 stocks | Lowest 60d vol above EMA200 |
-| Total positions held | 2–8 (dynamic) | Fewer when momentum is narrow; deduped |
-| Capital allocation | **50% of live SIM cash** | Dynamic — slot = 50% cash ÷ 8 positions; scales with account |
-| Risk-off | Daily | Equal-weight index < 200d SMA → full cash |
+| Universe (scan) | 61 stocks | `atos/universe.py` |
+| Rebalance | Every 7 calendar days | `us_momentum.py` REBAL_DAYS |
+| Offense slots | Up to 6 stocks | `config/capital.json` offense_slots |
+| Defense slots | Always 2 stocks | `config/capital.json` defense_slots |
+| Total positions held | 2–8 (dynamic) | Deduped offense + defense |
+| Position size | 12.5% of Blend budget | 1 / (6+2) slots |
+| Capital allocation | **50% of live SIM cash** | `config/capital.json` allocation_pct |
+| Risk-off | Daily | Equal-weight index < 200d SMA -> full cash |
 | Corporate events | Every cycle | Auto-exit 3d before ex-div; skip 2d before earnings |
-| Last rebalance | 2026-08-07 | 7 positions: AMD UNH CSCO BAC MU MS V |
-| Next rebalance | ~2026-08-14 | V may be excluded (ex-div 2026-08-11) |
+| Last rebalance | 2026-08-07 | AMD, UNH, BAC, V (4 open positions) |
+| Next rebalance | ~2026-08-14 | — |
 
 **Example position size** (if SIM account = 10M SEK):
-50% × 10M = 5M SEK ÷ 8 positions = **~625K SEK per stock = ~250 shares of a $250 stock**
+50% x 10M = 5M SEK / 8 slots = **625K SEK per stock**
 
 OMX/CPH per-instrument strategies PAUSED — backtesting showed no reliable edge over 10y.
 
@@ -422,12 +423,18 @@ Full results saved to `data/grid_results.csv`.
 Full grid results saved to `data/grid_results.csv` (190 passing combinations).
 To enable: set `US_REVERSION_ENABLED = True` in `atos_runner.py`.
 
-Capital: **50% of live SIM cash** — completely isolated from US Blend sleeve.
-2 concurrent positions max. Each slot = 50% cash ÷ 2 = **25% of SIM cash per trade**.
-SLEEVE_DD_CAP = 10% (pauses new entries if sleeve down 10% from peak).
+**Capital & position sizing (all from `config/capital.json`):**
+- Allocation: **50% of live SIM cash** — completely isolated from US Blend sleeve
+- Max slots: `max_universe_pct (10%) x 61 stocks = 6 slots` (never < 2)
+- Slot size: `50% cash / 6 slots = 8.3% of account per position`
+- DD cap: 10% sleeve drawdown -> pause new entries
+- Stop: -4% hard stop per position
+- Time-stop: 10 trading days max hold
 
 **Example position size** (if SIM = 10M SEK):
-50% × 10M = 5M SEK ÷ 2 slots = **2.5M SEK per slot = ~990 shares of a $250 stock**
+50% x 10M = 5M SEK / 6 slots = **833K SEK per slot = ~330 shares of a $250 stock**
+
+To change allocation: edit `config/capital.json` only. No code change needed.
 
 ---
 
@@ -513,3 +520,82 @@ Output files: `data/oos_trade_log.csv` (23 OOS trades), `data/is_grid_results.cs
 - Rebalance timestamp only advances if at least one buy order actually filled
 - On a market holiday: engine retries the full rebalance the next trading day
 - Prevents "skipped week" bug when scheduled rebalance day falls on a US holiday
+
+---
+
+## New Features — 2026-08-08 (Agent #4, session 2)
+
+### Central Capital Config (`config/capital.json` + `atos/capital_config.py`)
+- Single file controls ALL allocation: strategy cash %, slot counts, stop %, DD cap, hold days
+- `atos/capital_config.py` — typed getters (blend_allocation_pct, reversion_max_universe_pct, etc.)
+- `us_momentum.py` and `us_reversion.py` both import from capital_config — no hardcoded numbers
+- Config summary printed at the start of every `run_cycle()` for audit trail
+- To change anything: edit `config/capital.json`, restart runner. Zero code changes needed.
+
+### Percentage-Based Reversion Position Count
+- Replaced `MAX_POSITIONS = 2` (hardcoded) with `MAX_UNIVERSE_PCT = 0.10` in capital.json
+- Result: `max_positions = max(2, round(61 x 0.10)) = 6 slots`
+- Slot size scales with both the account balance AND the universe size
+- Capital spread across more stocks instead of concentrating into 2
+
+### Strategy Comparison (Dashboard + Terminal)
+- **Dashboard**: cumulative P&L line chart (Blend blue, Reversion orange) built from trade_log.csv
+- **Dashboard**: Strategy Head-to-Head table (N trades, WR, total P&L, avg win, avg loss, winner)
+- **Terminal**: `_strategy_scorecard()` reads trade_log.csv -> STRATEGY HEAD-TO-HEAD section in print_banner()
+- Both update automatically as real trades accumulate in trade_log.csv
+
+### Intraday Reversion Scanner (`atos/intraday_reversion.py`)
+- Runs 5x per US session (19:00, 20:30, 22:00, 23:30, 00:30 PKT = 10:00 AM-3:30 PM ET)
+- Uses daily indicators (EMA200, SMA20) from historical closes — stable, no intraday noise
+- RSI: last 13 daily closes + today's live price as 14th data point
+- Volume: partial-day total scaled by (390 min / minutes elapsed) for fair comparison to 20d avg
+- Entry conditions same as daily scanner (RSI<33, dip>5%, vol>1.5x, above EMA200)
+
+**Bad-news filter (3 layers):**
+
+| Layer | Rule | Catches |
+|---|---|---|
+| 1. Gap-down | >8% open vs yesterday close -> skip | Overnight earnings miss, FDA rejection |
+| 2. Catastrophic | >15% total drop today -> skip | Crisis-level events |
+| 3. Keyword scan | Any of ~25 red-flag words in last 24h headlines (yfinance.news, free) -> skip | SEC charges, bankruptcy, CEO fired, recall, guidance cut |
+
+Keyword list covers: fraud, SEC investigation, class action, bankruptcy, chapter 11,
+delisted, going concern, earnings miss, guidance cut, dividend cut, CEO/CFO resign/fired,
+product recall, FDA warning/rejection.
+
+Falls back silently if yfinance news fetch fails — price filters still run.
+
+**Entry timing rationale:**
+- 9:30-10:00 AM ET: NEVER buy (opening gap volatility unreliable)
+- 10:00 AM-2:30 PM ET: Best window (panic volume confirmed, price stabilised)
+- 3:30 PM ET: Final scan (close-like price, most consistent with daily backtest)
+
+**Architecture — why 2 separate files (not merged):**
+- `intraday_monitor.py`: GUARD — runs continuously, 1s Saxo polling, exits open positions
+- `atos/intraday_reversion.py`: SCOUT — 5 snapshots/session, finds new entries
+- Merging would require downloading yfinance batch data every second (absurd) or
+  checking stop-losses every 90 minutes (dangerous — stocks can blow stops between checks)
+- Separate failure domains: if scanner crashes, monitor keeps protecting positions
+
+### Trade Log (`data/trade_log.csv`)
+Every BUY and SELL from every strategy is appended with:
+`date, strategy, action, ticker, shares, price_usd, value_sek, pnl_sek, reason, entry_date, days_held`
+Used by: dashboard charts, terminal scorecard, strategy comparison stats.
+
+---
+
+## Intraday Scan — Market Signal Check (2026-08-08)
+
+Ran the reversion scanner on Friday 2026-08-07 close prices (cached).
+**Result: 0 signals.** Market is in a strong uptrend — stocks are above SMA20, RSI 40-87.
+
+Closest near-misses:
+| Ticker | RSI | Dip vs SMA20 | Vol | Missing |
+|---|---|---|---|---|
+| UPS | 36 | 5.1% | 1.0x | Volume spike only (needs 1.5x) |
+| AMD | 47 | 4.0% | 0.9x | RSI + vol + 1% more dip |
+| AAPL | 41 | 3.1% | 0.6x | RSI + vol + dip |
+
+This is expected. In the OOS backtest, reversion signals fired ~8% of trading days (once
+every 2-3 weeks). In bull markets with low vol, signals are rare — exactly when we don't
+want to force trades. The strategy waits for genuine panic, not manufactured entries.
