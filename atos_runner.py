@@ -719,6 +719,34 @@ def run_cycle():
     print("\nCycle complete.\n")
 
 
+TRADE_LOG_CSV = os.path.join(BASE_DIR, "data", "trade_log.csv")
+_TRADE_LOG_HEADER = ("date,strategy,action,ticker,shares,price_usd,"
+                     "value_sek,pnl_sek,reason,entry_date,days_held\n")
+
+
+def _append_trade_log(strategy: str, action: str, ticker: str, shares: int,
+                      price_usd: float, value_sek: float, pnl_sek,
+                      reason: str = "", entry_date: str = "", days_held: int = 0):
+    """Append one trade row to data/trade_log.csv.
+    Called on every BUY and SELL across ALL strategies so there is one
+    human-readable record of the entire trade history regardless of which
+    strategy placed the order.
+    """
+    write_header = not os.path.exists(TRADE_LOG_CSV)
+    try:
+        with open(TRADE_LOG_CSV, "a", newline="", encoding="utf-8") as f:
+            if write_header:
+                f.write(_TRADE_LOG_HEADER)
+            pnl_str = f"{pnl_sek:.2f}" if pnl_sek is not None else ""
+            f.write(
+                f"{date.today().isoformat()},{strategy},{action},{ticker},"
+                f"{shares},{price_usd:.4f},{value_sek:.2f},{pnl_str},"
+                f"{reason},{entry_date},{days_held}\n"
+            )
+    except Exception as e:
+        print(f"  [trade_log] write failed: {e}")
+
+
 def _log_buy_signal(mkt: str, ticker: str, decision, executed: int, block_reason):
     """Record a BUY signal attempt in the signals table (executed reflects
     whether an order was actually placed, not merely whether it was approved)."""
@@ -791,19 +819,25 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
             "trailing_stop_high": price, "regime_at_entry": "momentum",
         })
         record_fill(-(shares * price_sek + comm))
+        _append_trade_log("US Blend", "BUY", ticker, shares, price,
+                          shares * price_sek, None, "US momentum rebalance")
         todays_actions.append({"action": "BUY", "ticker": ticker, "market_group": "US Equities",
-                               "score": 0, "shares": shares, "price": price,
-                               "reason": "US momentum", "pnl_sek": None})
+                               "strategy": "US Blend", "score": 0, "shares": shares,
+                               "price": price, "reason": "US momentum", "pnl_sek": None})
     else:  # Sell (full close of the tracked position)
         comm = commission_sek(shares, price_sek)
+        pnl = None
         if cur_trade:
             entry_sek = cur_trade.get("entry_price", price) * rate
             pnl = shares * (price_sek - entry_sek) - comm
             db.close_trade(cur_trade["id"], price, "momentum_rebalance", pnl, comm)
         record_fill(shares * price_sek - comm)
+        _append_trade_log("US Blend", "SELL", ticker, shares, price,
+                          shares * price_sek, pnl, "US momentum exit",
+                          entry_date=cur_trade.get("entry_date", "") if cur_trade else "")
         todays_actions.append({"action": "EXIT", "ticker": ticker, "market_group": "US Equities",
-                               "score": 0, "shares": shares, "price": price,
-                               "reason": "US momentum exit", "pnl_sek": None})
+                               "strategy": "US Blend", "score": 0, "shares": shares,
+                               "price": price, "reason": "US momentum exit", "pnl_sek": pnl})
     return True
 
 
@@ -966,7 +1000,7 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list):
     """US Mean Reversion — short-term dip-buying strategy (3-10 day holds).
 
     Completely independent of US Blend: separate sleeve capital, separate DB rows
-    (strategy='US Reversion'), separate position limit (MAX_POSITIONS=3).
+    (strategy='US Reversion'), separate position limit (MAX_POSITIONS=2, 150K SEK each).
 
     Enabled only when US_REVERSION_ENABLED = True (after backtest passes).
     """
@@ -1024,10 +1058,18 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list):
                     pnl_sek = (cur_price - trade.get("entry_price", 0)) * sh * fx_usd
                     db.close_trade(trade["id"], exit_price=cur_price,
                                    exit_date=today.isoformat(), pnl_sek=pnl_sek)
+                    entry_d = trade.get("entry_date", "")
+                    held_d  = (today - _date.fromisoformat(entry_d)).days if entry_d else 0
+                    _append_trade_log(
+                        "US Reversion", "SELL", ticker, sh, cur_price,
+                        sh * cur_price * fx_usd, pnl_sek, reason,
+                        entry_date=entry_d, days_held=held_d,
+                    )
                     todays_actions.append({
                         "action": "SELL", "ticker": ticker, "market_group": "US Equities",
-                        "score": 0, "shares": sh, "price": cur_price,
-                        "reason": f"reversion exit: {reason}", "pnl_sek": pnl_sek,
+                        "strategy": "US Reversion", "score": 0, "shares": sh,
+                        "price": cur_price, "reason": f"reversion exit: {reason}",
+                        "pnl_sek": pnl_sek,
                     })
                 except Exception as e:
                     print(f"  {tag} sell {ticker} FAILED: {e}")
@@ -1039,6 +1081,23 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list):
     slots_free = USR.MAX_POSITIONS - len(rev_open_now)
     if slots_free <= 0:
         print(f"  {tag} full ({USR.MAX_POSITIONS}/{USR.MAX_POSITIONS} positions)")
+        return
+
+    # ── Sleeve DD cap check (mirrors backtest logic) ───────────────
+    # Estimate current sleeve equity: fixed sleeve minus cost of open positions.
+    open_value_sek = sum(
+        (t.get("shares", 0) or 0) * _price(tk) * fx_usd
+        for tk, t in rev_open_now.items()
+    )
+    open_cost_sek = sum(
+        (t.get("shares", 0) or 0) * (t.get("entry_price", 0) or 0) * fx_usd
+        for t in rev_open_now.values()
+    )
+    sleeve_equity = (USR.REVERSION_SLEEVE_SEK - open_cost_sek) + open_value_sek
+    sleeve_dd = (USR.REVERSION_SLEEVE_SEK - sleeve_equity) / USR.REVERSION_SLEEVE_SEK
+    if sleeve_dd >= USR.SLEEVE_DD_CAP:
+        print(f"  {tag} sleeve DD {sleeve_dd*100:.1f}% >= cap {USR.SLEEVE_DD_CAP*100:.0f}% "
+              f"— no new entries (sleeve ~{sleeve_equity:,.0f} SEK)")
         return
 
     candidates = USR.scan(feat_data, US_TICKERS)
@@ -1064,11 +1123,13 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list):
             print(f"  {tag} {ticker}: slot too small for 1 share — skip")
             continue
 
+        cost_sek = shares * price * fx_usd
         print(f"  {tag} BUY {ticker}: RSI={cand['rsi']} dip={cand['dip_pct']}% "
-              f"vol={cand['vol_ratio']}× | {shares} shares @ ${price:.2f}")
+              f"vol={cand['vol_ratio']}× | {shares} shares @ ${price:.2f} "
+              f"(~{cost_sek:,.0f} SEK) [US Reversion sleeve]")
         try:
             saxo_client.place_order(uic=uic, side="Buy", qty=shares, asset_type="Stock")
-            comm = commission_sek(shares, price * fx_usd)
+            comm = commission_sek(shares, cost_sek)
             db.insert_trade({
                 "strategy": "US Reversion", "market_group": "US Equities",
                 "ticker": ticker, "direction": "BUY",
@@ -1077,10 +1138,15 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list):
                 "entry_score": cand["score"], "d1_trend": 0, "d2_momentum": 0,
                 "d3_breakout": 0, "d4_meanrev": cand["rsi"], "d5_vol": cand["vol_ratio"],
             })
+            _append_trade_log(
+                "US Reversion", "BUY", ticker, shares, price, cost_sek, None,
+                f"RSI={cand['rsi']} dip={cand['dip_pct']}% vol={cand['vol_ratio']}x",
+            )
             todays_actions.append({
                 "action": "BUY", "ticker": ticker, "market_group": "US Equities",
-                "score": cand["score"], "shares": shares, "price": price,
-                "reason": (f"mean-reversion: RSI {cand['rsi']}, "
+                "strategy": "US Reversion", "score": cand["score"],
+                "shares": shares, "price": price,
+                "reason": (f"[US Reversion] RSI {cand['rsi']}, "
                            f"dip {cand['dip_pct']}%, vol {cand['vol_ratio']}×"),
                 "pnl_sek": None,
             })
