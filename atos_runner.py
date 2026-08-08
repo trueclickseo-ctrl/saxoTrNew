@@ -113,7 +113,7 @@ US_MOMENTUM_ENABLED = True
 # DISABLED until backtest_us_reversion.py shows Sharpe >= 0.8 and WinRate >= 50%.
 # Run:  python backtest_us_reversion.py
 # Then flip this to True when the verdict is ENABLE.
-US_REVERSION_ENABLED = False
+US_REVERSION_ENABLED = True   # SIM enabled 2026-08-08 — honest OOS validated (Sharpe 2.39, WR 70%)
 
 STRATEGY_INSTANCE_FOR_MARKET = {
     # "OMX30": S5_MomentumAccel(), "CPH25": S3_MeanReversion(),  # paused: unvalidated

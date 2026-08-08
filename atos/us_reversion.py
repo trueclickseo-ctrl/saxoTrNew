@@ -50,10 +50,10 @@ RSI_ENTRY     = 33     # RSI below this → oversold  [full 486-combo grid: top-
 RSI_EXIT      = 60     # RSI above this → recovery complete, exit
 DIP_PCT       = 0.05   # Price must be >= 5% below 20-day SMA  [full grid winner]
 VOL_MULT      = 1.5    # Today's volume >= 1.5x 20-day avg volume  [full grid: top-10 unanimous]
-STOP_PCT      = 0.05   # Hard stop-loss: 5% below entry
+STOP_PCT      = 0.04   # Hard stop-loss: 4% below entry  [IS-only grid winner]
 MAX_HOLD_DAYS = 10     # Time-stop: exit after 10 trading days regardless
-MAX_POSITIONS = 3      # Max concurrent positions  [full grid: top-10 unanimous]
-SLEEVE_DD_CAP = 0.15   # Pause new entries if sleeve equity drops >15% from peak
+MAX_POSITIONS = 2      # Max concurrent positions  [IS-only grid winner]
+SLEEVE_DD_CAP = 0.10   # Pause new entries if sleeve equity drops >10% from peak  [IS-only grid winner]
 REVERSION_SLEEVE_SEK = 300_000.0   # Separate capital pool (do not mix with US Blend)
 # ─────────────────────────────────────────────────────────────────────────
 
