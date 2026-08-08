@@ -115,6 +115,15 @@ US_MOMENTUM_ENABLED = True
 # Then flip this to True when the verdict is ENABLE.
 US_REVERSION_ENABLED = True   # SIM enabled 2026-08-08 — honest OOS validated (Sharpe 2.39, WR 70%)
 
+# ── Dynamic capital allocation (SIM testing) ───────────────────────────────
+# Each strategy claims a % of the live Saxo SIM cash balance, so position
+# sizes scale with the full account rather than a small fixed sleeve.
+#   BLEND_CASH_PCT  — share of available cash given to US Blend
+#   REV_CASH_PCT    — share of available cash given to US Reversion
+#   The remaining 10% stays as a cash buffer (costs + new signals).
+BLEND_CASH_PCT = 0.50   # 50% of SIM cash → US Blend momentum
+REV_CASH_PCT   = 0.40   # 40% of SIM cash → US Reversion (split across 2 slots)
+
 STRATEGY_INSTANCE_FOR_MARKET = {
     # "OMX30": S5_MomentumAccel(), "CPH25": S3_MeanReversion(),  # paused: unvalidated
 }
@@ -684,18 +693,22 @@ def run_cycle():
                 })
 
     # ── 6c. US momentum rebalance (the validated strategy) ────────
+    blend_budget = cash_sek * BLEND_CASH_PCT
     if US_MOMENTUM_ENABLED:
-        print("  Running US momentum strategy...")
+        print(f"  Running US momentum strategy... (budget: {blend_budget:,.0f} SEK = {BLEND_CASH_PCT*100:.0f}% of {cash_sek:,.0f})")
         try:
-            run_us_momentum(feat_data, db.get_open_trades(), todays_actions)
+            run_us_momentum(feat_data, db.get_open_trades(), todays_actions,
+                            available_cash_sek=blend_budget)
         except Exception as e:
             print(f"  [US momentum] ERROR: {e}")
 
     # ── 6d. US mean reversion (Option 3 — enable after backtest) ──
+    rev_budget = cash_sek * REV_CASH_PCT
     if US_REVERSION_ENABLED:
-        print("  Running US reversion strategy...")
+        print(f"  Running US reversion strategy... (budget: {rev_budget:,.0f} SEK = {REV_CASH_PCT*100:.0f}% of {cash_sek:,.0f})")
         try:
-            run_us_reversion(feat_data, db.get_open_trades(), todays_actions)
+            run_us_reversion(feat_data, db.get_open_trades(), todays_actions,
+                             available_cash_sek=rev_budget)
         except Exception as e:
             print(f"  [US reversion] ERROR: {e}")
 
@@ -880,9 +893,11 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
     return True
 
 
-def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list, dry_run: bool = False):
+def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
+                    dry_run: bool = False, available_cash_sek: float = 0.0):
     """Validated US cross-sectional momentum, executed as a monthly rebalance with a
     daily market risk-off overlay. See atos/us_momentum.py + STRATEGY_NOTES.md.
+    available_cash_sek: if >0, overrides the fixed sleeve and uses this as the rebalance budget.
     dry_run=True previews the orders (prints them) without placing any or touching the DB."""
     from atos import us_momentum as USM
     from instrument_map import load_instrument_map
@@ -913,14 +928,18 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list, dr
             _do("Sell", tk, tr.get("shares", 0),
                 _price(tk, tr.get("entry_price", 0)), cur_trade=tr)
 
-    # US sleeve capital — starts at US_SLEEVE_SEK and COMPOUNDS with the strategy's
-    # own P&L. Profits raise the tradeable budget (the bot's reward); losses lower it.
-    # It is NEVER topped up from the rest of the account, so extra deposits stay untouched.
-    state         = _load_us_state()
-    sleeve_cash   = float(state.get("sleeve_cash", USM.US_SLEEVE_SEK))
-    us_value      = sum((tr.get("shares", 0) or 0) * _price(tk, tr.get("entry_price", 0)) * fx_usd
-                        for tk, tr in us_open.items())
-    sleeve_equity = sleeve_cash + us_value   # current tradeable budget (compounds)
+    # US sleeve capital. If available_cash_sek is provided (dynamic mode), the
+    # rebalance budget is that value directly — position sizes scale with the
+    # full account. Otherwise falls back to the compounding fixed sleeve.
+    state     = _load_us_state()
+    us_value  = sum((tr.get("shares", 0) or 0) * _price(tk, tr.get("entry_price", 0)) * fx_usd
+                    for tk, tr in us_open.items())
+    if available_cash_sek > 0:
+        sleeve_equity = available_cash_sek   # dynamic: 50% of live SIM cash
+        print(f"  {tag} dynamic budget: {sleeve_equity:,.0f} SEK (open positions: ~{us_value:,.0f} SEK)")
+    else:
+        sleeve_cash   = float(state.get("sleeve_cash", USM.US_SLEEVE_SEK))
+        sleeve_equity = sleeve_cash + us_value   # classic compounding sleeve
 
     # ── Corporate event exits (ex-dividend / earnings) ────────────────────
     # Run every cycle — not just on rebalance day. If we hold a stock that is
@@ -1035,11 +1054,14 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list, dr
         _save_us_state(state)
 
 
-def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list):
+def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
+                     available_cash_sek: float = 0.0):
     """US Mean Reversion — short-term dip-buying strategy (3-10 day holds).
 
-    Completely independent of US Blend: separate sleeve capital, separate DB rows
-    (strategy='US Reversion'), separate position limit (MAX_POSITIONS=2, 150K SEK each).
+    Completely independent of US Blend: separate DB rows (strategy='US Reversion'),
+    separate position limit (MAX_POSITIONS=2).
+    available_cash_sek: if >0, slot size = this / MAX_POSITIONS (dynamic mode).
+    Otherwise uses fixed REVERSION_SLEEVE_SEK.
 
     Enabled only when US_REVERSION_ENABLED = True (after backtest passes).
     """
@@ -1122,8 +1144,11 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list):
         print(f"  {tag} full ({USR.MAX_POSITIONS}/{USR.MAX_POSITIONS} positions)")
         return
 
+    # ── Sleeve size: dynamic (% of SIM cash) or fixed fallback ───────
+    sleeve_base = available_cash_sek if available_cash_sek > 0 else USR.REVERSION_SLEEVE_SEK
+    slot_sek    = sleeve_base / USR.MAX_POSITIONS
+
     # ── Sleeve DD cap check (mirrors backtest logic) ───────────────
-    # Estimate current sleeve equity: fixed sleeve minus cost of open positions.
     open_value_sek = sum(
         (t.get("shares", 0) or 0) * _price(tk) * fx_usd
         for tk, t in rev_open_now.items()
@@ -1132,8 +1157,8 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list):
         (t.get("shares", 0) or 0) * (t.get("entry_price", 0) or 0) * fx_usd
         for t in rev_open_now.values()
     )
-    sleeve_equity = (USR.REVERSION_SLEEVE_SEK - open_cost_sek) + open_value_sek
-    sleeve_dd = (USR.REVERSION_SLEEVE_SEK - sleeve_equity) / USR.REVERSION_SLEEVE_SEK
+    sleeve_equity = (sleeve_base - open_cost_sek) + open_value_sek
+    sleeve_dd = (sleeve_base - sleeve_equity) / sleeve_base if sleeve_base > 0 else 0
     if sleeve_dd >= USR.SLEEVE_DD_CAP:
         print(f"  {tag} sleeve DD {sleeve_dd*100:.1f}% >= cap {USR.SLEEVE_DD_CAP*100:.0f}% "
               f"— no new entries (sleeve ~{sleeve_equity:,.0f} SEK)")
@@ -1145,8 +1170,8 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list):
         print(f"  {tag} no entry signals today")
         return
 
-    print(f"  {tag} {len(candidates)} candidate(s), {slots_free} slot(s) free")
-    slot_sek = USR.REVERSION_SLEEVE_SEK / USR.MAX_POSITIONS
+    print(f"  {tag} {len(candidates)} candidate(s), {slots_free} slot(s) free | "
+          f"slot size: {slot_sek:,.0f} SEK each")
 
     for cand in candidates[:slots_free]:
         ticker = cand["ticker"]
