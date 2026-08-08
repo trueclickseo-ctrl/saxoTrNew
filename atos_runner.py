@@ -121,8 +121,8 @@ US_REVERSION_ENABLED = True   # SIM enabled 2026-08-08 — honest OOS validated 
 #   BLEND_CASH_PCT  — share of available cash given to US Blend
 #   REV_CASH_PCT    — share of available cash given to US Reversion
 #   The remaining 10% stays as a cash buffer (costs + new signals).
-BLEND_CASH_PCT = 0.50   # 50% of SIM cash → US Blend momentum
-REV_CASH_PCT   = 0.40   # 40% of SIM cash → US Reversion (split across 2 slots)
+BLEND_CASH_PCT = 0.50   # 50% of SIM cash → US Blend momentum (up to 8 positions)
+REV_CASH_PCT   = 0.50   # 50% of SIM cash → US Reversion (split across 2 slots = 25% each)
 
 STRATEGY_INSTANCE_FOR_MARKET = {
     # "OMX30": S5_MomentumAccel(), "CPH25": S3_MeanReversion(),  # paused: unvalidated

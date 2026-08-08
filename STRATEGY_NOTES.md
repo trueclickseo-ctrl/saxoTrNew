@@ -264,20 +264,23 @@ less drawdown — the real value of the strategy is DD reduction, not beating B&
 **Upgraded the live signal to risk-adjusted momentum** in atos/us_momentum.py.
 (mom252 worse than mom120; low-vol lowest DD but low return — a defensive alternative.)
 
-**LIVE CONFIG — 2026-08-08:**
+**LIVE CONFIG — 2026-08-08 (updated 2026-08-08):**
 
 | Parameter | Value | Notes |
 |---|---|---|
-| Universe | 61 stocks | S&P500 across all 11 sectors |
+| Universe (scan) | 61 stocks | S&P500 across all 11 sectors — scanned daily for signals |
 | Rebalance | Every 7 calendar days | Retries next trading day if market closed |
 | Offense | Up to 6 stocks | RSI-adj momentum > 5% 6-month return, ranked by return/vol |
 | Defense | Always 2 stocks | Lowest 60d vol above EMA200 |
-| Total positions | 2–8 (dynamic) | Fewer when momentum is narrow; deduped |
-| Sleeve | 1,095,000 SEK | Compounds with own P&L; never topped up from account |
+| Total positions held | 2–8 (dynamic) | Fewer when momentum is narrow; deduped |
+| Capital allocation | **50% of live SIM cash** | Dynamic — slot = 50% cash ÷ 8 positions; scales with account |
 | Risk-off | Daily | Equal-weight index < 200d SMA → full cash |
 | Corporate events | Every cycle | Auto-exit 3d before ex-div; skip 2d before earnings |
 | Last rebalance | 2026-08-07 | 7 positions: AMD UNH CSCO BAC MU MS V |
 | Next rebalance | ~2026-08-14 | V may be excluded (ex-div 2026-08-11) |
+
+**Example position size** (if SIM account = 10M SEK):
+50% × 10M = 5M SEK ÷ 8 positions = **~625K SEK per stock = ~250 shares of a $250 stock**
 
 OMX/CPH per-instrument strategies PAUSED — backtesting showed no reliable edge over 10y.
 
@@ -286,7 +289,7 @@ OMX/CPH per-instrument strategies PAUSED — backtesting showed no reliable edge
 ## Option 3: US Mean Reversion — Design & Backtest Log
 
 **Module:** `atos/us_reversion.py` | **Backtest:** `backtest_us_reversion.py`
-**Status: DISABLED** — `US_REVERSION_ENABLED = False` in `atos_runner.py`
+**Status: LIVE ON SIM** — `US_REVERSION_ENABLED = True` in `atos_runner.py` (enabled 2026-08-08)
 
 ### Logic
 Buy strong stocks (above EMA200) that have had a sharp short-term dip. Catch the bounce.
@@ -419,8 +422,12 @@ Full results saved to `data/grid_results.csv`.
 Full grid results saved to `data/grid_results.csv` (190 passing combinations).
 To enable: set `US_REVERSION_ENABLED = True` in `atos_runner.py`.
 
-Capital: **separate 300,000 SEK sleeve** — completely isolated from US Blend sleeve.
-Max 3 concurrent positions. SLEEVE_DD_CAP = 15% (pauses new entries if sleeve down 15%).
+Capital: **50% of live SIM cash** — completely isolated from US Blend sleeve.
+2 concurrent positions max. Each slot = 50% cash ÷ 2 = **25% of SIM cash per trade**.
+SLEEVE_DD_CAP = 10% (pauses new entries if sleeve down 10% from peak).
+
+**Example position size** (if SIM = 10M SEK):
+50% × 10M = 5M SEK ÷ 2 slots = **2.5M SEK per slot = ~990 shares of a $250 stock**
 
 ---
 
