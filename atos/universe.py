@@ -62,7 +62,7 @@ SP500_TICKERS = [
     "CLX",   # Clorox — cleaning products, spikes on volatility events
     "MKC",   # McCormick — spices, pricing power, low-vol
     "TSN",   # Tyson Foods — protein/food, counter-cyclical tendency
-    "K",     # Kellanova (Kellogg) — cereal/snacks, defensive
+    "CAG",   # Conagra Brands — packaged food, replaces K (Kellanova acquired by Mars 2025)
 
     # ── Financials — existing (10) ───────────────────────────────────────────
     "JPM", "V", "MA", "BAC", "GS", "MS", "BLK", "AXP", "SPGI", "CB",
@@ -76,7 +76,7 @@ SP500_TICKERS = [
     "ICE",   # Intercontinental Exchange — exchange infrastructure
     "CME",   # CME Group — derivatives exchange, counter-cyclical revenue
     "SCHW",  # Charles Schwab — brokerage, dips sharply then recovers (reversion)
-    "BK",    # BNY Mellon — custody bank, true low-vol
+    "TROW",  # T. Rowe Price — asset manager, replaces BK (Yahoo data issue)
 
     # ── Healthcare — existing (9) ────────────────────────────────────────────
     "LLY", "UNH", "JNJ", "ABBV", "MRK", "TMO", "ISRG", "DHR", "MDT",
@@ -121,7 +121,7 @@ SP500_TICKERS = [
     "OKE",   # ONEOK — natural gas midstream, dividend, low-vol
     "SLB",   # SLB (Schlumberger) — oilfield services, global cycle play
     "DVN",   # Devon Energy — Permian E&P, variable dividend model
-    "HES",   # Hess Corp — E&P, Guyana exposure, acquisition target history
+    "APA",   # APA Corp — E&P, replaces HES (Hess acquired by Chevron 2024)
 
     # ── Semiconductors — existing (5) ────────────────────────────────────────
     "AMD", "QCOM", "MU", "AMAT", "ASML",
