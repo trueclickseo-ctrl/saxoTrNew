@@ -36,6 +36,20 @@ execution:
   dry_run: true              # true = scan only, no orders placed
   scan_interval_minutes: 60  # How often run_binance_bot checks for signals
 
+# ── Portfolio risk / equity stop ─────────────────────────────────────────────
+# Checked every scan.  If equity falls more than equity_stop_drawdown_pct from
+# its all-time peak, new entries are halted for the rest of the session.
+# Recovery requires a manual operator call to EquityStop.reset() -- the bot
+# does NOT resume automatically to prevent averaging down into a losing market.
+#
+# equity_stop_flatten: if true, also close all open positions when halt fires.
+# Leave false on testnet until the flatten logic has been validated live.
+#
+# State is persisted to data/binance_equity_state.json (gitignored).
+risk:
+  equity_stop_drawdown_pct: 15.0   # halt if equity falls 15% from peak
+  equity_stop_flatten: false        # true = close all positions on halt
+
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging:
   level: INFO

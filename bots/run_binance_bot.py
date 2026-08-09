@@ -23,6 +23,7 @@ import os
 import sys
 import time
 import traceback
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -55,13 +56,18 @@ except ImportError:
 
 from binance_bot.binance_client  import BinanceClient
 from binance_bot.binance_adapter import BinanceAdapter
-from binance_bot.logger          import get_logger
+from binance_bot.logger          import get_logger, log_trade, log_signal
+from binance_bot.equity_stop     import EquityStop
 from core.broker_interface       import BrokerError
 from strategies.binance          import mean_reversion as MR
+from strategies.binance.mean_reversion import STRATEGY_ID
+
+EQUITY_STATE_PATH = ROOT / "data" / "binance_equity_state.json"
 
 log = get_logger(__name__)
 
 CONFIG_PATH = ROOT / "binance_bot" / "config" / "binance_testnet_config.yaml"
+PID_FILE    = ROOT / "logs" / "binance_bot.pid"
 
 # Optional: reuse the existing Saxo email notifier for crash alerts.
 # It reads the same config/email.json so no extra setup is needed.
@@ -223,15 +229,78 @@ def _execute_buys(adapter: BinanceAdapter, signals: list, cfg: dict) -> None:
                 side="BUY",
                 qty=qty,
                 order_type="MARKET",
-                strategy_tag="crypto_mean_reversion",
+                strategy_tag=STRATEGY_ID,
             )
             log.info(
                 "Order placed: %s %s qty=%s fill=%s status=%s",
                 result.side, result.symbol, result.qty,
                 result.filled_price, result.status,
             )
+            log_trade({
+                "ts":          datetime.now(timezone.utc).isoformat(),
+                "symbol":      result.symbol,
+                "side":        "BUY",
+                "price":       float(result.filled_price or sig.price),
+                "qty":         float(result.qty),
+                "strategy":    STRATEGY_ID,
+                "order_id":    result.order_id,
+                "rsi":         round(sig.rsi, 2),
+                "dip_pct":     round(sig.dip_pct, 2),
+                "vol_ratio":   round(sig.vol_ratio, 3),
+                "exit_reason": None,
+                "realized_pnl": None,
+            })
         except BrokerError as exc:
             log.error("Order failed for %s: %s", sig.symbol, exc)
+
+
+def _flatten_all(adapter: BinanceAdapter, cfg: dict, dry_run: bool) -> None:
+    """
+    Close all positions opened by this bot by placing market SELL orders.
+    Called when the equity stop fires and equity_stop_flatten is true.
+
+    Uses the same net-qty reconstruction as _open_slots() / _total_open_notional().
+    Skips any symbol where net qty is negligible (testnet dust).
+    """
+    universe = cfg["symbols"]
+    log.warning("EQUITY STOP -- FLATTEN: closing all positions (dry_run=%s)", dry_run)
+    for symbol in universe:
+        try:
+            trades  = adapter._c.get_my_trades(symbol, limit=100)
+            net_qty = sum(
+                float(t["qty"]) * (1.0 if t["isBuyer"] else -1.0)
+                for t in trades
+            )
+            if net_qty <= 1e-8:
+                continue
+            log.warning("  Flattening %s  qty=%.8f", symbol, net_qty)
+            if dry_run:
+                log.warning("  (dry_run=True -- SELL order not placed)")
+                continue
+            result = adapter.place_order(
+                symbol=symbol,
+                side="SELL",
+                qty=net_qty,
+                order_type="MARKET",
+                strategy_tag="equity_stop_flatten",
+            )
+            log.warning(
+                "  Flatten order placed: %s qty=%s fill=%s status=%s",
+                result.symbol, result.qty, result.filled_price, result.status,
+            )
+            log_trade({
+                "ts":           datetime.now(timezone.utc).isoformat(),
+                "symbol":       result.symbol,
+                "side":         "SELL",
+                "price":        float(result.filled_price or 0),
+                "qty":          float(result.qty),
+                "strategy":     "equity_stop_flatten",
+                "order_id":     result.order_id,
+                "exit_reason":  "equity_stop",
+                "realized_pnl": None,
+            })
+        except Exception as exc:
+            log.error("  Flatten failed for %s: %s", symbol, exc)
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -258,14 +327,54 @@ def run_once(execute: bool = False) -> None:
         balance.available_cash, balance.total_equity,
     )
 
+    # ── Portfolio-level equity stop ───────────────────────────────────────────
+    risk_cfg    = cfg.get("risk", {})
+    dd_threshold = float(risk_cfg.get("equity_stop_drawdown_pct", 15.0)) / 100.0
+    do_flatten   = bool(risk_cfg.get("equity_stop_flatten", False))
+
+    eq_stop = EquityStop(str(EQUITY_STATE_PATH), drawdown_threshold=dd_threshold)
+    halted, halt_reason = eq_stop.check(float(balance.total_equity))
+
+    if halted:
+        log.warning("*** EQUITY STOP ACTIVE *** %s", halt_reason)
+        if do_flatten:
+            _flatten_all(adapter, cfg, dry_run=dry_run)
+        log.warning("No new entries this scan. Manual reset required to resume.")
+        return
+    else:
+        log.info(
+            "Equity stop: OK  peak=%.2f  current=%.2f  drawdown=%.1f%%  threshold=%.0f%%",
+            eq_stop.peak_equity,
+            float(balance.total_equity),
+            (eq_stop.peak_equity - float(balance.total_equity)) / max(eq_stop.peak_equity, 1) * 100,
+            dd_threshold * 100,
+        )
+
     open_slots = _open_slots(adapter, cfg)
     log.info("Open slots: %d / %d", open_slots, cfg["capital"]["max_slots"])
 
     symbols = cfg["symbols"]
     log.info("Scanning %d symbols: %s", len(symbols), ", ".join(symbols))
 
+    scan_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     signals = MR.scan(adapter, symbols, cfg["strategy"], open_slots)
     _print_scan_summary(signals)
+
+    # Structured signal log — every symbol, every scan, regardless of action
+    _ts = datetime.now(timezone.utc).isoformat()
+    for sig in signals:
+        log_signal({
+            "ts":        _ts,
+            "scan_id":   scan_id,
+            "symbol":    sig.symbol,
+            "action":    sig.action,
+            "reason":    sig.reason,
+            "rsi":       round(sig.rsi, 2),
+            "dip_pct":   round(sig.dip_pct, 2),
+            "vol_ratio": round(sig.vol_ratio, 3),
+            "price":     float(sig.price),
+            "strategy":  sig.strategy,
+        })
 
     if not dry_run:
         _execute_buys(adapter, signals, cfg)
@@ -294,21 +403,34 @@ def main() -> None:
             "Ctrl+C or touch STOP_BINANCE to stop cleanly.",
             interval_min,
         )
-        while True:
-            if _kill_switch_active():
-                log.info("STOP_BINANCE file detected -- shutting down loop cleanly.")
-                break
+        # Write PID so the dashboard can detect whether the loop is alive
+        try:
+            PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+            PID_FILE.write_text(str(os.getpid()))
+        except Exception:
+            pass
+
+        try:
+            while True:
+                if _kill_switch_active():
+                    log.info("STOP_BINANCE file detected -- shutting down loop cleanly.")
+                    break
+                try:
+                    run_once(execute=args.execute)
+                except KeyboardInterrupt:
+                    log.info("Stopped by user (Ctrl+C).")
+                    break
+                except Exception as exc:
+                    log.error("Unhandled error in loop: %s", exc, exc_info=True)
+                    _send_crash_alert(exc)
+                    log.info("Crash alert sent. Continuing loop in %d minutes...", interval_min)
+                log.info("Next scan in %d minutes...", interval_min)
+                time.sleep(interval_min * 60)
+        finally:
             try:
-                run_once(execute=args.execute)
-            except KeyboardInterrupt:
-                log.info("Stopped by user (Ctrl+C).")
-                break
-            except Exception as exc:
-                log.error("Unhandled error in loop: %s", exc, exc_info=True)
-                _send_crash_alert(exc)
-                log.info("Crash alert sent. Continuing loop in %d minutes...", interval_min)
-            log.info("Next scan in %d minutes...", interval_min)
-            time.sleep(interval_min * 60)
+                PID_FILE.unlink(missing_ok=True)
+            except Exception:
+                pass
     else:
         run_once(execute=args.execute)
 

@@ -31,6 +31,10 @@ if TYPE_CHECKING:
 
 import statistics
 
+# Stable identifier used in trade records and structured logs so per-strategy
+# performance can be evaluated independently once multiple strategies go live.
+STRATEGY_ID = "mean_reversion_v1"
+
 
 @dataclass
 class CandidateSignal:
@@ -41,6 +45,7 @@ class CandidateSignal:
     vol_ratio: float      # 24h vol / 20d avg vol
     action: str           # "BUY" | "QUEUED" (slots full) | "SKIP"
     reason: str = ""
+    strategy: str = STRATEGY_ID
 
 
 def _rsi(closes: list[float], period: int = 14) -> float:
