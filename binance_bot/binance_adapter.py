@@ -147,16 +147,20 @@ class BinanceAdapter(BrokerInterface):
                 locked = Decimal(b["locked"])
                 total  = free + locked
                 if total > 0 and b["asset"] != "USDT":
-                    ticker = self._c.get_symbol_ticker(b["asset"] + "USDT")
-                    price  = Decimal(ticker["price"])
-                    positions.append(
-                        Position(
-                            symbol=b["asset"] + "USDT",
-                            qty=total,
-                            avg_entry_price=price,
-                            unrealised_pnl=None,
+                    try:
+                        ticker = self._c.get_symbol_ticker(b["asset"] + "USDT")
+                        price  = Decimal(ticker["price"])
+                        positions.append(
+                            Position(
+                                symbol=b["asset"] + "USDT",
+                                qty=total,
+                                avg_entry_price=price,
+                                unrealised_pnl=None,
+                            )
                         )
-                    )
+                    except Exception:
+                        # Asset has no USDT pair on testnet -- skip silently
+                        pass
             return positions
         except Exception as exc:
             raise BrokerError(f"get_positions() failed: {exc}") from exc

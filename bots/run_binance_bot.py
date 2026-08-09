@@ -72,13 +72,33 @@ def _load_config() -> dict:
 
 
 def _open_slots(adapter: BinanceAdapter, cfg: dict) -> int:
+    """
+    Count slots used by positions WE opened (via our own API key trade history).
+    Using balance alone is unreliable on testnet because Binance pre-loads
+    all universe assets into new accounts. get_my_trades() only returns
+    trades placed by our key, so pre-loaded assets are invisible here.
+    """
     max_slots = int(cfg["capital"]["max_slots"])
-    try:
-        positions = adapter.get_positions()
-        return max(0, max_slots - len(positions))
-    except BrokerError as exc:
-        log.warning("Could not fetch positions: %s — assuming 0 free slots", exc)
-        return 0
+    universe  = cfg["symbols"]
+    open_count = 0
+    open_symbols = []
+    for symbol in universe:
+        try:
+            trades = adapter._c.get_my_trades(symbol, limit=100)
+            net_qty = sum(
+                float(t["qty"]) * (1.0 if t["isBuyer"] else -1.0)
+                for t in trades
+            )
+            if net_qty > 1e-8:
+                open_count += 1
+                open_symbols.append(symbol)
+        except Exception:
+            pass
+    if open_symbols:
+        log.info("Our open positions: %s", ", ".join(open_symbols))
+    else:
+        log.info("Our open positions: none (testnet pre-loads excluded)")
+    return max(0, max_slots - open_count)
 
 
 def _print_scan_summary(signals: list) -> None:
