@@ -8,6 +8,40 @@ Current status: TESTNET ONLY. Do not proceed with live until all items are check
 
 ---
 
+## Testnet quirks discovered during live testing
+
+**Pre-loaded asset balances (2026-08-09)**
+Binance testnet accounts start with non-zero balances in every major asset:
+BTC(1), ETH(1), BNB(1), SOL(6), ADA(2631) — all universe symbols.
+These are NOT positions we opened and must not count against our slot limit.
+
+- `get_positions()` (balance-based) sees all 5 as open positions -> slots=0 always.
+  Fixed by using `get_my_trades()` instead, which only returns trades made with
+  our specific API key. Pre-loaded assets have no trade history for our key.
+- Before going live: confirm the live account has no pre-existing balances that
+  would trigger the same false-positive. If it does, `get_my_trades()` will still
+  correctly show only trades we placed, so this fix holds for live too.
+
+**"Invalid symbol" from get_positions() (2026-08-09)**
+Some pre-loaded assets do not have a USDT pair on testnet (e.g. obscure tokens).
+Calling `get_symbol_ticker(asset + "USDT")` throws `APIError(code=-1121)`.
+Fixed by wrapping the per-asset ticker call in a try/except and skipping silently.
+This is not a real error -- it just means that balance cannot be priced.
+
+**Position state reconstruction durability gap**
+`_open_slots()` and `_total_open_notional()` derive open positions from trade
+history (last 100 trades per symbol). This works for testnet but will drift if:
+- Bot restarts mid-position and old fills fall outside the 100-trade window
+- A manual trade is placed on the same API key during testing
+- A position is partially filled across multiple orders
+
+**Backlog item (not urgent for testnet):** Replace trade-history reconstruction
+with a proper position ledger in a database (e.g. `data/binance_positions.json`
+or a SQLite table). Write on every fill, read at scan start. This is the
+correct architecture for a production bot.
+
+---
+
 ## Items that MUST change for live
 
 ### 1. Base URLs
