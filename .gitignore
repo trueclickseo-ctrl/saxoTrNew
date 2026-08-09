@@ -48,6 +48,10 @@ data/*.csv
 results/
 STOP_TRADING
 
+# Virtual environment
+.venv/
+venv/
+
 # OS clutter
 .DS_Store
 Thumbs.db

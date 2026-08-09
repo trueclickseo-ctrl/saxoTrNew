@@ -53,15 +53,15 @@ except ImportError:
     print("ERROR: pyyaml not installed — run: pip install pyyaml")
     sys.exit(1)
 
-from binance.binance_client  import BinanceClient
-from binance.binance_adapter import BinanceAdapter
-from binance.logger          import get_logger
-from core.broker_interface   import BrokerError
-from strategies.binance      import mean_reversion as MR
+from binance_bot.binance_client  import BinanceClient
+from binance_bot.binance_adapter import BinanceAdapter
+from binance_bot.logger          import get_logger
+from core.broker_interface       import BrokerError
+from strategies.binance          import mean_reversion as MR
 
 log = get_logger(__name__)
 
-CONFIG_PATH = ROOT / "binance" / "config" / "binance_testnet_config.yaml"
+CONFIG_PATH = ROOT / "binance_bot" / "config" / "binance_testnet_config.yaml"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
