@@ -28,6 +28,7 @@ data/atos_risk_state.json
 data/daily_state.json
 data/risk_capital.json
 data/us_momentum_state.json
+data/atos_scan_state.json
 # strategy monitor state
 data/strategy_monitor.json
 # generated HTML dashboard (was uploaded to namazic.com)
@@ -51,6 +52,15 @@ STOP_TRADING
 # Virtual environment
 .venv/
 venv/
+
+# Log files — never commit; large and machine-local
+logs/
+
+# Kill-switch sentinel files (written at runtime, not source-controlled)
+STOP_BINANCE
+
+# Backtest cache pickles (re-downloadable via --reset)
+data/*.pkl
 
 # OS clutter
 .DS_Store

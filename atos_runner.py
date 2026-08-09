@@ -846,6 +846,42 @@ def run_cycle():
         except Exception as e:
             print(f"  [notifier] weekly report failed: {e}")
 
+    # ── 12. Write scan state snapshot (read by dashboard_saxo.ps1) ──
+    try:
+        _rev_cands_logged = len(_rev_signals)
+        _rev_executed     = sum(1 for c in _rev_signals if c.get("ticker") in
+                                {a["ticker"] for a in todays_actions if a.get("strategy") == "US Reversion"})
+        _rev_max          = max(2, round(len(US_TICKERS) * __import__("atos.us_reversion", fromlist=["MAX_UNIVERSE_PCT"]).MAX_UNIVERSE_PCT))
+        _blend_tgts       = _blend_signal.get("targets", [])
+        _blend_risk_off   = _blend_signal.get("risk_off", False)
+        _last_reb_state   = _load_us_state()
+        _last_reb         = _last_reb_state.get("last_rebalance")
+        _days_since_reb   = (date.today() - date.fromisoformat(_last_reb)).days if _last_reb else None
+        _write_scan_state({
+            "scan_ts":         datetime.now().isoformat(),
+            "strategies": {
+                "US Blend": {
+                    "status":            "risk_off" if _blend_risk_off else "rebalanced" if _blend_tgts else "hold",
+                    "targets":           _blend_tgts,
+                    "risk_off":          _blend_risk_off,
+                    "reason":            _blend_signal.get("reason", ""),
+                    "days_since_rebalance": _days_since_reb,
+                },
+                "US Reversion": {
+                    "candidates_found":  _rev_cands_logged,
+                    "executed":          _rev_executed,
+                    "max_slots":         _rev_max,
+                    "slots_used":        len([t for t in open_trades_now
+                                             if t.get("strategy") == "US Reversion"]),
+                },
+            },
+            "total_equity_sek": total_equity,
+            "open_positions":   len(open_trades_now),
+            "signals_logged":   len(todays_actions),
+        })
+    except Exception as e:
+        print(f"  [scan_state] failed: {e}")
+
     print("\nCycle complete.\n")
 
 
@@ -905,28 +941,45 @@ def _append_trade_log(strategy: str, action: str, ticker: str, shares: int,
         print(f"  [trade_log] write failed: {e}")
 
 
-def _log_buy_signal(mkt: str, ticker: str, decision, executed: int, block_reason):
-    """Record a BUY signal attempt in the signals table (executed reflects
-    whether an order was actually placed, not merely whether it was approved)."""
+def _log_buy_signal(mkt: str, ticker: str, decision, executed: int, block_reason,
+                    strategy: str = "ATOS", scan_ts: str = None):
+    """Record a BUY signal attempt in the signals table."""
     db.insert_signal({
-        "signal_date": date.today().isoformat(), "market_group": mkt,
-        "ticker": ticker, "final_score": decision.score,
-        "d1_trend": decision.d1_trend,
+        "signal_date": date.today().isoformat(),
+        "scan_ts":     scan_ts or datetime.now().isoformat(),
+        "strategy":    strategy,
+        "market_group": mkt,
+        "ticker":      ticker,
+        "final_score": decision.score,
+        "d1_trend":    decision.d1_trend,
         "d2_momentum": decision.d2_momentum,
         "d3_breakout": decision.d3_breakout,
         "d4_mean_revert": decision.d4_mean_revert,
-        "d5_volume": decision.d5_volume,
+        "d5_volume":   decision.d5_volume,
         "d6_smart_money": getattr(decision, 'd6_smart_money', 0),
         "d7_mom_quality": getattr(decision, 'd7_mom_quality', 0),
-        "d8_regime": getattr(decision, 'd8_regime', 0),
-        "regime": getattr(decision, 'regime', 'unknown'),
-        "action": "BUY",
-        "executed": executed,
+        "d8_regime":   getattr(decision, 'd8_regime', 0),
+        "regime":      getattr(decision, 'regime', 'unknown'),
+        "action":      "BUY",
+        "executed":    executed,
         "block_reason": block_reason,
     })
 
 
 US_MOMENTUM_STATE = os.path.join(BASE_DIR, "data", "us_momentum_state.json")
+SCAN_STATE_FILE   = os.path.join(BASE_DIR, "data", "atos_scan_state.json")
+
+
+def _write_scan_state(state: dict):
+    """Overwrite atos_scan_state.json with this cycle's summary.
+    Read by dashboard_saxo.ps1 / saxo_dashboard_helper.py."""
+    try:
+        tmp = SCAN_STATE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2, default=str)
+        os.replace(tmp, SCAN_STATE_FILE)
+    except Exception as e:
+        print(f"  [scan_state] write failed: {e}")
 
 
 def _load_us_state():
@@ -1189,6 +1242,26 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
         state["sleeve_cash"] = sleeve_equity - deployed_sek
         _save_us_state(state)
 
+    # ── Log rebalance signals ───────────────────────────────────────────────
+    if not dry_run:
+        _mom_scan_ts = datetime.now().isoformat()
+        for tk in priority:
+            _placed = tk in {a["ticker"] for a in todays_actions if a.get("action") == "BUY"}
+            try:
+                db.insert_signal({
+                    "signal_date": date.today().isoformat(), "scan_ts": _mom_scan_ts,
+                    "strategy": "US Blend", "market_group": "US Equities",
+                    "ticker": tk, "final_score": 0,
+                    "action": "BUY", "executed": 1 if _placed else 0,
+                    "block_reason": None if _placed else "order_failed",
+                    "d1_trend": 0, "d2_momentum": 0, "d3_breakout": 0,
+                    "d4_mean_revert": 0, "d5_volume": 0,
+                    "d6_smart_money": 0, "d7_mom_quality": 0, "d8_regime": 0,
+                    "regime": "momentum",
+                })
+            except Exception:
+                pass
+
 
 def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
                      available_cash_sek: float = 0.0):
@@ -1252,9 +1325,11 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
             if uic and sh > 0:
                 try:
                     saxo_client.place_order(uic=uic, side="Sell", qty=sh, asset_type="Stock")
-                    pnl_sek = (cur_price - trade.get("entry_price", 0)) * sh * fx_usd
+                    comm_exit = commission_sek(sh, sh * cur_price * fx_usd)
+                    pnl_sek = (cur_price - trade.get("entry_price", 0)) * sh * fx_usd - comm_exit
                     db.close_trade(trade["id"], exit_price=cur_price,
-                                   exit_date=today.isoformat(), pnl_sek=pnl_sek)
+                                   exit_reason=reason, pnl_sek=pnl_sek,
+                                   commission_sek=comm_exit)
                     entry_d = trade.get("entry_date", "")
                     held_d  = (today - _date.fromisoformat(entry_d)).days if entry_d else 0
                     _append_trade_log(
@@ -1329,6 +1404,9 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
         sleeve_sek = slot_sek * max_positions,
     )
 
+    scan_ts_str    = datetime.now().isoformat()
+    ordered_tickers = set()
+
     for cand in candidates[:slots_free]:
         ticker = cand["ticker"]
         price  = cand["price"]
@@ -1345,7 +1423,7 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
 
         cost_sek = shares * price * fx_usd
         print(f"  {tag} BUY {ticker}: RSI={cand['rsi']} dip={cand['dip_pct']}% "
-              f"vol={cand['vol_ratio']}× | {shares} shares @ ${price:.2f} "
+              f"vol={cand['vol_ratio']}x | {shares} shares @ ${price:.2f} "
               f"(~{cost_sek:,.0f} SEK) [US Reversion sleeve]")
         try:
             saxo_client.place_order(uic=uic, side="Buy", qty=shares, asset_type="Stock")
@@ -1356,8 +1434,13 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
                 "entry_date": today.isoformat(), "entry_price": price,
                 "shares": shares, "commission_sek": comm,
                 "entry_score": cand["score"], "d1_trend": 0, "d2_momentum": 0,
-                "d3_breakout": 0, "d4_meanrev": cand["rsi"], "d5_vol": cand["vol_ratio"],
+                "d3_breakout": 0,
+                "d4_mean_revert": cand["rsi"],
+                "d5_volume": cand["vol_ratio"],
+                "d6_smart_money": 0, "d7_mom_quality": 0, "d8_regime": 0,
+                "stop_price": 0, "trailing_stop_high": price, "regime_at_entry": "reversion",
             })
+            ordered_tickers.add(ticker)
             _append_trade_log(
                 "US Reversion", "BUY", ticker, shares, price, cost_sek, None,
                 f"RSI={cand['rsi']} dip={cand['dip_pct']}% vol={cand['vol_ratio']}x",
@@ -1378,6 +1461,59 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
             )
         except Exception as e:
             print(f"  {tag} buy {ticker} FAILED: {e}")
+
+    # ── Log ALL US tickers to signals table (candidates + skips) ─────────────
+    # Candidates that fired: BUY, executed=1 if order placed, 0 if failed/no-UIC
+    # Candidates that didn't fit (slots_full): BUY, executed=0, block_reason
+    # All others: SKIP, with current RSI / dip / vol for dashboard near-miss view
+    cand_tickers = {c["ticker"] for c in candidates}
+    attempt_set  = {c["ticker"] for c in candidates[:slots_free]}
+    for tk in US_TICKERS:
+        if tk in rev_open_now:
+            continue
+        try:
+            if tk in cand_tickers:
+                cand = next(c for c in candidates if c["ticker"] == tk)
+                if tk in attempt_set:
+                    block = None if tk in ordered_tickers else "order_failed"
+                    executed = 1 if tk in ordered_tickers else 0
+                else:
+                    block = "slots_full"
+                    executed = 0
+                db.insert_signal({
+                    "signal_date": today.isoformat(), "scan_ts": scan_ts_str,
+                    "strategy": "US Reversion", "market_group": "US Equities",
+                    "ticker": tk, "final_score": cand.get("score", 0),
+                    "action": "BUY", "executed": executed, "block_reason": block,
+                    "rsi": cand.get("rsi"), "dip_pct": cand.get("dip_pct"),
+                    "vol_ratio": cand.get("vol_ratio"),
+                    "d1_trend": 0, "d2_momentum": 0, "d3_breakout": 0,
+                    "d4_mean_revert": cand.get("rsi"), "d5_volume": cand.get("vol_ratio"),
+                    "d6_smart_money": 0, "d7_mom_quality": 0, "d8_regime": 0,
+                    "regime": "reversion",
+                })
+            else:
+                rsi_s, sma20_s = _rsi_sma20(tk)
+                px_s = _price(tk)
+                dip_s = (sma20_s - px_s) / sma20_s * 100 if sma20_s and sma20_s > 0 else None
+                vr_s = None
+                if tk in feat_data and "Volume" in feat_data[tk].columns:
+                    vvol = feat_data[tk]["Volume"].dropna()
+                    v20m = float(vvol.tail(20).mean()) if len(vvol) >= 20 else 0
+                    vr_s = float(vvol.iloc[-1]) / v20m if v20m > 0 else None
+                db.insert_signal({
+                    "signal_date": today.isoformat(), "scan_ts": scan_ts_str,
+                    "strategy": "US Reversion", "market_group": "US Equities",
+                    "ticker": tk, "final_score": 0,
+                    "action": "SKIP", "executed": 0, "block_reason": "conditions_not_met",
+                    "rsi": rsi_s, "dip_pct": dip_s, "vol_ratio": vr_s,
+                    "d1_trend": 0, "d2_momentum": 0, "d3_breakout": 0,
+                    "d4_mean_revert": rsi_s, "d5_volume": vr_s,
+                    "d6_smart_money": 0, "d7_mom_quality": 0, "d8_regime": 0,
+                    "regime": "reversion",
+                })
+        except Exception as _sig_err:
+            print(f"  {tag} signal log failed for {tk}: {_sig_err}")
 
 
 def _currency_for(market_group: str) -> str:

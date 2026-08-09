@@ -129,6 +129,12 @@ def migrate_schema():
         "ALTER TABLE detector_weights ADD COLUMN w_mom_quality REAL DEFAULT 1.0",
         "ALTER TABLE detector_weights ADD COLUMN w_regime REAL DEFAULT 1.0",
         "ALTER TABLE equity_curve ADD COLUMN cph25_equity_sek REAL DEFAULT 0",
+        # Logging-parity additions: per-signal strategy tag + reversion indicators
+        "ALTER TABLE signals ADD COLUMN strategy TEXT DEFAULT 'ATOS_v1'",
+        "ALTER TABLE signals ADD COLUMN scan_ts TEXT",
+        "ALTER TABLE signals ADD COLUMN rsi REAL",
+        "ALTER TABLE signals ADD COLUMN dip_pct REAL",
+        "ALTER TABLE signals ADD COLUMN vol_ratio REAL",
     ]
     with _conn() as conn:
         for sql in migrations:
@@ -204,18 +210,28 @@ def get_all_closed_trades() -> list[dict]:
 # -- Signals --------------------------------------------------------
 
 def insert_signal(data: dict):
+    data = {
+        "strategy":     "ATOS_v1",
+        "scan_ts":      None,
+        "rsi":          None,
+        "dip_pct":      None,
+        "vol_ratio":    None,
+        **data,
+    }
     with _conn() as conn:
         conn.execute("""
             INSERT INTO signals
-              (signal_date, market_group, ticker, final_score,
+              (signal_date, scan_ts, strategy, market_group, ticker, final_score,
                d1_trend, d2_momentum, d3_breakout, d4_mean_revert, d5_volume,
                d6_smart_money, d7_mom_quality, d8_regime, regime,
-               action, executed, block_reason)
+               action, executed, block_reason,
+               rsi, dip_pct, vol_ratio)
             VALUES
-              (:signal_date, :market_group, :ticker, :final_score,
+              (:signal_date, :scan_ts, :strategy, :market_group, :ticker, :final_score,
                :d1_trend, :d2_momentum, :d3_breakout, :d4_mean_revert, :d5_volume,
                :d6_smart_money, :d7_mom_quality, :d8_regime, :regime,
-               :action, :executed, :block_reason)
+               :action, :executed, :block_reason,
+               :rsi, :dip_pct, :vol_ratio)
         """, data)
 
 
