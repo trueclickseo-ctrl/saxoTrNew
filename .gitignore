@@ -4,10 +4,14 @@
 saxo_token.json
 .env
 *.env
+.env.binance
+.env.live
 # FTP credentials for the (legacy) dashboard upload
 config/deploy.json
 # Email credentials (Gmail app password) — copy email.json.template -> email.json to enable
 config/email.json
+# Binance — the .env.binance file holds testnet API keys
+# (already caught by *.env above, but listed explicitly for clarity)
 
 # ── Runtime state / databases — local only, not history ──────────
 # SQLite databases (large, machine-local)

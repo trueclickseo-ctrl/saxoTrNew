@@ -2,3 +2,8 @@ pandas
 numpy
 yfinance
 requests
+
+# Binance bot dependencies (not needed for the Saxo bot)
+python-binance
+python-dotenv
+pyyaml

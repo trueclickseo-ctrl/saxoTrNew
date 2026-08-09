@@ -1,0 +1,42 @@
+# binance/config/binance_testnet_config.yaml
+# ------------------------------------------
+# Binance TESTNET bot configuration.
+# All values here are testnet-safe defaults.
+# See docs/binance/testnet_vs_live.md before changing anything for live.
+
+# ── Universe ──────────────────────────────────────────────────────────────────
+symbols:
+  - BTCUSDT
+  - ETHUSDT
+  - BNBUSDT
+  - SOLUSDT
+  - ADAUSDT
+
+# ── Strategy: Crypto Mean Reversion ──────────────────────────────────────────
+strategy:
+  name: crypto_mean_reversion
+  rsi_period: 14
+  rsi_oversold: 35           # Enter when RSI < 35 (slightly looser than Saxo's 33)
+  dip_threshold_pct: 5.0     # Price must be >= 5% below SMA-20
+  volume_multiplier: 1.5     # 24h volume must be > 1.5x the 20-day average
+  ema_trend_period: 200      # Price must be above EMA-200 (trend filter)
+  max_hold_days: 10
+  stop_loss_pct: 4.0         # Hard stop: exit if unrealised loss > 4%
+  take_profit_pct: 8.0       # Optional profit target (0 = disabled)
+
+# ── Capital allocation ───────────────────────────────────────────────────────
+capital:
+  max_slots: 3               # Maximum simultaneous open positions
+  position_size_pct: 25.0    # Percent of free USDT per position
+  max_account_risk_pct: 10.0 # Never risk more than 10% of total equity at once
+
+# ── Execution ────────────────────────────────────────────────────────────────
+execution:
+  order_type: MARKET         # MARKET | LIMIT
+  dry_run: true              # true = scan only, no orders placed
+  scan_interval_minutes: 60  # How often run_binance_bot checks for signals
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+logging:
+  level: INFO
+  log_dir: logs/
