@@ -47,7 +47,7 @@ import pandas as pd
 import atos.capital_config as CAP
 
 # ── Strategy parameters — loaded from config/capital.json ─────────────────
-RSI_ENTRY     = 33     # RSI below this → oversold  [full 486-combo grid: top-10 unanimous]
+RSI_ENTRY     = 38     # RSI below this → oversold  [extended grid top-1: 120 trades, Sharpe 1.73, WR 60%]
 RSI_EXIT      = 60     # RSI above this → recovery complete, exit
 DIP_PCT       = 0.05   # Price must be >= 5% below 20-day SMA  [full grid winner]
 VOL_MULT      = 1.5    # Today's volume >= 1.5x 20-day avg volume  [full grid: top-10 unanimous]
