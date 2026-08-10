@@ -209,15 +209,15 @@ def render(token):
     st   = _atos_status()
     s    = st.get("status","idle")
     if s=="running":
-        atos = f"{GR}▶  ATOS IS RUNNING  —  Scanning universe...{W}"
+        atos = f"{GR}[RUNNING]  ATOS scanning universe...{W}"
     elif s=="complete":
         ts = st.get("timestamp","")[:16].replace("T"," ")
-        atos = (f"{BL}✓  Last scan {ts}   "
+        atos = (f"{BL}[DONE]  Last scan {ts}   "
                 f"{GR}{st.get('buy_count',0)} BUY{W}  "
                 f"{RD}{st.get('exit_count',0)} EXIT{W}  "
                 f"{DM}{st.get('blocked_count',0)} blocked{W}")
     else:
-        atos = f"{DM}ATOS idle  —  next scan 2:00 AM PKT{W}"
+        atos = f"{DM}[IDLE]  Next scan: 2:00 AM PKT{W}"
 
     L += [
         HR,
@@ -241,79 +241,104 @@ def render(token):
     L.append(f"  {'Unrealized P&L':<22} {_pnl(upl,'')}")
     L.append("")
 
-    # Positions
+    # ── Positions ─────────────────────────────────────────────────
     db    = _db_trades()
     saxo  = _positions(token) if token else []
+    acur  = bal.get("Currency", "EUR")   # account currency for P&L label
 
-    L.append(f"  {BD}OPEN POSITIONS{W}")
-    # Column headers
-    hdr = (f"  {'Ticker':<8}  {'Shrs':>5}  {'Entry':>8}  "
-           f"{'Live':>8}  {'Stop':>8}  {'P&L':>9}  {'Chg':>7}  {'Regime':<12}  Strategy")
-    L.append(f"{DM}{hdr}{W}")
-    L.append(f"  {DM}{'─'*70}{W}")
-
+    # Collect rows as plain dicts first, then render with colour
+    rows = []
     total_pnl = 0.0
     count     = 0
 
     if saxo:
         for p in saxo:
-            disp = p.get("DisplayAndFormat",{})
-            pb   = p.get("PositionBase",{})
-            pv   = p.get("PositionView",{})
-            sym  = disp.get("Symbol","?")
+            disp = p.get("DisplayAndFormat", {})
+            pb   = p.get("PositionBase", {})
+            pv   = p.get("PositionView", {})
+            sym  = disp.get("Symbol", "?")
             base = sym.split(":")[0].upper()
-            shs  = pb.get("Amount",0) or 0
-            ep   = pb.get("OpenPrice",0) or 0
-            pnl  = pv.get("ProfitLossOnTrade",0) or 0
-            ppc  = pv.get("ProfitLossOnTradeInPercentage",0) or 0
-            cur  = pv.get("CurrentPrice",0) or 0
-            if cur==0 and shs>0 and ep>0: cur = ep + pnl/shs
-            if ppc==0 and ep>0 and shs>0: ppc = pnl/(ep*shs)*100
-
-            drow  = db.get(base,{})
-            stop  = _effective_stop(drow)
-            reg   = drow.get("regime_at_entry") or "—"
-            strat = (drow.get("strategy") or "—")[:14]
-
-            near   = stop>0 and cur>0 and cur < stop*1.05
-            stop_s = f"{RD}{BD}{_c(stop)}{W}" if near else (f"{YL}{_c(stop)}{W}" if stop else f"{DM}—{W}")
-
-            col_pnl = _rpad(_pnl(pnl),14)
-            col_pct = _rpad(_pct(ppc),12)
-            col_reg = _rpad(_reg(reg),20)
-
-            L.append(
-                f"  {sym.split(':')[0]:<8}  {int(shs):>5}  {_c(ep):>8}  "
-                f"{_c(cur):>8}  {_rpad(stop_s,8)}  "
-                f"{col_pnl}  {col_pct}  {col_reg}  {DM}{strat}{W}"
-            )
+            shs  = pb.get("Amount", 0) or 0
+            ep   = pb.get("OpenPrice", 0) or 0
+            pnl  = pv.get("ProfitLossOnTrade", 0) or 0
+            ppc  = pv.get("ProfitLossOnTradeInPercentage", 0) or 0
+            live = pv.get("CurrentPrice", 0) or 0
+            if live == 0 and shs > 0 and ep > 0:
+                live = ep + pnl / shs
+            if ppc == 0 and ep > 0 and shs > 0:
+                ppc = pnl / (ep * shs) * 100
+            drow = db.get(base, {})
+            rows.append({
+                "ticker": sym.split(":")[0], "shs": int(shs),
+                "entry": ep, "live": live, "pnl": pnl, "ppc": ppc,
+                "stop": _effective_stop(drow),
+                "regime": (drow.get("regime_at_entry") or "—")[:10],
+                "strategy": (drow.get("strategy") or "—")[:10],
+                "live_available": True,
+            })
             total_pnl += pnl
             count     += 1
-
     elif db:
-        # Market closed — DB only, no live prices
         for base, drow in db.items():
-            tk    = drow.get("ticker", base).split(":")[0]
-            shs   = drow.get("shares",0) or 0
-            ep    = drow.get("entry_price",0) or 0
-            stop  = _effective_stop(drow)
-            reg   = drow.get("regime_at_entry") or "—"
-            strat = (drow.get("strategy") or "—")[:14]
-            L.append(
-                f"  {tk:<8}  {int(shs):>5}  {_c(ep):>8}  "
-                f"{'—':>8}  {f'{YL}{_c(stop)}{W}':>8}  "
-                f"{'—':>9}  {'—':>7}  {_rpad(_reg(reg),20)}  {DM}{strat}{W}"
-            )
+            rows.append({
+                "ticker": drow.get("ticker", base).split(":")[0],
+                "shs": int(drow.get("shares", 0) or 0),
+                "entry": drow.get("entry_price", 0) or 0,
+                "live": 0, "pnl": 0, "ppc": 0,
+                "stop": _effective_stop(drow),
+                "regime": (drow.get("regime_at_entry") or "—")[:10],
+                "strategy": (drow.get("strategy") or "—")[:10],
+                "live_available": False,
+            })
             count += 1
-    else:
-        L.append(f"  {DM}No open positions{W}")
 
-    if count>0:
-        L.append(f"  {DM}{'─'*70}{W}")
+    SEP = "  "
+    HR2 = f"  {DM}{'─'*84}{W}"
+
+    L.append(f"  {BD}OPEN POSITIONS{W}  {DM}(P&L in {acur}){W}")
+    L.append(f"{DM}  {'Ticker':<7}{SEP}{'Shrs':>5}{SEP}{'Entry':>8}{SEP}"
+             f"{'Live':>8}{SEP}{'Stop Loss':>9}{SEP}{'P&L':>10}{SEP}"
+             f"{'Chg%':>7}{SEP}{'Regime':<10}{SEP}Strategy{W}")
+    L.append(HR2)
+
+    if not rows:
+        L.append(f"  {DM}No open positions{W}")
+    else:
+        for r in rows:
+            tk   = r["ticker"][:7]
+            shs  = str(r["shs"])
+            ep   = f"{r['entry']:.2f}"
+            lv   = f"{r['live']:.2f}"  if r["live_available"] else "—"
+            st   = f"{r['stop']:.2f}"  if r["stop"] else "—"
+
+            pnl_raw = r["pnl"]
+            ppc_raw = r["ppc"]
+            pnl_s = (("+" if pnl_raw >= 0 else "") + f"{pnl_raw:,.0f}") if r["live_available"] else "—"
+            ppc_s = (("+" if ppc_raw >= 0 else "") + f"{ppc_raw:.2f}%") if r["live_available"] else "—"
+
+            near = r["stop"] > 0 and r["live"] > 0 and r["live"] < r["stop"] * 1.05
+
+            # Apply colour AFTER padding the raw value to correct width
+            pnl_col = (GR if pnl_raw >= 0 else RD) if r["live_available"] else DM
+            ppc_col = (GR if ppc_raw >= 0 else RD) if r["live_available"] else DM
+            stp_col = (RD+BD) if near else YL
+
+            L.append(
+                f"  {BD}{tk:<7}{W}{SEP}{shs:>5}{SEP}{ep:>8}{SEP}{lv:>8}{SEP}"
+                f"{stp_col}{st:>9}{W}{SEP}"
+                f"{pnl_col}{pnl_s:>10}{W}{SEP}"
+                f"{ppc_col}{ppc_s:>7}{W}{SEP}"
+                f"{REGIME_COL.get(r['regime'].upper(), DM)}{r['regime']:<10}{W}{SEP}"
+                f"{DM}{r['strategy']}{W}"
+            )
+
+        L.append(HR2)
+        total_s  = ("+" if total_pnl >= 0 else "") + f"{total_pnl:,.0f}"
+        total_col = GR if total_pnl >= 0 else RD
         L.append(
-            f"  {'TOTAL':<8}  {count:>5} pos"
-            f"  {'':>8}  {'':>8}  {'':>8}  "
-            f"{_rpad(_pnl(total_pnl),14)}"
+            f"  {BD}{'TOTAL':<7}{W}{SEP}{count:>5} pos"
+            f"{'':>20}"
+            f"{total_col}{total_s:>10}{W}"
         )
 
     # Trade history
