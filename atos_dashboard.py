@@ -480,6 +480,11 @@ HTML_CONTENT = """<!DOCTYPE html>
             </div>
         </header>
 
+        <div id="atosBanner" style="margin-bottom:16px;padding:12px 18px;border-radius:10px;display:flex;align-items:center;gap:12px;font-size:14px;font-weight:600;border:1px solid rgba(100,116,139,0.3);background:rgba(15,17,23,0.5);color:var(--text-secondary);">
+            <span id="atosBannerDot" style="width:10px;height:10px;border-radius:50%;background:#64748b;flex-shrink:0;"></span>
+            <span id="atosBannerText">Dashboard live — checking ATOS status...</span>
+        </div>
+
         <div class="kpi-row delay-1">
             <div class="glass-card kpi-card">
                 <h3>ATOS Sleeve Equity</h3>
@@ -522,12 +527,14 @@ HTML_CONTENT = """<!DOCTYPE html>
                             <th>Shares</th>
                             <th>Entry Price</th>
                             <th>Current Price</th>
+                            <th>Stop Loss</th>
                             <th>Entry Date</th>
                             <th>P&amp;L</th>
                             <th>% Chg</th>
+                            <th>Regime</th>
                         </tr>
                     </thead>
-                    <tbody><tr><td colspan="8" class="empty-state">Loading...</td></tr></tbody>
+                    <tbody><tr><td colspan="10" class="empty-state">Loading...</td></tr></tbody>
                 </table>
             </div>
             <div id="strategyTargetInfo" style="margin-top:10px;font-size:13px;color:var(--text-secondary);"></div>
@@ -917,16 +924,23 @@ HTML_CONTENT = """<!DOCTYPE html>
             container.innerHTML = html;
         }
 
+        function regimeBadge(regime) {
+            if (!regime || regime === '—') return '<span style="color:var(--text-secondary)">—</span>';
+            const r = regime.toUpperCase();
+            const colors = { BULL: '#10b981', BEAR: '#ef4444', SIDEWAYS: '#f59e0b', TRANSITION: '#6366f1', MOMENTUM: '#3b82f6' };
+            const c = colors[r] || '#64748b';
+            return `<span style="background:${c}22;color:${c};border:1px solid ${c}55;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:600;">${regime}</span>`;
+        }
+
         function updateLivePositions(liveData) {
             const openBody = document.querySelector('#openPositionsTable tbody');
             const positions = (liveData && liveData.data) || [];
 
             if (positions.length === 0) {
-                openBody.innerHTML = '<tr><td colspan="8" class="empty-state">No open positions</td></tr>';
+                openBody.innerHTML = '<tr><td colspan="10" class="empty-state">No open positions</td></tr>';
                 return;
             }
 
-            // US Blend tickers from DB (so we can highlight them)
             const US_MKTS = ['US', 'US Equities'];
 
             let rows = positions.map(p => {
@@ -937,6 +951,9 @@ HTML_CONTENT = """<!DOCTYPE html>
                     ? p.current_price.toFixed(2) : '—';
                 const entryPx   = p.entry_price ? p.entry_price.toFixed(2) : '—';
                 const entryDate = p.entry_date ? p.entry_date.substring(0, 10) : '—';
+                const stopPx    = p.stop_price ? p.stop_price.toFixed(2) : '—';
+                const stopCls   = (p.stop_price && p.current_price && p.current_price < p.stop_price * 1.05)
+                    ? 'text-danger' : 'text-secondary';
                 const isATOS    = US_MKTS.includes(p.market_group);
                 const rowStyle  = isATOS ? '' : 'opacity:0.55;';
                 const tickerLabel = p.ticker.split(':')[0];
@@ -950,9 +967,11 @@ HTML_CONTENT = """<!DOCTYPE html>
                         <td>${p.shares}</td>
                         <td style="color:var(--text-secondary)">${entryPx}</td>
                         <td><strong>${curPx}</strong></td>
+                        <td class="${stopCls}" style="font-size:12px">${stopPx}</td>
                         <td>${entryDate}</td>
                         <td class="${pnlCls}">${pnl >= 0 ? '+' : ''}${formatNumber(pnl)} ${p.currency}</td>
                         <td class="${pnlCls}">${pnlPct >= 0 ? '+' : ''}${typeof pnlPct === 'number' ? pnlPct.toFixed(2) : '-'}%</td>
+                        <td>${regimeBadge(p.regime)}</td>
                     </tr>
                 `;
             }).join('');
@@ -966,8 +985,9 @@ HTML_CONTENT = """<!DOCTYPE html>
                         <td></td>
                         <td style="color:var(--text-secondary)">Cost: ${formatNumber(s.total_invested_sek)} SEK</td>
                         <td>Value: ${formatNumber(s.total_value_sek)} SEK</td>
-                        <td></td>
+                        <td></td><td></td>
                         <td class="${pnlCls}" colspan="2">${s.total_pnl_sek >= 0 ? '+' : ''}${formatNumber(s.total_pnl_sek)} SEK &nbsp;(${pnlPct >= 0 ? '+' : ''}${formatNumber(pnlPct)}%)</td>
+                        <td></td>
                     </tr>`;
             }
             openBody.innerHTML = rows;
@@ -1178,9 +1198,50 @@ HTML_CONTENT = """<!DOCTYPE html>
             }).join('');
         }
 
+        async function updateStatusBanner() {
+            try {
+                const s = await fetch('/api/status').then(r => r.json());
+                const dot  = document.getElementById('atosBannerDot');
+                const text = document.getElementById('atosBannerText');
+                const banner = document.getElementById('atosBanner');
+                if (s.status === 'running') {
+                    dot.style.background = '#10b981';
+                    dot.style.boxShadow = '0 0 8px #10b981';
+                    dot.style.animation = 'pulse 1.5s infinite';
+                    banner.style.borderColor = 'rgba(16,185,129,0.4)';
+                    banner.style.background = 'rgba(16,185,129,0.08)';
+                    text.style.color = '#10b981';
+                    text.textContent = '▶  ATOS IS RUNNING — Scanning universe...';
+                } else if (s.status === 'complete') {
+                    const ts = s.timestamp ? new Date(s.timestamp).toLocaleTimeString() : '—';
+                    dot.style.background = '#3b82f6';
+                    dot.style.boxShadow = 'none';
+                    dot.style.animation = 'none';
+                    banner.style.borderColor = 'rgba(59,130,246,0.3)';
+                    banner.style.background = 'rgba(59,130,246,0.07)';
+                    text.style.color = '#3b82f6';
+                    text.textContent = `✓  Last scan ${ts} — ${s.buy_count} BUY · ${s.exit_count} EXIT · ${s.blocked_count} blocked`;
+                } else {
+                    const next = new Date();
+                    next.setUTCHours(21, 0, 0, 0);  // 2:00 AM PKT = 21:00 UTC prev day
+                    if (next <= new Date()) next.setDate(next.getDate() + 1);
+                    const diffH = Math.round((next - new Date()) / 3600000);
+                    dot.style.background = '#64748b';
+                    dot.style.boxShadow = 'none';
+                    dot.style.animation = 'none';
+                    banner.style.borderColor = 'rgba(100,116,139,0.3)';
+                    banner.style.background = 'rgba(15,17,23,0.5)';
+                    text.style.color = 'var(--text-secondary)';
+                    text.textContent = `Dashboard live · ATOS daily scan runs at 2:00 AM PKT (in ~${diffH}h) · Live positions refresh every 60s`;
+                }
+            } catch (e) {}
+        }
+
         // Start
         fetchDashboardData();
         setInterval(fetchDashboardData, 60000);
+        updateStatusBanner();
+        setInterval(updateStatusBanner, 10000);
         function updateUsMomentum(d) {
             const el = document.getElementById('usMomentum');
             if (!d) { el.textContent = 'Unavailable'; return; }
@@ -1320,7 +1381,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 current = cursor.fetchone()
                 self.send_json({"current": dict(current) if current else None})
 
+            elif path == '/api/status':
+                conn.close()
+                status_file = os.path.join(DB_DIR, 'atos_status.json')
+                if os.path.exists(status_file):
+                    with open(status_file) as f:
+                        self.send_json(json.load(f))
+                else:
+                    self.send_json({"status": "idle", "timestamp": None,
+                                    "buy_count": 0, "exit_count": 0, "blocked_count": 0})
+                return
+
             elif path == '/api/positions/live':
+                # Pre-load DB open trades for stop_price + regime enrichment
+                cursor.execute("SELECT * FROM trades WHERE exit_date IS NULL")
+                _db_rows = cursor.fetchall()
+                _db_by_base = {}
+                for _row in _db_rows:
+                    _base = (_row['ticker'] or '').split('.')[0].split(':')[0].upper()
+                    _db_by_base[_base] = dict(_row)
+
                 saxo_token = _load_saxo_token()
                 if saxo_token:
                     positions = _saxo_get_positions(saxo_token)
@@ -1351,6 +1431,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             saxo_cur_px = entry_price + (pnl / shares)
                         if pnl_pct == 0 and entry_price > 0:
                             pnl_pct = (pnl / (entry_price * shares)) * 100 if shares > 0 else 0
+                        _base_sym = sym.split(':')[0].upper()
+                        _db = _db_by_base.get(_base_sym, {})
                         formatted.append({
                             'ticker': sym,
                             'description': disp.get('Description', '?'),
@@ -1363,6 +1445,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             'pnl_pct': round(pnl_pct, 2),
                             'currency': disp.get('Currency', '?'),
                             'market_value': pview.get('MarketValue') or round(entry_price * shares + pnl, 2),
+                            'stop_price': _db.get('stop_price'),
+                            'regime': _db.get('regime_at_entry') or '—',
+                            'strategy': _db.get('strategy') or '—',
                         })
                     # Portfolio totals, each position converted to SEK by its currency.
                     import sys as _sys

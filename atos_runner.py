@@ -27,6 +27,7 @@ import os
 import sys
 import json
 import ftplib
+import subprocess
 from datetime import datetime, date
 
 
@@ -437,6 +438,7 @@ def print_banner(total_equity: float, day_start: float, open_count: int,
 
 def run_cycle():
     log_path = _setup_logging()
+    _write_status("running")
     print(f"\n{'='*60}\nATOS Daily Cycle — {datetime.now():%Y-%m-%d %H:%M:%S}\n{'='*60}")
     print(CAP.summary())
     print(f"Log: {log_path}")
@@ -882,6 +884,16 @@ def run_cycle():
     except Exception as e:
         print(f"  [scan_state] failed: {e}")
 
+    buy_n     = sum(1 for a in todays_actions if a["action"] == "BUY")
+    exit_n    = sum(1 for a in todays_actions if a["action"] == "EXIT")
+    blocked_n = sum(1 for a in todays_actions if a["action"] == "BLOCKED")
+    _write_status("complete", buy_n, exit_n, blocked_n)
+    _send_notification(
+        "ATOS Scan Complete",
+        f"{buy_n} BUY · {exit_n} EXIT · {blocked_n} blocked  |  "
+        f"{len(open_trades_now)} positions open  |  "
+        f"Equity {total_equity:,.0f} SEK"
+    )
     print("\nCycle complete.\n")
 
 
@@ -968,6 +980,46 @@ def _log_buy_signal(mkt: str, ticker: str, decision, executed: int, block_reason
 
 US_MOMENTUM_STATE = os.path.join(BASE_DIR, "data", "us_momentum_state.json")
 SCAN_STATE_FILE   = os.path.join(BASE_DIR, "data", "atos_scan_state.json")
+STATUS_FILE       = os.path.join(BASE_DIR, "data", "atos_status.json")
+
+
+def _write_status(status: str, buy_count: int = 0, exit_count: int = 0, blocked_count: int = 0):
+    """Write run status for the dashboard status banner to read."""
+    payload = {
+        "status":        status,
+        "timestamp":     datetime.now().isoformat(),
+        "buy_count":     buy_count,
+        "exit_count":    exit_count,
+        "blocked_count": blocked_count,
+    }
+    try:
+        tmp = STATUS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+        os.replace(tmp, STATUS_FILE)
+    except Exception:
+        pass
+
+
+def _send_notification(title: str, msg: str):
+    """Windows balloon notification — no external packages."""
+    try:
+        ps_cmd = (
+            'Add-Type -AssemblyName System.Windows.Forms; '
+            '$n = New-Object System.Windows.Forms.NotifyIcon; '
+            '$n.Icon = [System.Drawing.SystemIcons]::Information; '
+            '$n.Visible = $true; '
+            f'$n.BalloonTipTitle = "{title}"; '
+            f'$n.BalloonTipText = "{msg}"; '
+            '$n.ShowBalloonTip(8000); '
+            'Start-Sleep -Milliseconds 8500; $n.Dispose()'
+        )
+        subprocess.Popen(
+            ['powershell', '-WindowStyle', 'Hidden', '-Command', ps_cmd],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
 
 
 def _write_scan_state(state: dict):
