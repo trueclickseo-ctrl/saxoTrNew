@@ -157,25 +157,26 @@ def _days_held(entry_date_str: str) -> int:
 
 
 def _next_rebalance() -> str:
-    """Return the next monthly rebalance date as a short string (e.g. 'Sep 1')."""
+    """Return the next weekly rebalance date as a short string (e.g. 'Aug 14 (4d)')."""
+    from datetime import timedelta
     state_path = os.path.join(BASE_DIR, "data", "us_momentum_state.json")
     try:
         with open(state_path) as f:
             state = json.load(f)
         last = state.get("last_rebalance")
         if last:
-            last_dt = date.fromisoformat(last[:10])
-            # Next rebalance: first trading day of the following month
-            if last_dt.month == 12:
-                nxt = date(last_dt.year + 1, 1, 1)
-            else:
-                nxt = date(last_dt.year, last_dt.month + 1, 1)
+            last_dt  = date.fromisoformat(last[:10])
+            try:
+                from atos.us_momentum import REBAL_DAYS
+            except Exception:
+                REBAL_DAYS = 7
+            nxt       = last_dt + timedelta(days=REBAL_DAYS)
             days_left = (nxt - date.today()).days
-            label = nxt.strftime("%b %-d") if sys.platform != "win32" else nxt.strftime("%b %d").lstrip("0")
+            label     = nxt.strftime("%b %d").lstrip("0")
             return f"{label} ({days_left}d)"
     except Exception:
         pass
-    return "monthly"
+    return "weekly"
 
 
 def _exit_info(drow: dict) -> str:
