@@ -392,7 +392,7 @@ def render(token):
         total_col = GR if total_pnl >= 0 else RD
         L.append(
             f"  {BD}{'TOTAL':<7}{W}{SEP}{count:>5} pos"
-            f"{'':>20}"
+            f"{'':>29}"
             f"{total_col}{total_s:>10}{W}"
         )
 
