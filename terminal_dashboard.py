@@ -256,8 +256,9 @@ def render(token):
     # Header
     et   = _et_now()
     mkt  = f"{GR}● OPEN{W}"  if _mkt_open() else f"{RD}● CLOSED{W}"
-    st   = _atos_status()
-    s    = st.get("status","idle")
+    status_d = _atos_status()
+    st       = status_d   # keep short alias for header block
+    s        = st.get("status","idle")
     if s=="running":
         atos = f"{GR}[RUNNING]  ATOS scanning universe...{W}"
     elif s=="complete":
@@ -363,7 +364,7 @@ def render(token):
             shs     = str(r["shs"])
             ep      = f"{r['entry']:.2f}"
             lv      = f"{r['live']:.2f}" if r["live_available"] else "—"
-            st      = f"{r['stop']:.2f}" if r["stop"] else "—"
+            stop_s  = f"{r['stop']:.2f}" if r["stop"] else "—"
             ex      = r["exit_info"][:22]
 
             pnl_raw = r["pnl"]
@@ -380,7 +381,7 @@ def render(token):
 
             L.append(
                 f"  {BD}{tk:<7}{W}{SEP}{shs:>5}{SEP}{ep:>8}{SEP}{lv:>8}{SEP}"
-                f"{stp_col}{st:>9}{W}{SEP}"
+                f"{stp_col}{stop_s:>9}{W}{SEP}"
                 f"{pnl_col}{pnl_s:>10}{W}{SEP}"
                 f"{ppc_col}{ppc_s:>7}{W}{SEP}"
                 f"{ex_col}{ex:<22}{W}{SEP}"
