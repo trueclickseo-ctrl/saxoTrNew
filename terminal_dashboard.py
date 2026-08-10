@@ -16,6 +16,9 @@ TOKEN_FILE = os.path.join(BASE_DIR, "saxo_token.json")
 SIM_BASE   = "https://gateway.saxobank.com/sim/openapi/"
 
 REFRESH_SECONDS = 30
+TRAILING_PCT  = 0.12   # 12% below trailing_stop_high (matches intraday_monitor)
+HARD_STOP_PCT = 0.15   # 15% below entry (last resort — US Blend hard floor)
+ATR_MULT      = 2.5    # entry − 2.5×ATR  (ATOS policy; used when stop_price stored)
 
 # ── Enable Windows VT100 colour support ───────────────────────────
 def _enable_vt():
@@ -129,6 +132,22 @@ def _atos_status():
 
 
 # ── Helpers ───────────────────────────────────────────────────────
+def _effective_stop(drow: dict) -> float:
+    """Return the effective stop price using the same rules as intraday_monitor.py.
+    Priority: 1) stored stop_price  2) trailing stop  3) hard floor."""
+    entry       = drow.get("entry_price", 0) or 0
+    stop_price  = drow.get("stop_price",  0) or 0
+    trail_high  = drow.get("trailing_stop_high") or entry
+
+    if stop_price > 0:
+        return stop_price                              # Rule 1 — US Reversion
+    if trail_high > 0:
+        trail_stop = trail_high * (1.0 - TRAILING_PCT)
+        hard_floor = entry * (1.0 - HARD_STOP_PCT)
+        return max(trail_stop, hard_floor)             # Rule 2/3 — US Blend
+    return entry * (1.0 - HARD_STOP_PCT)              # Rule 3 fallback
+
+
 def _usd_sek():
     try:
         sys.path.insert(0, BASE_DIR)
@@ -252,12 +271,12 @@ def render(token):
             if ppc==0 and ep>0 and shs>0: ppc = pnl/(ep*shs)*100
 
             drow  = db.get(base,{})
-            stop  = drow.get("stop_price") or 0
+            stop  = _effective_stop(drow)
             reg   = drow.get("regime_at_entry") or "—"
             strat = (drow.get("strategy") or "—")[:14]
 
-            near  = stop>0 and cur>0 and cur < stop*1.05
-            stop_s = f"{RD}{_c(stop)}{W}" if near else (_c(stop) if stop else f"{DM}—{W}")
+            near   = stop>0 and cur>0 and cur < stop*1.05
+            stop_s = f"{RD}{BD}{_c(stop)}{W}" if near else (f"{YL}{_c(stop)}{W}" if stop else f"{DM}—{W}")
 
             col_pnl = _rpad(_pnl(pnl),14)
             col_pct = _rpad(_pct(ppc),12)
@@ -277,12 +296,12 @@ def render(token):
             tk    = drow.get("ticker", base).split(":")[0]
             shs   = drow.get("shares",0) or 0
             ep    = drow.get("entry_price",0) or 0
-            stop  = drow.get("stop_price") or 0
+            stop  = _effective_stop(drow)
             reg   = drow.get("regime_at_entry") or "—"
             strat = (drow.get("strategy") or "—")[:14]
             L.append(
                 f"  {tk:<8}  {int(shs):>5}  {_c(ep):>8}  "
-                f"{'—':>8}  {(_c(stop) if stop else '—'):>8}  "
+                f"{'—':>8}  {f'{YL}{_c(stop)}{W}':>8}  "
                 f"{'—':>9}  {'—':>7}  {_rpad(_reg(reg),20)}  {DM}{strat}{W}"
             )
             count += 1
