@@ -38,7 +38,7 @@ def load_instrument_map() -> dict:
                       f"Rerun lookup_instruments.py to fill it in.")
                 continue
             mapping[row["yahoo_ticker"]] = {
-                "uic": int(row["uic"]),
+                "uic": int(float(row["uic"])),
                 "symbol": row["symbol"],
                 "currency": currency,
             }
