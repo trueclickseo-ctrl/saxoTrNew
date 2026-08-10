@@ -412,6 +412,52 @@ def render(token):
             f"  {'Total realized P&L':<22} {_pnl(realized,' SEK')}",
         ]
 
+    # Today's scan signals
+    scan_actions = st.get("actions") or []
+    if scan_actions:
+        buys     = [a for a in scan_actions if a.get("action") == "BUY"]
+        exits    = [a for a in scan_actions if a.get("action") in ("EXIT", "EXIT(FAILED)")]
+        blocked  = [a for a in scan_actions if a.get("action") == "BLOCKED"]
+
+        scan_ts  = (st.get("timestamp") or "")[:16].replace("T", " ")
+        L += ["", f"  {BD}TODAY'S SIGNALS{W}  {DM}(scan: {scan_ts}){W}"]
+        SIG_HR = f"  {DM}{'─'*72}{W}"
+        L.append(SIG_HR)
+
+        # Header
+        L.append(
+            f"{DM}  {'Action':<8}  {'Ticker':<7}  {'Strategy':<12}  "
+            f"{'Score':>5}  {'Shrs':>5}  {'Price':>8}  Reason{W}"
+        )
+        L.append(SIG_HR)
+
+        ACTION_COL = {"BUY": GR+BD, "EXIT": CY, "EXIT(FAILED)": RD, "BLOCKED": DM}
+        for a in scan_actions:
+            act   = a.get("action", "")
+            tk    = (a.get("ticker") or "")[:7]
+            strat = (a.get("strategy") or a.get("market_group") or "")[:12]
+            score = a.get("score") or 0
+            shrs  = a.get("shares") or 0
+            price = a.get("price") or 0
+            rsn   = (a.get("reason") or "")[:28]
+            acol  = ACTION_COL.get(act, DM)
+            pnl_a = a.get("pnl_sek")
+            pnl_part = (f"  P&L {_pnl(pnl_a,' SEK')}" if pnl_a is not None else "")
+            L.append(
+                f"  {acol}{act:<8}{W}  {BD}{tk:<7}{W}  {DM}{strat:<12}{W}  "
+                f"{score:>5.2f}  {shrs:>5}  {price:>8.2f}  {DM}{rsn}{W}{pnl_part}"
+            )
+
+        if not scan_actions:
+            L.append(f"  {DM}No signals this scan{W}")
+
+        L.append(SIG_HR)
+        L.append(
+            f"  {GR}{len(buys)} BUY{W}  "
+            f"{CY}{len(exits)} EXIT{W}  "
+            f"{DM}{len(blocked)} BLOCKED{W}"
+        )
+
     # Footer
     ref = "once" if "--once" in sys.argv else ("5s" if "--fast" in sys.argv else f"{REFRESH_SECONDS}s")
     L += [

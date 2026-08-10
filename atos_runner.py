@@ -519,7 +519,7 @@ def run_open_scan(log_fn=None) -> dict:
     exit_n    = sum(1 for a in todays_actions if a["action"] == "EXIT")
     blocked_n = sum(1 for a in todays_actions if a["action"] == "BLOCKED")
 
-    _write_status("complete", buy_n, exit_n, blocked_n)
+    _write_status("complete", buy_n, exit_n, blocked_n, actions=todays_actions)
     _send_notification(
         "ATOS Open Scan",
         f"{buy_n} BUY · {exit_n} EXIT  |  "
@@ -986,7 +986,7 @@ def run_cycle():
     buy_n     = sum(1 for a in todays_actions if a["action"] == "BUY")
     exit_n    = sum(1 for a in todays_actions if a["action"] == "EXIT")
     blocked_n = sum(1 for a in todays_actions if a["action"] == "BLOCKED")
-    _write_status("complete", buy_n, exit_n, blocked_n)
+    _write_status("complete", buy_n, exit_n, blocked_n, actions=todays_actions)
     _send_notification(
         "ATOS Scan Complete",
         f"{buy_n} BUY · {exit_n} EXIT · {blocked_n} blocked  |  "
@@ -1082,7 +1082,8 @@ SCAN_STATE_FILE   = os.path.join(BASE_DIR, "data", "atos_scan_state.json")
 STATUS_FILE       = os.path.join(BASE_DIR, "data", "atos_status.json")
 
 
-def _write_status(status: str, buy_count: int = 0, exit_count: int = 0, blocked_count: int = 0):
+def _write_status(status: str, buy_count: int = 0, exit_count: int = 0,
+                  blocked_count: int = 0, actions: list = None):
     """Write run status for the dashboard status banner to read."""
     payload = {
         "status":        status,
@@ -1090,6 +1091,7 @@ def _write_status(status: str, buy_count: int = 0, exit_count: int = 0, blocked_
         "buy_count":     buy_count,
         "exit_count":    exit_count,
         "blocked_count": blocked_count,
+        "actions":       actions or [],
     }
     try:
         tmp = STATUS_FILE + ".tmp"
