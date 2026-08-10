@@ -8,7 +8,7 @@ Usage:
 """
 
 import os, sys, json, time, sqlite3
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, date, timezone, timedelta
 
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 DB_PATH    = os.path.join(BASE_DIR, "data", "atos_live.db")
@@ -148,6 +148,56 @@ def _effective_stop(drow: dict) -> float:
     return entry * (1.0 - HARD_STOP_PCT)              # Rule 3 fallback
 
 
+def _days_held(entry_date_str: str) -> int:
+    """Calendar days since entry_date (ISO string)."""
+    try:
+        return (date.today() - date.fromisoformat(entry_date_str[:10])).days
+    except Exception:
+        return 0
+
+
+def _next_rebalance() -> str:
+    """Return the next monthly rebalance date as a short string (e.g. 'Sep 1')."""
+    state_path = os.path.join(BASE_DIR, "data", "us_momentum_state.json")
+    try:
+        with open(state_path) as f:
+            state = json.load(f)
+        last = state.get("last_rebalance")
+        if last:
+            last_dt = date.fromisoformat(last[:10])
+            # Next rebalance: first trading day of the following month
+            if last_dt.month == 12:
+                nxt = date(last_dt.year + 1, 1, 1)
+            else:
+                nxt = date(last_dt.year, last_dt.month + 1, 1)
+            days_left = (nxt - date.today()).days
+            label = nxt.strftime("%b %-d") if sys.platform != "win32" else nxt.strftime("%b %d").lstrip("0")
+            return f"{label} ({days_left}d)"
+    except Exception:
+        pass
+    return "monthly"
+
+
+def _exit_info(drow: dict) -> str:
+    """Return a short exit-trigger string for the Exit column."""
+    strategy   = (drow.get("strategy") or "").strip()
+    entry_date = drow.get("entry_date", "")
+    days       = _days_held(entry_date)
+
+    if "Reversion" in strategy:
+        # Max 10 trading days; show progress
+        try:
+            sys.path.insert(0, BASE_DIR)
+            from atos.us_reversion import MAX_HOLD_DAYS
+        except Exception:
+            MAX_HOLD_DAYS = 10
+        days_left = max(MAX_HOLD_DAYS - days, 0)
+        return f"Day {days}/{MAX_HOLD_DAYS} ({days_left}d left)"
+    else:
+        # US Blend: monthly rebalance
+        return f"Day {days}  Reb: {_next_rebalance()}"
+
+
 def _usd_sek():
     try:
         sys.path.insert(0, BASE_DIR)
@@ -274,6 +324,7 @@ def render(token):
                 "stop": _effective_stop(drow),
                 "regime": (drow.get("regime_at_entry") or "—")[:10],
                 "strategy": (drow.get("strategy") or "—")[:10],
+                "exit_info": _exit_info(drow),
                 "live_available": True,
             })
             total_pnl += pnl
@@ -288,52 +339,56 @@ def render(token):
                 "stop": _effective_stop(drow),
                 "regime": (drow.get("regime_at_entry") or "—")[:10],
                 "strategy": (drow.get("strategy") or "—")[:10],
+                "exit_info": _exit_info(drow),
                 "live_available": False,
             })
             count += 1
 
     SEP = "  "
-    HR2 = f"  {DM}{'─'*84}{W}"
+    HR2 = f"  {DM}{'─'*96}{W}"
 
     L.append(f"  {BD}OPEN POSITIONS{W}  {DM}(P&L in {acur}){W}")
-    L.append(f"{DM}  {'Ticker':<7}{SEP}{'Shrs':>5}{SEP}{'Entry':>8}{SEP}"
-             f"{'Live':>8}{SEP}{'Stop Loss':>9}{SEP}{'P&L':>10}{SEP}"
-             f"{'Chg%':>7}{SEP}{'Regime':<10}{SEP}Strategy{W}")
+    L.append(
+        f"{DM}  {'Ticker':<7}{SEP}{'Shrs':>5}{SEP}{'Entry':>8}{SEP}"
+        f"{'Live':>8}{SEP}{'Stop Loss':>9}{SEP}{'P&L':>10}{SEP}"
+        f"{'Chg%':>7}{SEP}{'Exit Trigger':<22}{SEP}Regime{W}"
+    )
     L.append(HR2)
 
     if not rows:
         L.append(f"  {DM}No open positions{W}")
     else:
         for r in rows:
-            tk   = r["ticker"][:7]
-            shs  = str(r["shs"])
-            ep   = f"{r['entry']:.2f}"
-            lv   = f"{r['live']:.2f}"  if r["live_available"] else "—"
-            st   = f"{r['stop']:.2f}"  if r["stop"] else "—"
+            tk      = r["ticker"][:7]
+            shs     = str(r["shs"])
+            ep      = f"{r['entry']:.2f}"
+            lv      = f"{r['live']:.2f}" if r["live_available"] else "—"
+            st      = f"{r['stop']:.2f}" if r["stop"] else "—"
+            ex      = r["exit_info"][:22]
 
             pnl_raw = r["pnl"]
             ppc_raw = r["ppc"]
-            pnl_s = (("+" if pnl_raw >= 0 else "") + f"{pnl_raw:,.0f}") if r["live_available"] else "—"
-            ppc_s = (("+" if ppc_raw >= 0 else "") + f"{ppc_raw:.2f}%") if r["live_available"] else "—"
+            pnl_s   = (("+" if pnl_raw >= 0 else "") + f"{pnl_raw:,.0f}") if r["live_available"] else "—"
+            ppc_s   = (("+" if ppc_raw >= 0 else "") + f"{ppc_raw:.2f}%") if r["live_available"] else "—"
 
-            near = r["stop"] > 0 and r["live"] > 0 and r["live"] < r["stop"] * 1.05
-
-            # Apply colour AFTER padding the raw value to correct width
+            near    = r["stop"] > 0 and r["live"] > 0 and r["live"] < r["stop"] * 1.05
             pnl_col = (GR if pnl_raw >= 0 else RD) if r["live_available"] else DM
             ppc_col = (GR if ppc_raw >= 0 else RD) if r["live_available"] else DM
-            stp_col = (RD+BD) if near else YL
+            stp_col = (RD + BD) if near else YL
+            # Reversion positions nearing max hold → warn in yellow
+            ex_col  = YL if "0d left" in ex or "1d left" in ex else DM
 
             L.append(
                 f"  {BD}{tk:<7}{W}{SEP}{shs:>5}{SEP}{ep:>8}{SEP}{lv:>8}{SEP}"
                 f"{stp_col}{st:>9}{W}{SEP}"
                 f"{pnl_col}{pnl_s:>10}{W}{SEP}"
                 f"{ppc_col}{ppc_s:>7}{W}{SEP}"
-                f"{REGIME_COL.get(r['regime'].upper(), DM)}{r['regime']:<10}{W}{SEP}"
-                f"{DM}{r['strategy']}{W}"
+                f"{ex_col}{ex:<22}{W}{SEP}"
+                f"{REGIME_COL.get(r['regime'].upper(), DM)}{r['regime']}{W}"
             )
 
         L.append(HR2)
-        total_s  = ("+" if total_pnl >= 0 else "") + f"{total_pnl:,.0f}"
+        total_s   = ("+" if total_pnl >= 0 else "") + f"{total_pnl:,.0f}"
         total_col = GR if total_pnl >= 0 else RD
         L.append(
             f"  {BD}{'TOTAL':<7}{W}{SEP}{count:>5} pos"
