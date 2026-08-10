@@ -433,6 +433,105 @@ def print_banner(total_equity: float, day_start: float, open_count: int,
 
 
 # ══════════════════════════════════════════════════════════════════
+# Open-market scan (called by intraday_monitor at 09:35 ET)
+# ══════════════════════════════════════════════════════════════════
+
+def run_open_scan(log_fn=None) -> dict:
+    """Run US strategy signal scan at market open.
+
+    Downloads the most recent daily bars for the full US universe, computes
+    features, then runs both US strategies (Blend + Reversion) and places any
+    approved orders. Designed to be called once per trading day by
+    intraday_monitor.py at ~09:35 ET (5 min after market open).
+
+    Args:
+        log_fn: optional callable(str) used for progress messages; defaults
+                to print so the monitor's terminal sees the output.
+
+    Returns:
+        dict with keys: buy_count, exit_count, blocked_count, actions
+    """
+    _log = log_fn or print
+
+    _log(f"\n{'='*60}")
+    _log(f"ATOS Open Scan — {datetime.now():%Y-%m-%d %H:%M:%S}")
+    _log("Strategies: US Blend (momentum) + US Reversion (mean-rev)")
+    _log(f"{'='*60}")
+
+    _write_status("running")
+    db.init_db()
+
+    if kill_switch_active():
+        _log("  STOP_TRADING file present — skipping open scan.")
+        _write_status("idle")
+        return {"buy_count": 0, "exit_count": 0, "blocked_count": 0, "actions": []}
+
+    # Fetch live account cash
+    try:
+        balances = saxo_client.get_balances()
+        cash_available = balances.get("CashBalance", 0)
+        account_currency = balances.get("Currency", "EUR")
+        fx_rate = fx.get_rate_to_sek(account_currency)
+        cash_sek = cash_available * fx_rate
+        _log(f"  Cash: {cash_available:,.2f} {account_currency} = {cash_sek:,.0f} SEK")
+    except Exception as e:
+        _log(f"  [WARN] Balances unavailable ({e}) — using risk capital estimate")
+        cash_sek = get_risk_capital()
+
+    # Download US universe (daily bars, same data the nightly engine uses)
+    _log(f"  Downloading daily data for {len(US_TICKERS)} US tickers...")
+    raw_data = download_universe(list(US_TICKERS))
+    feat_data: dict = {}
+    for ticker, df in raw_data.items():
+        try:
+            feat_data[ticker] = add_all(df)
+        except Exception as e:
+            _log(f"  [WARN] features failed for {ticker}: {e}")
+    _log(f"  {len(feat_data)} tickers ready")
+
+    if not feat_data:
+        _log("  No market data — aborting open scan.")
+        _write_status("idle")
+        return {"buy_count": 0, "exit_count": 0, "blocked_count": 0, "actions": []}
+
+    open_trades = db.get_open_trades()
+    todays_actions: list = []
+
+    # ── US Blend (cross-sectional momentum) ───────────────────────
+    blend_budget = cash_sek * BLEND_CASH_PCT
+    _log(f"  US Blend — budget: {blend_budget:,.0f} SEK ({BLEND_CASH_PCT*100:.0f}% of cash)")
+    try:
+        run_us_momentum(feat_data, open_trades, todays_actions,
+                        available_cash_sek=blend_budget)
+    except Exception as e:
+        _log(f"  [US Blend ERROR] {e}")
+
+    # ── US Reversion (mean reversion) ─────────────────────────────
+    rev_budget = cash_sek * REV_CASH_PCT
+    _log(f"  US Reversion — budget: {rev_budget:,.0f} SEK ({REV_CASH_PCT*100:.0f}% of cash)")
+    try:
+        run_us_reversion(feat_data, db.get_open_trades(), todays_actions,
+                         available_cash_sek=rev_budget)
+    except Exception as e:
+        _log(f"  [US Reversion ERROR] {e}")
+
+    buy_n     = sum(1 for a in todays_actions if a["action"] == "BUY")
+    exit_n    = sum(1 for a in todays_actions if a["action"] == "EXIT")
+    blocked_n = sum(1 for a in todays_actions if a["action"] == "BLOCKED")
+
+    _write_status("complete", buy_n, exit_n, blocked_n)
+    _send_notification(
+        "ATOS Open Scan",
+        f"{buy_n} BUY · {exit_n} EXIT  |  "
+        f"{len(db.get_open_trades())} positions open",
+    )
+    _log(f"\n  Open scan done — {buy_n} BUY, {exit_n} EXIT, {blocked_n} blocked\n")
+
+    return {"buy_count": buy_n, "exit_count": exit_n,
+            "blocked_count": blocked_n, "actions": todays_actions}
+
+
+# ══════════════════════════════════════════════════════════════════
 # Main Cycle
 # ══════════════════════════════════════════════════════════════════
 

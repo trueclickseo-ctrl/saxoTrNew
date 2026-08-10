@@ -1,37 +1,47 @@
 """
 intraday_monitor.py
 --------------------
-ATOS Intraday Price Monitor — the real-time safety net for live positions.
-Checks live prices from Saxo API every second and sells IMMEDIATELY when any
-position breaches its stop-loss. No signal generation, no rebalance.
+ATOS Intraday Monitor — real-time safety net AND intraday buy scanner.
+
+Two roles run in parallel:
+
+  STOP-LOSS GUARD (every 1 second, during market hours):
+      Polls live Saxo prices, sells IMMEDIATELY if any position breaches
+      its stop-loss (fixed, trailing, or hard-floor rules).
+
+  BUY SCANNER (runs ONCE per session at 09:35 ET, then every 90 min):
+      09:35 ET open scan  — downloads the latest daily bars for all US
+          tickers, runs US Blend (cross-sectional momentum) + US Reversion
+          (mean-reversion dip-buy), and places approved orders immediately.
+      Every 90 min        — runs the intraday reversion scanner (5-min bar
+          setups) so fresh dip-buy signals throughout the session are caught.
 
 Architecture:
-  Daily engine (daily_run.py / Task Scheduler 06:00 PKT):
-      signal generation, monthly rebalance, learning pass
+  Nightly engine  (atos_runner.run_cycle, 02:00 AM PKT):
+      Full cycle: exits, learning pass, equity snapshot, FTP upload.
+      Also places US strategy orders — but those execute at next day's open.
 
-  THIS SCRIPT (Task Scheduler 15:30 PKT = 09:30 ET = US market open):
-      1-second polling → stop-loss check → instant sell
-      exits automatically at 16:00 ET (US market close)
+  THIS SCRIPT (Task Scheduler 15:30 PKT = 09:30 ET):
+      Faster execution: open scan fires at 09:35 ET for same-day fills.
+      Stop-loss guard runs continuously at 1-second resolution.
+      Exits automatically when US market closes (16:00 ET).
 
 Reliability (real-money safe):
   - Rate-limit aware: backs off on HTTP 429 (respects Retry-After header)
   - Auth-error aware: on 401, attempts token refresh before retrying
   - Circuit breaker: if prices unavailable for BLIND_SECONDS, logs CRITICAL
-    so you can see the alert in the log file / console immediately
   - Double-sell guard: checks DB before placing sell — won't sell twice
-  - Every sell attempt is logged with full P&L detail
-  - Sell order failures are logged as CRITICAL (order not placed)
+  - Open-scan guard: flag file prevents running the open scan twice per day
+    if the monitor restarts mid-session
 
 Stop-loss priority (first rule that applies):
   1. Fixed stop_price from DB (set by risk engine at entry)
   2. Trailing stop: TRAILING_PCT below trailing_stop_high from DB
-  3. Hard floor: HARD_STOP_PCT below entry_price (last resort — US Blend
-     positions have stop_price=0; this catches extreme crashes for them)
+  3. Hard floor: HARD_STOP_PCT below entry_price (US Blend positions have
+     stop_price=0; this catches extreme crashes for them)
 
 Rate limits (Saxo SIM):
   ~120 req/min per endpoint. At 1 req/s = 60 req/min. Safe.
-  For live production API, verify limits in the Saxo developer portal and
-  adjust POLL_INTERVAL if needed.
 
 Task Scheduler setup:
   Trigger  : Daily, 15:30 PKT
@@ -55,6 +65,17 @@ import fx
 from atos import database as db
 from atos.risk import commission_sek
 
+# Lazy import of atos_runner (heavy — only pulled in when buy scan runs)
+_atos_runner = None
+
+def _get_runner():
+    global _atos_runner
+    if _atos_runner is None:
+        import atos_runner as _ar
+        _atos_runner = _ar
+    return _atos_runner
+
+
 # US market holidays 2025–2026 (NYSE observed dates)
 _US_HOLIDAYS = {
     date(2025, 1, 1), date(2025, 1, 20), date(2025, 2, 17), date(2025, 4, 18),
@@ -72,6 +93,14 @@ HARD_STOP_PCT    = 0.15         # 15% below entry price (last-resort floor)
 TRAILING_PCT     = 0.12         # 12% below trailing_stop_high
 BLIND_SECONDS    = 180          # circuit-breaker: alert if blind for 3 min
 LOG_FILE         = os.path.join(BASE_DIR, "data", "monitor_log.txt")
+
+# ── Buy-scan configuration ─────────────────────────────────────────
+# Open scan: fires this many minutes after market open so opening volatility settles
+OPEN_SCAN_DELAY_MIN  = 5        # 09:30 + 5 min = 09:35 ET
+# Intraday reversion re-scan interval (minutes)
+INTRADAY_RESCAN_MIN  = 90       # re-run dip-buy scanner every 90 min during session
+# Flag file prevents double-running the open scan if monitor restarts mid-session
+_OPEN_SCAN_FLAG_DIR  = os.path.join(BASE_DIR, "data")
 
 # US market hours (Eastern Time)
 _EDT = timezone(timedelta(hours=-4))   # EDT (Apr–Nov)
@@ -132,6 +161,52 @@ def _seconds_until_close() -> float:
     close = now.replace(hour=MARKET_CLOSE[0], minute=MARKET_CLOSE[1],
                         second=0, microsecond=0)
     return max((close - now).total_seconds(), 0)
+
+
+# ── Buy-scan helpers ──────────────────────────────────────────────
+
+def _open_scan_flag_path() -> str:
+    return os.path.join(_OPEN_SCAN_FLAG_DIR, f"open_scan_{date.today().isoformat()}.flag")
+
+
+def _open_scan_done_today() -> bool:
+    return os.path.exists(_open_scan_flag_path())
+
+
+def _mark_open_scan_done():
+    os.makedirs(_OPEN_SCAN_FLAG_DIR, exist_ok=True)
+    with open(_open_scan_flag_path(), "w") as f:
+        f.write(datetime.now().isoformat())
+
+
+def _run_open_scan():
+    """Run the US strategy buy scan at market open. Runs once per calendar day."""
+    if _open_scan_done_today():
+        log.info("[BUY SCAN] Already ran today — skip.")
+        return
+
+    log.info("[BUY SCAN] ═══════════════════════════════════════════")
+    log.info("[BUY SCAN] Starting open scan — US Blend + US Reversion")
+    log.info("[BUY SCAN] ═══════════════════════════════════════════")
+
+    try:
+        runner = _get_runner()
+        result = runner.run_open_scan(log_fn=lambda m: log.info("[BUY SCAN] %s", m))
+        _mark_open_scan_done()
+        log.info("[BUY SCAN] Done — %d BUY, %d EXIT, %d blocked",
+                 result["buy_count"], result["exit_count"], result["blocked_count"])
+    except Exception as e:
+        log.error("[BUY SCAN] Open scan failed: %s", e, exc_info=True)
+
+
+def _run_intraday_rescan():
+    """Run the intraday reversion scanner (5-min bar dip-buy signals)."""
+    log.info("[INTRADAY SCAN] Running intraday reversion scanner...")
+    try:
+        runner = _get_runner()
+        runner.run_intraday_cycle()
+    except Exception as e:
+        log.error("[INTRADAY SCAN] Failed: %s", e)
 
 
 # ── Yahoo Finance last-close prices (used when market is closed) ────
@@ -569,10 +644,13 @@ def main():
     show_table = "--no-display" not in sys.argv
 
     log.info("=" * 60)
-    log.info("ATOS Intraday Monitor — %s ET", _et_now().strftime("%Y-%m-%d %H:%M:%S"))
-    log.info("Poll: %ds | Trailing: %.0f%% | Hard floor: %.0f%% | Table: %s",
-             POLL_INTERVAL, TRAILING_PCT * 100, HARD_STOP_PCT * 100,
-             "ON" if show_table else "OFF (--no-display)")
+    log.info("ATOS Intraday Monitor + Buy Scanner — %s ET",
+             _et_now().strftime("%Y-%m-%d %H:%M:%S"))
+    log.info("Stop-loss poll: %ds | Trailing: %.0f%% | Hard floor: %.0f%%",
+             POLL_INTERVAL, TRAILING_PCT * 100, HARD_STOP_PCT * 100)
+    log.info("Open scan: %d min after market open | Rescan: every %d min",
+             OPEN_SCAN_DELAY_MIN, INTRADAY_RESCAN_MIN)
+    log.info("Table display: %s", "ON" if show_table else "OFF (--no-display)")
     log.info("=" * 60)
 
     try:
@@ -595,13 +673,35 @@ def main():
     yahoo_prices: dict = {}
     yahoo_fetched_at = 0.0
 
+    # Buy-scan scheduling
+    last_rescan_at   = 0.0   # timestamp of last intraday rescan
+    open_scan_fired  = False  # in-memory flag (flag file is the persistent guard)
+
     try:
         while True:
             now_et = _et_now()
             market_open = _market_is_open()
 
             if market_open:
-                # ── LIVE MODE — Saxo API every 1s, display every 5s ──
+                # ── BUY SCAN: fire open scan 5 min after 09:30 ET ────────
+                mins_past_open = (now_et.hour - MARKET_OPEN[0]) * 60 + (now_et.minute - MARKET_OPEN[1])
+                if (not open_scan_fired and
+                        mins_past_open >= OPEN_SCAN_DELAY_MIN and
+                        not _open_scan_done_today()):
+                    open_scan_fired = True
+                    log.info("[BUY SCAN] Market open %d min — running open scan...",
+                             mins_past_open)
+                    import threading
+                    threading.Thread(target=_run_open_scan, daemon=True).start()
+
+                # ── BUY SCAN: intraday rescan every 90 min ────────────────
+                if (time.time() - last_rescan_at) >= INTRADAY_RESCAN_MIN * 60:
+                    last_rescan_at = time.time()
+                    # Don't block the stop-loss loop; run in a background thread
+                    import threading
+                    threading.Thread(target=_run_intraday_rescan, daemon=True).start()
+
+                # ── LIVE MODE — Saxo API every 1s, display every 5s ──────
                 try:
                     _poll_once(imap, consecutive_failures, blind_since,
                                tick, show_table, last_display)
