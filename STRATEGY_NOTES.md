@@ -584,6 +584,54 @@ Used by: dashboard charts, terminal scorecard, strategy comparison stats.
 
 ---
 
+---
+
+## ETF Strategies — Added 2026-08-15
+
+Four strategies in `saxo_etf_strategy/core/etf_strategy.py`. Select via `strategy_name` in `etf_config.py`.
+
+### 1. Sector Rotation (default — `sector_rotation`)
+- Universe: 11 US sector SPDR ETFs (SPY, XLK, XLV, XLE, XLF, XLI, XLY, XLP, XLU, XLRE, XLB)
+- Signal: rank by 3-month total return (63 trading days)
+- Action: BUY top 3; hold until SL/TP
+- Signals 2026-08-15: XLV +16.6%, XLF +13.5%, XLE +11.1%
+- Best fit for: slow-moving sector trends, monthly-ish holding periods
+
+### 2. Risk-Off / Defensive Rotation (`risk_off`)
+- Signal: SPY vs SMA200 (uptrend/downtrend regime)
+- Uptrend (SPY > SMA200): BUY SPY + QQQ
+- Downtrend (SPY < SMA200): BUY TLT + GLD (bonds + gold)
+- Signals 2026-08-15: SPY +10.1% above SMA200 → BUY SPY, QQQ
+- Best fit for: regime-aware allocation, macro-driven rotation
+
+### 3. Mean Reversion (`mean_reversion`)
+- Universe: SPY, QQQ, IWM, EFA, EEM (5 broad ETFs)
+- Entry: RSI(14) < 30 AND price ≥ 5% below 20-day SMA
+- Exit: SL/TP only (8% stop, 20% target)
+- Signals 2026-08-15: none (market not oversold)
+- Best fit for: panic dip-buying in healthy uptrends
+
+### 4. Dual MA Crossover (`dual_ma`)
+- Universe: curated 50 most liquid US ETFs (broad, sector, bond, commodity, factor)
+- Signal: 20-day MA > 100-day MA (momentum crossover)
+- Rank by crossover strength; take top 3
+- Signals 2026-08-15: ARKG +17.8%, XBI +8.7%, IBB +7.9% (biotech momentum)
+- Note: earlier version scanned all 2,122 NYSE_ARCA ETFs — fixed to curated 50 to avoid rate limits
+- Best fit for: medium-term trend following across a broad ETF menu
+
+### Risk Parameters (all strategies)
+- Capital: 15% of account | Max positions: 5 | Per position: 3% of account
+- Stop-loss: 8% | Take-profit: 20%
+- Exit review: daily via `/trade/v1/infoprices` live price fetch
+
+### Observations
+- `sector_rotation` is the most conservative — limited to 11 well-known sector ETFs
+- `risk_off` acts as a macro overlay — protective in downtrends
+- `mean_reversion` fires rarely in bull markets (intentional)
+- `dual_ma` may find leveraged/niche ETFs if the curated list is expanded carelessly — keep universe names explicitly listed
+
+---
+
 ## Intraday Scan — Market Signal Check (2026-08-08)
 
 Ran the reversion scanner on Friday 2026-08-07 close prices (cached).

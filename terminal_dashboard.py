@@ -9,11 +9,14 @@ Usage:
 
 import os, sys, json, time, sqlite3
 from datetime import datetime, date, timezone, timedelta
+import threading
 
-BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
-DB_PATH    = os.path.join(BASE_DIR, "data", "atos_live.db")
-TOKEN_FILE = os.path.join(BASE_DIR, "saxo_token.json")
-SIM_BASE   = "https://gateway.saxobank.com/sim/openapi/"
+BASE_DIR        = os.path.dirname(os.path.abspath(__file__))
+DB_PATH         = os.path.join(BASE_DIR, "data", "atos_live.db")
+TOKEN_FILE      = os.path.join(BASE_DIR, "saxo_token.json")
+SIM_BASE        = "https://gateway.saxobank.com/sim/openapi/"
+TRADE_LOG_PATH  = os.path.join(BASE_DIR, "data", "trade_log.csv")
+ETF_STATE_PATH  = os.path.join(BASE_DIR, "saxo_etf_strategy", "data", "etf_positions.json")
 
 REFRESH_SECONDS = 30
 TRAILING_PCT  = 0.12   # 12% below trailing_stop_high (matches intraday_monitor)
@@ -123,6 +126,70 @@ def _db_stats():
     except Exception:
         return {}
 
+def _read_stock_trades(n=20):
+    """Read last N stock trades from trade_log.csv, newest first."""
+    if not os.path.exists(TRADE_LOG_PATH):
+        return []
+    try:
+        import csv
+        with open(TRADE_LOG_PATH, newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        out = []
+        for r in rows[-n:]:
+            pnl_raw = r.get("pnl_sek", "").strip()
+            out.append({
+                "date":     r.get("date", "")[:10],
+                "action":   r.get("action", "").upper(),
+                "ticker":   r.get("ticker", ""),
+                "strategy": r.get("strategy", ""),
+                "shares":   int(float(r.get("shares") or 0)),
+                "price":    float(r.get("price_usd") or 0),
+                "value":    float(r.get("value_sek") or 0),
+                "pnl":      float(pnl_raw) if pnl_raw else None,
+                "currency": "SEK",
+                "source":   "stock",
+                "dry_run":  False,
+            })
+        return list(reversed(out))
+    except Exception:
+        return []
+
+
+def _read_etf_trades():
+    """Read ETF order history from etf_positions.json, newest first."""
+    if not os.path.exists(ETF_STATE_PATH):
+        return []
+    try:
+        d    = json.load(open(ETF_STATE_PATH, encoding="utf-8"))
+        orders = d.get("orders", [])
+        out = []
+        for o in reversed(orders):
+            side  = (o.get("side") or "").upper()
+            price = o.get("entry_price") if side == "BUY" else o.get("exit_price", 0)
+            pnl   = None
+            if side == "SELL":
+                ep = o.get("entry_price")
+                xp = o.get("exit_price")
+                if ep and xp:
+                    pnl = (xp - ep) * o.get("quantity", 0)
+            out.append({
+                "date":     (o.get("timestamp") or "")[:10],
+                "action":   side,
+                "ticker":   o.get("symbol", ""),
+                "strategy": "ETF",
+                "shares":   o.get("quantity", 0),
+                "price":    price or 0,
+                "value":    (price or 0) * o.get("quantity", 0),
+                "pnl":      pnl,
+                "currency": "USD",
+                "source":   "etf",
+                "dry_run":  o.get("dry_run", False),
+            })
+        return out
+    except Exception:
+        return []
+
+
 def _atos_status():
     p = os.path.join(BASE_DIR, "data", "atos_status.json")
     try:
@@ -197,6 +264,33 @@ def _exit_info(drow: dict) -> str:
     else:
         # US Blend: monthly rebalance
         return f"Day {days}  Reb: {_next_rebalance()}"
+
+
+def _yf_last_close(tickers: list) -> dict:
+    """Fetch last closing price from Yahoo Finance for given tickers.
+    Returns {ticker: price}. Used when market is closed or Saxo token expired."""
+    if not tickers:
+        return {}
+    try:
+        import yfinance as yf
+        raw = yf.download(tickers, period="5d", interval="1d",
+                          auto_adjust=True, progress=False,
+                          group_by="ticker" if len(tickers) > 1 else None)
+        result = {}
+        if len(tickers) == 1:
+            if not raw.empty:
+                result[tickers[0]] = float(raw["Close"].dropna().iloc[-1])
+        else:
+            for t in tickers:
+                try:
+                    s = raw[t]["Close"].dropna()
+                    if not s.empty:
+                        result[t] = float(s.iloc[-1])
+                except Exception:
+                    pass
+        return result
+    except Exception:
+        return {}
 
 
 def _usd_sek():
@@ -332,27 +426,44 @@ def render(token):
             total_pnl += pnl
             count     += 1
     elif db:
+        # No Saxo connection — fetch last closing prices from Yahoo Finance
+        yf_tickers = [drow.get("ticker", base).split(":")[0] for base, drow in db.items()]
+        yf_prices  = _yf_last_close(yf_tickers)
         for base, drow in db.items():
+            tk    = drow.get("ticker", base).split(":")[0]
+            ep    = drow.get("entry_price", 0) or 0
+            shs   = int(drow.get("shares", 0) or 0)
+            close = yf_prices.get(tk, 0)
+            pnl   = (close - ep) * shs if close and ep and shs else None
+            ppc   = ((close - ep) / ep * 100) if close and ep else None
             rows.append({
-                "ticker": drow.get("ticker", base).split(":")[0],
-                "shs": int(drow.get("shares", 0) or 0),
-                "entry": drow.get("entry_price", 0) or 0,
-                "live": 0, "pnl": 0, "ppc": 0,
+                "ticker": tk,
+                "shs": shs,
+                "entry": ep,
+                "live": close,
+                "pnl": pnl,
+                "ppc": ppc,
                 "stop": _effective_stop(drow),
                 "regime": (drow.get("regime_at_entry") or "—")[:10],
                 "strategy": (drow.get("strategy") or "—")[:10],
                 "exit_info": _exit_info(drow),
-                "live_available": False,
+                "live_available": bool(close),
+                "is_close_price": True,
             })
+            if pnl is not None:
+                total_pnl += pnl
             count += 1
 
     SEP = "  "
     HR2 = f"  {DM}{'─'*96}{W}"
 
-    L.append(f"  {BD}OPEN POSITIONS{W}  {DM}(P&L in {acur}){W}")
+    using_close = any(r.get("is_close_price") for r in rows)
+    price_label = "Last Close" if using_close else "Live"
+    price_note  = f"  {YL}(last close — market closed){W}" if using_close else ""
+    L.append(f"  {BD}OPEN POSITIONS{W}  {DM}(P&L in {acur}){W}{price_note}")
     L.append(
         f"{DM}  {'Ticker':<7}{SEP}{'Shrs':>5}{SEP}{'Entry':>8}{SEP}"
-        f"{'Live':>8}{SEP}{'Stop Loss':>9}{SEP}{'P&L':>10}{SEP}"
+        f"{price_label:>10}{SEP}{'Stop Loss':>9}{SEP}{'P&L':>10}{SEP}"
         f"{'Chg%':>7}{SEP}{'Exit Trigger':<22}{SEP}Regime{W}"
     )
     L.append(HR2)
@@ -398,21 +509,83 @@ def render(token):
             f"{total_col}{total_s:>10}{W}"
         )
 
-    # Trade history
-    stats = _db_stats()
-    if stats:
-        closed   = stats.get("closed",0) or 0
-        wins     = stats.get("wins",0) or 0
-        realized = stats.get("realized") or 0
-        wr       = wins/closed*100 if closed else 0
-        losses   = closed - wins
-        L += [
-            "",
-            f"  {BD}TRADE HISTORY{W}",
-            f"  {'Closed trades':<22} {closed}  "
-            f"(W:{GR}{wins}{W}  L:{RD}{losses}{W}  WR: {BD}{wr:.1f}%{W})",
-            f"  {'Total realized P&L':<22} {_pnl(realized,' SEK')}",
-        ]
+    # ── Trade History (stocks + ETF from local files) ─────────────
+    stock_trades = _read_stock_trades(20)
+    etf_trades   = _read_etf_trades()
+
+    # Merge: ETF newest first, then stocks newest first (up to 25 combined)
+    all_trades = (etf_trades + stock_trades)[:25]
+
+    TH_HR = f"  {DM}{'─'*96}{W}"
+    L += ["", f"  {BD}TRADE HISTORY{W}  {DM}(own records — stocks last 20 + all ETF){W}"]
+    L.append(TH_HR)
+    L.append(
+        f"{DM}  {'Date':<10}  {'Side':<4}  {'Ticker':<7}  {'Strategy':<14}"
+        f"  {'Shrs':>6}  {'Price':>8}  {'Value':>12}  {'P&L':>12}  Src{W}"
+    )
+    L.append(TH_HR)
+
+    if not all_trades:
+        L.append(f"  {DM}No trade history yet{W}")
+    else:
+        for t in all_trades:
+            act    = t["action"]
+            dry    = t["dry_run"]
+            cur    = t["currency"]
+            pnl    = t["pnl"]
+            val    = t["value"]
+
+            # Colour: BUY=green, SELL profit=green, SELL loss=red, dry=dim
+            if dry:
+                act_col = DM
+                act_lbl = f"{DM}BUY*{W}"   # * = dry run
+            elif act == "BUY":
+                act_col = GR
+                act_lbl = f"{GR}{act:<4}{W}"
+            else:
+                act_col = (GR if pnl and pnl >= 0 else RD) if pnl is not None else CY
+                act_lbl = f"{act_col}{act:<4}{W}"
+
+            pnl_s = ""
+            if dry:
+                pnl_s = f"{DM}[DRY RUN]{W}"
+            elif pnl is not None:
+                c = GR if pnl >= 0 else RD
+                pnl_s = f"{c}{'+'if pnl>=0 else ''}{pnl:,.0f} {cur}{W}"
+            else:
+                pnl_s = f"{DM}—{W}"
+
+            src_badge = f"{DM}ETF{W}" if t["source"] == "etf" else f"{BL}STK{W}"
+            val_s  = f"{val:>12,.0f}"
+            price_s = f"{t['price']:>8.2f}"
+
+            L.append(
+                f"  {act_lbl}  {t['date']:<10}  {BD}{t['ticker']:<7}{W}  "
+                f"{DM}{t['strategy']:<14}{W}  {t['shares']:>6,}  {price_s}  "
+                f"{DM}{val_s}{W}  {_rpad(pnl_s, 18)}  {src_badge}"
+            )
+
+    L.append(TH_HR)
+
+    # Summary line from DB stats + ETF tally
+    stats   = _db_stats()
+    closed  = stats.get("closed", 0) or 0
+    wins    = stats.get("wins", 0)   or 0
+    realized= stats.get("realized")  or 0
+    wr      = wins / closed * 100 if closed else 0
+    losses  = closed - wins
+
+    etf_closed = sum(1 for t in etf_trades if t["action"] == "SELL" and not t["dry_run"])
+    etf_open   = sum(1 for t in etf_trades if t["action"] == "BUY"  and not t["dry_run"])
+    etf_dry    = sum(1 for t in etf_trades if t["dry_run"])
+
+    L.append(
+        f"  {BD}Stocks{W}: {closed} closed  "
+        f"W:{GR}{wins}{W} L:{RD}{losses}{W}  WR:{BD}{wr:.1f}%{W}  "
+        f"Realized: {_pnl(realized,' SEK')}   "
+        f"{BD}ETF{W}: {etf_open} open  {etf_closed} closed  "
+        f"{DM}{etf_dry} dry-run{W}"
+    )
 
     # Today's scan signals
     scan_actions = st.get("actions") or []

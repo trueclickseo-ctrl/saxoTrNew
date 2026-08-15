@@ -1,158 +1,538 @@
 """
 atos/universe.py
 -----------------
-US equity universe for ATOS — solid S&P 500 blue chips only.
+US equity universe for ATOS — expanded 2026-08-14 from 108 → ~400 tickers.
 
-Criteria for inclusion:
-  1. S&P 500 constituent, market cap > $30B
-  2. Average daily dollar volume > $200M (in/out without slippage)
-  3. Established business — no near-term M&A/delist risk
-  4. Core business understandable — no pure mining, no REITs, no biotech binary risk
+Sectors: Technology, Financials, Energy, Healthcare, Consumer Discretionary,
+         Industrials, Communication Services, Consumer Staples, Materials, Utilities.
 
-108 stocks across 10 sectors. Reviewed 2026-08-08.
+Excluded (confirmed delistings/acquisitions as of Aug 2026):
+  ATVI  — acquired by Microsoft (Oct 2023)
+  VMW   — acquired by Broadcom (Nov 2023)
+  SPLK  — acquired by Cisco (Mar 2024)
+  K     — Kellanova acquired by Mars (Aug 2024)
+  PXD   — acquired by ExxonMobil (Oct 2024)
+  HES   — acquired by Chevron (Oct 2024)
+  MRO   — acquired by ConocoPhillips (Nov 2024)
+  DFS   — acquired by Capital One (May 2025)
+  TWTR  — went private (Oct 2022)
+  COG   — renamed CTRA (Coterra Energy); not on Saxo SIM
+
+Run lookup_missing.py after any universe change to fill new UICs.
 """
 
 SP500_TICKERS = [
 
-    # ── Technology — mega-cap & software (10) ────────────────────────────────
+    # ── Technology — mega-cap & cloud (10) ───────────────────────────────────
     "AAPL",  # Apple — highest daily $ volume on earth
-    "MSFT",  # Microsoft — cloud + AI, $3T, ultra-liquid
-    "NVDA",  # Nvidia — AI chips, highest momentum stock in universe
-    "AVGO",  # Broadcom — networking/custom AI chips, $800B+
-    "ORCL",  # Oracle — cloud database, solid compounder
-    "CSCO",  # Cisco — networking infrastructure, dividend, defensive
+    "MSFT",  # Microsoft — cloud + AI, $3T
+    "NVDA",  # Nvidia — AI chips, highest momentum
+    "AVGO",  # Broadcom — networking/custom AI chips
+    "ORCL",  # Oracle — cloud database, compounder
+    "CSCO",  # Cisco — networking, dividend, defensive
+    "INTC",  # Intel — x86 CPUs, restructuring story
     "ADBE",  # Adobe — creative software, recurring revenue
-    "CRM",   # Salesforce — enterprise CRM, high volume
-    "NOW",   # ServiceNow — workflow automation, strong trend
+    "CRM",   # Salesforce — enterprise CRM
+    "NOW",   # ServiceNow — workflow automation
+
+    # ── Technology — enterprise software & IT services (8) ───────────────────
     "INTU",  # Intuit — TurboTax/QuickBooks, pricing power
+    "ACN",   # Accenture — IT consulting, $200B+
+    "IBM",   # IBM — hybrid cloud/AI, defensive, dividend
+    "PANW",  # Palo Alto Networks — cybersecurity platform
+    "FTNT",  # Fortinet — network security appliances
+    "ADSK",  # Autodesk — CAD/design software, SaaS transition
+    "CDNS",  # Cadence Design Systems — EDA software
+    "SNPS",  # Synopsys — EDA, semiconductor toolchain
 
-    # ── Technology — IT services, cybersecurity, semiconductors (8) ──────────
-    "ACN",   # Accenture — IT consulting, $200B+, global
-    "IBM",   # IBM — hybrid cloud/AI, defensive tech, dividend
-    "PANW",  # Palo Alto Networks — cybersecurity, high momentum
-    "SNPS",  # Synopsys — EDA software, essential chip design toolchain
+    # ── Technology — semiconductors (14) ─────────────────────────────────────
+    "AMD",   # AMD — CPUs + AI GPUs
+    "QCOM",  # Qualcomm — mobile chips, auto/IoT
+    "MU",    # Micron — DRAM/NAND, AI memory
+    "AMAT",  # Applied Materials — semiconductor equipment
+    "ASML",  # ASML — EUV monopoly (Dutch ADR)
+    "LRCX",  # Lam Research — etch equipment
+    "KLAC",  # KLA Corp — semiconductor inspection
     "TXN",   # Texas Instruments — analog chips, 50yr dividend growth
-    "ADI",   # Analog Devices — analog/mixed-signal, pairs TXN
-    "KLAC",  # KLA Corp — semiconductor inspection equipment
-    "LRCX",  # Lam Research — semiconductor etch equipment
+    "ADI",   # Analog Devices — analog/mixed-signal
+    "MRVL",  # Marvell Technology — data infra chips
+    "MCHP",  # Microchip Technology — MCUs, embedded
+    "ON",    # ON Semiconductor — power/auto chips
+    "NXPI",  # NXP Semiconductors — auto/IoT chips (Dutch ADR)
+    "TER",   # Teradyne — semiconductor test equipment
+    "QRVO",  # Qorvo — RF chips for mobile
+    "SWKS",  # Skyworks Solutions — RF/wireless chips
 
-    # ── Communication Services (4) ───────────────────────────────────────────
-    "GOOGL", # Alphabet — search + cloud, $2T, massive volume
-    "META",  # Meta — social/AR, highest revenue growth in sector
-    "NFLX",  # Netflix — streaming, $400B+, strong momentum
-    "DIS",   # Disney — parks + streaming, defensive media
+    # ── Technology — hardware & storage (6) ──────────────────────────────────
+    "HPQ",   # HP Inc. — PCs/printing, high buybacks
+    "DELL",  # Dell Technologies — infrastructure + AI servers
+    "HPE",   # HP Enterprise — servers/networking
+    "NTAP",  # NetApp — cloud data storage
+    "STX",   # Seagate — HDD storage, dividend
+    "WDC",   # Western Digital — HDD/NAND, pairs STX
 
-    # ── Consumer Discretionary (15) ──────────────────────────────────────────
-    "AMZN",  # Amazon — e-commerce + AWS, $2T
-    "TSLA",  # Tesla — EV leader, highest retail volume in universe
-    "HD",    # Home Depot — home improvement, $400B, reliable trend
-    "MCD",   # McDonald's — global QSR, inflation-pass-through
-    "COST",  # Costco — membership retail, recession-resistant
-    "NKE",   # Nike — global brand, sports apparel leader
-    "BKNG",  # Booking Holdings — online travel, $150B+
-    "TJX",   # TJX Companies — off-price retail, defensive discretionary
-    "SBUX",  # Starbucks — global coffee, pricing power
-    "LOW",   # Lowe's — home improvement, pairs HD for ranking
-    "TGT",   # Target — general retail, $70B market cap
-    "ORLY",  # O'Reilly Auto Parts — auto parts, recession-resistant
-    "AZO",   # AutoZone — auto parts, buy-back machine
-    "ROST",  # Ross Stores — off-price, defensive in downturns
-    "CMG",   # Chipotle — fast casual, proven growth compounder
+    # ── Technology — networking & cloud infrastructure (4) ───────────────────
+    "ANET",  # Arista Networks — cloud networking
+    "GDDY",  # GoDaddy — web hosting/domains, SMB SaaS
+    "CLVT",  # Clarivate — IP/analytics data
+    "DOCN",  # DigitalOcean — cloud for SMBs
 
-    # ── Consumer Staples (9) ─────────────────────────────────────────────────
-    "WMT",   # Walmart — largest retailer, $700B, highest staples volume
+    # ── Technology — cybersecurity & cloud software (10) ─────────────────────
+    "CRWD",  # CrowdStrike — endpoint security
+    "ZS",    # Zscaler — zero-trust network security
+    "NET",   # Cloudflare — network security/CDN
+    "OKTA",  # Okta — identity management
+    "SNOW",  # Snowflake — cloud data platform
+    "DDOG",  # Datadog — observability/APM
+    "MDB",   # MongoDB — document database
+    "WDAY",  # Workday — HR/finance cloud
+    "TEAM",  # Atlassian — dev collaboration (Jira)
+
+    # ── Technology — SaaS & developer tools (8) ──────────────────────────────
+    "SHOP",  # Shopify — e-commerce platform (Canadian, NYSE listed)
+    "PLTR",  # Palantir — data analytics/AI for gov & enterprise
+    "HUBS",  # HubSpot — marketing/CRM software
+    "MNDY",  # Monday.com — work OS
+    "TWLO",  # Twilio — communications APIs
+    "DOCU",  # DocuSign — e-signature, SaaS
+    "VEEV",  # Veeva Systems — life sciences cloud
+    "ZM",    # Zoom — video conferencing, mean-reversion candidate
+
+    # ── Technology — fintech & payments (5) ──────────────────────────────────
+    "PYPL",  # PayPal — digital payments
+    "XYZ",   # Block (formerly SQ, rebranded Jan 2025) — Cash App + payments
+    "EBAY",  # eBay — e-commerce marketplace
+    "MTCH",  # Match Group — online dating (Tinder/Hinge)
+    "KDP",   # Keurig Dr Pepper — beverages + direct-to-consumer
+
+    # ── Technology — mobility & consumer internet (8) ────────────────────────
+    "UBER",  # Uber — ride-share + delivery platform
+    "LYFT",  # Lyft — US ride-share
+    "DASH",  # DoorDash — food delivery
+    "ABNB",  # Airbnb — short-term rentals
+    "EXPE",  # Expedia — online travel
+    "ETSY",  # Etsy — handmade marketplace
+    "W",     # Wayfair — online furniture, high-beta
+    "TTD",   # The Trade Desk — programmatic advertising
+
+    # ── Technology — gaming & media software (3) ─────────────────────────────
+    "RBLX",  # Roblox — user-generated gaming platform
+    "EA",    # Electronic Arts — gaming (may need Live acct for UIC)
+    "TTWO",  # Take-Two Interactive — GTA publisher
+
+    # ── Technology — international tech ADRs (7) ─────────────────────────────
+    "BIDU",  # Baidu — Chinese search/AI (NASDAQ ADR)
+    "BABA",  # Alibaba — Chinese e-commerce (NYSE ADR)
+    "NTES",  # NetEase — Chinese gaming/cloud (NASDAQ ADR)
+    "JD",    # JD.com — Chinese e-commerce (NASDAQ ADR)
+    "PDD",   # PDD Holdings (Temu/Pinduoduo) — NASDAQ ADR
+    "MELI",  # MercadoLibre — LatAm e-commerce (NASDAQ)
+    "SE",    # Sea Limited — SE Asia gaming/e-com (NYSE)
+
+    # ── Technology — ad-tech & niche software (4) ────────────────────────────
+    "PUBM",  # PubMatic — sell-side ad platform
+    "APPN",  # Appian — low-code process automation
+    "APPF",  # AppFolio — property management SaaS
+
+    # ── Technology — clean energy tech (4) ───────────────────────────────────
+    "FSLR",  # First Solar — US solar panels, IRA beneficiary
+    "ENPH",  # Enphase Energy — solar microinverters
+    "RUN",   # Sunrun — residential solar installer
+    "SEDG",  # SolarEdge — solar inverters
+
+    # ── Technology — EV (2) ──────────────────────────────────────────────────
+    "RIVN",  # Rivian — EV trucks/delivery vans
+    "LCID",  # Lucid Group — luxury EV
+
+    # ── Communication Services — existing (4) ────────────────────────────────
+    "GOOGL", # Alphabet — search + cloud, $2T
+    "META",  # Meta — social/AR
+    "NFLX",  # Netflix — streaming
+    "DIS",   # Disney — parks + streaming
+
+    # ── Communication Services — telecom & cable (7) ─────────────────────────
+    "CMCSA", # Comcast — cable/broadband/NBC
+    "VZ",    # Verizon — telecom, high yield
+    "T",     # AT&T — telecom, post-Warner spinoff
+    "TMUS",  # T-Mobile — fastest-growing US carrier
+    "CHTR",  # Charter Communications — cable
+    "FOXA",  # Fox Corporation — news/sports media
+    "PSKY",  # Skydance Media (formerly Paramount/PARA — merged Sept 2024)
+
+    # ── Communication Services — streaming & social (10) ─────────────────────
+    "SNAP",  # Snap — social/camera, high-beta
+    "PINS",  # Pinterest — visual discovery
+    "SPOT",  # Spotify — audio streaming
+    "ROKU",  # Roku — streaming OS/ad platform
+    "WBD",   # Warner Bros. Discovery — streaming + HBO
+    "U",     # Unity Software — 3D engine for gaming/AR
+    "BILI",  # Bilibili — Chinese gaming/video (NASDAQ ADR)
+    "TME",   # Tencent Music Entertainment (NYSE ADR)
+    "HUYA",  # Huya — Chinese game streaming (NYSE ADR)
+
+    # ── Consumer Discretionary — existing (15) ───────────────────────────────
+    "AMZN",  # Amazon — e-commerce + AWS
+    "TSLA",  # Tesla — EV leader
+    "HD",    # Home Depot — home improvement
+    "MCD",   # McDonald's — global QSR
+    "COST",  # Costco — membership retail
+    "NKE",   # Nike — global brand
+    "BKNG",  # Booking Holdings — online travel
+    "TJX",   # TJX Companies — off-price retail
+    "SBUX",  # Starbucks — global coffee
+    "LOW",   # Lowe's — home improvement
+    "TGT",   # Target — general retail
+    "ORLY",  # O'Reilly Auto Parts — recession-resistant
+    "AZO",   # AutoZone — auto parts, buyback machine
+    "ROST",  # Ross Stores — off-price, defensive
+    "CMG",   # Chipotle — fast casual
+
+    # ── Consumer Discretionary — restaurants (2 new) ─────────────────────────
+    "YUM",   # Yum! Brands — KFC/Pizza Hut/Taco Bell
+    "DPZ",   # Domino's Pizza — delivery brand
+
+    # ── Consumer Discretionary — value retail (3 new) ────────────────────────
+    "DG",    # Dollar General — rural discount retail
+    "DLTR",  # Dollar Tree — dollar-store retail
+    "BBY",   # Best Buy — consumer electronics
+
+    # ── Consumer Discretionary — specialty retail (5 new) ────────────────────
+    "TSCO",  # Tractor Supply — farm/ranch retail
+    "ULTA",  # Ulta Beauty — beauty specialty
+    "LULU",  # Lululemon — premium athletic wear
+    "KMX",   # CarMax — used auto retail
+    "AN",    # AutoNation — auto dealerships
+
+    # ── Consumer Discretionary — apparel & accessories (9 new) ───────────────
+    "PVH",   # PVH Corp — Calvin Klein/Tommy Hilfiger
+    "RL",    # Ralph Lauren — luxury American fashion
+    "VFC",   # VF Corporation — The North Face/Timberland
+    # "SKX",  # Skechers — not found on Yahoo Finance (delisted/OTC?)
+    "CROX",  # Crocs — foam footwear, viral brand
+    # "HBI",  # Hanesbrands — no Yahoo data (bankruptcy/delisted 2024)
+    "LEVI",  # Levi Strauss — denim/apparel (NYSE)
+    "HOG",   # Harley-Davidson — motorcycles, aspirational brand
+    "GRMN",  # Garmin — GPS/wearables, aviation exposure
+
+    # ── Consumer Discretionary — hospitality & gaming (4 new) ────────────────
+    "HLT",   # Hilton Hotels — asset-light franchise
+    "MAR",   # Marriott — largest hotel franchise
+    "MGM",   # MGM Resorts — gaming/hospitality + BetMGM
+    "LVS",   # Las Vegas Sands — Macau/Singapore gaming
+
+    # ── Consumer Discretionary — cruise lines (2 new) ────────────────────────
+    "CCL",   # Carnival — cruise line, high-beta
+    "RCL",   # Royal Caribbean — cruise line
+
+    # ── Consumer Discretionary — autos (2 new) ───────────────────────────────
+    "F",     # Ford Motor — legacy auto + EV transition
+    "GM",    # General Motors — large buybacks, cyclical
+
+    # ── Consumer Discretionary — entertainment & toys (3 new) ────────────────
+    "SONY",  # Sony Group — PlayStation/music (NYSE ADR)
+    "HAS",   # Hasbro — toys/entertainment (Transformers/GI Joe)
+    "MAT",   # Mattel — Barbie/Hot Wheels, turnaround
+
+    # ── Consumer Staples — existing (9) ──────────────────────────────────────
+    "WMT",   # Walmart — largest retailer
     "PG",    # Procter & Gamble — household brands, ultra-low-vol
-    "KO",    # Coca-Cola — beverages, Buffett holding, true defensive
-    "PEP",   # PepsiCo — beverages + snacks, pairs KO
-    "CL",    # Colgate-Palmolive — oral/personal care, global
-    "MDLZ",  # Mondelez — snacks (Oreo, Cadbury), low tech correlation
-    "GIS",   # General Mills — cereal/yogurt, stable FCF
-    "KMB",   # Kimberly-Clark — tissue/personal care, ultra-low-vol
-    "SYY",   # Sysco — food distribution, $30B, steady growth
+    "KO",    # Coca-Cola — beverages, true defensive
+    "PEP",   # PepsiCo — beverages + snacks
+    "CL",    # Colgate-Palmolive — oral/personal care
+    "MDLZ",  # Mondelez — snacks (Oreo/Cadbury)
+    "GIS",   # General Mills — cereal/yogurt
+    "KMB",   # Kimberly-Clark — tissue/personal care
+    "SYY",   # Sysco — food distribution
 
-    # ── Financials (15) ──────────────────────────────────────────────────────
-    "JPM",   # JPMorgan — largest US bank, benchmark financial
+    # ── Consumer Staples — packaged food & beverage (11 new) ─────────────────
+    "KHC",   # Kraft Heinz — packaged foods, high yield
+    "HRL",   # Hormel Foods — spam/Skippy, ultra-defensive
+    "CLX",   # Clorox — cleaning products
+    "CHD",   # Church & Dwight — household brands
+    "ADM",   # Archer Daniels Midland — agri-processing
+    "KR",    # Kroger — grocery retail
+    "ACI",   # Albertsons — grocery retail
+    "CPB",   # Campbell Soup — soup/snacks
+    "CAG",   # Conagra Brands — packaged foods
+    "HSY",   # Hershey — confectionery, pricing power
+    "MKC",   # McCormick — spices, pricing power
+
+    # ── Consumer Staples — beverages & tobacco (9 new) ───────────────────────
+    "SJM",   # J.M. Smucker — Folgers/Jif/pet food
+    "TAP",   # Molson Coors — beer, dividend
+    "STZ",   # Constellation Brands — beer (Modelo/Corona in US)
+    "MO",    # Altria — cigarettes/tobacco, ultra-high yield
+    "PM",    # Philip Morris International — cigarettes/IQOS
+    "UL",    # Unilever — consumer goods (NYSE ADR)
+    "TSN",   # Tyson Foods — protein/chicken
+    "COKE",  # Coca-Cola Consolidated — regional bottler
+    "BF-B",  # Brown-Forman B — Jack Daniel's/spirits
+
+    # ── Financials — existing (15) ───────────────────────────────────────────
+    "JPM",   # JPMorgan — largest US bank
     "V",     # Visa — payments network, 80%+ margins
     "MA",    # Mastercard — payments, pairs Visa
     "BAC",   # Bank of America — second-largest US bank
-    "GS",    # Goldman Sachs — investment bank, high beta to markets
-    "MS",    # Morgan Stanley — wealth + IB, $200B
+    "GS",    # Goldman Sachs — investment bank
+    "MS",    # Morgan Stanley — wealth + IB
     "BLK",   # BlackRock — world's largest asset manager
-    "AXP",   # American Express — premium card, Buffett holding
-    "SPGI",  # S&P Global — ratings + data, pricing power moat
-    "CB",    # Chubb — global P&C insurer, $100B+
-    "WFC",   # Wells Fargo — third-largest US bank, post-consent order
-    "SCHW",  # Charles Schwab — largest US brokerage, high volume
-    "MCO",   # Moody's — ratings duopoly, tracks SPGI
-    "ICE",   # Intercontinental Exchange — exchange infrastructure
-    "CME",   # CME Group — derivatives exchange, counter-cyclical
+    "AXP",   # American Express — premium card, Buffett
+    "SPGI",  # S&P Global — ratings + data
+    "CB",    # Chubb — global P&C insurer
+    "WFC",   # Wells Fargo — third-largest US bank
+    "SCHW",  # Charles Schwab — largest US brokerage
+    "MCO",   # Moody's — ratings duopoly
+    "ICE",   # Intercontinental Exchange — exchange infra
+    "CME",   # CME Group — derivatives exchange
 
-    # ── Healthcare (15) ──────────────────────────────────────────────────────
-    "LLY",   # Eli Lilly — GLP-1 monopoly, highest HC momentum
-    "UNH",   # UnitedHealth — managed care, largest HC company
-    "JNJ",   # Johnson & Johnson — pharma + medtech, AAA rated
-    "ABBV",  # AbbVie — Humira successor drugs, $300B+
-    "MRK",   # Merck — Keytruda oncology, global pharma
-    "TMO",   # Thermo Fisher — lab instruments, life science infrastructure
-    "ISRG",  # Intuitive Surgical — robotic surgery monopoly
-    "DHR",   # Danaher — life science tools, serial acquirer
-    "MDT",   # Medtronic — cardiac/diabetes devices, defensive
-    "AMGN",  # Amgen — mature biotech, $150B, consistent FCF + dividend
-    "GILD",  # Gilead Sciences — HIV franchise, $100B, stable
-    "CI",    # Cigna — managed care, $80B
-    "ELV",   # Elevance Health — managed care (Anthem), $100B
-    "BSX",   # Boston Scientific — cardiac/endo devices, $110B
-    "SYK",   # Stryker — orthopedic/surgical, $140B, consistent compounder
+    # ── Financials — large/regional banks (9 new) ────────────────────────────
+    "C",     # Citigroup — global bank, restructuring
+    "COF",   # Capital One — credit cards/consumer lending
+    "USB",   # US Bancorp — super-regional bank
+    "TFC",   # Truist Financial — Southeast regional
+    "PNC",   # PNC Financial — regional bank
+    "FITB",  # Fifth Third Bancorp — Midwest regional
+    "RF",    # Regions Financial — Southeast regional
+    "KEY",   # KeyCorp — regional, interest-rate sensitive
+    "HBAN",  # Huntington Bancshares — Midwest regional
 
-    # ── Industrials (13) ─────────────────────────────────────────────────────
-    "CAT",   # Caterpillar — construction/mining equipment, global cycle bellwether
-    "HON",   # Honeywell — automation/aerospace, diversified industrial
-    "RTX",   # RTX (Raytheon) — defense + aerospace engines
-    "DE",    # Deere — agricultural equipment, pricing power
-    "UPS",   # UPS — package delivery, global logistics
-    "EMR",   # Emerson Electric — automation, 60yr dividend grower
-    "ITW",   # Illinois Tool Works — diversified industrial, high ROIC
-    "GE",    # GE Aerospace — jet engines, strong post-spin momentum
-    "LMT",   # Lockheed Martin — F-35/missiles, defense, low-vol
-    "NOC",   # Northrop Grumman — defense (B-21 bomber), steady
-    "ETN",   # Eaton — power management/electrification, data center beneficiary
-    "GD",    # General Dynamics — defense + Gulfstream jets
-    "TDG",   # TransDigm — aerospace parts, strong pricing power
+    # ── Financials — diversified banks & trust (4 new) ───────────────────────
+    "STT",   # State Street — custody bank/ETF business
+    "MTB",   # M&T Bank — regional, Mid-Atlantic
+    "CFG",   # Citizens Financial — regional bank
+    "ZION",  # Zions Bancorporation — Western US regional
 
-    # ── Energy (7) ───────────────────────────────────────────────────────────
-    "XOM",   # ExxonMobil — largest US energy co, $500B+
-    "CVX",   # Chevron — integrated major, post-Hess acquisition
-    "COP",   # ConocoPhillips — pure E&P, best-in-class capital returns
-    "EOG",   # EOG Resources — Permian E&P, top operator
-    "MPC",   # Marathon Petroleum — largest US refiner, $60B
-    "PSX",   # Phillips 66 — refining + midstream, $60B
-    "VLO",   # Valero Energy — refining, highest beta to crack spreads
+    # ── Financials — insurance (8 new) ───────────────────────────────────────
+    "MET",   # MetLife — life/annuities
+    "PRU",   # Prudential Financial — life insurance/asset mgmt
+    "AIG",   # AIG — P&C insurance, restructured
+    "TRV",   # Travelers — P&C insurance, Dow component
+    "ALL",   # Allstate — auto/home insurance
+    "PGR",   # Progressive — auto insurance, fastest-growing
+    "LNC",   # Lincoln Financial — life/retirement
+    "AFL",   # Aflac — supplemental insurance, Japan exposure
+    "UNM",   # Unum Group — disability/life insurance
+    "HIG",   # Hartford Financial — P&C + group benefits
+    "CNA",   # CNA Financial — commercial P&C insurance
 
-    # ── Semiconductors (5) ───────────────────────────────────────────────────
-    "AMD",   # AMD — CPUs + AI GPUs, highest semi momentum after NVDA
-    "QCOM",  # Qualcomm — mobile chips, diversifying to auto/IoT
-    "MU",    # Micron — DRAM/NAND, AI memory demand
-    "AMAT",  # Applied Materials — semiconductor equipment
-    "ASML",  # ASML — EUV monopoly (Netherlands, ADR), essential
+    # ── Financials — financial services & fintech (9 new) ────────────────────
+    "SYF",   # Synchrony Financial — private label credit cards
+    "HOOD",  # Robinhood Markets — retail brokerage/crypto
+    "SOFI",  # SoFi Technologies — neobank
+    "BR",    # Broadridge Financial — investor communications
+    "CBOE",  # Cboe Global Markets — options exchange
+    "FIS",   # Fidelity National Information Services — payments tech
+    "FISV",  # Fiserv — payment processing, POS systems
+    "GPN",   # Global Payments — merchant processing
+    "WU",    # Western Union — money transfer
+    "NDAQ",  # Nasdaq Inc. — exchange + data/analytics
+    "MKTX",  # MarketAxess — electronic bond trading
+    "NTRS",  # Northern Trust — wealth mgmt/custody
 
-    # ── Materials (4) ────────────────────────────────────────────────────────
-    "LIN",   # Linde — industrial gases, global duopoly, true low-vol
-    "APD",   # Air Products — industrial gases, hydrogen economy
-    "ECL",   # Ecolab — water/hygiene chemicals, recurring revenue
-    "SHW",   # Sherwin-Williams — paint/coatings, pricing power
+    # ── Financials — REITs (4 new) ────────────────────────────────────────────
+    "AMT",   # American Tower — cell tower REIT
+    "EQIX",  # Equinix — data center REIT, AI buildout
+    "DLR",   # Digital Realty — data center REIT
+    "CCI",   # Crown Castle — cell tower REIT
 
-    # ── Utilities (3) ────────────────────────────────────────────────────────
-    # Only the 3 largest — critical for the low-vol defense sleeve.
-    "NEE",   # NextEra Energy — largest utility + wind/solar leader
-    "SO",    # Southern Company — regulated utility, Southeast US
-    "DUK",   # Duke Energy — regulated utility, 8M customers
+    # ── Healthcare — existing (15) ───────────────────────────────────────────
+    "LLY",   # Eli Lilly — GLP-1 monopoly
+    "UNH",   # UnitedHealth — managed care, largest HC
+    "JNJ",   # Johnson & Johnson — pharma + medtech
+    "ABBV",  # AbbVie — Humira successor drugs
+    "MRK",   # Merck — Keytruda oncology
+    "TMO",   # Thermo Fisher — lab instruments
+    "ISRG",  # Intuitive Surgical — robotic surgery
+    "DHR",   # Danaher — life science tools
+    "MDT",   # Medtronic — cardiac/diabetes devices
+    "AMGN",  # Amgen — mature biotech, dividend
+    "GILD",  # Gilead Sciences — HIV franchise
+    "CI",    # Cigna — managed care
+    "ELV",   # Elevance Health — managed care (Anthem)
+    "BSX",   # Boston Scientific — cardiac/endo devices
+    "SYK",   # Stryker — orthopedic/surgical
+
+    # ── Healthcare — large pharma & biotech (6 new) ──────────────────────────
+    "PFE",   # Pfizer — large-cap pharma, pipeline
+    "BMY",   # Bristol-Myers Squibb — diversified pharma
+    "MRNA",  # Moderna — mRNA platform, high-beta
+    "REGN",  # Regeneron — biotech, high momentum
+    "VRTX",  # Vertex Pharma — cystic fibrosis monopoly
+    "BIIB",  # Biogen — neurology/Alzheimer's
+
+    # ── Healthcare — managed care & distribution (6 new) ─────────────────────
+    "HUM",   # Humana — Medicare Advantage
+    "CVS",   # CVS Health — pharmacy/PBM/insurance
+    # "WBA",  # Walgreens — no Yahoo data (went private Aug 2024)
+    "MCK",   # McKesson — pharma distribution
+    "CAH",   # Cardinal Health — pharma distribution
+    "IQV",   # IQVIA — healthcare data/CRO
+
+    # ── Healthcare — medical devices (10 new) ────────────────────────────────
+    "EW",    # Edwards Lifesciences — heart valves
+    "ZBH",   # Zimmer Biomet — orthopedic implants
+    "BAX",   # Baxter International — renal/hospital products
+    "BDX",   # Becton Dickinson — medical devices/diagnostics
+    "ALGN",  # Align Technology — Invisalign, dental
+    "DXCM",  # DexCom — continuous glucose monitoring
+    "GEHC",  # GE HealthCare — imaging/diagnostics
+    "PEN",   # Penumbra — neurovascular/blood clot devices
+    # "MASI",  # Masimo — no Yahoo data (ticker changed after acquisition)
+
+    # ── Healthcare — diagnostics & tools (6 new) ─────────────────────────────
+    "HCA",   # HCA Healthcare — hospital operator
+    "THC",   # Tenet Healthcare — hospital operator
+    "LH",    # LabCorp — lab diagnostics
+    "DGX",   # Quest Diagnostics — lab diagnostics
+    "A",     # Agilent Technologies — lab instruments
+    "IDXX",  # IDEXX Labs — veterinary diagnostics
+    "ZTS",   # Zoetis — animal health
+    "ILMN",  # Illumina — genomic sequencing
+
+    # ── Healthcare — genomics & early-stage biotech (5 new) ──────────────────
+    "CRSP",  # CRISPR Therapeutics — gene editing
+    "EDIT",  # Editas Medicine — gene editing
+    "NTLA",  # Intellia Therapeutics — in vivo gene editing
+    # "EXAS",  # Exact Sciences — no Yahoo data (ticker issue, skip)
+    "RGEN",  # Repligen — bioprocessing tools
+    "NVCR",  # NovaCure — tumor treating fields (oncology)
+
+    # ── Industrials — existing (13) ──────────────────────────────────────────
+    "CAT",   # Caterpillar — construction/mining equipment
+    "HON",   # Honeywell — automation/aerospace
+    "RTX",   # RTX (Raytheon) — defense + aerospace
+    "DE",    # Deere — agricultural equipment
+    "UPS",   # UPS — package delivery
+    "EMR",   # Emerson Electric — automation, 60yr dividend
+    "ITW",   # Illinois Tool Works — diversified industrial
+    "GE",    # GE Aerospace — jet engines
+    "LMT",   # Lockheed Martin — F-35/missiles
+    "NOC",   # Northrop Grumman — defense (B-21)
+    "ETN",   # Eaton — power management/data center
+    "GD",    # General Dynamics — defense + Gulfstream
+    "TDG",   # TransDigm — aerospace parts, pricing power
+
+    # ── Industrials — transport & diversified (8 new) ────────────────────────
+    "BA",    # Boeing — aerospace/defense, high-beta
+    "MMM",   # 3M — diversified industrial, restructuring
+    "UNP",   # Union Pacific — Class I railroad
+    "FDX",   # FedEx — express/freight, economic indicator
+    "PH",    # Parker-Hannifin — motion & control
+    "ROK",   # Rockwell Automation — factory automation
+    "CSX",   # CSX Corporation — railroad, East US
+    "NSC",   # Norfolk Southern — railroad, pairs CSX
+
+    # ── Industrials — airlines (5 new) ────────────────────────────────────────
+    "DAL",   # Delta Air Lines — premium airline
+    "UAL",   # United Airlines — global carrier
+    "LUV",   # Southwest Airlines — low-cost carrier
+    "ALK",   # Alaska Air Group — West Coast carrier
+    "JBLU",  # JetBlue Airways — ultra-low-cost
+
+    # ── Industrials — waste & engineering (7 new) ─────────────────────────────
+    "WM",    # Waste Management — defensive infrastructure
+    "RSG",   # Republic Services — waste management
+    "J",     # Jacobs Solutions — engineering & construction
+    "FLR",   # Fluor — global engineering, high-beta
+    "ACM",   # AECOM — infrastructure engineering
+    "DOV",   # Dover — diversified industrial manufacturing
+    "CMI",   # Cummins — engines/power systems
+
+    # ── Industrials — HVAC & equipment (4 new) ────────────────────────────────
+    "IR",    # Ingersoll Rand — compressed air/industrial tools
+    "CARR",  # Carrier Global — HVAC/refrigeration
+    "OTIS",  # Otis Worldwide — elevators/escalators
+    "TEX",   # Terex — aerial work platforms, cranes
+
+    # ── Industrials — building products & materials (4 new) ───────────────────
+    "MAS",   # Masco — cabinets/plumbing/coatings
+    "MLM",   # Martin Marietta Materials — aggregates
+    "VMC",   # Vulcan Materials — aggregates, infrastructure
+    "EXP",   # Eagle Materials — cement/wallboard
+
+    # ── Industrials — homebuilders (6 new) ────────────────────────────────────
+    "DHI",   # D.R. Horton — largest US homebuilder
+    "LEN",   # Lennar — second-largest homebuilder
+    "PHM",   # PulteGroup — homebuilder, entry-to-luxury
+    "NVR",   # NVR Inc. — premium homebuilder, no land risk
+    "KBH",   # KB Home — entry-level homebuilder
+    "TOL",   # Toll Brothers — luxury homebuilder
+
+    # ── Energy — existing (7) ────────────────────────────────────────────────
+    "XOM",   # ExxonMobil — largest US energy co
+    "CVX",   # Chevron — integrated major
+    "COP",   # ConocoPhillips — pure E&P
+    "EOG",   # EOG Resources — Permian E&P
+    "MPC",   # Marathon Petroleum — largest US refiner
+    "PSX",   # Phillips 66 — refining + midstream
+    "VLO",   # Valero Energy — refining
+
+    # ── Energy — E&P & oilfield services (9 new) ─────────────────────────────
+    "SLB",   # SLB (Schlumberger) — oilfield services
+    "HAL",   # Halliburton — oilfield services
+    "OXY",   # Occidental Petroleum — Permian + chemicals
+    "DVN",   # Devon Energy — Permian E&P
+    "BKR",   # Baker Hughes — oilfield tech/LNG
+    "APA",   # APA Corp — international E&P
+    "RRC",   # Range Resources — Appalachian nat gas
+    "EQT",   # EQT Corp — largest US nat gas producer
+    "LNG",   # Cheniere Energy — LNG export
+
+    # ── Energy — midstream & pipelines (3 new) ───────────────────────────────
+    "KMI",   # Kinder Morgan — nat gas pipelines
+    "WMB",   # Williams Companies — nat gas midstream
+    "OKE",   # ONEOK — nat gas midstream, dividend
+
+    # ── Energy — power generation (1 new) ─────────────────────────────────────
+    "NRG",   # NRG Energy — competitive power generation
+
+    # ── Energy — Canadian energy (4 new) ──────────────────────────────────────
+    "ENB",   # Enbridge — Canadian pipelines (NYSE listed)
+    "TRP",   # TC Energy — Canadian pipelines (NYSE listed)
+    "CNQ",   # Canadian Natural Resources (NYSE listed)
+    "SU",    # Suncor Energy — Canadian oil sands (NYSE listed)
+
+    # ── Utilities — existing (3) ─────────────────────────────────────────────
+    "NEE",   # NextEra Energy — largest utility + wind/solar
+    "SO",    # Southern Company — regulated utility
+    "DUK",   # Duke Energy — regulated utility
+
+    # ── Utilities — expanded (11 new) ─────────────────────────────────────────
+    "D",     # Dominion Energy — regulated, Virginia
+    "AEP",   # American Electric Power — transmission
+    "XEL",   # Xcel Energy — wind-heavy utility
+    "EXC",   # Exelon — nuclear/transmission
+    "PEG",   # PSEG — NJ utility, nuclear
+    "ED",    # Consolidated Edison — NYC utility
+    "ETR",   # Entergy — Southeast utility, nuclear
+    "FE",    # FirstEnergy — Ohio/Mid-Atlantic
+    "PPL",   # PPL Corporation — PA/KY utility
+    "AES",   # AES Corporation — global power/renewables
+    "PCG",   # PG&E — California utility (post-bankruptcy)
+    "SRE",   # Sempra — California/Texas utility + LNG
+    "CMS",   # CMS Energy — Michigan utility
+
+    # ── Materials — existing (4) ─────────────────────────────────────────────
+    "LIN",   # Linde — industrial gases, global duopoly
+    "APD",   # Air Products — industrial gases
+    "ECL",   # Ecolab — water/hygiene chemicals
+    "SHW",   # Sherwin-Williams — paint/coatings
+
+    # ── Materials — expanded (8 new) ──────────────────────────────────────────
+    "NEM",   # Newmont — gold mining, counter-cyclical
+    "FCX",   # Freeport-McMoRan — copper, EV/infra demand
+    "PPG",   # PPG Industries — coatings, auto/industrial
+    "ALB",   # Albemarle — lithium, EV battery materials
+    "DD",    # DuPont — specialty chemicals, electronics
+    "LYB",   # LyondellBasell — plastics/chemicals, high yield
+    "CE",    # Celanese — specialty chemicals
+    "IFF",   # International Flavors & Fragrances — ingredients
 ]
 
 # Deduplicated, sector order preserved
 US_TICKERS = list(dict.fromkeys(SP500_TICKERS))
 
-# ── Legacy / inactive — kept for backward-compatible imports ──────────────────
-# OMX30/CPH25/DAX40 removed 2026-08-08 (both strategies failed backtests).
+# ── Legacy / inactive ─────────────────────────────────────────────────────────
 OMX30_TICKERS    = []
 CPH25_TICKERS    = []
 DAX40_TICKERS    = []

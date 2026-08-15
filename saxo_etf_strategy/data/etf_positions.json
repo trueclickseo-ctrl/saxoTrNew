@@ -1,0 +1,57 @@
+{
+  "positions": {
+    "35420": {
+      "symbol": "XLV",
+      "quantity": 174,
+      "entry_price": 167.37,
+      "entry_score": 0.16642274722977213,
+      "order_id": "DRY_RUN"
+    },
+    "35416": {
+      "symbol": "XLF",
+      "quantity": 503,
+      "entry_price": 58.16,
+      "entry_score": 0.13505074160811859,
+      "order_id": "DRY_RUN"
+    },
+    "35415": {
+      "symbol": "XLE",
+      "quantity": 473,
+      "entry_price": 61.91,
+      "entry_score": 0.11149012567324945,
+      "order_id": "DRY_RUN"
+    }
+  },
+  "orders": [
+    {
+      "uic": 35420,
+      "symbol": "XLV",
+      "side": "Buy",
+      "quantity": 174,
+      "entry_price": 167.37,
+      "order_id": "DRY_RUN",
+      "dry_run": true,
+      "timestamp": "2026-08-15T10:28:08.633443"
+    },
+    {
+      "uic": 35416,
+      "symbol": "XLF",
+      "side": "Buy",
+      "quantity": 503,
+      "entry_price": 58.16,
+      "order_id": "DRY_RUN",
+      "dry_run": true,
+      "timestamp": "2026-08-15T10:28:08.635176"
+    },
+    {
+      "uic": 35415,
+      "symbol": "XLE",
+      "side": "Buy",
+      "quantity": 473,
+      "entry_price": 61.91,
+      "order_id": "DRY_RUN",
+      "dry_run": true,
+      "timestamp": "2026-08-15T10:28:08.637970"
+    }
+  ]
+}

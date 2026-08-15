@@ -112,9 +112,16 @@ def plan_rebalance(current_shares: dict, targets: list, scale: float,
     """Actions to move current US holdings -> equal-weight target (top-N * scale).
 
     current_shares: {ticker: shares held}. targets: tickers to hold.
-    Returns list of {'ticker','side','shares'} (Buy/Sell), shares > 0."""
+    Returns list of {'ticker','side','shares'} (Buy/Sell), shares > 0.
+
+    Idempotency: positions already within REBAL_THRESHOLD of their target size
+    are left alone, preventing unnecessary sell-then-rebuy round-trips when the
+    runner is executed more than once with identical targets.
+    """
+    REBAL_THRESHOLD = 0.10   # skip adjustment if position is within 10% of target
+
     actions = []
-    # Exit anything no longer in the target set.
+    # Exit anything no longer in the target set (full close, no threshold).
     for t, sh in current_shares.items():
         if t not in targets and sh > 0:
             actions.append({"ticker": t, "side": "Sell", "shares": int(sh)})
@@ -128,6 +135,9 @@ def plan_rebalance(current_shares: dict, targets: list, scale: float,
         tgt = int(per_usd / price)
         cur = int(current_shares.get(t, 0))
         delta = tgt - cur
+        # Skip trivial size drift — only trade when the position is meaningfully off.
+        if tgt > 0 and abs(delta) / tgt < REBAL_THRESHOLD:
+            continue
         if delta > 0:
             actions.append({"ticker": t, "side": "Buy", "shares": delta})
         elif delta < 0:

@@ -55,7 +55,17 @@ def _load_state() -> dict:
         _save_state(state)
         return state
     with open(RISK_STATE_FILE) as f:
-        return json.load(f)
+        content = f.read().strip()
+    if not content:
+        state = {"available_cash_sek": 0}
+        _save_state(state)
+        return state
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        state = {"available_cash_sek": 0}
+        _save_state(state)
+        return state
 
 
 # Market-group → trading currency, used to convert open-position values into

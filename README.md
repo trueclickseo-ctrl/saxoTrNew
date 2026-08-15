@@ -1,6 +1,6 @@
 # ATOS — Algorithmic Trading Operating System
 ## Agent Handover & Project State Document
-### Last Updated: 2026-08-08 | Updated by: Agent #4 (Kwaseem) — v2
+### Last Updated: 2026-08-15 | Updated by: Agent #4 (Kwaseem) — v3
 
 ---
 
@@ -62,6 +62,7 @@ Dashboard:    python atos_dashboard.py  ->  http://localhost:8070
 |---|---|---|---|
 | **US Momentum Blend** | LIVE | 50% of live SIM cash | `atos/us_momentum.py` |
 | **US Mean Reversion** | LIVE ON SIM | 50% of live SIM cash | `atos/us_reversion.py` |
+| **ETF Sector Rotation** | DRY RUN (SIM) | 15% of account | `saxo_etf_strategy/` |
 | OMX30 / CPH25 | PAUSED | — | `atos_runner.py` |
 
 ### Universe (2026-08-08)
@@ -78,9 +79,10 @@ Check the dashboard (`python atos_dashboard.py` → http://localhost:8070) for c
 | Process | Trigger | Job |
 |---|---|---|
 | `atos_runner.py` | Task Scheduler 06:00 PKT | Daily cycle — Blend rebalance + Reversion exits |
+| `saxo_etf_strategy\run_etf_bot.py` | Task Scheduler 06:30 PKT | ETF daily scan — signals + exits |
 | `atos_runner.py intraday` | Task Scheduler ×5 (19:00–00:30 PKT) | Intraday reversion scan |
 | `intraday_monitor.py` | Task Scheduler 15:30 PKT | 1-second stop-loss watchdog |
-| `atos_dashboard.py` | Manual | Dashboard at http://localhost:8070 |
+| `terminal_dashboard.py` | Manual | PowerShell live dashboard |
 
 ---
 
@@ -254,7 +256,71 @@ Verdict: 5/5 — edge survives clean OOS test.
 
 ---
 
-## 9. File Map
+## 9. ETF Strategy Module — `saxo_etf_strategy/`
+
+**Completely separate from the shares strategies.** No shared imports, no shared capital, no shared state files. Runs as an independent process.
+
+### Capital
+- **15% of account balance** (separate from stocks' 85%)
+- Max 5 positions, 3% of account per position
+- Stop-loss: **8%** | Take-profit: **20%**
+- All in EUR (SIM account currency)
+
+### 4 Available Strategies (switch via `etf_config.py` `strategy_name`)
+
+| Strategy | Logic | Today's signals |
+|---|---|---|
+| `sector_rotation` ✓ **(default)** | Top 3 of 11 US sector ETFs by 3-month return | XLV, XLF, XLE |
+| `risk_off` | SPY > SMA200 → SPY+QQQ; SPY < SMA200 → TLT+GLD | SPY, QQQ |
+| `mean_reversion` | RSI<30 + price ≥5% below SMA20 on 5 broad ETFs | — (no dips today) |
+| `dual_ma` | 20d MA > 100d MA on curated 50-ETF list | ARKG, XBI, IBB |
+
+### How to Run
+
+```powershell
+# From E:\SaxoTrNew\SaxoTrNew (always run from parent dir)
+python saxo_etf_strategy\run_etf_bot.py
+```
+
+Task Scheduler job: `\ATOS ETF Daily Run` at 06:30 PKT daily.
+
+### Going Live
+
+```python
+# saxo_etf_strategy/config/etf_config.py
+dry_run: bool = False        # flip to place real SIM orders
+# base_url = "...openapi"   # change sim/ → live URL when ready for real money
+```
+
+**Keep `dry_run=True` until several weeks of dry-run signals have been reviewed.**
+
+### Key Files
+
+| File | Purpose |
+|---|---|
+| `saxo_etf_strategy/run_etf_bot.py` | Entry point — wires Saxo auth, runs daily cycle |
+| `saxo_etf_strategy/run_etf_daily.bat` | Task Scheduler launcher (sets CWD correctly) |
+| `saxo_etf_strategy/config/etf_config.py` | All config: capital, strategy, risk, paths |
+| `saxo_etf_strategy/core/etf_strategy.py` | 4 strategy classes + dispatcher |
+| `saxo_etf_strategy/core/etf_executor.py` | Order execution, exit review (SL/TP) |
+| `saxo_etf_strategy/core/etf_universe.py` | ETF universe builder (8,922 ETFs, cached 24h) |
+| `saxo_etf_strategy/core/etf_state.py` | JSON position state store |
+| `saxo_etf_strategy/core/saxo_client.py` | HTTP client with rate-limit backoff |
+| `saxo_etf_strategy/data/etf_positions.json` | Live position state + order log |
+| `saxo_etf_strategy/data/etf_universe.json` | Cached ETF universe (24h TTL) |
+| `saxo_etf_strategy/logs/etf_strategy.log` | Daily run log |
+
+### Isolation Proof
+```powershell
+# ETF module imports nothing from shares code:
+grep -r "import atos" saxo_etf_strategy/   # → no matches
+# Shares code knows nothing about ETF:
+grep -r "etf_strategy" atos/ run_atos.py   # → no matches
+```
+
+---
+
+## 10. File Map
 
 ### Core Engine
 | File | Purpose |
@@ -321,7 +387,7 @@ Verdict: 5/5 — edge survives clean OOS test.
 
 ---
 
-## 10. Risk Rules
+## 11. Risk Rules
 
 ```
 Capital:         config/capital.json (single source of truth)
@@ -338,7 +404,7 @@ News filter:     Gap-down >8% or 24h keyword match -> skip intraday entry
 
 ---
 
-## 11. Dashboard Features
+## 12. Dashboard Features
 
 - Equity curve chart (90-day)
 - Strategy sleeve status cards (US Blend blue / US Reversion orange)
@@ -351,7 +417,7 @@ News filter:     Gap-down >8% or 24h keyword match -> skip intraday entry
 
 ---
 
-## 12. Email Notifications
+## 13. Email Notifications
 
 ATOS sends automatic email notifications to `heyitskaxhif@gmail.com` for every
 significant event. No manual action needed — emails fire from `atos_runner.py`
@@ -391,7 +457,7 @@ python send_test_email.py
 
 ---
 
-## 13. Task Scheduler Setup (pending if not done)
+## 14. Task Scheduler Setup (pending if not done)
 
 ```
 Task 1 — Daily cycle
@@ -412,7 +478,7 @@ Tasks 3-7 — Intraday reversion scans
 
 ---
 
-## 13. Priority Task List for Next Agent
+## 15. Priority Task List for Next Agent
 
 - [ ] **Task Scheduler — add intraday reversion scans** (Tasks 3-7 above, 5 entries)
 - [ ] **instrument_map.csv — add UICs for new tickers:**
@@ -432,7 +498,7 @@ Tasks 3-7 — Intraday reversion scans
 
 ---
 
-## 14. Backtest Results Summary
+## 16. Backtest Results Summary
 
 ### US Momentum Blend — LIVE
 ```
@@ -463,7 +529,7 @@ VERDICT:   LIVE ON SIM — watch 6-8 weeks before real capital
 
 ---
 
-## 15. Agent Session Log
+## 17. Agent Session Log
 
 | Session | Date | Key Work Done |
 |---|---|---|
@@ -477,8 +543,13 @@ VERDICT:   LIVE ON SIM — watch 6-8 weeks before real capital
 | **Agent #4** | **2026-08-08** | **Honest OOS validation (Sharpe 2.39 OOS). Enabled Reversion on SIM. Trade log CSV + strategy labels. Dynamic capital allocation (50/50). Central config/capital.json. Strategy comparison chart + terminal scorecard. Percentage-based Reversion positions (MAX_UNIVERSE_PCT=0.10). Intraday scanner (atos/intraday_reversion.py) with bad-news + keyword news filters. run_intraday_cycle().** |
 | **Agent #4 (cont)** | **2026-08-08** | **Expanded US universe 61->108 solid S&P 500 blue-chips (removed REITs, small E&P, speculative biotech, smaller names). Replaced 3 delisted tickers (HES->APA, K->CAG, BK->TROW). Email notification system (atos/notifier.py): BUY/SELL emails with account balance, weekly Blend rebalance email, Reversion signal email, exit email, Friday P&L report with SVG chart. Signal tickers on dashboard (dashboard_gen.py). Verified email delivery.** |
 
+| **Agent #4 (cont)** | **2026-08-14/15** | **Idempotency fix: REBAL_THRESHOLD=0.10 in plan_rebalance() (prevents sell-rebuy round-trip when runner executes twice). ETF strategy module: saxo_etf_strategy/ — 4 strategies (sector_rotation, risk_off, mean_reversion, dual_ma), conservative risk (15% capital, 5 pos, 8% SL/20% TP), dry_run=True, Task Scheduler at 06:30 PKT. Terminal dashboard: combined stock+ETF trade history table from local CSV + JSON (no Saxo API). DualMA fixed: curated 50-ETF list instead of full 2,122-ETF scan. saxo_client: truncate HTML error bodies, fix raise-None crash on all-rate-limited retries. RSI_ENTRY 33→38 in us_reversion (doubles trade count, Sharpe 1.73).** |
+
 **Next agent:** You are Agent #8 (or continuing Agent #4).
-Priority: Monday — issue new Saxo token (`python set_token.py`), run `python lookup_instruments.py` to map new tickers in instrument_map.csv. Then set up Task Scheduler intraday scan entries, watch SIM results.
+- ETF: observe dry-run logs Mon-Fri before flipping `dry_run=False` in `saxo_etf_strategy/config/etf_config.py`
+- ETF: sector_rotation exit-on-rank-drop not yet implemented (only SL/TP exits)
+- Stocks: token expires every ~24h — run `python saxo_auth.py` to refresh
+- Stocks: BF-B, FITB, ETN missing UICs in instrument_map.csv (low priority)
 
 ---
 
