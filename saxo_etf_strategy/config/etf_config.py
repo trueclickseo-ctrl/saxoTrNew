@@ -62,7 +62,7 @@ class ETFConfig:
     risk: ETFRiskConfig = field(default_factory=ETFRiskConfig)
     state_path: str = field(default_factory=lambda: os.path.join(_ETF_ROOT, "data", "etf_positions.json"))
     log_path: str = field(default_factory=lambda: os.path.join(_ETF_ROOT, "logs", "etf_strategy.log"))
-    dry_run: bool = True   # stays True until you explicitly flip it after reviewing dry-run logs
+    dry_run: bool = False  # flipped 2026-08-15 — real SIM orders enabled
 
 
 DEFAULT_CONFIG = ETFConfig()
