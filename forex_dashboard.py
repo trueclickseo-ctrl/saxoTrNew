@@ -141,7 +141,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append(f"  {BD}{CY}╔{'═'*W_TOTAL}╗{W}")
     src_tag = f"{'SAXO LIVE' if price_src=='saxo' else 'yfinance (~15min delay)'}"
     L.append(f"  {BD}{CY}║{'  FOREX QUANT DASHBOARD':^{W_TOTAL}}║{W}")
-    L.append(f"  {BD}{CY}║{f'  EMA · RSI(2) · Donchian · BB  |  12 FX Pairs  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
+    L.append(f"  {BD}{CY}║{f'  EMA · RSI(2) · Donchian · BB  |  27 FX Pairs  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
     L.append(f"  {BD}{CY}╚{'═'*W_TOTAL}╝{W}")
     L.append("")
 
@@ -152,7 +152,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
              f"{GR}{BD}■ Donchian(20){W}  channel breakout   "
              f"{YL}{BD}■ BB(20,2)+RSI(14){W}  fade extremes")
     L.append(f"  {DM}Scheduler: 06:20 PKT daily  |  --live flag active  |  "
-             f"Max 4 slots × 4 strategies = 16 positions  |  12 pairs: 7 majors + 5 crosses{W}")
+             f"Max 4 slots × 4 strategies = 16 positions  |  27 pairs: 7 majors + 20 crosses{W}")
     L.append(HR)
     L.append("")
 
@@ -305,9 +305,14 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append("")
     L.append(f"  {BD}LIVE RATES{W}  {DM}({src_label}){W}")
     L.append("")
-    # Two rows: majors first, then crosses
-    MAJORS  = ["EURUSD","GBPUSD","USDJPY","AUDUSD","USDCAD","NZDUSD","USDCHF"]
-    CROSSES = ["EURGBP","EURJPY","GBPJPY","AUDJPY","CADJPY"]
+    # Four rows: majors, JPY crosses, EUR/GBP crosses, AUD/NZD/CHF crosses
+    RATE_ROWS = [
+        ["EURUSD","GBPUSD","USDJPY","AUDUSD","USDCAD","NZDUSD","USDCHF"],
+        ["EURJPY","GBPJPY","AUDJPY","CADJPY","NZDJPY","CHFJPY"],
+        ["EURGBP","EURAUD","EURNZD","EURCAD","EURCHF",
+         "GBPAUD","GBPCAD","GBPCHF","GBPNZD"],
+        ["AUDCAD","AUDCHF","AUDNZD","NZDCAD","NZDCHF"],
+    ]
 
     def _rate_row(syms):
         row = "  "
@@ -317,9 +322,10 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
                     else f"{DM}{sym}  —{W}    ")
         return row
 
-    L.append(_rate_row(MAJORS))
-    L.append("")
-    L.append(_rate_row(CROSSES))
+    for i, row_syms in enumerate(RATE_ROWS):
+        L.append(_rate_row(row_syms))
+        if i < len(RATE_ROWS) - 1:
+            L.append("")
     L.append("")
     L.append(HR)
 

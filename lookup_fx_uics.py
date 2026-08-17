@@ -13,11 +13,18 @@ TOKEN_FILE = os.path.join(BASE_DIR, "saxo_token.json")
 SIM_BASE   = "https://gateway.saxobank.com/sim/openapi/"
 
 TARGETS = [
-    "EURGBP",
-    "EURJPY",
-    "GBPJPY",
-    "AUDJPY",
-    "CADJPY",
+    # Already in universe — re-verify
+    "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "NZDUSD", "USDCHF",
+    "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "CADJPY",
+    # EUR crosses
+    "EURAUD", "EURNZD", "EURCAD", "EURCHF",
+    # GBP crosses
+    "GBPAUD", "GBPCAD", "GBPCHF", "GBPNZD",
+    # AUD / NZD crosses
+    "AUDCAD", "AUDCHF", "AUDNZD",
+    "NZDJPY", "NZDCAD", "NZDCHF",
+    # CHF / JPY remaining
+    "CHFJPY",
 ]
 
 

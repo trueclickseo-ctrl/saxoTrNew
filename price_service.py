@@ -26,6 +26,11 @@ _YF_MAP = {
     "USDCHF": "CHF=X",
     "EURGBP": "EURGBP=X", "EURJPY": "EURJPY=X", "GBPJPY": "GBPJPY=X",
     "AUDJPY": "AUDJPY=X", "CADJPY": "CADJPY=X",
+    "EURAUD": "EURAUD=X", "EURNZD": "EURNZD=X", "EURCAD": "EURCAD=X",
+    "EURCHF": "EURCHF=X", "GBPAUD": "GBPAUD=X", "GBPCAD": "GBPCAD=X",
+    "GBPCHF": "GBPCHF=X", "GBPNZD": "GBPNZD=X", "AUDCAD": "AUDCAD=X",
+    "AUDCHF": "AUDCHF=X", "AUDNZD": "AUDNZD=X", "NZDJPY": "NZDJPY=X",
+    "NZDCAD": "NZDCAD=X", "NZDCHF": "NZDCHF=X", "CHFJPY": "CHFJPY=X",
     # ETF — same symbol works in yfinance
     "XLK": "XLK", "XLV": "XLV", "XLE": "XLE", "XLF": "XLF",
     "XLI": "XLI", "XLY": "XLY", "XLP": "XLP", "XLU": "XLU",
@@ -43,12 +48,28 @@ FX_INSTRUMENTS = [
     {"symbol": "USDCAD", "uic": 38,  "asset_type": "FxSpot"},
     {"symbol": "NZDUSD", "uic": 37,  "asset_type": "FxSpot"},
     {"symbol": "USDCHF", "uic": 39,  "asset_type": "FxSpot"},
-    # Cross pairs — UICs confirmed Saxo SIM 2026-08-17
-    {"symbol": "EURGBP", "uic": 17,  "asset_type": "FxSpot"},
-    {"symbol": "EURJPY", "uic": 18,  "asset_type": "FxSpot"},
-    {"symbol": "GBPJPY", "uic": 26,  "asset_type": "FxSpot"},
-    {"symbol": "AUDJPY", "uic": 2,   "asset_type": "FxSpot"},
-    {"symbol": "CADJPY", "uic": 6,   "asset_type": "FxSpot"},
+    # Cross pairs Tier 1 — confirmed Saxo SIM 2026-08-17
+    {"symbol": "EURGBP", "uic": 17,   "asset_type": "FxSpot"},
+    {"symbol": "EURJPY", "uic": 18,   "asset_type": "FxSpot"},
+    {"symbol": "GBPJPY", "uic": 26,   "asset_type": "FxSpot"},
+    {"symbol": "AUDJPY", "uic": 2,    "asset_type": "FxSpot"},
+    {"symbol": "CADJPY", "uic": 6,    "asset_type": "FxSpot"},
+    # Cross pairs Tier 2 — confirmed Saxo SIM 2026-08-17
+    {"symbol": "EURAUD", "uic": 12,   "asset_type": "FxSpot"},
+    {"symbol": "EURNZD", "uic": 2072, "asset_type": "FxSpot"},
+    {"symbol": "EURCAD", "uic": 13,   "asset_type": "FxSpot"},
+    {"symbol": "EURCHF", "uic": 14,   "asset_type": "FxSpot"},
+    {"symbol": "GBPAUD", "uic": 22,   "asset_type": "FxSpot"},
+    {"symbol": "GBPCAD", "uic": 23,   "asset_type": "FxSpot"},
+    {"symbol": "GBPCHF", "uic": 24,   "asset_type": "FxSpot"},
+    {"symbol": "GBPNZD", "uic": 28,   "asset_type": "FxSpot"},
+    {"symbol": "AUDCAD", "uic": 1,    "asset_type": "FxSpot"},
+    {"symbol": "AUDCHF", "uic": 5027, "asset_type": "FxSpot"},
+    {"symbol": "AUDNZD", "uic": 3,    "asset_type": "FxSpot"},
+    {"symbol": "NZDJPY", "uic": 36,   "asset_type": "FxSpot"},
+    {"symbol": "NZDCAD", "uic": 33,   "asset_type": "FxSpot"},
+    {"symbol": "NZDCHF", "uic": 34,   "asset_type": "FxSpot"},
+    {"symbol": "CHFJPY", "uic": 8,    "asset_type": "FxSpot"},
 ]
 
 
