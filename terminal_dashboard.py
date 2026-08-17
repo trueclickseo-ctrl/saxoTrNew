@@ -509,44 +509,27 @@ def render(token):
             f"{total_col}{total_s:>10}{W}"
         )
 
-    # ── Trade History (stocks + ETF from local files) ─────────────
+    # ── Trade History ─────────────────────────────────────────────
     stock_trades = _read_stock_trades(20)
     etf_trades   = _read_etf_trades()
-
-    # Merge: ETF newest first, then stocks newest first (up to 25 combined)
-    all_trades = (etf_trades + stock_trades)[:25]
-
     TH_HR = f"  {DM}{'─'*96}{W}"
-    L += ["", f"  {BD}TRADE HISTORY{W}  {DM}(own records — stocks last 20 + all ETF){W}"]
-    L.append(TH_HR)
-    L.append(
+    TH_HDR = (
         f"{DM}  {'Date':<10}  {'Side':<4}  {'Ticker':<7}  {'Strategy':<14}"
-        f"  {'Shrs':>6}  {'Price':>8}  {'Value':>12}  {'P&L':>12}  Src{W}"
+        f"  {'Shrs':>6}  {'Price':>8}  {'Value':>12}  {'P&L':>14}{W}"
     )
-    L.append(TH_HR)
 
-    if not all_trades:
-        L.append(f"  {DM}No trade history yet{W}")
-    else:
-        for t in all_trades:
-            act    = t["action"]
-            dry    = t["dry_run"]
-            cur    = t["currency"]
-            pnl    = t["pnl"]
-            val    = t["value"]
-
-            # Colour: BUY=green, SELL profit=green, SELL loss=red, dry=dim
+    def _trade_rows(trades):
+        rows = []
+        for t in trades:
+            act = t["action"]; dry = t["dry_run"]; cur = t["currency"]
+            pnl = t["pnl"];    val = t["value"]
             if dry:
-                act_col = DM
-                act_lbl = f"{DM}BUY*{W}"   # * = dry run
+                act_lbl = f"{DM}BUY*{W}"
             elif act == "BUY":
-                act_col = GR
                 act_lbl = f"{GR}{act:<4}{W}"
             else:
                 act_col = (GR if pnl and pnl >= 0 else RD) if pnl is not None else CY
                 act_lbl = f"{act_col}{act:<4}{W}"
-
-            pnl_s = ""
             if dry:
                 pnl_s = f"{DM}[DRY RUN]{W}"
             elif pnl is not None:
@@ -554,36 +537,52 @@ def render(token):
                 pnl_s = f"{c}{'+'if pnl>=0 else ''}{pnl:,.0f} {cur}{W}"
             else:
                 pnl_s = f"{DM}—{W}"
-
-            src_badge = f"{DM}ETF{W}" if t["source"] == "etf" else f"{BL}STK{W}"
-            val_s  = f"{val:>12,.0f}"
-            price_s = f"{t['price']:>8.2f}"
-
-            L.append(
+            rows.append(
                 f"  {act_lbl}  {t['date']:<10}  {BD}{t['ticker']:<7}{W}  "
-                f"{DM}{t['strategy']:<14}{W}  {t['shares']:>6,}  {price_s}  "
-                f"{DM}{val_s}{W}  {_rpad(pnl_s, 18)}  {src_badge}"
+                f"{DM}{t['strategy']:<14}{W}  {t['shares']:>6,}  {t['price']:>8.2f}  "
+                f"{DM}{val:>12,.0f}{W}  {_rpad(pnl_s, 14)}"
             )
+        return rows
 
+    # ── Section 1: Stock trades ────────────────────────────────────
+    stats    = _db_stats()
+    closed   = stats.get("closed", 0) or 0
+    wins     = stats.get("wins", 0)   or 0
+    realized = stats.get("realized")  or 0
+    wr       = wins / closed * 100 if closed else 0
+    losses   = closed - wins
+
+    L += ["", f"  {BD}STOCK TRADES{W}  {DM}(US Blend + US Reversion — last 20){W}"]
     L.append(TH_HR)
+    L.append(TH_HDR)
+    L.append(TH_HR)
+    if stock_trades:
+        L += _trade_rows(stock_trades)
+    else:
+        L.append(f"  {DM}No stock trades yet{W}")
+    L.append(TH_HR)
+    L.append(
+        f"  {closed} closed   "
+        f"W:{GR}{wins}{W}  L:{RD}{losses}{W}  WR:{BD}{wr:.1f}%{W}   "
+        f"Realized: {_pnl(realized, ' SEK')}"
+    )
 
-    # Summary line from DB stats + ETF tally
-    stats   = _db_stats()
-    closed  = stats.get("closed", 0) or 0
-    wins    = stats.get("wins", 0)   or 0
-    realized= stats.get("realized")  or 0
-    wr      = wins / closed * 100 if closed else 0
-    losses  = closed - wins
-
+    # ── Section 2: ETF trades ──────────────────────────────────────
     etf_closed = sum(1 for t in etf_trades if t["action"] == "SELL" and not t["dry_run"])
     etf_open   = sum(1 for t in etf_trades if t["action"] == "BUY"  and not t["dry_run"])
     etf_dry    = sum(1 for t in etf_trades if t["dry_run"])
 
+    L += ["", f"  {BD}ETF TRADES{W}  {DM}(ETF rotation strategy){W}"]
+    L.append(TH_HR)
+    L.append(TH_HDR)
+    L.append(TH_HR)
+    if etf_trades:
+        L += _trade_rows(etf_trades)
+    else:
+        L.append(f"  {DM}No ETF trades yet{W}")
+    L.append(TH_HR)
     L.append(
-        f"  {BD}Stocks{W}: {closed} closed  "
-        f"W:{GR}{wins}{W} L:{RD}{losses}{W}  WR:{BD}{wr:.1f}%{W}  "
-        f"Realized: {_pnl(realized,' SEK')}   "
-        f"{BD}ETF{W}: {etf_open} open  {etf_closed} closed  "
+        f"  {etf_open} open   {etf_closed} closed   "
         f"{DM}{etf_dry} dry-run{W}"
     )
 
