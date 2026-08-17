@@ -58,6 +58,7 @@ import forex.strategy_bb       as strat_bb
 import forex.strategy_pullback as strat_pullback
 import forex.strategy_gap      as strat_gap
 import pnl_tracker
+import trade_logger
 
 logging.basicConfig(
     level=logging.INFO,
@@ -283,6 +284,19 @@ def _log_order(entry: dict) -> None:
     orders.append(entry)
     with open(ORDERS_FILE, "w") as f:
         json.dump(orders[-500:], f, indent=2)
+    # Persistent CSV — never truncated
+    trade_logger.log_trade(
+        module     = "forex",
+        strategy   = entry.get("strategy", ""),
+        symbol     = entry.get("symbol", ""),
+        side       = entry.get("side", ""),
+        quantity   = entry.get("quantity", 0),
+        price      = entry.get("entry_price") or entry.get("exit_price") or 0,
+        order_id   = entry.get("order_id"),
+        dry_run    = entry.get("dry_run", False),
+        stop_price = entry.get("stop_price", 0),
+        notes      = entry.get("reason", ""),
+    )
 
 
 # ── Currency exposure helpers ─────────────────────────────────────────────────

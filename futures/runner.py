@@ -46,6 +46,7 @@ import futures.strategy     as strat_donchian
 import futures.strategy_rsi as strat_rsi
 import futures.strategy_ema as strat_ema
 import pnl_tracker
+import trade_logger
 
 # Registry: name → strategy module
 STRATEGIES = {
@@ -236,6 +237,19 @@ def _log_order(entry: dict) -> None:
     orders.append(entry)
     with open(ORDERS_FILE, "w") as f:
         json.dump(orders[-500:], f, indent=2)
+    # Persistent CSV — never truncated
+    trade_logger.log_trade(
+        module     = "futures",
+        strategy   = entry.get("strategy", ""),
+        symbol     = entry.get("symbol", ""),
+        side       = entry.get("side", ""),
+        quantity   = entry.get("quantity", 0),
+        price      = entry.get("entry_price") or entry.get("exit_price") or 0,
+        order_id   = entry.get("order_id"),
+        dry_run    = entry.get("dry_run", False),
+        stop_price = entry.get("stop_price", 0),
+        notes      = entry.get("reason", ""),
+    )
 
 
 # ── Strategy dispatch helpers ──────────────────────────────────────────────

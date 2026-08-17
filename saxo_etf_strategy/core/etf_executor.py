@@ -17,6 +17,7 @@ import logging
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 import pnl_tracker
+import trade_logger
 from typing import List, Optional
 
 from core.saxo_client import SaxoClient
@@ -146,6 +147,16 @@ class ETFExecutor:
             "entry_price": price, "order_id": order_id,
             "dry_run": self.cfg.dry_run,
         })
+        trade_logger.log_trade(
+            module   = "etf",
+            strategy = "ETF Rotation",
+            symbol   = signal.symbol,
+            side     = "Buy",
+            quantity = quantity,
+            price    = price,
+            order_id = order_id if not self.cfg.dry_run else None,
+            dry_run  = self.cfg.dry_run,
+        )
         if not self.cfg.dry_run:
             pnl_tracker.log_open("etf", "ETF Rotation", signal.symbol, "Buy",
                                  quantity, price, order_id=order_id)
@@ -233,5 +244,15 @@ class ETFExecutor:
             "exit_price": live_price, "reason": reason,
             "dry_run": self.cfg.dry_run,
         })
+        trade_logger.log_trade(
+            module   = "etf",
+            strategy = "ETF Rotation",
+            symbol   = symbol,
+            side     = "Sell",
+            quantity = quantity,
+            price    = live_price,
+            dry_run  = self.cfg.dry_run,
+            notes    = reason,
+        )
         if not self.cfg.dry_run:
             pnl_tracker.log_close("etf", symbol, live_price, reason, strategy="ETF Rotation")
