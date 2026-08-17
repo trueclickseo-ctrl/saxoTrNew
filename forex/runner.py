@@ -9,6 +9,7 @@ Strategies:
   donchian  — 20-day Donchian channel breakout (momentum)
   bb        — Bollinger Band(20,2) + RSI(14) mean-reversion (fade extremes)
   pullback  — EMA(20) pullback in EMA(50) trend (~70% win rate, tight stops)
+  gap       — Weekend gap fill — fade Sunday open vs Friday close (~80-85% WR)
 
 Universe:
   27 pairs — 7 G7 majors + 20 liquid crosses (UICs confirmed Saxo SIM)
@@ -55,6 +56,7 @@ import forex.strategy_rsi      as strat_rsi
 import forex.strategy_donchian as strat_donchian
 import forex.strategy_bb       as strat_bb
 import forex.strategy_pullback as strat_pullback
+import forex.strategy_gap      as strat_gap
 import pnl_tracker
 
 logging.basicConfig(
@@ -71,8 +73,9 @@ STRATEGIES = {
     "donchian": strat_donchian,
     "bb":       strat_bb,
     "pullback": strat_pullback,
+    "gap":      strat_gap,
 }
-SLOTS_PER_STRATEGY = {"ema": 4, "rsi": 4, "donchian": 4, "bb": 4, "pullback": 4}
+SLOTS_PER_STRATEGY = {"ema": 4, "rsi": 4, "donchian": 4, "bb": 4, "pullback": 4, "gap": 4}
 
 # ── Session-aware pair groups ──────────────────────────────────────────────────
 # asian  : 06:20 PKT  — Tokyo/Sydney session (JPY crosses, AUD, NZD)
@@ -182,6 +185,24 @@ def _fetch_history(uic: int, count: int = CHART_BARS) -> pd.DataFrame | None:
     except Exception as exc:
         logger.warning(f"Chart fetch failed for UIC {uic}: {exc}")
         return None
+
+
+def _fetch_live_prices(pairs: list) -> dict:
+    """Fetch current bid/ask mid prices for a list of pairs (used by gap strategy)."""
+    prices = {}
+    for pair in pairs:
+        try:
+            resp = _get("/trade/v1/infoprices", {
+                "Uic": pair["uic"], "AssetType": ASSET_TYPE, "FieldGroups": "Quote"
+            })
+            q   = resp.get("Quote", {})
+            bid = float(q.get("Bid", 0))
+            ask = float(q.get("Ask", 0))
+            if bid > 0 and ask > 0:
+                prices[pair["symbol"]] = (bid + ask) / 2
+        except Exception as exc:
+            logger.debug(f"Live price fetch failed for {pair['symbol']}: {exc}")
+    return prices
 
 
 def _live_price(uic: int, account_key: str) -> float | None:
@@ -325,7 +346,8 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
 
 def _run_entries(strat_name: str, strat_mod, positions: dict,
                  market_data: dict, equity: float, akey: str,
-                 dry_run: bool, today_str: str) -> int:
+                 dry_run: bool, today_str: str,
+                 live_prices: dict | None = None) -> int:
     max_slots  = SLOTS_PER_STRATEGY[strat_name]
     prefix     = f"{strat_name}:"
     held       = sum(1 for k in positions if k.startswith(prefix))
@@ -334,7 +356,11 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         return 0
 
     open_syms = {k.split(":", 1)[1] for k in positions if k.startswith(prefix)}
-    signals   = strat_mod.generate_signals(market_data, open_symbols=open_syms)
+    if getattr(strat_mod, "NEEDS_LIVE_PRICES", False):
+        signals = strat_mod.generate_signals(market_data, open_symbols=open_syms,
+                                             live_prices=live_prices or {})
+    else:
+        signals = strat_mod.generate_signals(market_data, open_symbols=open_syms)
 
     entries = 0
     for sig in signals[:slots_free]:
@@ -361,7 +387,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             logger.info(f"  {direction} {resp.get('OrderId','?')}: {qty:,}x {sym}[{tag}] "
                         f"({strat_name})  @ {sig['close']:.5f}  stop={sig['stop_price']:.5f}")
 
-        positions[f"{strat_name}:{sym}"] = {
+        pos_record = {
             "uic":          uic,
             "direction":    direction,
             "entry_price":  sig["close"],
@@ -370,6 +396,11 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             "entry_date":   today_str,
             "atr_at_entry": sig["atr"],
         }
+        if "gap_target" in sig:
+            pos_record["gap_target"]   = sig["gap_target"]
+            pos_record["friday_close"] = sig.get("friday_close", sig["gap_target"])
+            pos_record["gap_pct"]      = sig.get("gap_pct", 0.0)
+        positions[f"{strat_name}:{sym}"] = pos_record
         oid = resp.get("OrderId") if not dry_run else None
         _log_order({"side": direction, "symbol": sym, "strategy": strat_name,
                     "uic": uic, "quantity": qty, "entry_price": sig["close"],
@@ -476,6 +507,13 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
     for pair in active_pairs:
         market_data[pair["symbol"]] = _fetch_history(pair["uic"])
 
+    # ── Fetch live prices if any strategy needs them (gap strategy) ───────────
+    needs_live = any(getattr(STRATEGIES[s], "NEEDS_LIVE_PRICES", False)
+                     for s in active_strategies)
+    live_prices: dict = _fetch_live_prices(active_pairs) if needs_live else {}
+    if live_prices:
+        logger.info(f"Live prices fetched : {len(live_prices)} pairs")
+
     # ── Run each strategy ─────────────────────────────────────────────────────
     total_exits = total_entries = 0
     for strat_name in active_strategies:
@@ -488,7 +526,8 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
         exits   = _run_exits(strat_name, strat_mod, positions,
                              market_data, akey, dry_run, today_str)
         entries = _run_entries(strat_name, strat_mod, positions,
-                               market_data, equity, akey, dry_run, today_str)
+                               market_data, equity, akey, dry_run, today_str,
+                               live_prices=live_prices)
 
         if exits == 0 and entries == 0:
             remaining = sum(1 for k in positions if k.startswith(prefix))
@@ -531,7 +570,7 @@ if __name__ == "__main__":
     ap.add_argument("--exits-only",  action="store_true",
                     help="Check stops only — no new entries (intraday stop check)")
     ap.add_argument("--strategy", default="all",
-                    choices=["all", "ema", "rsi", "donchian", "bb", "pullback"],
+                    choices=["all", "ema", "rsi", "donchian", "bb", "pullback", "gap"],
                     help="Which strategy to run (default: all)")
     ap.add_argument("--status",   action="store_true",
                     help="Print open positions and exit")
@@ -577,6 +616,7 @@ if __name__ == "__main__":
         market_data = {}
         for pair in PAIRS:
             market_data[pair["symbol"]] = _fetch_history(pair["uic"])
+        scan_live_prices = _fetch_live_prices(PAIRS)
 
         # Panel 1 — EMA crossover
         print(f"\n[EMA] 5/30 crossover + ADX(14)")
@@ -631,6 +671,7 @@ if __name__ == "__main__":
                   f"{r['bb_pct']:>6.1f}% {r['rsi14']:>7.1f}{flag}")
 
         # Panel 5 — Pullback to EMA(20)
+
         print(f"\n[PULLBACK] EMA(20) pullback in EMA(50) trend  (~70% WR)")
         rows = strat_pullback.scan_summary(market_data)
         print(f"  {'Pair':<10} {'Close':>10} {'EMA20':>10} {'EMA50':>10} "
@@ -651,6 +692,21 @@ if __name__ == "__main__":
             print(f"  {r['symbol']:<10} {r['close']:>10.5f} {r['ema20']:>10.5f} "
                   f"{r['ema50']:>10.5f} {r['adx']:>6.1f}  "
                   f"{r['trend']:<6} {adx_flag:<6} {pb_flag:<6}  {signal}")
+
+        # Panel 6 — Weekend Gap Fill
+        print(f"\n[GAP] Weekend Gap Fill  (~80-85% WR)  "
+              f"{'— live prices available' if scan_live_prices else '— no live prices (run on Sunday)'}")
+        rows = strat_gap.scan_summary(market_data, live_prices=scan_live_prices)
+        print(f"  {'Pair':<10} {'Fri Close':>10} {'Sun Open':>10} {'Gap':>8} {'Gap%':>6}  Signal")
+        print("  " + "-" * 70)
+        for r in rows:
+            if r["status"] != "ok":
+                print(f"  {r['symbol']:<10}  no data"); continue
+            gap_str = f"{r['gap']:+.5f}" if r['sunday_open'] > 0 else "n/a"
+            pct_str = f"{r['gap_pct']:.3f}%" if r['sunday_open'] > 0 else "n/a"
+            sun_str = f"{r['sunday_open']:.5f}" if r['sunday_open'] > 0 else "n/a"
+            print(f"  {r['symbol']:<10} {r['friday_close']:>10.5f} {sun_str:>10} "
+                  f"{gap_str:>8} {pct_str:>6}  {r['signal']}")
         sys.exit(0)
 
     active = list(STRATEGIES) if args.strategy == "all" else [args.strategy]
