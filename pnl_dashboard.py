@@ -18,19 +18,34 @@ import pnl_tracker
 REFRESH_SECONDS = 60
 
 # ── VT100 ─────────────────────────────────────────────────────────
-def _enable_vt():
+def _clear_console():
     try:
-        import ctypes
-        k32 = ctypes.windll.kernel32
-        h   = k32.GetStdHandle(-11)
-        m   = ctypes.c_ulong()
-        k32.GetConsoleMode(h, ctypes.byref(m))
-        k32.SetConsoleMode(h, m.value | 0x4)
+        import ctypes, struct
+        k32  = ctypes.windll.kernel32
+        h    = k32.GetStdHandle(-11)
+        buf  = ctypes.create_string_buffer(22)
+        k32.GetConsoleScreenBufferInfo(h, buf)
+        _, _, _, _, _, left, top, right, bottom, _, _ = struct.unpack("hhhhHhhhhhh", buf.raw)
+        cols = right - left + 1
+        rows = bottom - top + 1
+        size = cols * rows
+        done = ctypes.c_ulong(0)
+        k32.FillConsoleOutputCharacterW(h, 32, size, 0, ctypes.byref(done))
+        k32.FillConsoleOutputAttribute(h, 7,  size, 0, ctypes.byref(done))
+        k32.SetConsoleCursorPosition(h, 0)
     except Exception:
-        pass
-    os.system("")
+        sys.stdout.write("\033[2J\033[H")
+        sys.stdout.flush()
 
-_enable_vt()
+try:
+    import ctypes as _ct
+    _k32 = _ct.windll.kernel32
+    _h   = _k32.GetStdHandle(-11)
+    _m   = _ct.c_ulong()
+    _k32.GetConsoleMode(_h, _ct.byref(_m))
+    _k32.SetConsoleMode(_h, _m.value | 0x4)
+except Exception:
+    pass
 
 GR  = "\033[92m"; RD  = "\033[91m"; YL  = "\033[93m"
 BL  = "\033[94m"; CY  = "\033[96m"; MG  = "\033[95m"
@@ -264,8 +279,7 @@ def main():
     while True:
         try:
             out = _render(args.module)
-            sys.stdout.write("\033[2J\033[H")
-            sys.stdout.flush()
+            _clear_console()
             sys.stdout.write(out)
             sys.stdout.flush()
             time.sleep(REFRESH_SECONDS)

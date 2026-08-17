@@ -19,20 +19,37 @@ import price_service
 
 REFRESH_SECONDS = 60
 
-# ── Windows VT100 ─────────────────────────────────────────────────
-def _enable_vt():
+# ── Windows console clear ─────────────────────────────────────────
+def _clear_console():
+    """Clear the Windows console via the Console API (works in all terminal hosts)."""
     try:
-        import ctypes
-        kernel32 = ctypes.windll.kernel32
-        handle   = kernel32.GetStdHandle(-11)
-        mode     = ctypes.c_ulong()
-        kernel32.GetConsoleMode(handle, ctypes.byref(mode))
-        kernel32.SetConsoleMode(handle, mode.value | 0x4)
+        import ctypes, struct
+        k32  = ctypes.windll.kernel32
+        h    = k32.GetStdHandle(-11)
+        buf  = ctypes.create_string_buffer(22)
+        k32.GetConsoleScreenBufferInfo(h, buf)
+        _, _, _, _, _, left, top, right, bottom, _, _ = struct.unpack("hhhhHhhhhhh", buf.raw)
+        cols = right - left + 1
+        rows = bottom - top + 1
+        size = cols * rows
+        done = ctypes.c_ulong(0)
+        k32.FillConsoleOutputCharacterW(h, 32, size, 0, ctypes.byref(done))
+        k32.FillConsoleOutputAttribute(h, 7,  size, 0, ctypes.byref(done))
+        k32.SetConsoleCursorPosition(h, 0)   # COORD {0,0}
     except Exception:
-        pass
-    os.system("")
+        sys.stdout.write("\033[2J\033[H")
+        sys.stdout.flush()
 
-_enable_vt()
+# Enable VT colours for ANSI colour codes (does NOT affect clear logic)
+try:
+    import ctypes as _ct
+    _k32 = _ct.windll.kernel32
+    _h   = _k32.GetStdHandle(-11)
+    _m   = _ct.c_ulong()
+    _k32.GetConsoleMode(_h, _ct.byref(_m))
+    _k32.SetConsoleMode(_h, _m.value | 0x4)
+except Exception:
+    pass
 
 # ── Colours ───────────────────────────────────────────────────────
 GR  = "\033[92m"   # bright green
@@ -368,8 +385,7 @@ def main():
     while True:
         try:
             out = _render(interval=interval)
-            sys.stdout.write("\033[2J\033[H")
-            sys.stdout.flush()
+            _clear_console()
             sys.stdout.write(out)
             sys.stdout.flush()
             time.sleep(interval)
