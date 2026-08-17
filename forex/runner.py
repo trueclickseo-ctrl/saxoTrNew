@@ -10,19 +10,20 @@ Strategies:
   bb        — Bollinger Band(20,2) + RSI(14) mean-reversion (fade extremes)
 
 Universe:
-  7 G7 majors: EURUSD GBPUSD USDJPY AUDUSD USDCAD NZDUSD USDCHF
-  5 crosses:   EURGBP EURJPY GBPJPY AUDJPY CADJPY
+  27 pairs — 7 G7 majors + 20 liquid crosses (UICs confirmed Saxo SIM)
+  Asian session  (14): JPY crosses, AUD/NZD pairs — run at 06:20 PKT
+  London session (13): EUR/GBP/USD crosses    — run at 18:00 PKT
 
 Usage:
-    python forex/runner.py                       # all 4 strategies, dry-run
-    python forex/runner.py --live                # all 4, real Saxo SIM orders
-    python forex/runner.py --strategy ema        # EMA only
-    python forex/runner.py --strategy rsi        # RSI only
-    python forex/runner.py --strategy donchian   # Donchian only
-    python forex/runner.py --strategy bb         # BB reversion only
-    python forex/runner.py --scan                # 4-panel market snapshot
-    python forex/runner.py --status              # open positions
-    python forex/runner.py --info                # verify UICs live
+    python forex/runner.py                          # all 4 strategies, all 27 pairs, dry-run
+    python forex/runner.py --live                   # all 4, real Saxo SIM orders
+    python forex/runner.py --session asian --live   # Asian session (14 pairs, 06:20 PKT)
+    python forex/runner.py --session london --live  # London session (13 pairs, 18:00 PKT)
+    python forex/runner.py --exits-only --live      # stop-check only, all pairs (14:00 PKT)
+    python forex/runner.py --strategy ema           # EMA only
+    python forex/runner.py --scan                   # 4-panel market snapshot
+    python forex/runner.py --status                 # open positions
+    python forex/runner.py --info                   # verify UICs live
 
 State:
     data/forex_state.json   — open positions (keyed as "strategy:symbol")
@@ -68,6 +69,22 @@ STRATEGIES = {
     "bb":       strat_bb,
 }
 SLOTS_PER_STRATEGY = {"ema": 4, "rsi": 4, "donchian": 4, "bb": 4}
+
+# ── Session-aware pair groups ──────────────────────────────────────────────────
+# asian  : 06:20 PKT  — Tokyo/Sydney session (JPY crosses, AUD, NZD)
+# london : 18:00 PKT  — London-NY overlap (EUR, GBP, USD pairs; tightest spreads)
+# all    : no filter  — every pair in universe
+SESSION_PAIRS = {
+    "asian": {
+        "USDJPY", "EURJPY", "GBPJPY", "AUDJPY", "CADJPY", "NZDJPY", "CHFJPY",
+        "AUDUSD", "NZDUSD", "AUDCAD", "AUDCHF", "AUDNZD", "NZDCAD", "NZDCHF",
+    },
+    "london": {
+        "EURUSD", "GBPUSD", "USDCAD", "USDCHF",
+        "EURGBP", "EURAUD", "EURNZD", "EURCAD", "EURCHF",
+        "GBPAUD", "GBPCAD", "GBPCHF", "GBPNZD",
+    },
+}
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 BASE_URL    = "https://gateway.saxobank.com/sim/openapi"
@@ -363,14 +380,19 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
 # ── Main daily cycle ──────────────────────────────────────────────────────────
 
 def run_exits_only(dry_run: bool = True,
-                   active_strategies: list | None = None) -> dict:
+                   active_strategies: list | None = None,
+                   session: str = "all") -> dict:
     """Check stops and time-stops on all open positions — no new entries."""
     if active_strategies is None:
         active_strategies = list(STRATEGIES)
 
+    session_filter = SESSION_PAIRS.get(session) if session != "all" else None
+    active_pairs   = [p for p in PAIRS
+                      if session_filter is None or p["symbol"] in session_filter]
+
     mode = "DRY-RUN" if dry_run else "LIVE (Saxo SIM)"
     logger.info("=" * 60)
-    logger.info(f"  FX Runner [EXITS-ONLY] — {mode}  "
+    logger.info(f"  FX Runner [EXITS-ONLY] — {mode}  session={session}  "
                 f"{datetime.now().strftime('%Y-%m-%d %H:%M')}")
     logger.info("=" * 60)
 
@@ -380,9 +402,10 @@ def run_exits_only(dry_run: bool = True,
     today_str = date.today().isoformat()
 
     logger.info(f"Open positions : {len(positions)}")
+    logger.info(f"Pairs checked  : {len(active_pairs)} ({session} session)")
 
     market_data: dict[str, pd.DataFrame | None] = {}
-    for pair in PAIRS:
+    for pair in active_pairs:
         market_data[pair["symbol"]] = _fetch_history(pair["uic"])
 
     total_exits = 0
@@ -417,14 +440,19 @@ def run_exits_only(dry_run: bool = True,
     return {"exits": total_exits, "holding": len(positions), "dry_run": dry_run}
 
 
-def run_daily(dry_run: bool = True, active_strategies: list | None = None) -> dict:
+def run_daily(dry_run: bool = True, active_strategies: list | None = None,
+              session: str = "all") -> dict:
     if active_strategies is None:
         active_strategies = list(STRATEGIES)
+
+    session_filter = SESSION_PAIRS.get(session) if session != "all" else None
+    active_pairs   = [p for p in PAIRS
+                      if session_filter is None or p["symbol"] in session_filter]
 
     strat_label = "+".join(active_strategies)
     mode        = "DRY-RUN" if dry_run else "LIVE (Saxo SIM)"
     logger.info("=" * 60)
-    logger.info(f"  FX Runner [{strat_label}] — {mode}  "
+    logger.info(f"  FX Runner [{strat_label}] — {mode}  session={session}  "
                 f"{datetime.now().strftime('%Y-%m-%d %H:%M')}")
     logger.info("=" * 60)
 
@@ -436,12 +464,12 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None) -> di
     total_slots = sum(SLOTS_PER_STRATEGY[s] for s in active_strategies)
     logger.info(f"Account equity : {equity:,.0f}")
     logger.info(f"Open positions : {len(positions)} / {total_slots} total slots")
-    logger.info(f"FX pairs tracked: {len(PAIRS)}")
+    logger.info(f"FX pairs scanned: {len(active_pairs)} of {len(PAIRS)} ({session} session)")
     logger.info(f"Strategies     : {strat_label}")
 
-    # ── Fetch price history once for all pairs ────────────────────────────────
+    # ── Fetch price history once for active session pairs ─────────────────────
     market_data: dict[str, pd.DataFrame | None] = {}
-    for pair in PAIRS:
+    for pair in active_pairs:
         market_data[pair["symbol"]] = _fetch_history(pair["uic"])
 
     # ── Run each strategy ─────────────────────────────────────────────────────
@@ -507,6 +535,9 @@ if __name__ == "__main__":
                     help="Show 4-panel market snapshot")
     ap.add_argument("--info",     action="store_true",
                     help="Verify UICs via live Saxo quotes")
+    ap.add_argument("--session",  default="all",
+                    choices=["all", "asian", "london"],
+                    help="Restrict to session pairs: asian (06:20 PKT) | london (18:00 PKT) | all")
     args = ap.parse_args()
 
     if args.info:
@@ -598,6 +629,8 @@ if __name__ == "__main__":
 
     active = list(STRATEGIES) if args.strategy == "all" else [args.strategy]
     if args.exits_only:
-        run_exits_only(dry_run=not args.live, active_strategies=active)
+        run_exits_only(dry_run=not args.live, active_strategies=active,
+                       session=args.session)
     else:
-        run_daily(dry_run=not args.live, active_strategies=active)
+        run_daily(dry_run=not args.live, active_strategies=active,
+                  session=args.session)
