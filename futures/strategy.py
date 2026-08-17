@@ -85,7 +85,8 @@ def _es_risk_off(market_data: dict, regime_symbol: str = "ES") -> bool:
     return not pd.isna(sma200) and float(es_close.iloc[-1]) < float(sma200)
 
 
-def generate_signals(market_data: dict, regime_symbol: str = "ES") -> list:
+def generate_signals(market_data: dict, regime_symbol: str = "ES",
+                     open_symbols: set = None) -> list:
     """Scan all markets for Donchian breakout signals — LONG and SHORT.
 
     Returns both BUY (close > 20d high) and SHORT (close < 20d low) signals,
@@ -98,9 +99,13 @@ def generate_signals(market_data: dict, regime_symbol: str = "ES") -> list:
       - Gold, crude oil, bonds: trade both directions regardless of regime.
     """
     risk_off = _es_risk_off(market_data, regime_symbol)
+    if open_symbols is None:
+        open_symbols = set()
 
     signals = []
     for symbol, df in market_data.items():
+        if symbol in open_symbols:
+            continue
         if df is None or len(df) < MIN_BARS:
             continue
         df = df.copy()

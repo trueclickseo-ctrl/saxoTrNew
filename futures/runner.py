@@ -1,18 +1,26 @@
 """
 futures/runner.py
 -----------------
-Daily execution runner for the Futures Trend-Following strategy.
+Daily execution runner for 3 independent futures strategies.
+
+STRATEGIES (each runs with its own position slots):
+  donchian  — Donchian Channel 30-day breakout         ~8-9 signals/yr
+  rsi       — RSI(5) pullback within trend              ~50-60 signals/yr
+  ema       — EMA(5/20) crossover + ADX(14) filter      ~20-25 signals/yr
+  TOTAL                                                 ~80 signals/yr (~weekly)
 
 Usage:
-    python futures/runner.py              # scan + dry-run (no real orders)
-    python futures/runner.py --live       # real orders in Saxo SIM
+    python futures/runner.py              # all 3 strategies, dry-run
+    python futures/runner.py --live       # all 3 strategies, real orders
+    python futures/runner.py --strategy donchian|rsi|ema  # single strategy
     python futures/runner.py --discover   # refresh UIC cache then exit
     python futures/runner.py --status     # print open positions then exit
+    python futures/runner.py --scan       # multi-strategy snapshot
 
 State:
-    data/futures_state.json   — open positions
-    data/futures_orders.json  — order log (last 500 entries)
-    data/futures_uic_cache.json — instrument UIC map (populated by --discover)
+    data/futures_state.json     — open positions (keyed by strategy:symbol)
+    data/futures_orders.json    — order log (last 500 entries)
+    data/futures_uic_cache.json — instrument UIC map
 """
 
 import argparse
@@ -34,11 +42,24 @@ import pandas as pd
 import saxo_auth
 
 from futures.universe import load_universe, MARKETS
-from futures.strategy import (
-    generate_signals, should_exit, size_position,
-    trailing_stop_update,
-    MAX_POSITIONS, MIN_BARS,
-)
+import futures.strategy     as strat_donchian
+import futures.strategy_rsi as strat_rsi
+import futures.strategy_ema as strat_ema
+import pnl_tracker
+
+# Registry: name → strategy module
+STRATEGIES = {
+    "donchian": strat_donchian,
+    "rsi":      strat_rsi,
+    "ema":      strat_ema,
+}
+
+# Positions-per-strategy slot limit (independent of each other)
+SLOTS_PER_STRATEGY = {
+    "donchian": 5,
+    "rsi":      5,
+    "ema":      5,
+}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,7 +73,8 @@ BASE_URL    = "https://gateway.saxobank.com/sim/openapi"
 DATA_DIR    = os.path.join(_ROOT, "data")
 STATE_FILE  = os.path.join(DATA_DIR, "futures_state.json")
 ORDERS_FILE = os.path.join(DATA_DIR, "futures_orders.json")
-CHART_BARS  = 60          # daily bars to fetch (needs >= MIN_BARS)
+CHART_BARS  = 80          # daily bars to fetch — enough for all three strategies
+MIN_BARS    = 55          # minimum valid bars (covers Donchian 30 + ATR 14 + buffer)
 
 # Chart API horizon: 1440 = daily bars.
 # Asset types that the chart API accepts per instrument type:
@@ -216,58 +238,35 @@ def _log_order(entry: dict) -> None:
         json.dump(orders[-500:], f, indent=2)
 
 
-# ── Core run ───────────────────────────────────────────────────────────────
+# ── Strategy dispatch helpers ──────────────────────────────────────────────
 
-def run_daily(dry_run: bool = True) -> dict:
-    """Execute one daily futures cycle. Returns summary dict."""
-    mode = "DRY-RUN" if dry_run else "LIVE (Saxo SIM)"
-    logger.info(f"{'='*55}")
-    logger.info(f"  Futures Runner — {mode}  {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    logger.info(f"{'='*55}")
+def _run_strategy_exits(strat_name: str, strat_mod, positions: dict,
+                        market_data: dict, universe: dict,
+                        equity: float, akey: str,
+                        today_str: str, dry_run: bool) -> int:
+    """Process exits for one strategy's positions. Returns exit count."""
+    exits = 0
+    prefix = f"{strat_name}:"
 
-    universe  = load_universe()
-    state     = _load_state()
-    positions = state.setdefault("positions", {})
-    equity, akey = _account()
-
-    logger.info(f"Account equity : {equity:,.0f} SEK (approx)")
-    logger.info(f"Open positions : {len(positions)} / {MAX_POSITIONS}")
-    logger.info(f"Markets tracked: {len(universe)}")
-
-    # ── Fetch daily history for all markets ──────────────────────────────
-    market_data: dict[str, pd.DataFrame | None] = {}
-    for sym, info in universe.items():
-        market_data[sym] = _fetch_history(info["uic"], info["asset_type"])
-
-    # ── Trail stops for open positions ───────────────────────────────────
-    from futures.strategy import _atr
-    for sym, pos in positions.items():
-        df = market_data.get(sym)
-        if df is None:
+    for key in list(positions):
+        if not key.startswith(prefix):
             continue
-        closes    = df["Close"].dropna()
-        highs     = df["High"].dropna()
-        lows      = df["Low"].dropna()
-        direction = pos.get("direction", "Buy")
-        atr_now   = float(_atr(highs, lows, closes).iloc[-1])
-        cur_stop  = float(pos.get("stop_price", 0))
-        new_stop  = trailing_stop_update(cur_stop, float(closes.iloc[-1]),
-                                         atr_now, direction)
-        if new_stop != cur_stop and new_stop > 0:
-            logger.info(f"  Trail stop {sym} ({direction}): {cur_stop:.4f} → {new_stop:.4f}")
-            pos["stop_price"] = round(new_stop, 6)
-
-    # ── Exit review ───────────────────────────────────────────────────────
-    today_str   = date.today().isoformat()
-    exits_done  = 0
-
-    for sym in list(positions):
-        pos     = positions[sym]
+        sym     = key[len(prefix):]
+        pos     = positions[key]
         df      = market_data.get(sym)
         ed      = pos.get("entry_date", today_str)
         cal_days = (date.today() - date.fromisoformat(ed)).days
-        exit_flag, reason = should_exit(pos, df, cal_days)
 
+        # Trail stop before checking exit
+        if df is not None:
+            atr_now  = float(strat_mod._atr(df["High"], df["Low"], df["Close"]).iloc[-1])
+            cur_stop = float(pos.get("stop_price", 0))
+            new_stop = strat_mod.trailing_stop_update(
+                cur_stop, float(df["Close"].iloc[-1]), atr_now, pos.get("direction", "Buy"))
+            if round(new_stop, 6) != round(cur_stop, 6) and new_stop > 0:
+                pos["stop_price"] = round(new_stop, 6)
+
+        exit_flag, reason = strat_mod.should_exit(pos, df, cal_days)
         if not exit_flag:
             continue
 
@@ -286,117 +285,176 @@ def run_daily(dry_run: bool = True) -> dict:
         pnl_pct = raw_pnl / entry * 100 if entry else 0.0
 
         order = {
-            "AccountKey":    akey,
-            "Uic":           uic,
-            "AssetType":     asset_type,
-            "Amount":        qty,
-            "BuySell":       close_side,
-            "OrderType":     "Market",
+            "AccountKey": akey, "Uic": uic, "AssetType": asset_type,
+            "Amount": qty, "BuySell": close_side,
+            "OrderType": "Market",
             "OrderDuration": {"DurationType": "DayOrder"},
-            "ManualOrder":   False,
+            "ManualOrder": False,
         }
-
-        tag = f"[{direction}]"
+        tag = "L" if is_long else "S"
         if dry_run:
-            logger.info(f"[DRY] {close_side:<4} {qty}x {sym} {tag} — {reason} "
-                        f"@ ~{live_px:.4f}  P&L {pnl_pct:+.1f}%")
+            logger.info(f"[DRY][{strat_name}] {close_side} {qty}x {sym}[{tag}] "
+                        f"— {reason} @ ~{live_px:.4f}  P&L {pnl_pct:+.1f}%")
         else:
             resp = _post("/trade/v2/orders", order)
-            logger.info(f"{close_side} {resp.get('OrderId','?')}: {qty}x {sym} {tag} "
-                        f"— {reason} @ ~{live_px:.4f}  P&L {pnl_pct:+.1f}%")
+            logger.info(f"[{strat_name}] {close_side} {resp.get('OrderId','?')}: "
+                        f"{qty}x {sym}[{tag}] — {reason} @ ~{live_px:.4f}  P&L {pnl_pct:+.1f}%")
 
-        _log_order({"side": close_side, "symbol": sym, "uic": uic, "quantity": qty,
-                    "position_direction": direction,
+        _log_order({"strategy": strat_name, "side": close_side, "symbol": sym,
+                    "uic": uic, "quantity": qty, "position_direction": direction,
                     "exit_price": live_px, "reason": reason,
                     "pnl_pct": round(pnl_pct, 2), "dry_run": dry_run})
-        del positions[sym]
-        exits_done += 1
+        if not dry_run:
+            pnl_tracker.log_close("futures", sym, live_px, reason, strategy=strat_name)
+        del positions[key]
+        exits += 1
+    return exits
 
-    # ── Entry signals ─────────────────────────────────────────────────────
-    slots_free   = MAX_POSITIONS - len(positions)
-    entries_done = 0
-    signals      = []
 
-    if slots_free > 0 and equity > 0:
-        signals = generate_signals(market_data)
-        signals = [s for s in signals if s["symbol"] not in positions
-                   and s["symbol"] in universe]
+def _run_strategy_entries(strat_name: str, strat_mod, positions: dict,
+                          market_data: dict, universe: dict,
+                          equity: float, akey: str,
+                          today_str: str, dry_run: bool) -> int:
+    """Process entries for one strategy. Returns entry count."""
+    prefix    = f"{strat_name}:"
+    max_slots = SLOTS_PER_STRATEGY[strat_name]
+    open_in_strat = {k[len(prefix):] for k in positions if k.startswith(prefix)}
+    slots_free = max_slots - len(open_in_strat)
+    if slots_free <= 0 or equity <= 0:
+        return 0
 
-        for sig in signals[:slots_free]:
-            sym        = sig["symbol"]
-            info       = universe[sym]
-            uic        = info["uic"]
-            asset_type = info["asset_type"]
-            qty        = size_position(equity, sig["atr"])
-            direction  = sig["direction"]
+    signals = strat_mod.generate_signals(market_data, open_symbols=open_in_strat)
+    signals = [s for s in signals if s["symbol"] in universe]
+    entries = 0
 
-            order = {
-                "AccountKey":    akey,
-                "Uic":           uic,
-                "AssetType":     asset_type,
-                "Amount":        qty,
-                "BuySell":       direction,
-                "OrderType":     "Market",
-                "OrderDuration": {"DurationType": "DayOrder"},
-                "ManualOrder":   False,
-            }
+    for sig in signals[:slots_free]:
+        sym        = sig["symbol"]
+        info       = universe[sym]
+        uic        = info["uic"]
+        asset_type = info["asset_type"]
+        qty        = strat_mod.size_position(equity, sig["atr"])
+        direction  = sig["direction"]
 
-            tag = "LONG" if direction == "Buy" else "SHORT"
-            if dry_run:
-                logger.info(f"[DRY] {direction:<4} {qty}x {sym} [{tag}] "
-                            f"@ ~{sig['close']:.4f}  stop={sig['stop_price']:.4f}  "
-                            f"score={sig['score']:.3f}  ATR={sig['atr']:.4f}")
-            else:
-                resp = _post("/trade/v2/orders", order)
-                logger.info(f"{direction} {resp.get('OrderId','?')}: {qty}x {sym} [{tag}] "
-                            f"@ ~{sig['close']:.4f}  stop={sig['stop_price']:.4f}")
+        order = {
+            "AccountKey": akey, "Uic": uic, "AssetType": asset_type,
+            "Amount": qty, "BuySell": direction,
+            "OrderType": "Market",
+            "OrderDuration": {"DurationType": "DayOrder"},
+            "ManualOrder": False,
+        }
+        tag = "LONG" if direction == "Buy" else "SHORT"
+        if dry_run:
+            logger.info(f"[DRY][{strat_name}] {direction} {qty}x {sym}[{tag}] "
+                        f"@ ~{sig['close']:.4f}  stop={sig['stop_price']:.4f}")
+        else:
+            resp = _post("/trade/v2/orders", order)
+            logger.info(f"[{strat_name}] {direction} {resp.get('OrderId','?')}: "
+                        f"{qty}x {sym}[{tag}] @ ~{sig['close']:.4f}  stop={sig['stop_price']:.4f}")
 
-            positions[sym] = {
-                "uic":          uic,
-                "asset_type":   asset_type,
-                "direction":    direction,
-                "entry_price":  sig["close"],
-                "stop_price":   sig["stop_price"],
-                "quantity":     qty,
-                "entry_date":   today_str,
-                "atr_at_entry": sig["atr"],
-                "score":        sig["score"],
-            }
-            _log_order({"side": direction, "symbol": sym, "uic": uic, "quantity": qty,
-                        "entry_price": sig["close"], "stop_price": sig["stop_price"],
-                        "score": sig["score"], "dry_run": dry_run})
-            entries_done += 1
+        positions[f"{strat_name}:{sym}"] = {
+            "uic":          uic,
+            "asset_type":   asset_type,
+            "direction":    direction,
+            "entry_price":  sig["close"],
+            "stop_price":   sig["stop_price"],
+            "quantity":     qty,
+            "entry_date":   today_str,
+            "atr_at_entry": sig["atr"],
+            "strategy":     strat_name,
+        }
+        oid = resp.get("OrderId") if not dry_run else None
+        _log_order({"strategy": strat_name, "side": direction, "symbol": sym,
+                    "uic": uic, "quantity": qty, "entry_price": sig["close"],
+                    "stop_price": sig["stop_price"], "dry_run": dry_run})
+        if not dry_run:
+            pnl_tracker.log_open("futures", strat_name, sym, direction, qty,
+                                 sig["close"], sig["stop_price"],
+                                 order_id=oid, timestamp=today_str)
+        entries += 1
+    return entries
 
-    elif slots_free > 0:
-        logger.info("No entry signals today (or regime filter active).")
 
-    # ── Final status ──────────────────────────────────────────────────────
-    logger.info(f"{'─'*55}")
-    logger.info(f"  Exits: {exits_done}  |  Entries: {entries_done}  "
+# ── Core run ───────────────────────────────────────────────────────────────
+
+def run_daily(dry_run: bool = True,
+              active_strategies: list | None = None) -> dict:
+    """Execute one daily futures cycle across all (or selected) strategies."""
+    if active_strategies is None:
+        active_strategies = list(STRATEGIES.keys())
+
+    mode = "DRY-RUN" if dry_run else "LIVE (Saxo SIM)"
+    strat_label = "+".join(active_strategies)
+    logger.info(f"{'='*60}")
+    logger.info(f"  Futures Runner [{strat_label}] — {mode}  "
+                f"{datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    logger.info(f"{'='*60}")
+
+    universe     = load_universe()
+    state        = _load_state()
+    positions    = state.setdefault("positions", {})
+
+    # Migrate old-format keys (plain "GC") to new format ("donchian:GC")
+    old_keys = [k for k in positions if ":" not in k]
+    for k in old_keys:
+        positions[f"donchian:{k}"] = positions.pop(k)
+
+    equity, akey = _account()
+
+    total_slots = sum(SLOTS_PER_STRATEGY[s] for s in active_strategies)
+    logger.info(f"Account equity : {equity:,.0f}")
+    logger.info(f"Open positions : {len(positions)} / {total_slots} total slots")
+    logger.info(f"Markets tracked: {len(universe)}")
+    logger.info(f"Strategies     : {strat_label}")
+
+    # ── Fetch history for all markets (once, shared by all strategies) ────
+    market_data: dict[str, pd.DataFrame | None] = {}
+    for sym, info in universe.items():
+        market_data[sym] = _fetch_history(info["uic"], info["asset_type"])
+
+    today_str    = date.today().isoformat()
+    total_exits  = 0
+    total_entries = 0
+
+    for name in active_strategies:
+        mod = STRATEGIES[name]
+        logger.info(f"{'─'*60}")
+        logger.info(f"  Strategy: {name.upper()}")
+
+        exits   = _run_strategy_exits(name, mod, positions, market_data,
+                                      universe, equity, akey, today_str, dry_run)
+        entries = _run_strategy_entries(name, mod, positions, market_data,
+                                        universe, equity, akey, today_str, dry_run)
+        if entries == 0:
+            open_in = sum(1 for k in positions if k.startswith(f"{name}:"))
+            logger.info(f"  [{name}] No signals today  |  Holding: {open_in}")
+
+        total_exits   += exits
+        total_entries += entries
+    # ── Final summary ─────────────────────────────────────────────────────
+    logger.info(f"{'='*60}")
+    logger.info(f"  TOTAL — Exits: {total_exits}  |  Entries: {total_entries}  "
                 f"|  Holding: {len(positions)}")
-    for sym, pos in positions.items():
-        df        = market_data.get(sym)
-        cur_px    = float(df["Close"].iloc[-1]) if df is not None else pos["entry_price"]
-        direction = pos.get("direction", "Buy")
-        is_long   = direction == "Buy"
-        raw_pnl   = (cur_px - pos["entry_price"]) if is_long else (pos["entry_price"] - cur_px)
-        pnl_pct   = raw_pnl / pos["entry_price"] * 100
-        held      = (date.today() - date.fromisoformat(pos["entry_date"])).days
-        tag       = "L" if is_long else "S"
-        logger.info(f"  HOLD {sym:<4}[{tag}]  qty={pos['quantity']}  "
+    for key, pos in positions.items():
+        strat, sym = key.split(":", 1) if ":" in key else ("donchian", key)
+        df       = market_data.get(sym)
+        cur_px   = float(df["Close"].iloc[-1]) if df is not None else pos["entry_price"]
+        is_long  = pos.get("direction", "Buy") == "Buy"
+        raw_pnl  = (cur_px - pos["entry_price"]) if is_long else (pos["entry_price"] - cur_px)
+        pnl_pct  = raw_pnl / pos["entry_price"] * 100
+        held     = (date.today() - date.fromisoformat(pos["entry_date"])).days
+        tag      = "L" if is_long else "S"
+        logger.info(f"  HOLD [{strat}] {sym}[{tag}]  qty={pos['quantity']}  "
                     f"entry={pos['entry_price']:.4f}  now={cur_px:.4f}  "
-                    f"P&L {pnl_pct:+.1f}%  stop={pos['stop_price']:.4f}  "
-                    f"{held}d held")
-    logger.info(f"{'─'*55}")
+                    f"P&L {pnl_pct:+.1f}%  stop={pos['stop_price']:.4f}  {held}d")
+    logger.info(f"{'='*60}")
 
     state["last_run"] = datetime.now().isoformat()
     _save_state(state)
 
     return {
-        "exits":    exits_done,
-        "entries":  entries_done,
+        "exits":    total_exits,
+        "entries":  total_entries,
         "holding":  len(positions),
-        "signals":  len(signals),
         "dry_run":  dry_run,
     }
 
@@ -404,15 +462,18 @@ def run_daily(dry_run: bool = True) -> dict:
 # ── CLI ────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="Futures trend-following runner")
+    ap = argparse.ArgumentParser(description="Futures multi-strategy runner")
     ap.add_argument("--live",     action="store_true",
                     help="Place real orders in Saxo SIM (default: dry-run)")
+    ap.add_argument("--strategy", default="all",
+                    choices=["all"] + list(STRATEGIES.keys()),
+                    help="Which strategy to run (default: all)")
     ap.add_argument("--discover", action="store_true",
                     help="(Re)discover instrument UICs from Saxo and exit")
     ap.add_argument("--status",   action="store_true",
                     help="Print open positions and exit (no orders)")
     ap.add_argument("--scan",     action="store_true",
-                    help="Show signal scores for all markets (how far from breakout)")
+                    help="Show all-strategy snapshot for all markets")
     args = ap.parse_args()
 
     if args.discover:
@@ -439,35 +500,68 @@ if __name__ == "__main__":
         print(f"\nFutures open positions ({len(positions)}):")
         if not positions:
             print("  None")
-        for sym, pos in positions.items():
+        for key, pos in positions.items():
+            strat, sym = key.split(":", 1) if ":" in key else ("donchian", key)
             held = (date.today() - date.fromisoformat(pos["entry_date"])).days
-            print(f"  {sym:<6}  qty={pos['quantity']}  "
+            tag  = "L" if pos.get("direction", "Buy") == "Buy" else "S"
+            print(f"  [{strat}] {sym:<6}[{tag}]  qty={pos['quantity']}  "
                   f"entry={pos['entry_price']:.4f}  "
                   f"stop={pos['stop_price']:.4f}  {held}d")
         sys.exit(0)
 
     if args.scan:
-        # Show how far each market is from its 30-day breakout level
-        from futures.strategy import _atr, BREAKOUT_PERIOD, ATR_PERIOD, MIN_BARS
-        from futures.universe import load_universe
+        from futures.strategy import BREAKOUT_PERIOD
         universe = load_universe()
-        print(f"\n{'Sym':<6} {'Price':>10} {'30d-High':>10} {'Gap%':>7} {'ATR':>8} {'Signal'}")
-        print("  " + "-" * 55)
+        print(f"\nFetching data for {len(universe)} markets...")
+        market_data = {}
         for sym, info in universe.items():
-            df = _fetch_history(info["uic"], info["asset_type"])
+            market_data[sym] = _fetch_history(info["uic"], info["asset_type"])
+
+        # ── Donchian scan ──────────────────────────────────────────────────
+        print(f"\n[DONCHIAN] 30-day breakout levels")
+        print(f"  {'Sym':<6} {'Price':>10} {'30d-Hi':>10} {'30d-Lo':>10} "
+              f"{'Gap%':>7}  Signal")
+        print("  " + "-" * 58)
+        from futures.strategy import _atr as _atr_d
+        for sym, df in market_data.items():
             if df is None:
-                print(f"  {sym:<6}  no data")
-                continue
-            closes = df["Close"].dropna()
-            highs  = df["High"].dropna()
-            lows   = df["Low"].dropna()
-            today  = float(closes.iloc[-1])
-            high30 = float(closes.iloc[-(BREAKOUT_PERIOD + 1):-1].max())
-            atr_v  = float(_atr(highs, lows, closes).iloc[-1])
-            gap_pct = (today / high30 - 1) * 100
-            signal = "BREAKOUT!" if today > high30 else f"{gap_pct:.1f}% from breakout"
-            print(f"  {sym:<6} {today:>10.4f} {high30:>10.4f} {gap_pct:>7.1f}% "
-                  f"{atr_v:>8.4f}  {signal}")
+                print(f"  {sym:<6}  no data"); continue
+            c = df["Close"].dropna(); h = df["High"].dropna(); l = df["Low"].dropna()
+            px    = float(c.iloc[-1])
+            hi30  = float(c.iloc[-(BREAKOUT_PERIOD + 1):-1].max())
+            lo30  = float(c.iloc[-(BREAKOUT_PERIOD + 1):-1].min())
+            atr_v = float(_atr_d(h, l, c).iloc[-1])
+            gap   = (px / hi30 - 1) * 100
+            flag  = "BREAKOUT!" if px > hi30 else ("SHORT BREAK!" if px < lo30 else f"{gap:+.1f}%")
+            print(f"  {sym:<6} {px:>10.4f} {hi30:>10.4f} {lo30:>10.4f} "
+                  f"{gap:>7.1f}%  {flag}")
+
+        # ── RSI scan ───────────────────────────────────────────────────────
+        print(f"\n[RSI] Pullback signals (RSI5 vs 50d SMA trend)")
+        print(f"  {'Sym':<6} {'Price':>10} {'RSI5':>6} {'50d-SMA':>10}  Trend  Status")
+        print("  " + "-" * 52)
+        for row in strat_rsi.scan_summary(market_data):
+            sym = row["symbol"]
+            if row["status"] != "ok":
+                print(f"  {sym:<6}  no data"); continue
+            flag = f"{'**OS**' if row['ob_flag']=='OS' else ('**OB**' if row['ob_flag']=='OB' else '      ')}"
+            print(f"  {sym:<6} {row['close']:>10.4f} {row['rsi5']:>6.1f} "
+                  f"{row['sma50']:>10.4f}  {row['trend']}  {flag}")
+
+        # ── EMA scan ───────────────────────────────────────────────────────
+        print(f"\n[EMA] 5/20 crossover + ADX(14)")
+        print(f"  {'Sym':<6} {'Price':>10} {'EMA5':>10} {'EMA20':>10} "
+              f"{'Gap%':>7} {'ADX':>6}  Trend / ADX")
+        print("  " + "-" * 68)
+        for row in strat_ema.scan_summary(market_data):
+            sym = row["symbol"]
+            if row["status"] != "ok":
+                print(f"  {sym:<6}  no data"); continue
+            adx_lbl = "TREND" if row["adx_ok"] else "range"
+            print(f"  {sym:<6} {row['close']:>10.4f} {row['fast_ema']:>10.4f} "
+                  f"{row['slow_ema']:>10.4f} {row['gap_pct']:>7.2f}% "
+                  f"{row['adx']:>6.1f}  {row['trend']} / {adx_lbl}")
         sys.exit(0)
 
-    run_daily(dry_run=not args.live)
+    active = list(STRATEGIES.keys()) if args.strategy == "all" else [args.strategy]
+    run_daily(dry_run=not args.live, active_strategies=active)

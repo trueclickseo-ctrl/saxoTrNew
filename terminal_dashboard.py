@@ -11,12 +11,17 @@ import os, sys, json, time, sqlite3
 from datetime import datetime, date, timezone, timedelta
 import threading
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import price_service
+
 BASE_DIR        = os.path.dirname(os.path.abspath(__file__))
 DB_PATH         = os.path.join(BASE_DIR, "data", "atos_live.db")
 TOKEN_FILE      = os.path.join(BASE_DIR, "saxo_token.json")
 SIM_BASE        = "https://gateway.saxobank.com/sim/openapi/"
 TRADE_LOG_PATH  = os.path.join(BASE_DIR, "data", "trade_log.csv")
-ETF_STATE_PATH  = os.path.join(BASE_DIR, "saxo_etf_strategy", "data", "etf_positions.json")
+ETF_STATE_PATH   = os.path.join(BASE_DIR, "saxo_etf_strategy", "data", "etf_positions.json")
+FOREX_STATE_PATH = os.path.join(BASE_DIR, "data", "forex_state.json")
+FUTURES_STATE_PATH = os.path.join(BASE_DIR, "data", "futures_state.json")
 
 REFRESH_SECONDS = 30
 TRAILING_PCT  = 0.12   # 12% below trailing_stop_high (matches intraday_monitor)
@@ -155,39 +160,139 @@ def _read_stock_trades(n=20):
         return []
 
 
+def _etf_live_prices(open_sym_map: dict, token: str = None) -> dict:
+    """Fetch ETF live prices: Saxo API first (has UICs), fallback yfinance."""
+    if not open_sym_map:
+        return {}
+    instruments = [
+        {"symbol": sym, "uic": int(uic_str), "asset_type": "Etf"}
+        for uic_str, pos in _etf_open_positions_raw().items()
+        for sym in [pos.get("symbol", "")]
+        if sym and sym in open_sym_map
+    ]
+    if not instruments:
+        # plain yfinance fallback if UIC lookup failed
+        instruments = [{"symbol": s, "uic": None, "asset_type": "Etf"}
+                       for s in open_sym_map]
+    prices, _ = price_service.fetch_prices(instruments, token=token)
+    return {sym: round(px, 2) for sym, px in prices.items()}
+
+
+def _etf_open_positions_raw() -> dict:
+    """Return raw positions dict {uic_str: {symbol, quantity, entry_price, ...}}."""
+    try:
+        d = json.load(open(ETF_STATE_PATH, encoding="utf-8"))
+        return d.get("positions", {})
+    except Exception:
+        return {}
+
+
 def _read_etf_trades():
-    """Read ETF order history from etf_positions.json, newest first."""
+    """Read ETF order history from etf_positions.json, newest first.
+    For open BUY positions, fetches current price via yfinance and shows unrealized P&L."""
     if not os.path.exists(ETF_STATE_PATH):
         return []
     try:
-        d    = json.load(open(ETF_STATE_PATH, encoding="utf-8"))
+        d      = json.load(open(ETF_STATE_PATH, encoding="utf-8"))
         orders = d.get("orders", [])
+
+        # Determine which symbols are still open (positions dict keyed by UIC)
+        open_positions = d.get("positions", {})
+        # Build symbol→entry map from positions values
+        open_sym_map   = {v["symbol"]: v for v in open_positions.values() if "symbol" in v}
+        token          = price_service.load_token()
+        live_prices    = _etf_live_prices(open_sym_map, token=token)
+
         out = []
         for o in reversed(orders):
             side  = (o.get("side") or "").upper()
-            price = o.get("entry_price") if side == "BUY" else o.get("exit_price", 0)
+            sym   = o.get("symbol", "")
+            qty   = o.get("quantity", 0)
+            entry = o.get("entry_price") if side == "BUY" else o.get("exit_price", 0)
             pnl   = None
+            now   = None
+
             if side == "SELL":
                 ep = o.get("entry_price")
                 xp = o.get("exit_price")
                 if ep and xp:
-                    pnl = (xp - ep) * o.get("quantity", 0)
+                    pnl = (xp - ep) * qty
+            elif side == "BUY" and sym in open_sym_map and sym in live_prices:
+                now = live_prices[sym]
+                ep  = o.get("entry_price") or 0
+                if ep > 0:
+                    pnl = (now - ep) * qty
+
             out.append({
-                "date":     (o.get("timestamp") or "")[:10],
-                "action":   side,
-                "ticker":   o.get("symbol", ""),
-                "strategy": "ETF",
-                "shares":   o.get("quantity", 0),
-                "price":    price or 0,
-                "value":    (price or 0) * o.get("quantity", 0),
-                "pnl":      pnl,
-                "currency": "USD",
-                "source":   "etf",
-                "dry_run":  o.get("dry_run", False),
+                "date":      (o.get("timestamp") or "")[:10],
+                "action":    side,
+                "ticker":    sym,
+                "strategy":  "ETF",
+                "shares":    qty,
+                "price":     entry or 0,
+                "now":       now,
+                "value":     (entry or 0) * qty,
+                "pnl":       pnl,
+                "currency":  "USD",
+                "source":    "etf",
+                "dry_run":   o.get("dry_run", False),
             })
         return out
     except Exception:
         return []
+
+
+def _read_forex_positions() -> list:
+    """Read open FX positions from forex_state.json."""
+    if not os.path.exists(FOREX_STATE_PATH):
+        return []
+    try:
+        d         = json.load(open(FOREX_STATE_PATH, encoding="utf-8"))
+        positions = d.get("positions", {})
+        out = []
+        for key, pos in positions.items():
+            strat, sym = key.split(":", 1) if ":" in key else ("ema", key)
+            out.append({
+                "key":        key,
+                "strategy":   strat,
+                "symbol":     sym,
+                "direction":  pos.get("direction", "Buy"),
+                "qty":        pos.get("quantity", 0),
+                "entry":      float(pos.get("entry_price", 0)),
+                "stop":       float(pos.get("stop_price", 0)),
+                "entry_date": pos.get("entry_date", ""),
+                "atr":        float(pos.get("atr_at_entry", 0)),
+            })
+        return out
+    except Exception:
+        return []
+
+
+def _read_futures_positions() -> list:
+    """Read open futures positions from futures_state.json."""
+    if not os.path.exists(FUTURES_STATE_PATH):
+        return []
+    try:
+        d         = json.load(open(FUTURES_STATE_PATH, encoding="utf-8"))
+        positions = d.get("positions", {})
+        out = []
+        for key, pos in positions.items():
+            strat, sym = key.split(":", 1) if ":" in key else ("donchian", key)
+            out.append({
+                "key":        key,
+                "strategy":   strat,
+                "symbol":     sym,
+                "direction":  pos.get("direction", "Buy"),
+                "qty":        pos.get("quantity", 0),
+                "entry":      float(pos.get("entry_price", 0)),
+                "stop":       float(pos.get("stop_price", 0)),
+                "entry_date": pos.get("entry_date", ""),
+            })
+        return out
+    except Exception:
+        return []
+
+
 
 
 def _atos_status():
@@ -515,7 +620,7 @@ def render(token):
     TH_HR = f"  {DM}{'─'*96}{W}"
     TH_HDR = (
         f"{DM}  {'Date':<10}  {'Side':<4}  {'Ticker':<7}  {'Strategy':<14}"
-        f"  {'Shrs':>6}  {'Price':>8}  {'Value':>12}  {'P&L':>14}{W}"
+        f"  {'Shrs':>6}  {'Entry':>8}  {'Now':>8}  {'Value':>12}  {'P&L':>14}  {'%':>8}{W}"
     )
 
     def _trade_rows(trades):
@@ -523,6 +628,7 @@ def render(token):
         for t in trades:
             act = t["action"]; dry = t["dry_run"]; cur = t["currency"]
             pnl = t["pnl"];    val = t["value"]
+            now = t.get("now")  # current live price (ETF open positions only)
             if dry:
                 act_lbl = f"{DM}BUY*{W}"
             elif act == "BUY":
@@ -537,10 +643,18 @@ def render(token):
                 pnl_s = f"{c}{'+'if pnl>=0 else ''}{pnl:,.0f} {cur}{W}"
             else:
                 pnl_s = f"{DM}—{W}"
+            now_s = f"{now:>8.2f}" if now is not None else f"{'—':>8}"
+            if pnl is not None and t["price"] > 0 and t["shares"] > 0:
+                pnl_pct = pnl / (t["price"] * t["shares"]) * 100
+                ppc = GR if pnl_pct >= 0 else RD
+                pct_s = f"{ppc}({'+'if pnl_pct>=0 else ''}{pnl_pct:.2f}%){W}"
+            else:
+                pct_s = f"{DM}{'':>8}{W}"
             rows.append(
                 f"  {act_lbl}  {t['date']:<10}  {BD}{t['ticker']:<7}{W}  "
-                f"{DM}{t['strategy']:<14}{W}  {t['shares']:>6,}  {t['price']:>8.2f}  "
-                f"{DM}{val:>12,.0f}{W}  {_rpad(pnl_s, 14)}"
+                f"{DM}{t['strategy']:<14}{W}  {t['shares']:>6,}  {t['price']:>8.2f}"
+                f"  {DM}{now_s}{W}  "
+                f"{DM}{val:>12,.0f}{W}  {_rpad(pnl_s, 14)}  {pct_s}"
             )
         return rows
 
@@ -572,6 +686,13 @@ def render(token):
     etf_open   = sum(1 for t in etf_trades if t["action"] == "BUY"  and not t["dry_run"])
     etf_dry    = sum(1 for t in etf_trades if t["dry_run"])
 
+    # Totals for open positions
+    etf_total_cost    = sum(t["value"] for t in etf_trades if t["action"] == "BUY" and not t["dry_run"] and t.get("now") is not None)
+    etf_total_now     = sum(t["now"] * t["shares"] for t in etf_trades if t["action"] == "BUY" and not t["dry_run"] and t.get("now") is not None)
+    etf_total_pnl     = sum(t["pnl"] for t in etf_trades if t["action"] == "BUY" and not t["dry_run"] and t.get("pnl") is not None)
+    etf_realized_pnl  = sum(t["pnl"] for t in etf_trades if t["action"] == "SELL" and not t["dry_run"] and t.get("pnl") is not None)
+    etf_pnl_pct       = (etf_total_pnl / etf_total_cost * 100) if etf_total_cost > 0 else 0
+
     L += ["", f"  {BD}ETF TRADES{W}  {DM}(ETF rotation strategy){W}"]
     L.append(TH_HR)
     L.append(TH_HDR)
@@ -581,10 +702,43 @@ def render(token):
     else:
         L.append(f"  {DM}No ETF trades yet{W}")
     L.append(TH_HR)
+
+    # Totals row
+    if etf_total_cost > 0:
+        pnl_col  = GR if etf_total_pnl >= 0 else RD
+        pnl_sign = "+" if etf_total_pnl >= 0 else ""
+        pct_sign = "+" if etf_pnl_pct  >= 0 else ""
+        L.append(
+            f"  {BD}{'TOTAL':<38}{W}"
+            f"  Cost: {BD}{etf_total_cost:>10,.0f}{W} USD"
+            f"  Now: {BD}{etf_total_now:>10,.0f}{W} USD"
+            f"  Unrealized P&L: {pnl_col}{BD}{pnl_sign}{etf_total_pnl:,.0f} USD"
+            f"  ({pct_sign}{etf_pnl_pct:.2f}%){W}"
+        )
+    if etf_realized_pnl:
+        r_col  = GR if etf_realized_pnl >= 0 else RD
+        r_sign = "+" if etf_realized_pnl >= 0 else ""
+        L.append(f"  {DM}Realized P&L (closed): {r_col}{r_sign}{etf_realized_pnl:,.0f} USD{W}")
+
     L.append(
         f"  {etf_open} open   {etf_closed} closed   "
         f"{DM}{etf_dry} dry-run{W}"
     )
+
+    # ── Section 3: Quick Forex + Futures summary ──────────────────────────
+    fx_positions  = _read_forex_positions()
+    fut_positions = _read_futures_positions()
+    MINI_HR = f"  {DM}{'─'*72}{W}"
+    L += ["", MINI_HR]
+    fx_n  = len(fx_positions)
+    fut_n = len(fut_positions)
+    L.append(
+        f"  {CY}{BD}FOREX{W}  {fx_n} open positions  "
+        f"{DM}│{W}  "
+        f"{YL}{BD}FUTURES{W}  {fut_n} open positions  "
+        f"{DM}  →  run: python forex_dashboard.py  for full FX view{W}"
+    )
+    L.append(MINI_HR)
 
     # Today's scan signals
     scan_actions = st.get("actions") or []
@@ -632,6 +786,43 @@ def render(token):
             f"{DM}{len(blocked)} BLOCKED{W}"
         )
 
+    # ── P&L Summary widget ────────────────────────────────────────────
+    try:
+        import pnl_tracker
+        pnl_s = pnl_tracker.get_summary()
+        PNL_HR = f"  {DM}{'─'*80}{W}"
+        L += ["", f"  {BD}P&L SUMMARY{W}  {DM}(realized — run pnl_dashboard.py for full view){W}"]
+        L.append(PNL_HR)
+        MOD_COLS = {"stock": BL, "etf": YL, "futures": MG, "forex": CY}
+        row_parts = []
+        for mod in ("stock", "etf", "futures", "forex"):
+            s    = pnl_s.get(mod, {})
+            col  = MOD_COLS.get(mod, DM)
+            cur  = "SEK" if mod == "stock" else "USD"
+            pnl  = s.get("realized_pnl", 0.0)
+            n    = s.get("closed_trades", 0)
+            wr   = s.get("win_rate", 0.0)
+            pc   = GR if pnl >= 0 else RD
+            sign = "+" if pnl >= 0 else ""
+            row_parts.append(
+                f"{col}{BD}{mod.upper():<8}{W} "
+                f"{pc}{BD}{sign}{pnl:>+,.0f}{W} {DM}{cur}  n={n}  WR={wr:.0f}%{W}"
+            )
+        L.append("  " + "   │   ".join(row_parts))
+        # Grand total (USD modules)
+        tot  = pnl_s.get("total", {})
+        tpnl = tot.get("realized_pnl", 0.0)
+        tc   = GR if tpnl >= 0 else RD
+        ts   = "+" if tpnl >= 0 else ""
+        L.append(
+            f"  {DM}Total realized (USD modules):{W}  "
+            f"{tc}{BD}{tpnl:>+,.2f} USD{W}   "
+            f"{DM}{tot.get('closed_trades',0)} trades  |  WR {tot.get('win_rate',0):.1f}%{W}"
+        )
+        L.append(PNL_HR)
+    except Exception:
+        pass
+
     # Footer
     ref = "once" if "--once" in sys.argv else ("5s" if "--fast" in sys.argv else f"{REFRESH_SECONDS}s")
     L += [
@@ -655,7 +846,8 @@ def main():
         token  = _load_token()
         output = render(token)
 
-        sys.stdout.write(CLEAR + HOME)
+        sys.stdout.write("\033[2J\033[H")
+        sys.stdout.flush()
         sys.stdout.write(output)
         sys.stdout.flush()
         first = False

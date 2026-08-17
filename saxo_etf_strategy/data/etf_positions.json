@@ -1,1 +1,57 @@
-{"positions": {}, "orders": []}
+{
+  "positions": {
+    "35420": {
+      "symbol": "XLV",
+      "quantity": 175,
+      "entry_price": 166.58,
+      "entry_score": 0.16456935123042515,
+      "order_id": "5039666035"
+    },
+    "35416": {
+      "symbol": "XLF",
+      "quantity": 505,
+      "entry_price": 57.99,
+      "entry_score": 0.13305978898007043,
+      "order_id": "5039666036"
+    },
+    "35415": {
+      "symbol": "XLE",
+      "quantity": 470,
+      "entry_price": 62.2,
+      "entry_score": 0.08798320797621129,
+      "order_id": "5039666037"
+    }
+  },
+  "orders": [
+    {
+      "uic": 35420,
+      "symbol": "XLV",
+      "side": "Buy",
+      "quantity": 175,
+      "entry_price": 166.58,
+      "order_id": "5039666035",
+      "dry_run": false,
+      "timestamp": "2026-08-17T13:30:28.551582"
+    },
+    {
+      "uic": 35416,
+      "symbol": "XLF",
+      "side": "Buy",
+      "quantity": 505,
+      "entry_price": 57.99,
+      "order_id": "5039666036",
+      "dry_run": false,
+      "timestamp": "2026-08-17T13:30:29.929155"
+    },
+    {
+      "uic": 35415,
+      "symbol": "XLE",
+      "side": "Buy",
+      "quantity": 470,
+      "entry_price": 62.2,
+      "order_id": "5039666037",
+      "dry_run": false,
+      "timestamp": "2026-08-17T13:30:31.361613"
+    }
+  ]
+}

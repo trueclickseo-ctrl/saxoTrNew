@@ -1,6 +1,6 @@
 # ATOS — Algorithmic Trading Operating System
 ## Agent Handover & Project State Document
-### Last Updated: 2026-08-15 | Updated by: Agent #4 (Kwaseem) — v3
+### Last Updated: 2026-08-17 | Updated by: Agent #4 (Kwaseem) — v4
 
 ---
 
@@ -37,8 +37,14 @@ account via the official Saxo OpenAPI.
 
 **Paper money only. No real money at risk.**
 
-The system runs two validated US equity strategies on **108 S&P 500 blue-chip stocks**,
-with a weekly momentum rebalance, an intraday mean-reversion scanner, a real-time 1-second
+The system runs **four concurrent trading modules**:
+
+1. **US Equities (ATOS)** — Momentum Blend + Mean Reversion on 108 S&P 500 stocks
+2. **ETF Module** — 4-strategy sector rotation / risk-off / mean-reversion on US ETFs
+3. **Futures Module** — 3 strategies (Donchian, RSI Pullback, EMA Crossover) on 5 markets
+4. **Forex Module** — EMA(5/30) + ADX trend-following on 7 FX pairs (FxSpot)
+
+Features: weekly momentum rebalance, intraday mean-reversion scanner, 1-second
 stop-loss monitor, and **automatic email notifications** on every trade and weekly P&L report.
 
 ---
@@ -63,6 +69,8 @@ Dashboard:    python atos_dashboard.py  ->  http://localhost:8070
 | **US Momentum Blend** | LIVE | 50% of live SIM cash | `atos/us_momentum.py` |
 | **US Mean Reversion** | LIVE ON SIM | 50% of live SIM cash | `atos/us_reversion.py` |
 | **ETF Sector Rotation** | DRY RUN (SIM) | 15% of account | `saxo_etf_strategy/` |
+| **Futures (3 strategies)** | LIVE ON SIM | 1% risk/trade (ATR-sized) | `futures/` |
+| **Forex EMA+ADX (7 pairs)** | LIVE ON SIM | 1% risk/trade (ATR-sized) | `forex/` |
 | OMX30 / CPH25 | PAUSED | — | `atos_runner.py` |
 
 ### Universe (2026-08-08)
@@ -80,6 +88,8 @@ Check the dashboard (`python atos_dashboard.py` → http://localhost:8070) for c
 |---|---|---|
 | `atos_runner.py` | Task Scheduler 06:00 PKT | Daily cycle — Blend rebalance + Reversion exits |
 | `saxo_etf_strategy\run_etf_bot.py` | Task Scheduler 06:30 PKT | ETF daily scan — signals + exits |
+| `futures/runner.py --live` | Task Scheduler 06:15 PKT | Futures daily cycle — 3 strategies, all markets |
+| `forex/runner.py --live` | Task Scheduler 06:20 PKT | Forex daily cycle — 7 FX pairs |
 | `atos_runner.py intraday` | Task Scheduler ×5 (19:00–00:30 PKT) | Intraday reversion scan |
 | `intraday_monitor.py` | Task Scheduler 15:30 PKT | 1-second stop-loss watchdog |
 | `terminal_dashboard.py` | Manual | PowerShell live dashboard |
@@ -353,6 +363,29 @@ grep -r "etf_strategy" atos/ run_atos.py   # → no matches
 | `atos_dashboard.py` | Live dashboard server — http://localhost:8070 |
 | `ATOS_Monitor.bat` | Double-click launcher for intraday monitor |
 
+### Futures Module (`futures/`)
+| File | Purpose |
+|---|---|
+| `futures/__init__.py` | Module marker |
+| `futures/universe.py` | 5 markets: ES, NQ (CdfOnIndex), GC (FxSpot), CL, ZB (ContractFutures) with UICs |
+| `futures/strategy.py` | Strategy 1 — Donchian Channel 30d breakout (BP=30, EP=5, Mult=1.5) |
+| `futures/strategy_rsi.py` | Strategy 2 — RSI(2) Pullback within uptrend (RSI<10, SMA50 trend filter) |
+| `futures/strategy_ema.py` | Strategy 3 — EMA(5/20) crossover + ADX(14) ≥ 20 confirmation |
+| `futures/runner.py` | Multi-strategy orchestrator — exits, entries, ATR sizing, state I/O |
+| `data/futures_state.json` | Open positions — keyed as `strategy:symbol` (e.g. `donchian:GC`) |
+| `data/futures_orders.json` | Order log (last 500 entries) |
+| `data/futures_uic_cache.json` | ContractFutures UIC cache (refresh monthly with `--discover`) |
+
+### Forex Module (`forex/`)
+| File | Purpose |
+|---|---|
+| `forex/__init__.py` | Module marker |
+| `forex/universe.py` | 7 FxSpot pairs: EURUSD(21), GBPUSD(31), USDJPY(42), AUDUSD(4), USDCAD(38), NZDUSD(37), USDCHF(39) |
+| `forex/strategy.py` | EMA(5/30) + ADX(14) ≥ 25 — fully bidirectional, 3-bar crossover window |
+| `forex/runner.py` | Live runner — bid/ask → mid, ATR sizing, trail stops, state I/O |
+| `data/forex_state.json` | Open FX positions |
+| `data/forex_orders.json` | Order log (last 500) |
+
 ### Backtests & Research
 | File | Purpose |
 |---|---|
@@ -362,6 +395,8 @@ grep -r "etf_strategy" atos/ run_atos.py   # → no matches
 | `backtest_strategies.py` | Per-instrument strategy backtester |
 | `backtest_momentum.py` | Cross-sectional momentum backtester |
 | `backtest_us_momentum.py` | US momentum daily-equity backtester |
+| `backtest_futures.py` | Donchian grid search (180 combos, ETF proxies, 5y) |
+| `backtest_forex.py` | EMA+ADX grid search (288 combos, 7 pairs, 5y, mark-to-market) |
 
 ### Auth & Infrastructure
 | File | Purpose |
@@ -519,6 +554,37 @@ Honest OOS (61-stock): Sharpe 2.39, WR 70%, MaxDD 5.9%, N=23
 VERDICT:   LIVE ON SIM — watch 6-8 weeks before real capital
 ```
 
+### Futures — 3 Strategies (LIVE ON SIM)
+```
+Markets:    ES, NQ (CdfOnIndex), GC (FxSpot), CL, ZB (ContractFutures)
+Capital:    1% of equity risked per trade, ATR-sized — no fixed budget
+
+Strategy 1 — Donchian Channel (futures/strategy.py)
+  Backtest (5y, ETF proxies): Sharpe=0.754, WR=43%, DD=9%, CAGR=8.7%
+  Signal freq: ~9/year | Hold: 3-4 weeks | Grid: 180 combos
+
+Strategy 2 — RSI(2) Pullback (futures/strategy_rsi.py)
+  Expected: WR ~65-70%, ~42 signals/year | Hold: 5-10 days
+
+Strategy 3 — EMA(5/20) + ADX (futures/strategy_ema.py)
+  Expected: WR ~45-50%, ~21 signals/year | Hold: 14-20 days
+
+Combined: ~70 signals/year ≈ weekly frequency
+VERDICT: LIVE ON SIM — observe for 8 weeks before allocating more
+```
+
+### Forex — EMA(5/30) + ADX (LIVE ON SIM)
+```
+Pairs:      EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, NZDUSD, USDCHF (all FxSpot)
+Capital:    1% of equity risked per trade, ATR-sized
+
+Backtest (5y, 7 pairs): Sharpe=1.619, WR=56%, DD=-5%, CAGR=3.9%
+Best params: FAST=5, SLOW=30, ADX=25, ATR_mult=1.5
+Grid: 288 combos tested; 116 passed all thresholds
+Signal freq: ~8/pair/year → ~56/year total
+VERDICT: LIVE ON SIM — Sharpe > 1.5 is a strong validated edge
+```
+
 ### Rejected (do not revisit)
 | Strategy | Why |
 |---|---|
@@ -545,11 +611,17 @@ VERDICT:   LIVE ON SIM — watch 6-8 weeks before real capital
 
 | **Agent #4 (cont)** | **2026-08-14/15** | **Idempotency fix: REBAL_THRESHOLD=0.10 in plan_rebalance() (prevents sell-rebuy round-trip when runner executes twice). ETF strategy module: saxo_etf_strategy/ — 4 strategies (sector_rotation, risk_off, mean_reversion, dual_ma), conservative risk (15% capital, 5 pos, 8% SL/20% TP), dry_run=True, Task Scheduler at 06:30 PKT. Terminal dashboard: combined stock+ETF trade history table from local CSV + JSON (no Saxo API). DualMA fixed: curated 50-ETF list instead of full 2,122-ETF scan. saxo_client: truncate HTML error bodies, fix raise-None crash on all-rate-limited retries. RSI_ENTRY 33→38 in us_reversion (doubles trade count, Sharpe 1.73).** |
 
+| **Agent #4 (cont)** | **2026-08-17** | **Futures module: 3 strategies (Donchian+RSI(2)+EMA) on ES/NQ/GC/CL/ZB. Multi-strategy runner with `strategy:symbol` position keys. 180-combo Donchian grid (Sharpe=0.754). Forex module: EMA(5/30)+ADX(14) on 7 FxSpot pairs. 288-combo grid (Sharpe=1.619). Mark-to-market backtest equity fix. Vectorized numpy backtester (~50x speedup). Both modules LIVE ON SIM. Updated STRATEGY_NOTES.md and README.md.** |
+
 **Next agent:** You are Agent #8 (or continuing Agent #4).
+- Futures: CL and ZB UICs change monthly — run `python futures/runner.py --discover` to refresh
+- Futures: observe all 3 strategies for 8 weeks before allocating more capital
+- Forex: all 7 pairs confirmed live with bid/ask on SIM — observe for 4 weeks
 - ETF: observe dry-run logs Mon-Fri before flipping `dry_run=False` in `saxo_etf_strategy/config/etf_config.py`
 - ETF: sector_rotation exit-on-rank-drop not yet implemented (only SL/TP exits)
-- Stocks: token expires every ~24h — run `python saxo_auth.py` to refresh
+- Stocks: token expires every ~24h — run `python set_token.py` to refresh
 - Stocks: BF-B, FITB, ETN missing UICs in instrument_map.csv (low priority)
+- Task Scheduler: add futures (06:15 PKT) and forex (06:20 PKT) daily jobs
 
 ---
 

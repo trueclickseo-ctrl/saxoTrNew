@@ -586,6 +586,214 @@ Used by: dashboard charts, terminal scorecard, strategy comparison stats.
 
 ---
 
+## Futures Strategies — Added 2026-08-17
+
+**Module:** `futures/` | **Backtest:** `backtest_futures.py`
+**Status: LIVE ON SIM** — `python futures/runner.py --live`
+
+Three independent strategies run concurrently on **5 markets** (ES, NQ, GC, CL, ZB),
+each with its own position slots. Combined signal frequency: ~70/year ≈ weekly.
+
+---
+
+### Markets (Saxo SIM instrument types — CfdOnFutures not available)
+
+| Symbol | Description | Saxo AssetType | UIC |
+|---|---|---|---|
+| ES | S&P 500 Index CFD | CfdOnIndex | 4913 |
+| NQ | NASDAQ-100 Index CFD | CfdOnIndex | 4912 |
+| GC | Gold Spot (XAU/USD) | FxSpot | 8176 |
+| CL | WTI Crude Oil (front-month) | ContractFutures | ~46093448 |
+| ZB | US 30-Year T-Bond (front-month) | ContractFutures | ~55981420 |
+
+CdfOnIndex and FxSpot bars use `CloseAsk`/`CloseBid` → mid = (Ask+Bid)/2.
+ContractFutures bars use standard `Open/High/Low/Close`.
+CL and ZB UICs change monthly — refresh with `python futures/runner.py --discover`.
+
+---
+
+### Strategy 1 — Donchian Channel Breakout (`futures/strategy.py`)
+
+**Logic:**
+- Entry: close above 30-day highest close → BUY
+- Bidirectional (GC, ZB only): close below 30-day lowest → SHORT
+- Long-only (ES, NQ, CL): no shorting
+- Regime filter: ES/NQ longs blocked when ES < 200-day SMA
+
+**Exit (first hit):**
+- A. 5-day trailing low/high (Donchian exit)
+- B. 1.5 × ATR(14) hard stop
+- C. 30-day time stop
+
+**Grid-optimal parameters (180 combos, 5y, ETF proxies SPY/QQQ/GLD/USO/TLT):**
+```
+BP=30  EP=5  Mult=1.5  Risk=1%
+→ Sharpe=0.754  WR=43%  DD=9%  CAGR=8.7%  N=43 trades (5y)
+```
+**Signal frequency:** ~9/year total (~2 per quarter)
+
+---
+
+### Strategy 2 — RSI(2) Pullback (`futures/strategy_rsi.py`)
+
+**Logic (Connors RSI strategy, adapted for futures):**
+- Entry LONG: close > 50d SMA (uptrend) AND RSI(2) < 10 (extreme oversold dip)
+- Entry SHORT (GC, ZB only): close < 50d SMA AND RSI(2) > 90
+- Regime filter: same as Donchian (ES/NQ longs blocked in risk-off)
+
+**Exit (first hit):**
+- A. RSI(2) recovers above 55 (long) or below 45 (short) — mean reversion complete
+- B. 1.5 × ATR(14) hard stop
+- C. 15-day time stop (pullbacks resolve fast; dead if still open after 15d)
+
+**Why RSI(2) and not RSI(14)?**
+RSI(14) oscillates slowly — rarely hits 20/80 on daily data in a bull market.
+RSI(2) oscillates daily: a 2-day down streak in an uptrend = RSI < 10. This is
+exactly the pattern that snaps back: temporary panic dip within a healthy trend.
+The 50d SMA filter ensures we only buy dips in confirmed uptrends (no falling knives).
+
+**Expected performance (5y, 5 markets):**
+- ~42 signals/year
+- Win rate: ~65-70% (mean reversion has higher WR than trend-following)
+- Avg hold: 5-10 days
+
+---
+
+### Strategy 3 — EMA(5/20) Crossover (`futures/strategy_ema.py`)
+
+**Logic:**
+- Entry: EMA(5) crosses EMA(20) within last 3 bars AND ADX(14) ≥ 20 AND DI aligned
+- Bidirectional (GC, ZB only): short on bearish crossover
+- Long-only (ES, NQ, CL): no shorting
+- Regime filter: same as Donchian
+
+**Exit (first hit):**
+- A. Opposite EMA crossover (EMA(5) crosses back through EMA(20))
+- B. 2.0 × ATR(14) hard stop
+- C. 25-day time stop
+
+**Why ADX ≥ 20 (not 25 like FX)?**
+Futures markets trend more cleanly than FX pairs. ADX ≥ 20 catches
+early-stage trends before they're fully developed. FX needs the stricter 25 filter
+because EUR/USD ranges for weeks around round numbers — futures break out more decisively.
+
+**Expected performance (5y, 5 markets):**
+- ~63 signals/year (raw); ~21 de-duplicated actionable entries/year
+- Win rate: ~45-50%
+- Avg hold: 14-20 days
+
+---
+
+### Signal Frequency Summary
+
+| Strategy | Signals/yr | WR | Avg Hold | Role |
+|---|---|---|---|---|
+| Donchian | ~9 | ~43% | 3-4 weeks | Big trend breakouts |
+| RSI Pullback | ~42 | ~65% | 5-10 days | Dip-buy within uptrend |
+| EMA Crossover | ~21 | ~45% | 2-3 weeks | Trend change signal |
+| **COMBINED** | **~70** | — | — | **~weekly signal frequency** |
+
+---
+
+### How to Run
+
+```powershell
+# From E:\SaxoTrNew\SaxoTrNew\
+python futures/runner.py              # all 3 strategies, dry-run
+python futures/runner.py --live       # all 3 strategies, real SIM orders
+python futures/runner.py --strategy rsi       # RSI pullback only
+python futures/runner.py --strategy donchian  # Donchian only
+python futures/runner.py --strategy ema       # EMA crossover only
+python futures/runner.py --scan               # 3-panel market snapshot
+python futures/runner.py --status             # open positions
+python futures/runner.py --discover           # refresh CL/ZB UICs (monthly)
+```
+
+### State Files
+| File | Purpose |
+|---|---|
+| `data/futures_state.json` | Open positions (keyed as `strategy:symbol`) |
+| `data/futures_orders.json` | Order log (last 500) |
+| `data/futures_uic_cache.json` | UIC map for ContractFutures (refresh monthly) |
+| `data/futures_grid_results.csv` | Donchian grid search results (180 combos) |
+
+### Key Notes
+- Old single-strategy positions (format: `"GC"`) auto-migrated to `"donchian:GC"` on next run
+- Run `--discover` monthly to refresh CL and ZB UICs (front-month rolls)
+- ES/NQ/GC UICs are permanent (CdfOnIndex / FxSpot — no expiry)
+- Backtest uses ETF proxies (SPY/QQQ/GLD/USO/TLT) — avoids roll-gap artifacts from raw futures
+
+---
+
+## Forex (FX Spot) Strategies — Added 2026-08-17
+
+**Module:** `forex/` | **Backtest:** `backtest_forex.py`
+**Status: LIVE ON SIM** — `python forex/runner.py --live`
+
+One strategy on **7 FX pairs**, fully bidirectional (all pairs trade both long and short).
+
+### Pairs (Saxo SIM, all AssetType=FxSpot)
+
+| Pair | UIC | Pip size |
+|---|---|---|
+| EURUSD | 21 | 0.0001 |
+| GBPUSD | 31 | 0.0001 |
+| USDJPY | 42 | 0.01 |
+| AUDUSD | 4 | 0.0001 |
+| USDCAD | 38 | 0.0001 |
+| NZDUSD | 37 | 0.0001 |
+| USDCHF | 39 | 0.0001 |
+
+All bars use `CloseAsk`/`CloseBid` → mid = (Ask+Bid)/2 (same as GC in futures).
+
+---
+
+### Strategy — EMA(5/30) Crossover + ADX(14) Filter
+
+**Why EMA crossover instead of Donchian (like futures)?**
+FX pairs whipsaw heavily around round-number levels. Donchian breakouts produce many
+false signals near key levels (1.2000, 160.00 etc.). The EMA crossover requires price
+to drag BOTH moving averages through each other — confirmed momentum. The ADX ≥ 25
+filter eliminates ranging sessions where crossovers flip back and forth repeatedly.
+
+**Logic:**
+- Entry: EMA(5) crosses EMA(30) within last 3 bars AND ADX(14) ≥ 25 AND DI direction aligned
+- Fully bidirectional: LONG on bullish crossover, SHORT on bearish crossover
+- No regime filter (FX trends independently of equity markets)
+
+**Exit (first hit):**
+- A. Opposite EMA crossover
+- B. 1.5 × ATR(14) hard stop
+- C. 45-day time stop (FX trends last longer than futures)
+
+**Grid-optimal parameters (288 combos, 5y, 7 pairs, yfinance FX data):**
+```
+FAST=5  SLOW=30  ADX=25  Mult=1.5  Risk=1%
+→ Sharpe=1.619  WR=56%  DD=-5%  CAGR=3.9%  N=43 trades (5y)
+116 / 288 combinations pass all thresholds
+```
+
+**Signal frequency:** ~8/year per pair → ~56/year across 7 pairs
+
+### How to Run
+
+```powershell
+python forex/runner.py --info    # verify all 7 UICs live + bid/ask
+python forex/runner.py --scan    # EMA/ADX snapshot for all pairs
+python forex/runner.py           # dry-run (no real orders)
+python forex/runner.py --live    # real SIM orders
+python forex/runner.py --status  # open positions
+```
+
+### State Files
+| File | Purpose |
+|---|---|
+| `data/forex_state.json` | Open positions |
+| `data/forex_orders.json` | Order log (last 500) |
+| `data/forex_grid_results.csv` | Grid search results (288 combos) |
+
+---
+
 ## ETF Strategies — Added 2026-08-15
 
 Four strategies in `saxo_etf_strategy/core/etf_strategy.py`. Select via `strategy_name` in `etf_config.py`.

@@ -14,6 +14,9 @@ Key fixes vs. the original scaffold:
 """
 
 import logging
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+import pnl_tracker
 from typing import List, Optional
 
 from core.saxo_client import SaxoClient
@@ -143,6 +146,9 @@ class ETFExecutor:
             "entry_price": price, "order_id": order_id,
             "dry_run": self.cfg.dry_run,
         })
+        if not self.cfg.dry_run:
+            pnl_tracker.log_open("etf", "ETF Rotation", signal.symbol, "Buy",
+                                 quantity, price, order_id=order_id)
 
     # ------------------------------------------------------------------
     # Exits — stop-loss / take-profit
@@ -227,3 +233,5 @@ class ETFExecutor:
             "exit_price": live_price, "reason": reason,
             "dry_run": self.cfg.dry_run,
         })
+        if not self.cfg.dry_run:
+            pnl_tracker.log_close("etf", symbol, live_price, reason, strategy="ETF Rotation")
