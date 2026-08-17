@@ -64,7 +64,7 @@ DM  = "\033[2m"    # dim
 HOME  = "\033[H"
 CLEAR = "\033[2J"
 
-STRAT_COL = {"ema": CY, "rsi": MG, "donchian": GR}
+STRAT_COL = {"ema": CY, "rsi": MG, "donchian": GR, "bb": YL}
 
 
 def _read_positions() -> list:
@@ -118,9 +118,9 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     positions = _read_positions()
     token     = price_service.load_token()
 
-    # Fetch live prices for ALL 7 FX pairs via Saxo API (fallback: yfinance)
+    # Fetch live prices for ALL 12 FX pairs via Saxo API (fallback: yfinance)
     # This covers both the positions table and the live rates strip
-    all_instruments = list(price_service.FX_INSTRUMENTS)  # all 7 pairs
+    all_instruments = list(price_service.FX_INSTRUMENTS)  # all 12 pairs (7 majors + 5 crosses)
 
     # Also add any position UIC overrides (in case a symbol's UIC differs from FX_INSTRUMENTS)
     pos_uics = {p["symbol"]: {"symbol": p["symbol"], "uic": p["uic"], "asset_type": p["asset_type"]}
@@ -141,17 +141,18 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append(f"  {BD}{CY}╔{'═'*W_TOTAL}╗{W}")
     src_tag = f"{'SAXO LIVE' if price_src=='saxo' else 'yfinance (~15min delay)'}"
     L.append(f"  {BD}{CY}║{'  FOREX QUANT DASHBOARD':^{W_TOTAL}}║{W}")
-    L.append(f"  {BD}{CY}║{f'  EMA · RSI(2) · Donchian  |  7 FX Pairs  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
+    L.append(f"  {BD}{CY}║{f'  EMA · RSI(2) · Donchian · BB  |  12 FX Pairs  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
     L.append(f"  {BD}{CY}╚{'═'*W_TOTAL}╝{W}")
     L.append("")
 
     # ── Strategy legend ───────────────────────────────────────────
     L.append(f"  {BD}STRATEGIES{W}   "
-             f"{CY}{BD}■ EMA(5/30)+ADX(14){W}  trend-following           "
+             f"{CY}{BD}■ EMA(5/30)+ADX(14){W}  trend-following   "
              f"{MG}{BD}■ RSI(2) Pullback{W}  mean-reversion in trend   "
-             f"{GR}{BD}■ Donchian(20){W}  channel breakout")
+             f"{GR}{BD}■ Donchian(20){W}  channel breakout   "
+             f"{YL}{BD}■ BB(20,2)+RSI(14){W}  fade extremes")
     L.append(f"  {DM}Scheduler: 06:20 PKT daily  |  --live flag active  |  "
-             f"Max 4 slots × 3 strategies = 12 positions{W}")
+             f"Max 4 slots × 4 strategies = 16 positions  |  12 pairs: 7 majors + 5 crosses{W}")
     L.append(HR)
     L.append("")
 
@@ -271,9 +272,10 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append("")
 
     strat_labels = {
-        "ema":      ("EMA Trend",       "EMA(5/30)+ADX(14)",  "Sharpe 1.13",   "4 slots"),
-        "rsi":      ("RSI Pullback",    "RSI(2)<10 dip-buy",  "mean reversion", "4 slots"),
-        "donchian": ("Donchian Break",  "20-day high/low",    "Sharpe 1.62",   "4 slots"),
+        "ema":      ("EMA Trend",       "EMA(5/30)+ADX(14)",    "Sharpe 1.13",    "4 slots"),
+        "rsi":      ("RSI Pullback",    "RSI(2)<10 dip-buy",    "mean reversion", "4 slots"),
+        "donchian": ("Donchian Break",  "20-day high/low",      "Sharpe 1.62",    "4 slots"),
+        "bb":       ("BB Reversion",    "BB(20,2)+RSI(14) fade","8d time stop",   "4 slots"),
     }
 
     for strat, (label, desc, metric, slots) in strat_labels.items():
@@ -303,15 +305,21 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append("")
     L.append(f"  {BD}LIVE RATES{W}  {DM}({src_label}){W}")
     L.append("")
-    rate_line = "  "
-    for inst in price_service.FX_INSTRUMENTS:
-        sym = inst["symbol"]
-        px  = live.get(sym)
-        if px:
-            rate_line += f"{BD}{sym}{W}  {DM}{px:.5f}{W}    "
-        else:
-            rate_line += f"{DM}{sym}  —{W}    "
-    L.append(rate_line)
+    # Two rows: majors first, then crosses
+    MAJORS  = ["EURUSD","GBPUSD","USDJPY","AUDUSD","USDCAD","NZDUSD","USDCHF"]
+    CROSSES = ["EURGBP","EURJPY","GBPJPY","AUDJPY","CADJPY"]
+
+    def _rate_row(syms):
+        row = "  "
+        for sym in syms:
+            px = live.get(sym)
+            row += (f"{BD}{sym}{W}  {DM}{px:.5f}{W}    " if px
+                    else f"{DM}{sym}  —{W}    ")
+        return row
+
+    L.append(_rate_row(MAJORS))
+    L.append("")
+    L.append(_rate_row(CROSSES))
     L.append("")
     L.append(HR)
 

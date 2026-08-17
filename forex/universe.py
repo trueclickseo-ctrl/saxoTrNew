@@ -16,6 +16,7 @@ Run `python forex/runner.py --info` to verify UICs are live.
 # Amount in orders = units of base currency (e.g. EUR for EURUSD).
 
 PAIRS = [
+    # ── G7 Majors ────────────────────────────────────────────────────────────
     {
         "symbol":      "EURUSD",
         "description": "Euro / US Dollar",
@@ -84,6 +85,58 @@ PAIRS = [
         "uic":         39,
         "yf_ticker":   "USDCHF=X",
         "pip_size":    0.0001,
+        "min_units":   1_000,
+    },
+    # ── Liquid Cross Pairs ───────────────────────────────────────────────────
+    # UICs confirmed via lookup_fx_uics.py against Saxo SIM on 2026-08-17
+    {
+        "symbol":      "EURGBP",
+        "description": "Euro / British Pound",
+        "base":        "EUR",
+        "quote":       "GBP",
+        "uic":         17,
+        "yf_ticker":   "EURGBP=X",
+        "pip_size":    0.0001,
+        "min_units":   1_000,
+    },
+    {
+        "symbol":      "EURJPY",
+        "description": "Euro / Japanese Yen",
+        "base":        "EUR",
+        "quote":       "JPY",
+        "uic":         18,
+        "yf_ticker":   "EURJPY=X",
+        "pip_size":    0.01,
+        "min_units":   1_000,
+    },
+    {
+        "symbol":      "GBPJPY",
+        "description": "British Pound / Japanese Yen",
+        "base":        "GBP",
+        "quote":       "JPY",
+        "uic":         26,
+        "yf_ticker":   "GBPJPY=X",
+        "pip_size":    0.01,
+        "min_units":   1_000,
+    },
+    {
+        "symbol":      "AUDJPY",
+        "description": "Australian Dollar / Japanese Yen",
+        "base":        "AUD",
+        "quote":       "JPY",
+        "uic":         2,
+        "yf_ticker":   "AUDJPY=X",
+        "pip_size":    0.01,
+        "min_units":   1_000,
+    },
+    {
+        "symbol":      "CADJPY",
+        "description": "Canadian Dollar / Japanese Yen",
+        "base":        "CAD",
+        "quote":       "JPY",
+        "uic":         6,
+        "yf_ticker":   "CADJPY=X",
+        "pip_size":    0.01,
         "min_units":   1_000,
     },
 ]

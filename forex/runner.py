@@ -4,17 +4,23 @@ forex/runner.py
 Multi-strategy daily execution runner for FX pairs.
 
 Strategies:
-  ema       — EMA(5/30) + ADX(14) crossover  (original)
-  rsi       — RSI(2) pullback within EMA(200) trend
-  donchian  — 20-day Donchian channel breakout
+  ema       — EMA(5/30) + ADX(14) crossover  (trend-following)
+  rsi       — RSI(2) pullback within EMA(200) trend (mean-reversion within trend)
+  donchian  — 20-day Donchian channel breakout (momentum)
+  bb        — Bollinger Band(20,2) + RSI(14) mean-reversion (fade extremes)
+
+Universe:
+  7 G7 majors: EURUSD GBPUSD USDJPY AUDUSD USDCAD NZDUSD USDCHF
+  5 crosses:   EURGBP EURJPY GBPJPY AUDJPY CADJPY
 
 Usage:
-    python forex/runner.py                       # all 3 strategies, dry-run
-    python forex/runner.py --live                # all 3, real Saxo SIM orders
+    python forex/runner.py                       # all 4 strategies, dry-run
+    python forex/runner.py --live                # all 4, real Saxo SIM orders
     python forex/runner.py --strategy ema        # EMA only
     python forex/runner.py --strategy rsi        # RSI only
     python forex/runner.py --strategy donchian   # Donchian only
-    python forex/runner.py --scan                # 3-panel market snapshot
+    python forex/runner.py --strategy bb         # BB reversion only
+    python forex/runner.py --scan                # 4-panel market snapshot
     python forex/runner.py --status              # open positions
     python forex/runner.py --info                # verify UICs live
 
@@ -44,6 +50,7 @@ from forex.universe import PAIRS, ASSET_TYPE, get_pair
 import forex.strategy          as strat_ema
 import forex.strategy_rsi      as strat_rsi
 import forex.strategy_donchian as strat_donchian
+import forex.strategy_bb       as strat_bb
 import pnl_tracker
 
 logging.basicConfig(
@@ -58,8 +65,9 @@ STRATEGIES = {
     "ema":      strat_ema,
     "rsi":      strat_rsi,
     "donchian": strat_donchian,
+    "bb":       strat_bb,
 }
-SLOTS_PER_STRATEGY = {"ema": 4, "rsi": 4, "donchian": 4}
+SLOTS_PER_STRATEGY = {"ema": 4, "rsi": 4, "donchian": 4, "bb": 4}
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 BASE_URL    = "https://gateway.saxobank.com/sim/openapi"
@@ -415,12 +423,12 @@ if __name__ == "__main__":
     ap.add_argument("--live",     action="store_true",
                     help="Place real orders in Saxo SIM (default: dry-run)")
     ap.add_argument("--strategy", default="all",
-                    choices=["all", "ema", "rsi", "donchian"],
+                    choices=["all", "ema", "rsi", "donchian", "bb"],
                     help="Which strategy to run (default: all)")
     ap.add_argument("--status",   action="store_true",
                     help="Print open positions and exit")
     ap.add_argument("--scan",     action="store_true",
-                    help="Show 3-panel market snapshot")
+                    help="Show 4-panel market snapshot")
     ap.add_argument("--info",     action="store_true",
                     help="Verify UICs via live Saxo quotes")
     args = ap.parse_args()
@@ -496,6 +504,20 @@ if __name__ == "__main__":
                 print(f"  {r['symbol']:<10}  no data"); continue
             print(f"  {r['symbol']:<10} {r['close']:>10.5f} {r['high20']:>10.5f} "
                   f"{r['low20']:>10.5f}  {r['signal']}")
+
+        # Panel 4 — Bollinger Band reversion
+        print(f"\n[BB] Bollinger Band(20,2) + RSI(14) mean reversion")
+        rows = strat_bb.scan_summary(market_data)
+        print(f"  {'Pair':<10} {'Close':>10} {'BB_Upper':>10} {'BB_Mid':>10} {'BB_Lower':>10} "
+              f"{'BB%':>6} {'RSI14':>7}  Signal")
+        print("  " + "-" * 80)
+        for r in rows:
+            if r["status"] != "ok":
+                print(f"  {r['symbol']:<10}  no data"); continue
+            flag = f"  *** {r['flag']} ***" if r.get("flag") else ""
+            print(f"  {r['symbol']:<10} {r['close']:>10.5f} {r['bb_upper']:>10.5f} "
+                  f"{r['bb_mid']:>10.5f} {r['bb_lower']:>10.5f} "
+                  f"{r['bb_pct']:>6.1f}% {r['rsi14']:>7.1f}{flag}")
         sys.exit(0)
 
     active = list(STRATEGIES) if args.strategy == "all" else [args.strategy]

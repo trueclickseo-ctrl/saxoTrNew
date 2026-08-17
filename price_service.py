@@ -24,6 +24,8 @@ _YF_MAP = {
     "EURUSD": "EURUSD=X", "GBPUSD": "GBPUSD=X", "USDJPY": "JPY=X",
     "AUDUSD": "AUDUSD=X", "USDCAD": "CAD=X",    "NZDUSD": "NZDUSD=X",
     "USDCHF": "CHF=X",
+    "EURGBP": "EURGBP=X", "EURJPY": "EURJPY=X", "GBPJPY": "GBPJPY=X",
+    "AUDJPY": "AUDJPY=X", "CADJPY": "CADJPY=X",
     # ETF — same symbol works in yfinance
     "XLK": "XLK", "XLV": "XLV", "XLE": "XLE", "XLF": "XLF",
     "XLI": "XLI", "XLY": "XLY", "XLP": "XLP", "XLU": "XLU",
@@ -41,6 +43,12 @@ FX_INSTRUMENTS = [
     {"symbol": "USDCAD", "uic": 38,  "asset_type": "FxSpot"},
     {"symbol": "NZDUSD", "uic": 37,  "asset_type": "FxSpot"},
     {"symbol": "USDCHF", "uic": 39,  "asset_type": "FxSpot"},
+    # Cross pairs — UICs confirmed Saxo SIM 2026-08-17
+    {"symbol": "EURGBP", "uic": 17,  "asset_type": "FxSpot"},
+    {"symbol": "EURJPY", "uic": 18,  "asset_type": "FxSpot"},
+    {"symbol": "GBPJPY", "uic": 26,  "asset_type": "FxSpot"},
+    {"symbol": "AUDJPY", "uic": 2,   "asset_type": "FxSpot"},
+    {"symbol": "CADJPY", "uic": 6,   "asset_type": "FxSpot"},
 ]
 
 
