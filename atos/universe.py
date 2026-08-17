@@ -117,7 +117,7 @@ SP500_TICKERS = [
 
     # ── Technology — gaming & media software (3) ─────────────────────────────
     "RBLX",  # Roblox — user-generated gaming platform
-    "EA",    # Electronic Arts — gaming (may need Live acct for UIC)
+    # "EA",  # Electronic Arts — not available in Saxo SIM (no instrument found)
     "TTWO",  # Take-Two Interactive — GTA publisher
 
     # ── Technology — international tech ADRs (7) ─────────────────────────────
