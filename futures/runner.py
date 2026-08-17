@@ -38,7 +38,6 @@ from futures.strategy import (
     generate_signals, should_exit, size_position,
     trailing_stop_update,
     MAX_POSITIONS, MIN_BARS,
-    LONG_ONLY_MARKETS, BIDIRECTIONAL_MARKETS,
 )
 
 logging.basicConfig(
@@ -50,11 +49,18 @@ logger = logging.getLogger("futures.runner")
 
 # ── Constants ──────────────────────────────────────────────────────────────
 BASE_URL    = "https://gateway.saxobank.com/sim/openapi"
-ASSET_TYPE  = "CfdOnFutures"
 DATA_DIR    = os.path.join(_ROOT, "data")
 STATE_FILE  = os.path.join(DATA_DIR, "futures_state.json")
 ORDERS_FILE = os.path.join(DATA_DIR, "futures_orders.json")
-CHART_BARS  = 60          # daily bars to fetch (needs ≥ MIN_BARS = 39)
+CHART_BARS  = 60          # daily bars to fetch (needs >= MIN_BARS)
+
+# Chart API horizon: 1440 = daily bars.
+# Asset types that the chart API accepts per instrument type:
+CHART_ASSET_TYPE = {
+    "CfdOnIndex":      "CfdOnIndex",
+    "FxSpot":          "FxSpot",
+    "ContractFutures": "ContractFutures",
+}
 
 
 # ── Saxo HTTP helpers ──────────────────────────────────────────────────────
@@ -112,40 +118,58 @@ def _account() -> tuple[float, str]:
 
 # ── Price data ─────────────────────────────────────────────────────────────
 
-def _fetch_history(uic: int, count: int = CHART_BARS) -> pd.DataFrame | None:
+def _fetch_history(uic: int, asset_type: str,
+                   count: int = CHART_BARS) -> pd.DataFrame | None:
     """Fetch daily OHLCV from Saxo chart API v3. Returns DataFrame or None."""
     try:
         resp = _get("/chart/v3/charts", {
             "Uic":       uic,
-            "AssetType": ASSET_TYPE,
+            "AssetType": asset_type,
             "Horizon":   1440,
             "Count":     count + 5,
         })
         rows = []
         for bar in resp.get("Data", []):
-            if isinstance(bar, dict):
+            if not isinstance(bar, dict):
+                continue
+            # ContractFutures: Open/High/Low/Close fields
+            # CfdOnIndex / FxSpot: bid/ask spread — use mid price
+            if "Close" in bar or "close" in bar:
                 o = bar.get("Open",  bar.get("open",  None))
                 h = bar.get("High",  bar.get("high",  None))
                 l = bar.get("Low",   bar.get("low",   None))
                 c = bar.get("Close", bar.get("close", None))
                 v = bar.get("Volume",bar.get("volume",0))
-                if None not in (o, h, l, c) and float(c) > 0:
-                    rows.append({"Open": float(o), "High": float(h),
-                                 "Low":  float(l), "Close": float(c),
-                                 "Volume": float(v)})
+            elif "CloseAsk" in bar and "CloseBid" in bar:
+                ask_c = float(bar["CloseAsk"]); bid_c = float(bar["CloseBid"])
+                ask_h = float(bar.get("HighAsk", ask_c))
+                bid_l = float(bar.get("LowBid",  bid_c))
+                ask_o = float(bar.get("OpenAsk", ask_c))
+                bid_o = float(bar.get("OpenBid", bid_c))
+                o = (ask_o + bid_o) / 2
+                h = (ask_h + float(bar.get("HighBid", ask_h))) / 2
+                l = (bid_l + float(bar.get("LowAsk",  bid_l))) / 2
+                c = (ask_c + bid_c) / 2
+                v = 0
+            else:
+                continue
+            if None not in (o, h, l, c) and float(c) > 0:
+                rows.append({"Open": float(o), "High": float(h),
+                             "Low":  float(l), "Close": float(c),
+                             "Volume": float(v)})
         if len(rows) >= MIN_BARS:
             return pd.DataFrame(rows)
         logger.debug(f"UIC {uic}: only {len(rows)} bars (need {MIN_BARS})")
         return None
     except Exception as exc:
-        logger.warning(f"Chart fetch failed for UIC {uic}: {exc}")
+        logger.warning(f"Chart fetch failed for UIC {uic} ({asset_type}): {exc}")
         return None
 
 
-def _live_price(uic: int, account_key: str) -> float | None:
+def _live_price(uic: int, asset_type: str, account_key: str) -> float | None:
     """Current mid price via /trade/v1/infoprices."""
     try:
-        params = {"Uic": uic, "AssetType": ASSET_TYPE, "FieldGroups": "Quote"}
+        params = {"Uic": uic, "AssetType": asset_type, "FieldGroups": "Quote"}
         if account_key:
             params["AccountKey"] = account_key
         resp = _get("/trade/v1/infoprices", params)
@@ -213,7 +237,7 @@ def run_daily(dry_run: bool = True) -> dict:
     # ── Fetch daily history for all markets ──────────────────────────────
     market_data: dict[str, pd.DataFrame | None] = {}
     for sym, info in universe.items():
-        market_data[sym] = _fetch_history(info["uic"])
+        market_data[sym] = _fetch_history(info["uic"], info["asset_type"])
 
     # ── Trail stops for open positions ───────────────────────────────────
     from futures.strategy import _atr
@@ -247,15 +271,15 @@ def run_daily(dry_run: bool = True) -> dict:
         if not exit_flag:
             continue
 
-        info      = universe.get(sym, {})
-        uic       = info.get("uic") or pos.get("uic")
-        qty       = pos.get("quantity", 1)
-        direction = pos.get("direction", "Buy")
-        is_long   = direction == "Buy"
-        # Closing side: long → Sell;  short → Buy
+        info       = universe.get(sym, {})
+        uic        = info.get("uic") or pos.get("uic")
+        asset_type = info.get("asset_type") or pos.get("asset_type", "CfdOnIndex")
+        qty        = pos.get("quantity", 1)
+        direction  = pos.get("direction", "Buy")
+        is_long    = direction == "Buy"
         close_side = "Sell" if is_long else "Buy"
 
-        live_px = _live_price(uic, akey) if uic else None
+        live_px = _live_price(uic, asset_type, akey) if uic else None
         live_px = live_px or float(pos.get("entry_price", 0))
         entry   = float(pos.get("entry_price", 0))
         raw_pnl = (live_px - entry) if is_long else (entry - live_px)
@@ -264,7 +288,7 @@ def run_daily(dry_run: bool = True) -> dict:
         order = {
             "AccountKey":    akey,
             "Uic":           uic,
-            "AssetType":     ASSET_TYPE,
+            "AssetType":     asset_type,
             "Amount":        qty,
             "BuySell":       close_side,
             "OrderType":     "Market",
@@ -299,16 +323,17 @@ def run_daily(dry_run: bool = True) -> dict:
                    and s["symbol"] in universe]
 
         for sig in signals[:slots_free]:
-            sym       = sig["symbol"]
-            info      = universe[sym]
-            uic       = info["uic"]
-            qty       = size_position(equity, sig["atr"])
-            direction = sig["direction"]   # "Buy" (long) or "Sell" (short)
+            sym        = sig["symbol"]
+            info       = universe[sym]
+            uic        = info["uic"]
+            asset_type = info["asset_type"]
+            qty        = size_position(equity, sig["atr"])
+            direction  = sig["direction"]
 
             order = {
                 "AccountKey":    akey,
                 "Uic":           uic,
-                "AssetType":     ASSET_TYPE,
+                "AssetType":     asset_type,
                 "Amount":        qty,
                 "BuySell":       direction,
                 "OrderType":     "Market",
@@ -328,6 +353,7 @@ def run_daily(dry_run: bool = True) -> dict:
 
             positions[sym] = {
                 "uic":          uic,
+                "asset_type":   asset_type,
                 "direction":    direction,
                 "entry_price":  sig["close"],
                 "stop_price":   sig["stop_price"],
@@ -385,12 +411,14 @@ if __name__ == "__main__":
                     help="(Re)discover instrument UICs from Saxo and exit")
     ap.add_argument("--status",   action="store_true",
                     help="Print open positions and exit (no orders)")
+    ap.add_argument("--scan",     action="store_true",
+                    help="Show signal scores for all markets (how far from breakout)")
     args = ap.parse_args()
 
     if args.discover:
         logger.info("Discovering futures instrument UICs from Saxo SIM...")
         from futures.universe import discover_uics, UIC_CACHE
-        import json, os
+        import json as _json
 
         def _get_fn(path, params=None):
             return _get(path, params)
@@ -398,10 +426,11 @@ if __name__ == "__main__":
         universe = discover_uics(_get_fn)
         os.makedirs(DATA_DIR, exist_ok=True)
         with open(UIC_CACHE, "w") as f:
-            json.dump(universe, f, indent=2)
+            _json.dump(universe, f, indent=2)
         print(f"\nDiscovered {len(universe)} markets:")
         for sym, info in universe.items():
-            print(f"  {sym:<6}  UIC={info['uic']}  {info['description']}")
+            print(f"  {sym:<6}  UIC={info['uic']:<12}  {info['asset_type']:<20}  "
+                  f"{info['description']}")
         sys.exit(0)
 
     if args.status:
@@ -415,6 +444,30 @@ if __name__ == "__main__":
             print(f"  {sym:<6}  qty={pos['quantity']}  "
                   f"entry={pos['entry_price']:.4f}  "
                   f"stop={pos['stop_price']:.4f}  {held}d")
+        sys.exit(0)
+
+    if args.scan:
+        # Show how far each market is from its 30-day breakout level
+        from futures.strategy import _atr, BREAKOUT_PERIOD, ATR_PERIOD, MIN_BARS
+        from futures.universe import load_universe
+        universe = load_universe()
+        print(f"\n{'Sym':<6} {'Price':>10} {'30d-High':>10} {'Gap%':>7} {'ATR':>8} {'Signal'}")
+        print("  " + "-" * 55)
+        for sym, info in universe.items():
+            df = _fetch_history(info["uic"], info["asset_type"])
+            if df is None:
+                print(f"  {sym:<6}  no data")
+                continue
+            closes = df["Close"].dropna()
+            highs  = df["High"].dropna()
+            lows   = df["Low"].dropna()
+            today  = float(closes.iloc[-1])
+            high30 = float(closes.iloc[-(BREAKOUT_PERIOD + 1):-1].max())
+            atr_v  = float(_atr(highs, lows, closes).iloc[-1])
+            gap_pct = (today / high30 - 1) * 100
+            signal = "BREAKOUT!" if today > high30 else f"{gap_pct:.1f}% from breakout"
+            print(f"  {sym:<6} {today:>10.4f} {high30:>10.4f} {gap_pct:>7.1f}% "
+                  f"{atr_v:>8.4f}  {signal}")
         sys.exit(0)
 
     run_daily(dry_run=not args.live)
