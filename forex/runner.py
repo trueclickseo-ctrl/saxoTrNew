@@ -362,6 +362,61 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
 
 # ── Main daily cycle ──────────────────────────────────────────────────────────
 
+def run_exits_only(dry_run: bool = True,
+                   active_strategies: list | None = None) -> dict:
+    """Check stops and time-stops on all open positions — no new entries."""
+    if active_strategies is None:
+        active_strategies = list(STRATEGIES)
+
+    mode = "DRY-RUN" if dry_run else "LIVE (Saxo SIM)"
+    logger.info("=" * 60)
+    logger.info(f"  FX Runner [EXITS-ONLY] — {mode}  "
+                f"{datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    logger.info("=" * 60)
+
+    state     = _load_state()
+    positions = state.setdefault("positions", {})
+    _, akey   = _account()
+    today_str = date.today().isoformat()
+
+    logger.info(f"Open positions : {len(positions)}")
+
+    market_data: dict[str, pd.DataFrame | None] = {}
+    for pair in PAIRS:
+        market_data[pair["symbol"]] = _fetch_history(pair["uic"])
+
+    total_exits = 0
+    for strat_name in active_strategies:
+        strat_mod = STRATEGIES[strat_name]
+        exits = _run_exits(strat_name, strat_mod, positions,
+                           market_data, akey, dry_run, today_str)
+        if exits:
+            logger.info(f"  [{strat_name}] Closed {exits} position(s)")
+        total_exits += exits
+
+    logger.info("=" * 60)
+    logger.info(f"  EXITS-ONLY complete — Closed: {total_exits}  "
+                f"|  Still holding: {len(positions)}")
+    for key, pos in positions.items():
+        strat, sym = key.split(":", 1) if ":" in key else ("ema", key)
+        df      = market_data.get(sym)
+        cur_px  = float(df["Close"].iloc[-1]) if df is not None else pos["entry_price"]
+        is_long = pos.get("direction", "Buy") == "Buy"
+        pnl_pct = ((cur_px - pos["entry_price"]) / pos["entry_price"] * 100
+                   if is_long else
+                   (pos["entry_price"] - cur_px) / pos["entry_price"] * 100)
+        held    = (date.today() - date.fromisoformat(pos.get("entry_date", today_str))).days
+        tag     = "L" if is_long else "S"
+        logger.info(f"  HOLD [{strat}] {sym}[{tag}]  "
+                    f"entry={pos['entry_price']:.5f}  now={cur_px:.5f}  "
+                    f"P&L {pnl_pct:+.2f}%  stop={pos['stop_price']:.5f}  {held}d")
+    logger.info("=" * 60)
+
+    state["last_exits_check"] = datetime.now().isoformat()
+    _save_state(state)
+    return {"exits": total_exits, "holding": len(positions), "dry_run": dry_run}
+
+
 def run_daily(dry_run: bool = True, active_strategies: list | None = None) -> dict:
     if active_strategies is None:
         active_strategies = list(STRATEGIES)
@@ -439,8 +494,10 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None) -> di
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="FX multi-strategy runner")
-    ap.add_argument("--live",     action="store_true",
+    ap.add_argument("--live",        action="store_true",
                     help="Place real orders in Saxo SIM (default: dry-run)")
+    ap.add_argument("--exits-only",  action="store_true",
+                    help="Check stops only — no new entries (intraday stop check)")
     ap.add_argument("--strategy", default="all",
                     choices=["all", "ema", "rsi", "donchian", "bb"],
                     help="Which strategy to run (default: all)")
@@ -540,4 +597,7 @@ if __name__ == "__main__":
         sys.exit(0)
 
     active = list(STRATEGIES) if args.strategy == "all" else [args.strategy]
-    run_daily(dry_run=not args.live, active_strategies=active)
+    if args.exits_only:
+        run_exits_only(dry_run=not args.live, active_strategies=active)
+    else:
+        run_daily(dry_run=not args.live, active_strategies=active)
