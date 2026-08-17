@@ -165,13 +165,15 @@ def generate_signals(market_data: dict, open_symbols: set = None) -> list:
         # rather than the exact crossover day — catches the setup even if we
         # missed the precise crossover session.
 
-        # Look back at most SIGNAL_LOOKBACK bars for when crossover occurred
-        SIGNAL_LOOKBACK = 3
+        # Look back at most SIGNAL_LOOKBACK bars for when crossover occurred.
+        # 15 bars (3 trading weeks) lets us enter established trends that are
+        # still intact — ADX filter ensures we only trade real momentum.
+        SIGNAL_LOOKBACK = 15
         n = len(fast)
         bullish_alignment = cur_fast > cur_slow
         bearish_alignment = cur_fast < cur_slow
 
-        # Check if crossover happened recently (within SIGNAL_LOOKBACK bars)
+        # Check if crossover happened within the lookback window
         recent_long_x, recent_short_x = False, False
         for k in range(1, min(SIGNAL_LOOKBACK + 1, n - 1)):
             f_cur  = float(fast.iloc[-k])

@@ -199,8 +199,27 @@ def _load_state() -> dict:
 
 def _save_state(state: dict) -> None:
     os.makedirs(DATA_DIR, exist_ok=True)
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=2, default=str)
+    tmp = STATE_FILE + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(state, f, indent=2, default=str)
+        # Atomic replace — works even when the target was created by another user
+        if os.path.exists(STATE_FILE):
+            os.replace(tmp, STATE_FILE)
+        else:
+            os.rename(tmp, STATE_FILE)
+    except PermissionError:
+        # State file owned by SYSTEM (Task Scheduler). Delete and recreate.
+        try:
+            os.remove(STATE_FILE)
+        except Exception:
+            pass
+        try:
+            os.rename(tmp, STATE_FILE)
+        except Exception as e:
+            logger.error(f"Cannot write state file — run PowerShell as Admin and fix permissions: {e}")
+            if os.path.exists(tmp):
+                os.remove(tmp)
 
 
 def _log_order(entry: dict) -> None:
