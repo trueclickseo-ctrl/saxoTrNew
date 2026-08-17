@@ -8,6 +8,7 @@ Strategies:
   rsi       — RSI(2) pullback within EMA(200) trend (mean-reversion within trend)
   donchian  — 20-day Donchian channel breakout (momentum)
   bb        — Bollinger Band(20,2) + RSI(14) mean-reversion (fade extremes)
+  pullback  — EMA(20) pullback in EMA(50) trend (~70% win rate, tight stops)
 
 Universe:
   27 pairs — 7 G7 majors + 20 liquid crosses (UICs confirmed Saxo SIM)
@@ -17,10 +18,11 @@ Universe:
 Usage:
     python forex/runner.py                          # all 4 strategies, all 27 pairs, dry-run
     python forex/runner.py --live                   # all 4, real Saxo SIM orders
-    python forex/runner.py --session asian --live   # Asian session (14 pairs, 06:20 PKT)
-    python forex/runner.py --session london --live  # London session (13 pairs, 18:00 PKT)
-    python forex/runner.py --exits-only --live      # stop-check only, all pairs (14:00 PKT)
-    python forex/runner.py --strategy ema           # EMA only
+    python forex/runner.py --session asian --live    # Asian session (14 pairs, 06:20 PKT)
+    python forex/runner.py --session london --live   # London session (13 pairs, 18:00 PKT)
+    python forex/runner.py --exits-only --live       # stop-check only, all pairs (14:00 PKT)
+    python forex/runner.py --strategy pullback       # Pullback strategy only
+    python forex/runner.py --strategy ema            # EMA only
     python forex/runner.py --scan                   # 4-panel market snapshot
     python forex/runner.py --status                 # open positions
     python forex/runner.py --info                   # verify UICs live
@@ -52,6 +54,7 @@ import forex.strategy          as strat_ema
 import forex.strategy_rsi      as strat_rsi
 import forex.strategy_donchian as strat_donchian
 import forex.strategy_bb       as strat_bb
+import forex.strategy_pullback as strat_pullback
 import pnl_tracker
 
 logging.basicConfig(
@@ -67,8 +70,9 @@ STRATEGIES = {
     "rsi":      strat_rsi,
     "donchian": strat_donchian,
     "bb":       strat_bb,
+    "pullback": strat_pullback,
 }
-SLOTS_PER_STRATEGY = {"ema": 4, "rsi": 4, "donchian": 4, "bb": 4}
+SLOTS_PER_STRATEGY = {"ema": 4, "rsi": 4, "donchian": 4, "bb": 4, "pullback": 4}
 
 # ── Session-aware pair groups ──────────────────────────────────────────────────
 # asian  : 06:20 PKT  — Tokyo/Sydney session (JPY crosses, AUD, NZD)
@@ -527,7 +531,7 @@ if __name__ == "__main__":
     ap.add_argument("--exits-only",  action="store_true",
                     help="Check stops only — no new entries (intraday stop check)")
     ap.add_argument("--strategy", default="all",
-                    choices=["all", "ema", "rsi", "donchian", "bb"],
+                    choices=["all", "ema", "rsi", "donchian", "bb", "pullback"],
                     help="Which strategy to run (default: all)")
     ap.add_argument("--status",   action="store_true",
                     help="Print open positions and exit")
@@ -625,6 +629,28 @@ if __name__ == "__main__":
             print(f"  {r['symbol']:<10} {r['close']:>10.5f} {r['bb_upper']:>10.5f} "
                   f"{r['bb_mid']:>10.5f} {r['bb_lower']:>10.5f} "
                   f"{r['bb_pct']:>6.1f}% {r['rsi14']:>7.1f}{flag}")
+
+        # Panel 5 — Pullback to EMA(20)
+        print(f"\n[PULLBACK] EMA(20) pullback in EMA(50) trend  (~70% WR)")
+        rows = strat_pullback.scan_summary(market_data)
+        print(f"  {'Pair':<10} {'Close':>10} {'EMA20':>10} {'EMA50':>10} "
+              f"{'ADX':>6}  {'Trend':<6} {'ADX?':<6} {'PB?':<6}  Signal")
+        print("  " + "-" * 80)
+        for r in rows:
+            if r["status"] != "ok":
+                print(f"  {r['symbol']:<10}  no data"); continue
+            adx_flag = "YES" if r["adx_ok"] else "no"
+            pb_flag  = "YES" if r["pb_touch"] else "no"
+            pos_flag = "above" if r["above_pb"] else "below"
+            signal = ""
+            if r["adx_ok"] and r["pb_touch"]:
+                if r["trend"] == "BULL" and r["above_pb"]:
+                    signal = "*** LONG SIGNAL ***"
+                elif r["trend"] == "BEAR" and not r["above_pb"]:
+                    signal = "*** SHORT SIGNAL ***"
+            print(f"  {r['symbol']:<10} {r['close']:>10.5f} {r['ema20']:>10.5f} "
+                  f"{r['ema50']:>10.5f} {r['adx']:>6.1f}  "
+                  f"{r['trend']:<6} {adx_flag:<6} {pb_flag:<6}  {signal}")
         sys.exit(0)
 
     active = list(STRATEGIES) if args.strategy == "all" else [args.strategy]
