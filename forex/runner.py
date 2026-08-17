@@ -93,6 +93,12 @@ SESSION_PAIRS = {
     },
 }
 
+# ── Currency exposure limit ───────────────────────────────────────────────────
+# Maximum times any single currency can appear (long OR short) across ALL open
+# positions simultaneously. Prevents correlated drawdowns when one currency
+# moves sharply — e.g. 5 EUR-long positions all losing on one ECB surprise.
+MAX_CURRENCY_EXPOSURE = 3
+
 # ── Constants ─────────────────────────────────────────────────────────────────
 BASE_URL    = "https://gateway.saxobank.com/sim/openapi"
 DATA_DIR    = os.path.join(_ROOT, "data")
@@ -279,6 +285,56 @@ def _log_order(entry: dict) -> None:
         json.dump(orders[-500:], f, indent=2)
 
 
+# ── Currency exposure helpers ─────────────────────────────────────────────────
+
+def _currency_exposure(positions: dict) -> dict:
+    """Count net directional exposure per currency across all open positions.
+
+    Returns {currency: net_count} where positive = net long, negative = net short.
+    Example: {"EUR": +2, "USD": -3, "GBP": +1}
+    """
+    exposure: dict[str, int] = {}
+    for key, pos in positions.items():
+        sym = key.split(":", 1)[1] if ":" in key else key
+        if len(sym) != 6:
+            continue
+        base  = sym[:3]   # e.g. EUR in EURUSD
+        quote = sym[3:]   # e.g. USD in EURUSD
+        if pos.get("direction", "Buy") == "Buy":
+            exposure[base]  = exposure.get(base,  0) + 1
+            exposure[quote] = exposure.get(quote, 0) - 1
+        else:
+            exposure[base]  = exposure.get(base,  0) - 1
+            exposure[quote] = exposure.get(quote, 0) + 1
+    return exposure
+
+
+def _currency_ok(sym: str, direction: str, exposure: dict) -> bool:
+    """Return True if adding this position keeps all currencies within the limit."""
+    base  = sym[:3]
+    quote = sym[3:]
+    if direction == "Buy":
+        new_base  = exposure.get(base,  0) + 1
+        new_quote = exposure.get(quote, 0) - 1
+    else:
+        new_base  = exposure.get(base,  0) - 1
+        new_quote = exposure.get(quote, 0) + 1
+    return (abs(new_base)  <= MAX_CURRENCY_EXPOSURE and
+            abs(new_quote) <= MAX_CURRENCY_EXPOSURE)
+
+
+def _update_exposure(exposure: dict, sym: str, direction: str) -> None:
+    """Update exposure dict in-place after a new position is opened."""
+    base  = sym[:3]
+    quote = sym[3:]
+    if direction == "Buy":
+        exposure[base]  = exposure.get(base,  0) + 1
+        exposure[quote] = exposure.get(quote, 0) - 1
+    else:
+        exposure[base]  = exposure.get(base,  0) - 1
+        exposure[quote] = exposure.get(quote, 0) + 1
+
+
 # ── Per-strategy exit / entry helpers ─────────────────────────────────────────
 
 def _run_exits(strat_name: str, strat_mod, positions: dict,
@@ -362,13 +418,22 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
     else:
         signals = strat_mod.generate_signals(market_data, open_symbols=open_syms)
 
+    exposure = _currency_exposure(positions)
+
     entries = 0
-    for sig in signals[:slots_free]:
+    for sig in signals:
+        if entries >= slots_free:
+            break
         sym       = sig["symbol"]
+        direction = sig["direction"]
+
+        if not _currency_ok(sym, direction, exposure):
+            logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] "
+                        f"— currency exposure limit (max {MAX_CURRENCY_EXPOSURE})")
+            continue
         pair_info = get_pair(sym)
         uic       = pair_info["uic"]
         qty       = strat_mod.size_position(equity, sig["atr"], pair_info["min_units"])
-        direction = sig["direction"]
 
         order = {"AccountKey": akey, "Uic": uic, "AssetType": ASSET_TYPE,
                  "Amount": qty, "BuySell": direction, "OrderType": "Market",
@@ -401,6 +466,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             pos_record["friday_close"] = sig.get("friday_close", sig["gap_target"])
             pos_record["gap_pct"]      = sig.get("gap_pct", 0.0)
         positions[f"{strat_name}:{sym}"] = pos_record
+        _update_exposure(exposure, sym, direction)   # keep exposure current for next signal
         oid = resp.get("OrderId") if not dry_run else None
         _log_order({"side": direction, "symbol": sym, "strategy": strat_name,
                     "uic": uic, "quantity": qty, "entry_price": sig["close"],
@@ -610,6 +676,17 @@ if __name__ == "__main__":
             tag  = "L" if pos.get("direction", "Buy") == "Buy" else "S"
             print(f"  [{strat}] {sym:<10}[{tag}]  qty={pos['quantity']:,}  "
                   f"entry={pos['entry_price']:.5f}  stop={pos['stop_price']:.5f}  {held}d")
+
+        # Currency exposure summary
+        exposure = _currency_exposure(positions)
+        if exposure:
+            print(f"\nCurrency exposure (limit: ±{MAX_CURRENCY_EXPOSURE}):")
+            for ccy, net in sorted(exposure.items(), key=lambda x: abs(x[1]), reverse=True):
+                if net == 0:
+                    continue
+                bar   = ("▲" * abs(net)) if net > 0 else ("▼" * abs(net))
+                warn  = "  ← AT LIMIT" if abs(net) >= MAX_CURRENCY_EXPOSURE else ""
+                print(f"  {ccy}  {net:+d}  {bar}{warn}")
         sys.exit(0)
 
     if args.scan:
