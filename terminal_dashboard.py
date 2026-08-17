@@ -656,7 +656,7 @@ def main():
         token  = _load_token()
         output = render(token)
 
-        sys.stdout.write((CLEAR+HOME) if first else HOME)
+        sys.stdout.write(CLEAR + HOME)
         sys.stdout.write(output)
         sys.stdout.flush()
         first = False
