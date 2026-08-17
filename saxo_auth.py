@@ -54,7 +54,7 @@ TOKEN_ENDPOINT = "https://sim.logonvalidation.net/token"
 APP_KEY = os.environ.get("SAXO_APP_KEY", "60d308f45fc34cc2913ae5f3692a94ba")
 REDIRECT_URL = os.environ.get("SAXO_REDIRECT_URL", "http://localhost/redirect")
 
-TOKEN_FILE = "saxo_token.json"
+TOKEN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saxo_token.json")
 
 
 def _generate_pkce_pair() -> tuple[str, str]:
