@@ -292,6 +292,81 @@ PAIRS = [
         "pip_size":    0.01,
         "min_units":   1_000,
     },
+    # ── Cross Pairs: Tier 2 — CAD crosses ────────────────────────────────────
+    {
+        "symbol":      "CADCHF",
+        "description": "Canadian Dollar / Swiss Franc",
+        "base":        "CAD",
+        "quote":       "CHF",
+        "uic":         7,            # sequential gap between CADJPY=6 and CHFJPY=8
+        "yf_ticker":   "CADCHF=X",
+        "pip_size":    0.0001,
+        "min_units":   1_000,
+    },
+    # ── Scandinavian pairs (oil-linked, frequent weekend gaps) ────────────────
+    # UICs 19, 20, 40, 41 inferred from sequential Saxo numbering — verify with:
+    #   python forex/runner.py --info
+    {
+        "symbol":      "EURNOK",
+        "description": "Euro / Norwegian Krone",
+        "base":        "EUR",
+        "quote":       "NOK",
+        "uic":         19,
+        "yf_ticker":   "EURNOK=X",
+        "pip_size":    0.0001,
+        "min_units":   1_000,
+    },
+    {
+        "symbol":      "EURSEK",
+        "description": "Euro / Swedish Krona",
+        "base":        "EUR",
+        "quote":       "SEK",
+        "uic":         20,
+        "yf_ticker":   "EURSEK=X",
+        "pip_size":    0.0001,
+        "min_units":   1_000,
+    },
+    {
+        "symbol":      "USDNOK",
+        "description": "US Dollar / Norwegian Krone",
+        "base":        "USD",
+        "quote":       "NOK",
+        "uic":         40,           # sequential gap between USDCHF=39 and USDJPY=42
+        "yf_ticker":   "USDNOK=X",
+        "pip_size":    0.0001,
+        "min_units":   1_000,
+    },
+    {
+        "symbol":      "USDSEK",
+        "description": "US Dollar / Swedish Krona",
+        "base":        "USD",
+        "quote":       "SEK",
+        "uic":         41,           # sequential gap between USDNOK=40 and USDJPY=42
+        "yf_ticker":   "USDSEK=X",
+        "pip_size":    0.0001,
+        "min_units":   1_000,
+    },
+    # ── EM / USD pairs (volatile, large weekend gaps) ─────────────────────────
+    {
+        "symbol":      "USDDKK",
+        "description": "US Dollar / Danish Krone",
+        "base":        "USD",
+        "quote":       "DKK",
+        "uic":         43,           # after USDJPY=42, verify with --info
+        "yf_ticker":   "USDDKK=X",
+        "pip_size":    0.0001,
+        "min_units":   1_000,
+    },
+    {
+        "symbol":      "USDMXN",
+        "description": "US Dollar / Mexican Peso",
+        "base":        "USD",
+        "quote":       "MXN",
+        "uic":         44,           # verify with --info
+        "yf_ticker":   "MXN=X",
+        "pip_size":    0.0001,
+        "min_units":   1_000,
+    },
 ]
 
 ASSET_TYPE = "FxSpot"

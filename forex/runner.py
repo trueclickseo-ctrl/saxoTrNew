@@ -12,9 +12,9 @@ Strategies:
   gap       — Weekend gap fill — fade Sunday open vs Friday close (~80-85% WR)
 
 Universe:
-  27 pairs — 7 G7 majors + 20 liquid crosses (UICs confirmed Saxo SIM)
+  34 pairs — 7 G7 majors + 27 crosses (UICs confirmed Saxo SIM; Scandi/EM verify with --info)
   Asian session  (14): JPY crosses, AUD/NZD pairs — run at 06:20 PKT
-  London session (13): EUR/GBP/USD crosses    — run at 18:00 PKT
+  London session (20): EUR/GBP/USD crosses + Scandi/CAD — run at 18:00 PKT
 
 Usage:
     python forex/runner.py                          # all 4 strategies, all 27 pairs, dry-run
@@ -47,6 +47,7 @@ sys.path.insert(0, _ROOT)
 sys.path.insert(0, _HERE)
 
 import requests
+import saxo_order
 import pandas as pd
 import saxo_auth
 
@@ -76,7 +77,7 @@ STRATEGIES = {
     "pullback": strat_pullback,
     "gap":      strat_gap,
 }
-SLOTS_PER_STRATEGY = {"ema": 4, "rsi": 4, "donchian": 4, "bb": 4, "pullback": 4, "gap": 4}
+SLOTS_PER_STRATEGY = {"ema": 4, "rsi": 4, "donchian": 4, "bb": 4, "pullback": 4, "gap": 25}
 
 # ── Session-aware pair groups ──────────────────────────────────────────────────
 # asian  : 06:20 PKT  — Tokyo/Sydney session (JPY crosses, AUD, NZD)
@@ -91,6 +92,8 @@ SESSION_PAIRS = {
         "EURUSD", "GBPUSD", "USDCAD", "USDCHF",
         "EURGBP", "EURAUD", "EURNZD", "EURCAD", "EURCHF",
         "GBPAUD", "GBPCAD", "GBPCHF", "GBPNZD",
+        # Scandinavian / EM — London open gives best liquidity
+        "CADCHF", "EURNOK", "EURSEK", "USDNOK", "USDSEK", "USDDKK", "USDMXN",
     },
 }
 
@@ -449,10 +452,6 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         uic       = pair_info["uic"]
         qty       = strat_mod.size_position(equity, sig["atr"], pair_info["min_units"])
 
-        order = {"AccountKey": akey, "Uic": uic, "AssetType": ASSET_TYPE,
-                 "Amount": qty, "BuySell": direction, "OrderType": "Market",
-                 "OrderDuration": {"DurationType": "DayOrder"}, "ManualOrder": False}
-
         tag    = "LONG" if direction == "Buy" else "SHORT"
         detail = (f"rsi={sig['rsi']:.1f}" if "rsi" in sig
                   else f"breakout={sig.get('breakout_level', 0):.5f}" if "breakout_level" in sig
@@ -462,9 +461,22 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                         f"({strat_name})  @ {sig['close']:.5f}  "
                         f"stop={sig['stop_price']:.5f}  {detail}")
         else:
-            resp = _post("/trade/v2/orders", order)
-            logger.info(f"  {direction} {resp.get('OrderId','?')}: {qty:,}x {sym}[{tag}] "
-                        f"({strat_name})  @ {sig['close']:.5f}  stop={sig['stop_price']:.5f}")
+            tp = sig.get("gap_target")   # only gap strategy provides a fixed target
+            entry_oid, stop_oid, tp_oid = saxo_order.place_with_stop(
+                post_fn           = _post,
+                account_key       = akey,
+                uic               = uic,
+                asset_type        = ASSET_TYPE,
+                amount            = qty,
+                buy_sell          = direction,
+                stop_price        = sig["stop_price"],
+                label             = f"{strat_name}:{sym}",
+                take_profit_price = tp,
+            )
+            tp_info = f"  tp_order={tp_oid}" if tp_oid else ""
+            logger.info(f"  {direction} {entry_oid}: {qty:,}x {sym}[{tag}] "
+                        f"({strat_name})  @ {sig['close']:.5f}  stop={sig['stop_price']:.5f}"
+                        f"  stop_order={stop_oid}{tp_info}")
 
         pos_record = {
             "uic":          uic,
@@ -481,7 +493,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             pos_record["gap_pct"]      = sig.get("gap_pct", 0.0)
         positions[f"{strat_name}:{sym}"] = pos_record
         _update_exposure(exposure, sym, direction)   # keep exposure current for next signal
-        oid = resp.get("OrderId") if not dry_run else None
+        oid = entry_oid if not dry_run else None
         _log_order({"side": direction, "symbol": sym, "strategy": strat_name,
                     "uic": uic, "quantity": qty, "entry_price": sig["close"],
                     "stop_price": sig["stop_price"], "dry_run": dry_run})

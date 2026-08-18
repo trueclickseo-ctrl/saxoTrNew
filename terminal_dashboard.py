@@ -174,7 +174,7 @@ def _read_stock_trades(n=20):
 
 
 def _etf_live_prices(open_sym_map: dict, token: str = None) -> dict:
-    """Fetch ETF live prices: Saxo API first (has UICs), fallback yfinance."""
+    """Fetch ETF live prices from Saxo API. Returns {} for symbols without UICs."""
     if not open_sym_map:
         return {}
     instruments = [
@@ -184,9 +184,7 @@ def _etf_live_prices(open_sym_map: dict, token: str = None) -> dict:
         if sym and sym in open_sym_map
     ]
     if not instruments:
-        # plain yfinance fallback if UIC lookup failed
-        instruments = [{"symbol": s, "uic": None, "asset_type": "Etf"}
-                       for s in open_sym_map]
+        return {}
     prices, _ = price_service.fetch_prices(instruments, token=token)
     return {sym: round(px, 2) for sym, px in prices.items()}
 
@@ -202,7 +200,7 @@ def _etf_open_positions_raw() -> dict:
 
 def _read_etf_trades():
     """Read ETF order history from etf_positions.json, newest first.
-    For open BUY positions, fetches current price via yfinance and shows unrealized P&L."""
+    For open BUY positions, fetches current price via Saxo API and shows unrealized P&L."""
     if not os.path.exists(ETF_STATE_PATH):
         return []
     try:
@@ -384,32 +382,6 @@ def _exit_info(drow: dict) -> str:
         return f"Day {days}  Reb: {_next_rebalance()}"
 
 
-def _yf_last_close(tickers: list) -> dict:
-    """Fetch last closing price from Yahoo Finance for given tickers.
-    Returns {ticker: price}. Used when market is closed or Saxo token expired."""
-    if not tickers:
-        return {}
-    try:
-        import yfinance as yf
-        raw = yf.download(tickers, period="5d", interval="1d",
-                          auto_adjust=True, progress=False,
-                          group_by="ticker" if len(tickers) > 1 else None)
-        result = {}
-        if len(tickers) == 1:
-            if not raw.empty:
-                result[tickers[0]] = float(raw["Close"].dropna().iloc[-1])
-        else:
-            for t in tickers:
-                try:
-                    s = raw[t]["Close"].dropna()
-                    if not s.empty:
-                        result[t] = float(s.iloc[-1])
-                except Exception:
-                    pass
-        return result
-    except Exception:
-        return {}
-
 
 def _usd_sek():
     try:
@@ -544,32 +516,24 @@ def render(token):
             total_pnl += pnl
             count     += 1
     elif db:
-        # No Saxo connection — fetch last closing prices from Yahoo Finance
-        yf_tickers = [drow.get("ticker", base).split(":")[0] for base, drow in db.items()]
-        yf_prices  = _yf_last_close(yf_tickers)
+        # No Saxo connection — show positions with n/a prices
         for base, drow in db.items():
-            tk    = drow.get("ticker", base).split(":")[0]
-            ep    = drow.get("entry_price", 0) or 0
-            shs   = int(drow.get("shares", 0) or 0)
-            close = yf_prices.get(tk, 0)
-            pnl   = (close - ep) * shs if close and ep and shs else None
-            ppc   = ((close - ep) / ep * 100) if close and ep else None
+            tk  = drow.get("ticker", base).split(":")[0]
+            ep  = drow.get("entry_price", 0) or 0
+            shs = int(drow.get("shares", 0) or 0)
             rows.append({
                 "ticker": tk,
                 "shs": shs,
                 "entry": ep,
-                "live": close,
-                "pnl": pnl,
-                "ppc": ppc,
+                "live": None,
+                "pnl": None,
+                "ppc": None,
                 "stop": _effective_stop(drow),
                 "regime": (drow.get("regime_at_entry") or "—")[:10],
                 "strategy": (drow.get("strategy") or "—")[:10],
                 "exit_info": _exit_info(drow),
-                "live_available": bool(close),
-                "is_close_price": True,
+                "live_available": False,
             })
-            if pnl is not None:
-                total_pnl += pnl
             count += 1
 
     SEP = "  "
@@ -738,7 +702,7 @@ def render(token):
         f"{DM}{etf_dry} dry-run{W}"
     )
 
-    # ── Section 3: Quick Forex + Futures summary ──────────────────────────
+    # ── Section 3: Cross-module summary ───────────────────────────────────
     fx_positions  = _read_forex_positions()
     fut_positions = _read_futures_positions()
     MINI_HR = f"  {DM}{'─'*72}{W}"
@@ -746,10 +710,13 @@ def render(token):
     fx_n  = len(fx_positions)
     fut_n = len(fut_positions)
     L.append(
-        f"  {CY}{BD}FOREX{W}  {fx_n} open positions  "
+        f"  {CY}{BD}FOREX{W}  {fx_n} open  "
         f"{DM}│{W}  "
-        f"{YL}{BD}FUTURES{W}  {fut_n} open positions  "
-        f"{DM}  →  run: python forex_dashboard.py  for full FX view{W}"
+        f"{MG}{BD}FUTURES{W}  {fut_n} open  "
+        f"{DM}  →  Dedicated dashboards:{W}  "
+        f"python forex_dashboard.py  "
+        f"{DM}│{W}  python stocks_dashboard.py  "
+        f"{DM}│{W}  python etf_dashboard.py"
     )
     L.append(MINI_HR)
 

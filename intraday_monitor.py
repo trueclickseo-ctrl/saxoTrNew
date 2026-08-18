@@ -1,749 +1,432 @@
 """
 intraday_monitor.py
 --------------------
-ATOS Intraday Monitor — real-time safety net AND intraday buy scanner.
+Real-time position monitor — runs every minute (via Task Scheduler) and
+immediately closes any position whose stop-loss OR take-profit level is hit.
 
-Two roles run in parallel:
+Covers: forex (FxSpot) and futures (CfdOnIndex, ContractFutures, CdfOnEtf).
 
-  STOP-LOSS GUARD (every 1 second, during market hours):
-      Polls live Saxo prices, sells IMMEDIATELY if any position breaches
-      its stop-loss (fixed, trailing, or hard-floor rules).
-
-  BUY SCANNER (runs ONCE per session at 09:35 ET, then every 90 min):
-      09:35 ET open scan  — downloads the latest daily bars for all US
-          tickers, runs US Blend (cross-sectional momentum) + US Reversion
-          (mean-reversion dip-buy), and places approved orders immediately.
-      Every 90 min        — runs the intraday reversion scanner (5-min bar
-          setups) so fresh dip-buy signals throughout the session are caught.
-
-Architecture:
-  Nightly engine  (atos_runner.run_cycle, 02:00 AM PKT):
-      Full cycle: exits, learning pass, equity snapshot, FTP upload.
-      Also places US strategy orders — but those execute at next day's open.
-
-  THIS SCRIPT (Task Scheduler 15:30 PKT = 09:30 ET):
-      Faster execution: open scan fires at 09:35 ET for same-day fills.
-      Stop-loss guard runs continuously at 1-second resolution.
-      Exits automatically when US market closes (16:00 ET).
-
-Reliability (real-money safe):
-  - Rate-limit aware: backs off on HTTP 429 (respects Retry-After header)
-  - Auth-error aware: on 401, attempts token refresh before retrying
-  - Circuit breaker: if prices unavailable for BLIND_SECONDS, logs CRITICAL
-  - Double-sell guard: checks DB before placing sell — won't sell twice
-  - Open-scan guard: flag file prevents running the open scan twice per day
-    if the monitor restarts mid-session
-
-Stop-loss priority (first rule that applies):
-  1. Fixed stop_price from DB (set by risk engine at entry)
-  2. Trailing stop: TRAILING_PCT below trailing_stop_high from DB
-  3. Hard floor: HARD_STOP_PCT below entry_price (US Blend positions have
-     stop_price=0; this catches extreme crashes for them)
-
-Rate limits (Saxo SIM):
-  ~120 req/min per endpoint. At 1 req/s = 60 req/min. Safe.
-
-Task Scheduler setup:
-  Trigger  : Daily, 15:30 PKT
-  Program  : python
-  Arguments: intraday_monitor.py
-  Start in : E:\\SaxoTrNew\\SaxoTrNew
+Usage:
+    python intraday_monitor.py           # one check, then exit (for Task Scheduler)
+    python intraday_monitor.py --watch   # loop every 60s until Ctrl+C
+    python intraday_monitor.py --dry     # one check, no real orders placed
 """
 
+import argparse
+import json
+import logging
 import os
+import smtplib
 import sys
 import time
-import logging
+from datetime import datetime, date
+from email.message import EmailMessage
+
 import requests
-from datetime import datetime, date, timezone, timedelta
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, BASE_DIR)
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _ROOT)
 
-import saxo_client
-import fx
-from atos import database as db
-from atos.risk import commission_sek
+import saxo_auth
 
-# Lazy import of atos_runner (heavy — only pulled in when buy scan runs)
-_atos_runner = None
+# ── Logging ────────────────────────────────────────────────────────────────
+_LOG_DIR  = os.path.join(_ROOT, "logs")
+os.makedirs(_LOG_DIR, exist_ok=True)
+_LOG_FILE = os.path.join(_LOG_DIR, f"monitor_{date.today():%Y-%m-%d}.log")
+_fmt = logging.Formatter("%(asctime)s  %(levelname)-7s  %(message)s", datefmt="%H:%M:%S")
+_fh  = logging.FileHandler(_LOG_FILE, encoding="utf-8")
+_fh.setFormatter(_fmt)
+_sh  = logging.StreamHandler()
+_sh.setFormatter(_fmt)
+logging.basicConfig(level=logging.INFO, handlers=[_sh, _fh])
+logger = logging.getLogger("monitor")
 
-def _get_runner():
-    global _atos_runner
-    if _atos_runner is None:
-        import atos_runner as _ar
-        _atos_runner = _ar
-    return _atos_runner
+# ── Saxo ───────────────────────────────────────────────────────────────────
+BASE_URL = "https://gateway.saxobank.com/sim/openapi"
+DATA_DIR = os.path.join(_ROOT, "data")
 
-
-# US market holidays 2025–2026 (NYSE observed dates)
-_US_HOLIDAYS = {
-    date(2025, 1, 1), date(2025, 1, 20), date(2025, 2, 17), date(2025, 4, 18),
-    date(2025, 5, 26), date(2025, 6, 19), date(2025, 7, 4), date(2025, 9, 1),
-    date(2025, 11, 27), date(2025, 12, 25),
-    date(2026, 1, 1), date(2026, 1, 19), date(2026, 2, 16), date(2026, 4, 3),
-    date(2026, 5, 25), date(2026, 6, 19), date(2026, 7, 3), date(2026, 9, 7),
-    date(2026, 11, 26), date(2026, 12, 25),
-}
-
-# ── Configuration ──────────────────────────────────────────────────
-POLL_INTERVAL    = 1            # seconds between stop-loss price checks
-DISPLAY_INTERVAL = 5            # seconds between screen redraws (lets you copy text)
-HARD_STOP_PCT    = 0.15         # 15% below entry price (last-resort floor)
-TRAILING_PCT     = 0.12         # 12% below trailing_stop_high
-BLIND_SECONDS    = 180          # circuit-breaker: alert if blind for 3 min
-LOG_FILE         = os.path.join(BASE_DIR, "data", "monitor_log.txt")
-
-# ── Buy-scan configuration ─────────────────────────────────────────
-# Open scan: fires this many minutes after market open so opening volatility settles
-OPEN_SCAN_DELAY_MIN  = 5        # 09:30 + 5 min = 09:35 ET
-# Intraday reversion re-scan interval (minutes)
-INTRADAY_RESCAN_MIN  = 90       # re-run dip-buy scanner every 90 min during session
-# Flag file prevents double-running the open scan if monitor restarts mid-session
-_OPEN_SCAN_FLAG_DIR  = os.path.join(BASE_DIR, "data")
-
-# US market hours (Eastern Time)
-_EDT = timezone(timedelta(hours=-4))   # EDT (Apr–Nov)
-_EST = timezone(timedelta(hours=-5))   # EST (Nov–Mar)
-MARKET_OPEN  = (9, 30)
-MARKET_CLOSE = (16, 0)
-
-# ── Logging ────────────────────────────────────────────────────────
-os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [MONITOR] %(levelname)s %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE, encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
-log = logging.getLogger("monitor")
+FOREX_STATE   = os.path.join(DATA_DIR, "forex_state.json")
+FUTURES_STATE = os.path.join(DATA_DIR, "futures_state.json")
+UIC_CACHE     = os.path.join(DATA_DIR, "futures_uic_cache.json")
 
 
-# ── ET helpers (DST-aware) ─────────────────────────────────────────
-
-def _et_now() -> datetime:
-    """Return current time in US Eastern (picks EDT or EST based on month)."""
-    now_utc = datetime.now(timezone.utc)
-    # DST: second Sunday in March to first Sunday in November
-    year = now_utc.year
-    # Rough DST check (good enough; avoids an external dependency)
-    mar_second_sun = datetime(year, 3, 8, 2, 0, tzinfo=timezone.utc)
-    while mar_second_sun.weekday() != 6:
-        mar_second_sun += timedelta(days=1)
-    nov_first_sun = datetime(year, 11, 1, 2, 0, tzinfo=timezone.utc)
-    while nov_first_sun.weekday() != 6:
-        nov_first_sun += timedelta(days=1)
-    tz = _EDT if mar_second_sun <= now_utc < nov_first_sun else _EST
-    return now_utc.astimezone(tz)
+def _hdrs() -> dict:
+    return {"Authorization": f"Bearer {saxo_auth.get_valid_access_token()}"}
 
 
-def _is_trading_day(d: date = None) -> bool:
-    """True if the given date is a US stock market trading day."""
-    d = d or _et_now().date()
-    if d.weekday() >= 5:          # weekend
-        return False
-    return d not in _US_HOLIDAYS
-
-
-def _market_is_open() -> bool:
-    """True if US market is currently open (Mon–Fri 09:30–16:00 ET, not a holiday)."""
-    now = _et_now()
-    if not _is_trading_day(now.date()):
-        return False
-    t = (now.hour, now.minute)
-    return MARKET_OPEN <= t < MARKET_CLOSE
-
-
-def _seconds_until_close() -> float:
-    now = _et_now()
-    close = now.replace(hour=MARKET_CLOSE[0], minute=MARKET_CLOSE[1],
-                        second=0, microsecond=0)
-    return max((close - now).total_seconds(), 0)
-
-
-# ── Buy-scan helpers ──────────────────────────────────────────────
-
-def _open_scan_flag_path() -> str:
-    return os.path.join(_OPEN_SCAN_FLAG_DIR, f"open_scan_{date.today().isoformat()}.flag")
-
-
-def _open_scan_done_today() -> bool:
-    return os.path.exists(_open_scan_flag_path())
-
-
-def _mark_open_scan_done():
-    os.makedirs(_OPEN_SCAN_FLAG_DIR, exist_ok=True)
-    with open(_open_scan_flag_path(), "w") as f:
-        f.write(datetime.now().isoformat())
-
-
-def _run_open_scan():
-    """Run the US strategy buy scan at market open. Runs once per calendar day."""
-    if _open_scan_done_today():
-        log.info("[BUY SCAN] Already ran today — skip.")
-        return
-
-    log.info("[BUY SCAN] ═══════════════════════════════════════════")
-    log.info("[BUY SCAN] Starting open scan — US Blend + US Reversion")
-    log.info("[BUY SCAN] ═══════════════════════════════════════════")
-
-    try:
-        runner = _get_runner()
-        result = runner.run_open_scan(log_fn=lambda m: log.info("[BUY SCAN] %s", m))
-        _mark_open_scan_done()
-        log.info("[BUY SCAN] Done — %d BUY, %d EXIT, %d blocked",
-                 result["buy_count"], result["exit_count"], result["blocked_count"])
-    except Exception as e:
-        log.error("[BUY SCAN] Open scan failed: %s", e, exc_info=True)
-
-
-def _run_intraday_rescan():
-    """Run the intraday reversion scanner (5-min bar dip-buy signals)."""
-    log.info("[INTRADAY SCAN] Running intraday reversion scanner...")
-    try:
-        runner = _get_runner()
-        runner.run_intraday_cycle()
-    except Exception as e:
-        log.error("[INTRADAY SCAN] Failed: %s", e)
-
-
-# ── Yahoo Finance last-close prices (used when market is closed) ────
-
-def _fetch_yahoo_prices(tickers: list) -> dict:
-    """Fetch last closing price for each ticker from Yahoo Finance.
-    Returns {ticker: last_close_price}. Used when Saxo market is closed."""
-    if not tickers:
-        return {}
-    try:
-        import yfinance as yf
-        raw = yf.download(
-            tickers, period="2d", interval="1d",
-            auto_adjust=True, threads=False, progress=False
-        )
-        prices = {}
-        if len(tickers) == 1:
-            if not raw.empty:
-                prices[tickers[0]] = float(raw["Close"].iloc[-1])
-        else:
-            for t in tickers:
-                try:
-                    prices[t] = float(raw["Close"][t].dropna().iloc[-1])
-                except Exception:
-                    pass
-        return prices
-    except Exception as e:
-        log.warning("Yahoo price fetch failed: %s", e)
-        return {}
-
-
-def _print_closed_table(open_trades: list, yahoo_prices: dict, imap: dict):
-    """Show portfolio with last closing prices when market is closed."""
-    global _display_initialized
-    now_et = _et_now()
-
-    pfx = (_ANSI_CLEAR + _ANSI_HOME) if not _display_initialized else _ANSI_HOME
-    _display_initialized = True
-    sys.stdout.write(pfx)
-    print(f"{'─'*80}")
-    trading_day = _is_trading_day()
-    day_label = "trading day" if trading_day else "holiday/weekend"
-    print(f"  ATOS Portfolio  |  {now_et.strftime('%A %H:%M')} ET  |  "
-          f"Market CLOSED ({day_label})")
-    print(f"  Prices: last Yahoo Finance close (Saxo API inactive)")
-    print(f"{'─'*80}")
-    print(f"  {'Ticker':<8}  {'Entry':>10}  {'Last Close':>10}  {'Shares':>7}  "
-          f"{'P&L (SEK)':>12}  {'%Chg':>7}  {'Stop':>10}")
-    print(f"{'─'*80}")
-
-    total_pnl = 0.0
-    total_cost = 0.0
-    for t in open_trades:
-        ticker = t.get("ticker", "")
-        if ticker not in imap:
-            continue
-        shares     = t.get("shares", 0) or 0
-        entry      = t.get("entry_price", 0) or 0
-        stop_p     = t.get("stop_price", 0) or 0
-        trail_high = t.get("trailing_stop_high") or entry
-        cur        = yahoo_prices.get(ticker, 0)
-        currency   = imap[ticker].get("currency", "USD")
+def _get(path: str, params: dict | None = None) -> dict:
+    for attempt in range(1, 4):
         try:
-            rate = fx.get_rate_to_sek(currency) if currency != "SEK" else 1.0
-        except Exception:
-            rate = 10.95
-
-        eff_stop = (stop_p if stop_p > 0
-                    else trail_high * (1.0 - TRAILING_PCT) if trail_high > 0
-                    else entry * (1.0 - HARD_STOP_PCT))
-
-        pnl_sek  = (cur - entry) * shares * rate if cur > 0 else 0.0
-        pct_chg  = (cur - entry) / entry * 100 if entry > 0 and cur > 0 else 0.0
-        total_pnl  += pnl_sek
-        total_cost += entry * shares * rate
-
-        cur_str = f"{cur:.2f}" if cur > 0 else "  ---"
-        pnl_str = f"{pnl_sek:+,.0f}" if cur > 0 else "  ---"
-        pct_str = f"{pct_chg:+.2f}%" if cur > 0 else "  ---"
-        col   = "\033[92m" if pnl_sek >= 0 else "\033[91m"
-        reset = "\033[0m"
-        print(f"  {ticker:<8}  {currency} {entry:>8.2f}  {currency} {cur_str:>8}  "
-              f"{int(shares):>7,}  {col}{pnl_str:>12}{reset}  "
-              f"{col}{pct_str:>7}{reset}  {currency} {eff_stop:>8.2f}")
-
-    print(f"{'─'*80}")
-    total_pct = total_pnl / total_cost * 100 if total_cost > 0 else 0
-    col   = "\033[92m" if total_pnl >= 0 else "\033[91m"
-    reset = "\033[0m"
-    print(f"  {'TOTAL':<8}  {'':>10}  {'':>10}  {'':>7}  "
-          f"{col}{total_pnl:>+12,.0f}{reset}  {col}{total_pct:>+7.2f}%{reset}")
-    print(f"{'─'*80}")
-    print()
-    print("  Monitor will AUTO-START live Saxo polling when market opens (09:30 ET).")
-    print("  (Press Ctrl+C to exit)")
-    print()
+            r = requests.get(f"{BASE_URL}{path}", headers=_hdrs(),
+                             params=params, timeout=12)
+            r.raise_for_status()
+            return r.json()
+        except (requests.exceptions.SSLError,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout) as exc:
+            if attempt < 3:
+                time.sleep(3 * attempt)
+                continue
+            raise exc
 
 
-# ── Live price fetching ────────────────────────────────────────────
+def _post(path: str, body: dict) -> dict:
+    r = requests.post(f"{BASE_URL}{path}", headers=_hdrs(), json=body, timeout=12)
+    r.raise_for_status()
+    return r.json()
 
-def _fetch_saxo_prices(consecutive_failures: list) -> dict:
-    """Fetch current prices for all Saxo positions.
-    Returns {uic: current_price_in_instrument_currency}.
-    Updates consecutive_failures[0] for the circuit breaker."""
+
+def _account_key() -> str:
     try:
-        resp = requests.get(
-            f"{saxo_client.SIM_BASE_URL}/port/v1/positions/me",
-            headers=saxo_client._headers(),
-            params={"FieldGroups": "PositionBase,DisplayAndFormat,PositionView"},
-            timeout=10,
-        )
-    except (requests.exceptions.Timeout,
-            requests.exceptions.ConnectionError) as e:
-        consecutive_failures[0] += 1
-        log.warning("Network error fetching prices (fail #%d): %s",
-                    consecutive_failures[0], e)
-        return {}
-
-    # Rate-limited
-    if resp.status_code == 429:
-        retry_after = int(resp.headers.get("Retry-After", 5))
-        consecutive_failures[0] += 1
-        log.warning("Rate limited by Saxo (429) — backing off %ds", retry_after)
-        time.sleep(retry_after)
-        return {}
-
-    # Auth expired — token needs refresh
-    if resp.status_code == 401:
-        consecutive_failures[0] += 1
-        log.warning("Auth error (401) — token may have expired. Attempting refresh...")
-        try:
-            import saxo_auth
-            saxo_auth.get_valid_access_token()   # PKCE auto-refresh
-            log.info("Token refreshed OK")
-        except Exception as e:
-            log.error("Token refresh failed: %s", e)
-        return {}
-
-    if resp.status_code != 200:
-        consecutive_failures[0] += 1
-        log.warning("Saxo returned HTTP %d (fail #%d)",
-                    resp.status_code, consecutive_failures[0])
-        return {}
-
-    # Successful fetch — reset failure counter
-    consecutive_failures[0] = 0
-
-    prices = {}
-    for pos in resp.json().get("Data", []):
-        pv  = pos.get("PositionView", {})
-        pb  = pos.get("PositionBase", {})
-        uic = pb.get("Uic")
-        if uic is None:
-            continue
-
-        cur = pv.get("CurrentPrice") or 0
-
-        # Fallback 1: MarketValue / Amount
-        if cur == 0:
-            mv     = pv.get("MarketValue") or 0
-            amount = pb.get("Amount") or 0
-            if amount > 0 and mv != 0:
-                cur = abs(mv) / abs(amount)
-
-        # Fallback 2: OpenPrice + P&L / shares
-        if cur == 0:
-            entry  = pb.get("OpenPrice") or 0
-            pnl    = pv.get("ProfitLossOnTrade") or 0
-            amount = pb.get("Amount") or 0
-            if entry > 0 and amount > 0:
-                cur = entry + pnl / amount
-
-        prices[uic] = cur
-
-    return prices
-
-
-# ── Stop-loss evaluation ───────────────────────────────────────────
-
-def _stop_triggered(trade: dict, cur_price: float) -> tuple[bool, str]:
-    """Return (triggered, reason) for one open position."""
-    shares      = trade.get("shares", 0) or 0
-    entry_price = trade.get("entry_price", 0) or 0
-    stop_price  = trade.get("stop_price", 0) or 0
-    trail_high  = trade.get("trailing_stop_high") or entry_price
-
-    if cur_price <= 0 or shares <= 0 or entry_price <= 0:
-        return False, ""
-
-    # Rule 1: fixed stop
-    if stop_price > 0 and cur_price <= stop_price:
-        return True, f"fixed stop {stop_price:.4f} (cur {cur_price:.4f})"
-
-    # Rule 2: trailing stop from DB high-water mark
-    if trail_high > 0:
-        trail_stop = trail_high * (1.0 - TRAILING_PCT)
-        if cur_price <= trail_stop:
-            return True, (f"trailing stop {trail_stop:.4f} "
-                          f"({TRAILING_PCT*100:.0f}% below high {trail_high:.4f}, "
-                          f"cur {cur_price:.4f})")
-
-    # Rule 3: hard floor (catches US Blend positions which have stop_price=0)
-    hard_floor = entry_price * (1.0 - HARD_STOP_PCT)
-    if cur_price <= hard_floor:
-        return True, (f"hard floor {hard_floor:.4f} "
-                      f"({HARD_STOP_PCT*100:.0f}% below entry {entry_price:.4f}, "
-                      f"cur {cur_price:.4f})")
-
-    return False, ""
-
-
-# ── Sell execution ─────────────────────────────────────────────────
-
-def _execute_stop_sell(trade: dict, cur_price: float, reason: str, imap: dict):
-    """Place market sell and update DB. Logs extensively for audit trail."""
-    ticker = trade.get("ticker", "")
-    shares = int(trade.get("shares", 0) or 0)
-    mkt    = trade.get("market_group", "US Equities")
-
-    # Double-sell guard: re-read the DB row to confirm it's still open
-    live_trades = {t["id"]: t for t in db.get_open_trades()}
-    if trade["id"] not in live_trades:
-        log.info("Trade %d (%s) already closed — skip double-sell", trade["id"], ticker)
-        return
-
-    if ticker not in imap:
-        log.critical(
-            "STOP triggered on %s but NOT in instrument_map.csv — CANNOT SELL! "
-            "Close this position manually in SaxoTraderGO immediately!",
-            ticker
-        )
-        return
-
-    uic      = imap[ticker]["uic"]
-    currency = imap[ticker].get("currency", "USD")
-    try:
-        rate = fx.get_rate_to_sek(currency) if currency != "SEK" else 1.0
+        info = _get("/port/v1/accounts/me")
+        data = info.get("Data", info)
+        acct = data[0] if isinstance(data, list) else data
+        return (acct.get("AccountKey", "") if isinstance(acct, dict) else "") or ""
     except Exception:
-        rate = 10.95   # rough fallback; only affects P&L logging, not the order
+        return ""
 
-    price_sek = cur_price * rate
-    comm      = commission_sek(shares, price_sek)
-    entry_sek = (trade.get("entry_price", cur_price) or cur_price) * rate
-    pnl_sek   = shares * (price_sek - entry_sek) - comm
 
-    log.warning(
-        "*** STOP-LOSS TRIGGERED *** %s x%d @ %.4f | %s | est. P&L %.0f SEK",
-        ticker, shares, cur_price, reason, pnl_sek
-    )
+# ── Live price fetch ───────────────────────────────────────────────────────
 
+def _fx_price(uic: int, akey: str) -> float | None:
+    """Mid price for FxSpot (forex pairs). Works on SIM."""
     try:
-        saxo_client.place_market_order(uic, "Stock", "Sell", shares)
-        log.warning("Sell order PLACED — %s x%d @ market", ticker, shares)
-    except Exception as e:
-        log.critical(
-            "SELL ORDER FAILED for %s: %s — "
-            "CLOSE THIS POSITION MANUALLY IN SAXOTRADEGO IMMEDIATELY!",
-            ticker, e
-        )
-        return
+        params = {"Uic": uic, "AssetType": "FxSpot", "FieldGroups": "Quote"}
+        if akey:
+            params["AccountKey"] = akey
+        q = _get("/trade/v1/infoprices", params).get("Quote", {})
+        bid, ask = q.get("Bid"), q.get("Ask")
+        if bid and ask:
+            return (float(bid) + float(ask)) / 2
+        mid = q.get("Mid")
+        return float(mid) if mid else None
+    except Exception:
+        return None
 
+
+def _saxo_positions_by_uic() -> dict:
+    """Fetch all open Saxo positions keyed by UIC.
+    Returns {uic: {pnl, current_price, qty, side}}
+    """
+    result = {}
     try:
-        db.close_trade(trade["id"], cur_price, "intraday_stop", pnl_sek, comm)
-        log.info("DB updated: trade %d closed (%s)", trade["id"], ticker)
-    except Exception as e:
-        log.error(
-            "DB close_trade failed for %s (sell ORDER was placed!): %s",
-            ticker, e
-        )
+        for p in _get("/port/v1/positions/me").get("Data", []):
+            pb  = p.get("PositionBase", {})
+            pv  = p.get("PositionView", {})
+            uic = pb.get("Uic")
+            if uic is not None:
+                result[uic] = {
+                    "pnl":           pv.get("ProfitLossOnTrade"),
+                    "current_price": pv.get("CurrentPrice") or 0,
+                    "qty":           pb.get("Amount", 0),
+                    "side":          pb.get("BuySell", "Buy"),
+                }
+    except Exception as exc:
+        logger.warning(f"Could not fetch Saxo positions: {exc}")
+    return result
 
 
-# ── Terminal portfolio table ───────────────────────────────────────
-
-_ANSI_HOME  = "\033[H"      # move cursor to top-left (no screen wipe)
-_ANSI_CLEAR = "\033[2J"    # clear screen — only used once at startup
-
-_display_initialized = False
-
-
-def _render_table(open_trades: list, prices: dict, imap: dict, tick: int,
-                  mode: str = "LIVE") -> str:
-    """Build the full portfolio table as a string (no side-effects)."""
-    now_et = _et_now()
-    rows = []
-    total_pnl = 0.0
-    total_cost = 0.0
-
-    for t in open_trades:
-        ticker = t.get("ticker", "")
-        if ticker not in imap:
-            continue
-        uic        = imap[ticker]["uic"]
-        shares     = t.get("shares", 0) or 0
-        entry      = t.get("entry_price", 0) or 0
-        stop_p     = t.get("stop_price", 0) or 0
-        trail_high = t.get("trailing_stop_high") or entry
-        cur        = prices.get(uic, 0)
-        currency   = imap[ticker].get("currency", "USD")
-        try:
-            rate = fx.get_rate_to_sek(currency) if currency != "SEK" else 1.0
-        except Exception:
-            rate = 10.95
-
-        eff_stop = (stop_p if stop_p > 0
-                    else trail_high * (1.0 - TRAILING_PCT) if trail_high > 0
-                    else entry * (1.0 - HARD_STOP_PCT))
-
-        pnl_sek = (cur - entry) * shares * rate if cur > 0 else 0.0
-        pct_chg = (cur - entry) / entry * 100 if entry > 0 and cur > 0 else 0.0
-        total_pnl  += pnl_sek
-        total_cost += entry * shares * rate
-
-        rows.append({"ticker": ticker, "entry": entry, "cur": cur,
-                     "shares": int(shares), "pnl_sek": pnl_sek,
-                     "pct": pct_chg, "stop": eff_stop, "currency": currency})
-
-    total_pct = total_pnl / total_cost * 100 if total_cost > 0 else 0
-    W = "\033[0m"
-
-    lines = []
-    lines.append("─" * 80)
-    lines.append(f"  ATOS Portfolio  |  {now_et.strftime('%H:%M:%S')} ET  |  "
-                 f"Market: {mode}  |  Polling every {POLL_INTERVAL}s  "
-                 f"(display every {DISPLAY_INTERVAL}s — text is copyable)")
-    lines.append("─" * 80)
-    lines.append(f"  {'Ticker':<8}  {'Entry':>10}  {'Current':>10}  {'Shares':>7}  "
-                 f"{'P&L (SEK)':>12}  {'%Chg':>7}  {'Stop':>10}")
-    lines.append("─" * 80)
-
-    for r in rows:
-        cur_str = f"{r['cur']:.2f}" if r['cur'] > 0 else "    ---"
-        pnl_str = f"{r['pnl_sek']:+,.0f}" if r['cur'] > 0 else "    ---"
-        pct_str = f"{r['pct']:+.2f}%" if r['cur'] > 0 else "    ---"
-        col = "\033[92m" if r['pnl_sek'] >= 0 else "\033[91m"
-        lines.append(
-            f"  {r['ticker']:<8}  {r['currency']} {r['entry']:>8.2f}  "
-            f"{r['currency']} {cur_str:>8}  {r['shares']:>7,}  "
-            f"{col}{pnl_str:>12}{W}  {col}{pct_str:>7}{W}  "
-            f"{r['currency']} {r['stop']:>8.2f}"
-        )
-
-    lines.append("─" * 80)
-    col = "\033[92m" if total_pnl >= 0 else "\033[91m"
-    lines.append(
-        f"  {'TOTAL':<8}  {'':>10}  {'':>10}  {'':>7}  "
-        f"{col}{total_pnl:>+12,.0f}{W}  {col}{total_pct:>+7.2f}%{W}"
-    )
-    lines.append("─" * 80)
-    lines.append(f"  Stop rules: trailing {TRAILING_PCT*100:.0f}% below high  |  "
-                 f"hard floor {HARD_STOP_PCT*100:.0f}% below entry")
-    lines.append("")
-    lines.append("  Ctrl+C to stop.  Text above stays still — safe to select & copy.")
-    lines.append("")   # blank line so cursor parks below the table
-    return "\n".join(lines)
+def _futures_live_price(uic: int, asset_type: str, entry: float,
+                        qty: int, direction: str,
+                        saxo_pos: dict, contract_size: float = 1) -> float | None:
+    """Back-calculate futures price from Saxo PnL (SIM doesn't stream non-FX prices)."""
+    sp = saxo_pos.get(uic)
+    if sp is None:
+        return None
+    cpx = sp.get("current_price") or 0
+    if cpx > 0:
+        return round(cpx, 6)
+    pnl = sp.get("pnl")
+    if pnl is None or not entry or not qty:
+        return None
+    # ContractFutures PnL is in account currency → divide by contract_size
+    # CfdOnIndex / CdfOnEtf PnL is in price-unit × qty equivalents
+    cs = contract_size if asset_type == "ContractFutures" else 1
+    divisor = qty * cs
+    if direction == "Buy":
+        return round(entry + pnl / divisor, 6)
+    return round(entry - pnl / divisor, 6)
 
 
-def _print_portfolio_table(open_trades: list, prices: dict, imap: dict, tick: int):
-    """Overwrites the terminal table in place without flashing."""
-    global _display_initialized
-    text = _render_table(open_trades, prices, imap, tick, mode="LIVE")
-    if not _display_initialized:
-        # First paint: clear once so we start with a clean slate
-        sys.stdout.write(_ANSI_CLEAR + _ANSI_HOME + text)
-        _display_initialized = True
-    else:
-        # Subsequent paints: jump to top and overwrite — no flash, text is stable
-        sys.stdout.write(_ANSI_HOME + text)
-    sys.stdout.flush()
+# ── Email alert ────────────────────────────────────────────────────────────
+
+def _send_alert(subject: str, body: str) -> None:
+    try:
+        cfg_path = os.path.join(_ROOT, "config", "email.json")
+        if not os.path.exists(cfg_path):
+            return
+        cfg = json.load(open(cfg_path, encoding="utf-8"))
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"]    = cfg["sender_email"]
+        msg["To"]      = cfg["recipient_email"]
+        msg.set_content(body)
+        with smtplib.SMTP(cfg["smtp_host"], int(cfg["smtp_port"])) as s:
+            s.starttls()
+            s.login(cfg["sender_email"], cfg["sender_password"])
+            s.send_message(msg)
+        logger.info(f"[alert] Email sent: {subject}")
+    except Exception as exc:
+        logger.warning(f"[alert] Email failed: {exc}")
 
 
-# ── Single poll ────────────────────────────────────────────────────
+# ── State helpers ──────────────────────────────────────────────────────────
 
-def _poll_once(imap: dict, consecutive_failures: list, blind_since: list,
-               tick: int, show_table: bool, last_display: list) -> dict:
-    """Poll prices, check stops, optionally refresh display.
-    last_display[0] = timestamp of last screen redraw (throttled to DISPLAY_INTERVAL).
-    Returns the latest prices dict (or {} on failure)."""
-    open_trades = db.get_open_trades()
-    if not open_trades:
-        consecutive_failures[0] = 0
+def _load_state(path: str) -> dict:
+    if not os.path.exists(path):
+        return {"positions": {}}
+    try:
+        return json.load(open(path, encoding="utf-8"))
+    except Exception:
+        return {"positions": {}}
+
+
+def _save_state(path: str, state: dict) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2)
+
+
+def _load_uic_cache() -> dict:
+    if not os.path.exists(UIC_CACHE):
         return {}
+    return json.load(open(UIC_CACHE, encoding="utf-8"))
 
-    prices = _fetch_saxo_prices(consecutive_failures)
 
-    # Circuit breaker
-    if not prices:
-        if blind_since[0] is None:
-            blind_since[0] = time.time()
-        blind_for = time.time() - blind_since[0]
-        if blind_for > BLIND_SECONDS:
-            log.critical(
-                "NO LIVE PRICES FOR %.0fs — MONITOR IS BLIND. "
-                "Check token / network / Saxo status. "
-                "Consider closing positions manually if market is moving.",
-                blind_for,
-            )
-        return {}
-    blind_since[0] = None
+# ── Close order helper ─────────────────────────────────────────────────────
 
-    # Redraw display only every DISPLAY_INTERVAL seconds so text stays
-    # stable long enough for the user to select and copy it
-    if show_table and (time.time() - last_display[0]) >= DISPLAY_INTERVAL:
-        _print_portfolio_table(open_trades, prices, imap, tick)
-        last_display[0] = time.time()
+def _close_position(akey: str, uic: int, asset_type: str,
+                    qty: int, direction: str, dry_run: bool) -> str | None:
+    """Place a market close order. Returns OrderId or None."""
+    close_side = "Sell" if direction == "Buy" else "Buy"
+    order = {
+        "AccountKey":    akey,
+        "Uic":           uic,
+        "AssetType":     asset_type,
+        "Amount":        qty,
+        "BuySell":       close_side,
+        "OrderType":     "Market",
+        "OrderDuration": {"DurationType": "DayOrder"},
+        "ManualOrder":   False,
+    }
+    if dry_run:
+        return "DRY"
+    try:
+        resp = _post("/trade/v2/orders", order)
+        return resp.get("OrderId", "?")
+    except requests.exceptions.HTTPError as err:
+        logger.error(f"Close order failed: {err.response.text if err.response else err}")
+        return None
 
-    # Check stops (always runs every POLL_INTERVAL — independent of display)
-    uic_to_trade = {imap[t["ticker"]]["uic"]: t
-                    for t in open_trades if t.get("ticker") in imap}
 
-    for uic, trade in uic_to_trade.items():
-        cur_price = prices.get(uic, 0)
-        ticker    = trade.get("ticker", "")
-        if cur_price <= 0:
-            log.debug("No live price for %s (UIC %d)", ticker, uic)
+# ── Core monitor logic ─────────────────────────────────────────────────────
+
+def _check_forex(akey: str, dry_run: bool) -> int:
+    """Check forex positions. Returns number of positions closed."""
+    state     = _load_state(FOREX_STATE)
+    positions = state.get("positions", {})
+    if not positions:
+        return 0
+
+    closed = 0
+    to_remove = []
+    now = datetime.now().strftime("%H:%M:%S")
+
+    for key, pos in positions.items():
+        strat, sym = key.split(":", 1) if ":" in key else ("?", key)
+        uic       = pos.get("uic")
+        direction = pos.get("direction", "Buy")
+        entry     = float(pos.get("entry_price", 0))
+        stop      = float(pos.get("stop_price", 0))
+        target    = pos.get("gap_target")        # take-profit for gap strategy
+        qty       = int(pos.get("quantity", 0))
+        is_long   = direction == "Buy"
+
+        if not uic or not qty:
             continue
 
-        triggered, reason = _stop_triggered(trade, cur_price)
-        if triggered:
-            _execute_stop_sell(trade, cur_price, reason, imap)
+        live = _fx_price(uic, akey)
+        if live is None:
+            logger.debug(f"[{strat}:{sym}] no live price, skipping")
+            continue
+
+        pnl_pct = ((live - entry) / entry * 100) if is_long else ((entry - live) / entry * 100)
+        reason  = None
+
+        # Stop-loss hit
+        if stop > 0:
+            if is_long and live <= stop:
+                reason = f"STOP-LOSS hit @ {live:.5f} (stop={stop:.5f})"
+            elif not is_long and live >= stop:
+                reason = f"STOP-LOSS hit @ {live:.5f} (stop={stop:.5f})"
+
+        # Take-profit hit (gap strategy gap_target)
+        if reason is None and target:
+            tgt = float(target)
+            if is_long and live >= tgt:
+                reason = f"TAKE-PROFIT hit @ {live:.5f} (target={tgt:.5f})"
+            elif not is_long and live <= tgt:
+                reason = f"TAKE-PROFIT hit @ {live:.5f} (target={tgt:.5f})"
+
+        if reason is None:
+            logger.debug(f"[{strat}:{sym}] {'LONG' if is_long else 'SHORT'} "
+                         f"live={live:.5f} stop={stop:.5f} pnl={pnl_pct:+.3f}% — OK")
+            continue
+
+        logger.info(f"[MONITOR] CLOSE {strat}:{sym} — {reason}  pnl={pnl_pct:+.2f}%")
+        oid = _close_position(akey, uic, "FxSpot", qty, direction, dry_run)
+        if oid is None:
+            logger.error(f"[MONITOR] Close order FAILED for {strat}:{sym}")
+            continue
+
+        to_remove.append(key)
+        closed += 1
+
+        subject = f"[Forex] {'🔴 STOP' if 'STOP' in reason else '🟢 TARGET'} {sym} — {strat.upper()} closed"
+        body = (
+            f"Position closed by intraday monitor.\n\n"
+            f"Strategy  : {strat.upper()}\n"
+            f"Pair      : {sym}\n"
+            f"Side      : {'LONG' if is_long else 'SHORT'}\n"
+            f"Reason    : {reason}\n"
+            f"P&L       : {pnl_pct:+.3f}%\n"
+            f"Entry     : {entry:.5f}\n"
+            f"Live      : {live:.5f}\n"
+            f"Order ID  : {oid}\n"
+            f"Time      : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        )
+        _send_alert(subject, body)
+
+    if to_remove and not dry_run:
+        for key in to_remove:
+            positions.pop(key, None)
+        _save_state(FOREX_STATE, state)
+
+    return closed
+
+
+def _check_futures(akey: str, dry_run: bool) -> int:
+    """Check futures positions. Returns number of positions closed."""
+    state     = _load_state(FUTURES_STATE)
+    positions = state.get("positions", {})
+    if not positions:
+        return 0
+
+    uic_cache  = _load_uic_cache()
+    uic_by_sym = {v["uic"]: v for v in uic_cache.values()}
+    saxo_pos   = _saxo_positions_by_uic()
+
+    closed    = 0
+    to_remove = []
+
+    for key, pos in positions.items():
+        strat, sym = key.split(":", 1) if ":" in key else ("?", key)
+        uic        = pos.get("uic")
+        asset_type = pos.get("asset_type", "CfdOnIndex")
+        direction  = pos.get("direction", "Buy")
+        entry      = float(pos.get("entry_price", 0))
+        stop       = float(pos.get("stop_price", 0))
+        qty        = int(pos.get("quantity", 0))
+        is_long    = direction == "Buy"
+
+        if not uic or not qty:
+            continue
+
+        cs = uic_by_sym.get(uic, {}).get("contract_size", 1)
+
+        if asset_type == "FxSpot":
+            live = _fx_price(uic, akey)
         else:
-            entry = trade.get("entry_price", 0) or 0
-            pct   = (cur_price - entry) / entry * 100 if entry > 0 else 0
-            log.debug("  %-6s %.4f  (%+.2f%%)", ticker, cur_price, pct)
+            live = _futures_live_price(uic, asset_type, entry, qty, direction,
+                                       saxo_pos, contract_size=cs)
 
-    return prices
+        if live is None:
+            logger.debug(f"[{strat}:{sym}] no live price, skipping")
+            continue
+
+        pnl_pct = ((live - entry) / entry * 100) if is_long else ((entry - live) / entry * 100)
+        reason  = None
+
+        if stop > 0:
+            if is_long and live <= stop:
+                reason = f"STOP-LOSS hit @ {live:.4f} (stop={stop:.4f})"
+            elif not is_long and live >= stop:
+                reason = f"STOP-LOSS hit @ {live:.4f} (stop={stop:.4f})"
+
+        if reason is None:
+            logger.debug(f"[{strat}:{sym}] live={live:.4f} stop={stop:.4f} pnl={pnl_pct:+.3f}% — OK")
+            continue
+
+        logger.info(f"[MONITOR] CLOSE {strat}:{sym} — {reason}  pnl={pnl_pct:+.2f}%")
+        oid = _close_position(akey, uic, asset_type, qty, direction, dry_run)
+        if oid is None:
+            logger.error(f"[MONITOR] Close order FAILED for {strat}:{sym}")
+            continue
+
+        to_remove.append(key)
+        closed += 1
+
+        subject = f"[Futures] 🔴 STOP {sym} — {strat.upper()} closed"
+        body = (
+            f"Futures position closed by intraday monitor.\n\n"
+            f"Strategy  : {strat.upper()}\n"
+            f"Market    : {sym}\n"
+            f"Side      : {'LONG' if is_long else 'SHORT'}\n"
+            f"Reason    : {reason}\n"
+            f"P&L       : {pnl_pct:+.3f}%\n"
+            f"Entry     : {entry:.4f}\n"
+            f"Live      : {live:.4f}\n"
+            f"Order ID  : {oid}\n"
+            f"Time      : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        )
+        _send_alert(subject, body)
+
+    if to_remove and not dry_run:
+        for key in to_remove:
+            positions.pop(key, None)
+        _save_state(FUTURES_STATE, state)
+
+    return closed
 
 
-# ── Main ───────────────────────────────────────────────────────────
+def run_once(dry_run: bool = False) -> None:
+    logger.info(f"{'='*50}")
+    logger.info(f"  Intraday Monitor  {'[DRY]' if dry_run else '[LIVE]'}  "
+                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"{'='*50}")
+
+    akey = _account_key()
+    if not akey:
+        logger.warning("Could not fetch AccountKey — monitor may miss some prices")
+
+    fx_closed  = _check_forex(akey, dry_run)
+    fut_closed = _check_futures(akey, dry_run)
+
+    total = fx_closed + fut_closed
+    if total:
+        logger.info(f"Monitor closed {total} position(s) "
+                    f"(forex={fx_closed}, futures={fut_closed})")
+    else:
+        logger.info("All positions within limits — no action needed.")
+
 
 def main():
-    from instrument_map import load_instrument_map
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--watch", action="store_true",
+                    help="Run continuously every 60s (Ctrl+C to stop)")
+    ap.add_argument("--dry", action="store_true",
+                    help="Check prices and log, but do NOT place real orders")
+    args = ap.parse_args()
 
-    # --no-display: suppress the terminal table (e.g. when running as a
-    # background Task Scheduler job where no console is attached)
-    show_table = "--no-display" not in sys.argv
-
-    log.info("=" * 60)
-    log.info("ATOS Intraday Monitor + Buy Scanner — %s ET",
-             _et_now().strftime("%Y-%m-%d %H:%M:%S"))
-    log.info("Stop-loss poll: %ds | Trailing: %.0f%% | Hard floor: %.0f%%",
-             POLL_INTERVAL, TRAILING_PCT * 100, HARD_STOP_PCT * 100)
-    log.info("Open scan: %d min after market open | Rescan: every %d min",
-             OPEN_SCAN_DELAY_MIN, INTRADAY_RESCAN_MIN)
-    log.info("Table display: %s", "ON" if show_table else "OFF (--no-display)")
-    log.info("=" * 60)
-
-    try:
-        imap = load_instrument_map()
-    except Exception as e:
-        log.critical("Cannot load instrument_map: %s", e)
-        sys.exit(1)
-
-    db.init_db()
-
-    if not _market_is_open():
-        log.info("Market not yet open — will start checking at 09:30 ET")
-
-    consecutive_failures = [0]
-    blind_since          = [None]
-    last_display         = [0.0]   # timestamp of last screen redraw
-    tick                 = 0
-
-    open_trades      = db.get_open_trades()
-    yahoo_prices: dict = {}
-    yahoo_fetched_at = 0.0
-
-    # Buy-scan scheduling
-    last_rescan_at   = 0.0   # timestamp of last intraday rescan
-    open_scan_fired  = False  # in-memory flag (flag file is the persistent guard)
-
-    try:
+    if args.watch:
+        logger.info("Monitor running in --watch mode (60s interval). Ctrl+C to exit.")
         while True:
-            now_et = _et_now()
-            market_open = _market_is_open()
-
-            if market_open:
-                # ── BUY SCAN: fire open scan 5 min after 09:30 ET ────────
-                mins_past_open = (now_et.hour - MARKET_OPEN[0]) * 60 + (now_et.minute - MARKET_OPEN[1])
-                if (not open_scan_fired and
-                        mins_past_open >= OPEN_SCAN_DELAY_MIN and
-                        not _open_scan_done_today()):
-                    open_scan_fired = True
-                    log.info("[BUY SCAN] Market open %d min — running open scan...",
-                             mins_past_open)
-                    import threading
-                    threading.Thread(target=_run_open_scan, daemon=True).start()
-
-                # ── BUY SCAN: intraday rescan every 90 min ────────────────
-                if (time.time() - last_rescan_at) >= INTRADAY_RESCAN_MIN * 60:
-                    last_rescan_at = time.time()
-                    # Don't block the stop-loss loop; run in a background thread
-                    import threading
-                    threading.Thread(target=_run_intraday_rescan, daemon=True).start()
-
-                # ── LIVE MODE — Saxo API every 1s, display every 5s ──────
-                try:
-                    _poll_once(imap, consecutive_failures, blind_since,
-                               tick, show_table, last_display)
-                except Exception as e:
-                    log.error("Unhandled poll error: %s", e)
-                tick += 1
-                if tick % 60 == 0:
-                    log.info("Heartbeat tick=%d | %s ET | %d positions watched",
-                             tick, now_et.strftime("%H:%M:%S"),
-                             len(db.get_open_trades()))
-
-                if _seconds_until_close() <= 0:
-                    log.info("US market closed (16:00 ET). Live polling stopped.")
-
-            else:
-                # ── CLOSED/HOLIDAY MODE — Yahoo prices every 5min ────
-                if show_table and (time.time() - yahoo_fetched_at > 300):
-                    open_trades = db.get_open_trades()
-                    tickers = [t["ticker"] for t in open_trades
-                               if t.get("ticker") in imap]
-                    if tickers:
-                        yahoo_prices = _fetch_yahoo_prices(tickers)
-                    yahoo_fetched_at = time.time()
-                    _print_closed_table(open_trades, yahoo_prices, imap)
-
-                time.sleep(30)
-                continue
-
-            time.sleep(POLL_INTERVAL)
-
-    except KeyboardInterrupt:
-        log.info("Monitor stopped by user (Ctrl+C).")
-
-    # Final closed-market snapshot after market closes
-    if show_table:
-        open_trades = db.get_open_trades()
-        tracked_tickers = [t["ticker"] for t in open_trades if t.get("ticker") in imap]
-        if tracked_tickers:
-            log.info("Fetching final closing prices from Yahoo...")
-            yahoo_prices = _fetch_yahoo_prices(tracked_tickers)
-        _print_closed_table(open_trades, yahoo_prices, imap)
-        input("\n  Market closed. Press Enter to exit...")
+            try:
+                run_once(dry_run=args.dry)
+            except Exception as exc:
+                logger.error(f"Monitor cycle error: {exc}")
+            time.sleep(60)
+    else:
+        run_once(dry_run=args.dry)
 
 
 if __name__ == "__main__":

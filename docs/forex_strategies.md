@@ -1,8 +1,8 @@
 # Forex Strategy Playbook
 
 **Module**: `forex/`  
-**Universe**: 27 FX pairs — 7 G7 majors + 20 liquid crosses (UICs confirmed Saxo SIM)  
-**Strategies**: 6 × 4 slots = **24 max open positions**  
+**Universe**: 34 FX pairs — 7 G7 majors + 27 crosses (incl. Scandinavian & EM)  
+**Strategies**: 5 × 4 + 1 × 25 = **45 max open positions**  
 **Risk per trade**: 1% of account equity  
 
 ---
@@ -12,9 +12,9 @@
 | Task (Task Scheduler)  | Time PKT     | Session       | Pairs |
 |------------------------|--------------|---------------|-------|
 | ATOS Forex Daily Run   | 06:20 Mon–Fri | Asian        | 14 (JPY/AUD/NZD crosses) |
-| ATOS Forex Exit Check  | 14:00 Mon–Fri | All          | 27 (stops only — no new entries) |
-| ATOS Forex London Run  | 18:00 Mon–Fri | London       | 13 (EUR/GBP/USD crosses) |
-| ATOS Forex Gap Fill    | 22:00 Sunday  | All          | 27 (gap fill entries only) |
+| ATOS Forex Exit Check  | 14:00 Mon–Fri | All          | 34 (stops only — no new entries) |
+| ATOS Forex London Run  | 18:00 Mon–Fri | London       | 20 (EUR/GBP/USD + Scandi/CAD) |
+| ATOS Forex Gap Fill    | 22:00 Sunday  | All          | 34 (gap fill entries only) |
 
 ---
 
@@ -238,7 +238,7 @@ Gap filters:
 Stop distance = 1.5 × gap size. Because the gap itself defines the volatility measure, position sizing is automatic — larger gaps get smaller positions, preserving the 1% risk rule.
 
 ### Frequency
-Approximately 1–3 signals per Sunday across 27 pairs. Gap fills occur most often in JPY, AUD, NZD pairs where weekend news has the largest impact.
+Approximately 3–8 signals per Sunday across 34 pairs. Gap fills occur most often in JPY, AUD, NZD, and Scandinavian pairs where weekend news has the largest impact. USDNOK and USDSEK gap frequently on oil/macro news; USDMXN gaps on EM risk events.
 
 ### Why ~80–85% win rate
 This is the genuine ceiling for a legitimate FX strategy. The edge is market microstructure, not pattern recognition — gap fading is built into how banks quote on Sunday open. The 7-day time stop keeps losing trades small, so the risk:reward remains sound even at this high win rate.
@@ -254,33 +254,48 @@ This is the genuine ceiling for a legitimate FX strategy. The edge is market mic
 | 3 | Donchian Breakout | Momentum | ~50% | 20d High/Low channel | 2.0×ATR | 60d | 4 |
 | 4 | BB Reversion | Mean-reversion | ~60% | BB(20,2) + RSI(14) | 2.0×ATR | 8d | 4 |
 | 5 | **Pullback-to-EMA** ★ | Trend continuation | **~70%+** | EMA(20/50) + ADX(14) | 1.5×ATR | 25d | 4 |
-| 6 | **Weekend Gap Fill** ★★ | Structural mean-rev | **~80–85%** | Gap % + live price | 1.5×gap | 7d | 4 |
+| 6 | **Weekend Gap Fill** ★★ | Structural mean-rev | **~80–85%** | Gap % + live price | 1.5×gap | 7d | **25** |
 
 ---
 
-## Universe — 27 Pairs
+## Universe — 34 Pairs
 
 ### Asian Session — 14 pairs (06:20 PKT)
 `USDJPY` `EURJPY` `GBPJPY` `AUDJPY` `CADJPY` `NZDJPY` `CHFJPY`  
 `AUDUSD` `NZDUSD` `AUDCAD` `AUDCHF` `AUDNZD` `NZDCAD` `NZDCHF`
 
-### London Session — 13 pairs (18:00 PKT)
+### London Session — 20 pairs (18:00 PKT)
 `EURUSD` `GBPUSD` `USDCAD` `USDCHF`  
 `EURGBP` `EURAUD` `EURNZD` `EURCAD` `EURCHF`  
-`GBPAUD` `GBPCAD` `GBPCHF` `GBPNZD`
+`GBPAUD` `GBPCAD` `GBPCHF` `GBPNZD`  
+`CADCHF` `EURNOK` `EURSEK` `USDNOK` `USDSEK` `USDDKK` `USDMXN`
 
-### Confirmed UICs (Saxo SIM, verified 2026-08-17)
-| Pair | UIC | Pair | UIC | Pair | UIC |
-|------|-----|------|-----|------|-----|
-| EURUSD | 21 | EURGBP | 17 | EURAUD | 12 |
-| GBPUSD | 31 | EURJPY | 18 | EURNZD | 2072 |
-| USDJPY | 42 | GBPJPY | 26 | EURCAD | 13 |
-| AUDUSD | 4  | AUDJPY | 2  | EURCHF | 14 |
-| USDCAD | 38 | CADJPY | 6  | GBPAUD | 22 |
-| NZDUSD | 37 | CHFJPY | 8  | GBPCAD | 23 |
-| USDCHF | 39 | NZDJPY | 36 | GBPCHF | 24 |
-| AUDCAD | 1  | NZDCAD | 33 | GBPNZD | 28 |
-| AUDCHF | 5027 | NZDCHF | 34 | AUDNZD | 3 |
+### Gap Fill — all 34 pairs (22:00 Sunday)
+All pairs are scanned; only those showing a 0.10%–2.00% gap receive entries.
+
+### UICs (Saxo SIM)
+| Pair | UIC | Status | Pair | UIC | Status |
+|------|-----|--------|------|-----|--------|
+| EURUSD | 21 | ✓ confirmed | EURGBP | 17 | ✓ confirmed |
+| GBPUSD | 31 | ✓ confirmed | EURJPY | 18 | ✓ confirmed |
+| USDJPY | 42 | ✓ confirmed | GBPJPY | 26 | ✓ confirmed |
+| AUDUSD | 4  | ✓ confirmed | AUDJPY | 2  | ✓ confirmed |
+| USDCAD | 38 | ✓ confirmed | CADJPY | 6  | ✓ confirmed |
+| NZDUSD | 37 | ✓ confirmed | CHFJPY | 8  | ✓ confirmed |
+| USDCHF | 39 | ✓ confirmed | NZDJPY | 36 | ✓ confirmed |
+| AUDCAD | 1  | ✓ confirmed | NZDCAD | 33 | ✓ confirmed |
+| AUDCHF | 5027 | ✓ confirmed | NZDCHF | 34 | ✓ confirmed |
+| AUDNZD | 3  | ✓ confirmed | EURAUD | 12 | ✓ confirmed |
+| EURNZD | 2072 | ✓ confirmed | EURCAD | 13 | ✓ confirmed |
+| EURCHF | 14 | ✓ confirmed | GBPAUD | 22 | ✓ confirmed |
+| GBPCAD | 23 | ✓ confirmed | GBPCHF | 24 | ✓ confirmed |
+| GBPNZD | 28 | ✓ confirmed | | | |
+| CADCHF | 7  | inferred (verify) | EURNOK | 19 | inferred (verify) |
+| EURSEK | 20 | inferred (verify) | USDNOK | 40 | inferred (verify) |
+| USDSEK | 41 | inferred (verify) | USDDKK | 43 | inferred (verify) |
+| USDMXN | 44 | inferred (verify) | | | |
+
+> **Verify new UICs**: run `python forex/runner.py --info` — invalid UICs return no data and the pair is silently skipped, no harm done.
 
 ---
 

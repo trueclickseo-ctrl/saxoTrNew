@@ -183,46 +183,35 @@ def load_instrument_map():
 
 
 # ══════════════════════════════════════════════════════════════════
-# Data source: Saxo first, Yahoo fallback
+# Data source: Saxo API only
 # ══════════════════════════════════════════════════════════════════
 
 def download_data(tickers, token, instrument_map):
     """
-    Download data using Saxo API first (real-time).
-    Falls back to Yahoo Finance for tickers without a UIC mapping.
+    Download historical OHLCV data from Saxo API.
+    Tickers without a UIC in instrument_map are skipped.
     """
     result = {}
     saxo_hits = 0
-    yahoo_hits = 0
+    no_uic = []
     failures = []
 
-    # Try Saxo API first for tickers we have UICs for
     for ticker in tickers:
         uic = instrument_map.get(ticker)
-        if uic:
-            df = saxo_get_historical(token, uic)
-            if df is not None and len(df) >= 55:
-                result[ticker] = df
-                saxo_hits += 1
-                continue
+        if not uic:
+            no_uic.append(ticker)
+            continue
 
-        # Fallback to Yahoo Finance
-        try:
-            import yfinance as yf
-            yf_data = yf.download(ticker, period="300d", progress=False, auto_adjust=True)
-            if yf_data is not None and len(yf_data) >= 55:
-                # Fix: yfinance now returns MultiIndex columns — flatten them
-                if isinstance(yf_data.columns, pd.MultiIndex):
-                    yf_data.columns = yf_data.columns.get_level_values(0)
-                result[ticker] = yf_data
-                yahoo_hits += 1
-                continue
-        except Exception:
-            pass
+        df = saxo_get_historical(token, uic)
+        if df is not None and len(df) >= 55:
+            result[ticker] = df
+            saxo_hits += 1
+        else:
+            failures.append(ticker)
 
-        failures.append(ticker)
-
-    print(f"  Data: {saxo_hits} from Saxo (real-time), {yahoo_hits} from Yahoo, {len(failures)} failed")
+    print(f"  Data: {saxo_hits} from Saxo, {len(no_uic)} skipped (no UIC), {len(failures)} failed")
+    if no_uic:
+        print(f"  No UIC: {', '.join(no_uic[:10])}")
     if failures:
         print(f"  Failed: {', '.join(failures[:10])}")
 

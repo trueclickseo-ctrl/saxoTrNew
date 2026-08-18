@@ -44,8 +44,46 @@ sys.path.insert(0, _HERE)
 import requests
 import pandas as pd
 import saxo_auth
+import saxo_order
 
 from futures.universe import load_universe, MARKETS
+
+# ── Email alert helper ─────────────────────────────────────────────────────
+def _send_trade_alert(strat: str, direction: str, sym: str, qty: int,
+                      entry: float, stop: float, order_id: str,
+                      equity: float) -> None:
+    """Send an email when a live order is placed. Silently skips if config missing."""
+    try:
+        import smtplib, json as _json
+        from email.message import EmailMessage
+        cfg_path = os.path.join(_ROOT, "config", "email.json")
+        if not os.path.exists(cfg_path):
+            return
+        cfg = _json.load(open(cfg_path, encoding="utf-8"))
+        side_emoji = "🟢 BUY" if direction == "Buy" else "🔴 SELL"
+        subject = f"[Futures] {side_emoji} {sym} — {strat.upper()} signal fired"
+        body = (
+            f"Strategy : {strat.upper()}\n"
+            f"Signal   : {direction} {qty}x {sym}\n"
+            f"Entry    : {entry:.4f}\n"
+            f"Stop     : {stop:.4f}\n"
+            f"Risk     : {abs(entry - stop) / entry * 100:.2f}% from stop\n"
+            f"Order ID : {order_id}\n"
+            f"Equity   : {equity:,.0f}\n"
+            f"Time     : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        )
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"]    = cfg["sender_email"]
+        msg["To"]      = cfg["recipient_email"]
+        msg.set_content(body)
+        with smtplib.SMTP(cfg["smtp_host"], int(cfg["smtp_port"])) as s:
+            s.starttls()
+            s.login(cfg["sender_email"], cfg["sender_password"])
+            s.send_message(msg)
+        logger.info(f"[alert] Email sent → {cfg['recipient_email']}")
+    except Exception as exc:
+        logger.warning(f"[alert] Email failed: {exc}")
 import futures.strategy          as strat_donchian
 import futures.strategy_rsi      as strat_rsi
 import futures.strategy_ema      as strat_ema
@@ -387,7 +425,17 @@ def _run_strategy_entries(strat_name: str, strat_mod, positions: dict,
             continue  # DRY: do not write to state or post order
 
         try:
-            resp = _post("/trade/v2/orders", order)
+            oid, stop_oid, tp_oid = saxo_order.place_with_stop(
+                post_fn     = _post,
+                account_key = akey,
+                uic         = uic,
+                asset_type  = asset_type,
+                amount      = qty,
+                buy_sell    = direction,
+                stop_price  = sig["stop_price"],
+                label       = f"{strat_name}:{sym}",
+                take_profit_price = sig.get("take_profit_price"),  # None unless strategy sets it
+            )
         except requests.exceptions.HTTPError as _err:
             _sc = _err.response.status_code if _err.response is not None else 0
             try:
@@ -409,8 +457,12 @@ def _run_strategy_entries(strat_name: str, strat_mod, positions: dict,
                 logger.warning(f"[{strat_name}] SKIP {sym}: 400 order size {qty} exceeds broker max — reduce sizing")
                 continue
             raise
-        logger.info(f"[{strat_name}] {direction} {resp.get('OrderId','?')}: "
-                    f"{qty}x {sym}[{tag}] @ ~{sig['close']:.4f}  stop={sig['stop_price']:.4f}")
+        tp_info = f"  tp_order={tp_oid}" if tp_oid else ""
+        logger.info(f"[{strat_name}] {direction} {oid}: "
+                    f"{qty}x {sym}[{tag}] @ ~{sig['close']:.4f}  stop={sig['stop_price']:.4f}  "
+                    f"stop_order={stop_oid}{tp_info}")
+        _send_trade_alert(strat_name, direction, sym, qty,
+                          sig["close"], sig["stop_price"], str(oid), equity)
 
         positions[f"{strat_name}:{sym}"] = {
             "uic":          uic,
@@ -423,7 +475,6 @@ def _run_strategy_entries(strat_name: str, strat_mod, positions: dict,
             "atr_at_entry": sig["atr"],
             "strategy":     strat_name,
         }
-        oid = resp.get("OrderId")
         _log_order({"strategy": strat_name, "side": direction, "symbol": sym,
                     "uic": uic, "quantity": qty, "entry_price": sig["close"],
                     "stop_price": sig["stop_price"], "dry_run": False})

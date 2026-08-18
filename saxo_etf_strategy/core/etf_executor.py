@@ -18,6 +18,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 import pnl_tracker
 import trade_logger
+import saxo_order
 from typing import List, Optional
 
 from core.saxo_client import SaxoClient
@@ -124,15 +125,33 @@ class ETFExecutor:
             "ManualOrder":   False,   # required by Saxo — marks algorithmic origin
         }
 
+        stop_price = round(price * (1 - self.cfg.risk.stop_loss_pct), 4)
+
         if self.cfg.dry_run:
             logger.info(f"[DRY RUN] Would BUY {quantity}x {signal.symbol} "
                         f"(UIC {signal.uic}) score={signal.score:.3f} "
-                        f"~{budget_ccy:.0f} {signal.currency} @ ~{price:.2f}")
+                        f"~{budget_ccy:.0f} {signal.currency} @ ~{price:.2f}  "
+                        f"stop={stop_price:.2f}")
             order_id = "DRY_RUN"
         else:
-            resp     = self.client.post("/trade/v2/orders", json_body=order)
-            order_id = resp.get("OrderId", "UNKNOWN")
-            logger.info(f"ETF BUY {order_id}: {quantity}x {signal.symbol} @ ~{price:.2f}")
+            def _client_post(path, body):
+                return self.client.post(path, json_body=body)
+
+            tp_price = round(price * (1 + self.cfg.risk.take_profit_pct), 2)
+            order_id, stop_oid, tp_oid = saxo_order.place_with_stop(
+                post_fn           = _client_post,
+                account_key       = self._account_key,
+                uic               = signal.uic,
+                asset_type        = "Etf",
+                amount            = quantity,
+                buy_sell          = "Buy",
+                stop_price        = stop_price,
+                label             = signal.symbol,
+                take_profit_price = tp_price,
+            )
+            tp_info = f"  tp={tp_price:.2f} tp_order={tp_oid}" if tp_oid else ""
+            logger.info(f"ETF BUY {order_id}: {quantity}x {signal.symbol} @ ~{price:.2f}  "
+                        f"stop={stop_price:.2f}  stop_order={stop_oid}{tp_info}")
 
         self.state.upsert_position(signal.uic, {
             "symbol":      signal.symbol,

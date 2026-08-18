@@ -120,7 +120,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     positions = _read_positions()
     token     = price_service.load_token()
 
-    # Fetch live prices for ALL 12 FX pairs via Saxo API (fallback: yfinance)
+    # Fetch live prices for all FX pairs via Saxo API
     # This covers both the positions table and the live rates strip
     all_instruments = list(price_service.FX_INSTRUMENTS)  # all 12 pairs (7 majors + 5 crosses)
 
@@ -141,7 +141,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
 
     # ── Header ────────────────────────────────────────────────────
     L.append(f"  {BD}{CY}╔{'═'*W_TOTAL}╗{W}")
-    src_tag = f"{'SAXO LIVE' if price_src=='saxo' else 'yfinance (~15min delay)'}"
+    src_tag = "SAXO LIVE" if price_src == "saxo" else "n/a (token expired)"
     L.append(f"  {BD}{CY}║{'  FOREX QUANT DASHBOARD':^{W_TOTAL}}║{W}")
     L.append(f"  {BD}{CY}║{f'  EMA · RSI(2) · Donchian · BB · Pullback · Gap  |  27 FX Pairs  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
     L.append(f"  {BD}{CY}╚{'═'*W_TOTAL}╝{W}")
@@ -176,9 +176,10 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append(COL_HDR)
     L.append(HR)
 
-    total_pnl  = 0.0
-    total_cost = 0.0
+    total_pnl   = 0.0
+    total_cost  = 0.0
     near_stop_count = 0
+    near_stop_list  = []
 
     if positions:
         # Group by strategy for cleaner display
@@ -233,6 +234,11 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
                          (not is_long and now_px > stop_px * 0.995)))
                 if near:
                     near_stop_count += 1
+                    side_label = "LONG" if is_long else "SHORT"
+                    dist_warn  = abs(now_px - stop_px) / now_px * 100 if now_px else 0
+                    near_stop_list.append(
+                        f"{strat.upper()} {sym} {side_label} — {dist_warn:.2f}% from stop ({stop_px:.5f})"
+                    )
                 stp_col = f"{RD}{BD}" if near else DM
                 stop_s  = f"{stop_px:.5f}"
 
@@ -263,9 +269,11 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
             f"{tc}{BD}{total_pnl:>+,.0f} USD  ({tpct:>+.4f}%){W}"
         )
 
-        # Near-stop warning
+        # Near-stop warning with details
         if near_stop_count:
-            L.append(f"  {RD}{BD}⚠  {near_stop_count} position(s) near stop — review immediately!{W}")
+            L.append(f"  {RD}{BD}⚠  {near_stop_count} position(s) within 0.5% of stop — review immediately!{W}")
+            for ns in near_stop_list:
+                L.append(f"  {RD}   • {ns}{W}")
     else:
         L.append(f"  {DM}No open forex positions.{W}")
     L.append(HR)
@@ -307,7 +315,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append(HR)
 
     # ── Pairs heat map ────────────────────────────────────────────
-    src_label = "Saxo SIM live" if price_src == "saxo" else "yfinance ~15min delay"
+    src_label = "Saxo SIM live" if price_src == "saxo" else "n/a — refresh token"
     L.append("")
     L.append(f"  {BD}LIVE RATES{W}  {DM}({src_label}){W}")
     L.append("")

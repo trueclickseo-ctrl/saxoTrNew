@@ -39,24 +39,85 @@ def _account():
         return None
 
 
-def _live_price(uic, asset_type):
+def _account_key():
     try:
-        info = _get(f"/trade/v1/infoprices/", {"Uic": uic, "AssetType": asset_type,
-                                                 "FieldGroups": "Quote"})
+        info = _get("/port/v1/accounts/me")
+        data = info.get("Data", info)
+        acct = data[0] if isinstance(data, list) else data
+        return acct.get("AccountKey", "") if isinstance(acct, dict) else ""
+    except Exception:
+        return ""
+
+_AKEY = None
+
+def _live_price(uic, asset_type):
+    global _AKEY
+    if _AKEY is None:
+        _AKEY = _account_key()
+    try:
+        params = {"Uic": uic, "AssetType": asset_type, "FieldGroups": "Quote"}
+        if _AKEY:
+            params["AccountKey"] = _AKEY
+        info = _get("/trade/v1/infoprices", params)
         q = info.get("Quote", {})
-        mid = (q.get("Ask", 0) + q.get("Bid", 0)) / 2
+        ask = q.get("Ask") or q.get("AskSize")
+        bid = q.get("Bid") or q.get("BidSize")
+        mid = (float(q.get("Ask", 0)) + float(q.get("Bid", 0))) / 2
         return round(mid, 6) if mid else None
     except Exception:
         return None
+
+
+def _saxo_live_pnl():
+    """Fetch live PnL per UIC from Saxo positions endpoint."""
+    uic_pnl = {}
+    try:
+        global _AKEY
+        if _AKEY is None:
+            _AKEY = _account_key()
+        data = _get("/port/v1/positions/me").get("Data", [])
+        for p in data:
+            pb   = p.get("PositionBase", {})
+            pv   = p.get("PositionView", {})
+            uic  = pb.get("Uic")
+            pnl  = pv.get("ProfitLossOnTrade")
+            cpx  = pv.get("CurrentPrice") or 0
+            qty  = pb.get("Amount", 0)
+            side = pb.get("BuySell", "Buy")
+            if uic is not None:
+                uic_pnl[uic] = {"pnl": pnl, "current_price": cpx, "qty": qty, "side": side}
+    except Exception:
+        pass
+    return uic_pnl
+
+
+def _load_uic_cache():
+    path = os.path.join(DATA_DIR, "futures_uic_cache.json")
+    try:
+        return json.load(open(path, encoding="utf-8"))
+    except Exception:
+        return {}
+
+_UIC_BY_UIC = None  # {uic_int: info_dict}
+
+def _contract_size_for(uic, asset_type):
+    global _UIC_BY_UIC
+    if _UIC_BY_UIC is None:
+        cache = _load_uic_cache()
+        _UIC_BY_UIC = {v["uic"]: v for v in cache.values()}
+    info = _UIC_BY_UIC.get(uic, {})
+    return info.get("contract_size", 1)
 
 
 def _positions():
     path = os.path.join(DATA_DIR, "futures_state.json")
     if not os.path.exists(path):
         return []
-    state = json.load(open(path, encoding="utf-8"))
-    today = date.today()
-    rows  = []
+    state    = json.load(open(path, encoding="utf-8"))
+    today    = date.today()
+    saxo_pnl = _saxo_live_pnl()
+    rows     = []
+
     for key, pos in state.get("positions", {}).items():
         strat, sym = key.split(":", 1) if ":" in key else ("?", key)
         entry_date = pos.get("entry_date", "?")
@@ -64,19 +125,47 @@ def _positions():
             days = (today - date.fromisoformat(entry_date)).days
         except Exception:
             days = 0
-        live_px = _live_price(pos.get("uic"), pos.get("asset_type"))
-        ep = pos.get("entry_price", 0)
+
+        ep         = pos.get("entry_price", 0)
+        uic        = pos.get("uic")
+        qty        = pos.get("quantity", 1)
+        direction  = pos.get("direction", "Buy")
+        asset_type = pos.get("asset_type", "")
+
+        # Try infoprices first (works for FxSpot/GC)
+        live_px = _live_price(uic, asset_type)
+
+        # Fall back: back-calculate from Saxo PnL
+        if (live_px is None or live_px == 0) and uic in saxo_pnl:
+            sp   = saxo_pnl[uic]
+            cpx  = sp.get("current_price") or 0
+            pnl  = sp.get("pnl")
+            if cpx and cpx > 0:
+                live_px = round(cpx, 6)
+            elif pnl is not None and ep and qty:
+                # ContractFutures: Saxo PnL is in account currency (USD).
+                # live = entry ± pnl / (qty × contract_size)
+                # CfdOnIndex / CdfOnEtf / FxSpot: PnL is in price-units × qty.
+                # live = entry ± pnl / qty
+                cs = _contract_size_for(uic, asset_type) if asset_type == "ContractFutures" else 1
+                divisor = qty * cs
+                if direction == "Buy":
+                    live_px = round(ep + pnl / divisor, 6)
+                else:
+                    live_px = round(ep - pnl / divisor, 6)
+
         if live_px and ep:
-            pnl_pct = (live_px - ep) / ep * 100 if pos.get("direction") == "Buy" \
+            pnl_pct = (live_px - ep) / ep * 100 if direction == "Buy" \
                       else (ep - live_px) / ep * 100
         else:
             pnl_pct = None
+
         rows.append({
             "key":         key,
             "strategy":    strat,
             "symbol":      sym,
-            "direction":   pos.get("direction", "?"),
-            "quantity":    pos.get("quantity", 0),
+            "direction":   direction,
+            "quantity":    qty,
             "entry_price": ep,
             "live_price":  live_px,
             "stop_price":  pos.get("stop_price"),

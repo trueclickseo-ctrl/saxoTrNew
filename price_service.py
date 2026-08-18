@@ -1,8 +1,9 @@
 """
 price_service.py  —  Unified live price fetcher
 -------------------------------------------------
-Priority:  Saxo SIM API  (when token valid, i.e. during market hours)
-Fallback:  yfinance      (outside market hours / token expired)
+Source:  Saxo SIM API  (/trade/v1/infoprices)
+         Works 24/5 for FxSpot.  Returns None for instruments where Saxo SIM
+         reports NoAccess (stocks, futures on SIM).
 
 Usage:
     from price_service import fetch_prices, load_token
@@ -19,25 +20,6 @@ BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 TOKEN_FILE = os.path.join(BASE_DIR, "saxo_token.json")
 SIM_BASE   = "https://gateway.saxobank.com/sim/openapi/"
 
-# yfinance fallback ticker per Saxo symbol
-_YF_MAP = {
-    "EURUSD": "EURUSD=X", "GBPUSD": "GBPUSD=X", "USDJPY": "JPY=X",
-    "AUDUSD": "AUDUSD=X", "USDCAD": "CAD=X",    "NZDUSD": "NZDUSD=X",
-    "USDCHF": "CHF=X",
-    "EURGBP": "EURGBP=X", "EURJPY": "EURJPY=X", "GBPJPY": "GBPJPY=X",
-    "AUDJPY": "AUDJPY=X", "CADJPY": "CADJPY=X",
-    "EURAUD": "EURAUD=X", "EURNZD": "EURNZD=X", "EURCAD": "EURCAD=X",
-    "EURCHF": "EURCHF=X", "GBPAUD": "GBPAUD=X", "GBPCAD": "GBPCAD=X",
-    "GBPCHF": "GBPCHF=X", "GBPNZD": "GBPNZD=X", "AUDCAD": "AUDCAD=X",
-    "AUDCHF": "AUDCHF=X", "AUDNZD": "AUDNZD=X", "NZDJPY": "NZDJPY=X",
-    "NZDCAD": "NZDCAD=X", "NZDCHF": "NZDCHF=X", "CHFJPY": "CHFJPY=X",
-    # ETF — same symbol works in yfinance
-    "XLK": "XLK", "XLV": "XLV", "XLE": "XLE", "XLF": "XLF",
-    "XLI": "XLI", "XLY": "XLY", "XLP": "XLP", "XLU": "XLU",
-    "XLRE": "XLRE", "XLB": "XLB", "SPY": "SPY",
-    # Futures
-    "ES": "ES=F", "NQ": "NQ=F", "GC": "GC=F", "CL": "CL=F", "ZB": "ZB=F",
-}
 
 # All 7 FX instruments (used by dashboards that need all rates even without open positions)
 FX_INSTRUMENTS = [
@@ -110,51 +92,25 @@ def _saxo_mid(token: str, uic: int, asset_type: str) -> float | None:
         return None
 
 
-# ── yfinance batch fallback ────────────────────────────────────────
-
-def _yf_batch(symbols: list[str]) -> dict[str, float]:
-    """Fetch last-close prices from yfinance for a list of Saxo symbols."""
-    if not symbols:
-        return {}
-    try:
-        import yfinance as yf
-        import pandas as pd
-        yf_tickers = [_YF_MAP.get(s, s) for s in symbols]
-        raw   = yf.download(yf_tickers, period="2d", auto_adjust=True, progress=False)
-        close = raw["Close"] if "Close" in raw.columns else raw
-        if isinstance(close.columns, pd.MultiIndex):
-            close.columns = close.columns.get_level_values(0)
-        out = {}
-        for sym, ytk in zip(symbols, yf_tickers):
-            try:
-                col = close[ytk] if ytk in close.columns else close
-                out[sym] = round(float(col.dropna().iloc[-1]), 5)
-            except Exception:
-                pass
-        return out
-    except Exception:
-        return {}
-
-
 # ── Main entry point ───────────────────────────────────────────────
 
 def fetch_prices(instruments: list[dict], token: str = None) -> tuple[dict[str, float], str]:
     """
-    Fetch live prices for a list of instruments.
+    Fetch live prices for a list of instruments from Saxo SIM.
 
     Args:
         instruments: list of {"symbol": str, "uic": int, "asset_type": str}
         token:       Saxo access token (auto-loaded from saxo_token.json if None)
 
     Returns:
-        (prices, source) where source is "saxo" or "yfinance"
+        (prices, source) where source is "saxo" or "unavailable"
         prices = {"EURUSD": 1.1582, ...}
+        Instruments where Saxo returns NoAccess (stocks, futures on SIM) are omitted.
     """
     if token is None:
         token = load_token()
 
-    prices:    dict[str, float] = {}
-    yf_needed: list[str]        = []
+    prices:  dict[str, float] = {}
     saxo_ok = False
 
     if token:
@@ -167,17 +123,6 @@ def fetch_prices(instruments: list[dict], token: str = None) -> tuple[dict[str, 
                 if px is not None:
                     prices[sym] = round(px, 5)
                     saxo_ok = True
-                    continue
-            # Saxo failed for this symbol — queue for yfinance
-            yf_needed.append(sym)
-    else:
-        yf_needed = [i["symbol"] for i in instruments]
 
-    # Fill any gaps with yfinance
-    if yf_needed:
-        yf_prices = _yf_batch(yf_needed)
-        prices.update(yf_prices)
-
-    source = "saxo" if saxo_ok and not yf_needed else (
-             "yfinance" if not saxo_ok else "saxo+yfinance")
+    source = "saxo" if saxo_ok else "unavailable"
     return prices, source
