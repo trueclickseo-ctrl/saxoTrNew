@@ -66,6 +66,7 @@ import forex.strategy_zscore      as strat_zscore
 import forex.strategy_ml          as strat_ml
 import pnl_tracker
 import trade_logger
+import forex.notifier as fx_notify
 
 logging.basicConfig(
     level=logging.INFO,
@@ -152,7 +153,22 @@ def _post(path: str, body: dict) -> dict:
     return r.json()
 
 
-# ── Account ───────────────────────────────────────────────────────────────────
+# ── Token / Account ───────────────────────────────────────────────────────────
+
+def _verify_token(scheduled_time: str = "") -> bool:
+    """
+    Test the Saxo token. Returns True if valid.
+    On failure, sends a token-expired email and returns False so the caller
+    can exit cleanly without placing any orders.
+    """
+    try:
+        _get("/port/v1/accounts/me")
+        return True
+    except Exception:
+        logger.error("Saxo token appears expired or invalid — sending alert email")
+        fx_notify.send_token_expired(scheduled_time)
+        return False
+
 
 def _account() -> tuple[float, str]:
     equity, key = 0.0, ""
@@ -676,6 +692,9 @@ def run_exits_only(dry_run: bool = True,
                 f"{datetime.now().strftime('%Y-%m-%d %H:%M')}")
     logger.info("=" * 60)
 
+    if not dry_run and not _verify_token("exits-only"):
+        return {"exits": 0, "holding": 0, "dry_run": False, "error": "token_expired"}
+
     state     = _load_state()
     positions = state.setdefault("positions", {})
     _, akey   = _account()
@@ -736,10 +755,16 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
 
     strat_label = "+".join(active_strategies)
     mode        = "DRY-RUN" if dry_run else "LIVE (Saxo SIM)"
+    run_time    = datetime.now().strftime("%H:%M")
     logger.info("=" * 60)
     logger.info(f"  FX Runner [{strat_label}] — {mode}  session={session}  "
                 f"{datetime.now().strftime('%Y-%m-%d %H:%M')}")
     logger.info("=" * 60)
+
+    # ── Token guard — email alert + abort if expired ──────────────────────────
+    if not dry_run and not _verify_token(run_time):
+        return {"exits": 0, "entries": 0, "holding": 0,
+                "dry_run": False, "error": "token_expired"}
 
     state     = _load_state()
     positions = state.setdefault("positions", {})
@@ -753,9 +778,11 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
     logger.info(f"Strategies     : {strat_label}")
 
     # ── Heal missing stop / TP orders (e.g. from prior API failures) ────────────
+    healed_stops = healed_tp = 0
     if not dry_run:
-        healed = _heal_missing_stops(positions, akey) + _heal_missing_tp(positions, akey)
-        if healed:
+        healed_stops = _heal_missing_stops(positions, akey)
+        healed_tp    = _heal_missing_tp(positions, akey)
+        if healed_stops or healed_tp:
             _save_state(state)
 
     # ── Fetch price history once for active session pairs ─────────────────────
@@ -813,6 +840,27 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
 
     state["last_run"] = datetime.now().isoformat()
     _save_state(state)
+
+    # ── Run-summary email (live only) ─────────────────────────────────────────
+    if not dry_run:
+        try:
+            today_trades   = [t for t in trade_logger.tail("forex", n=200)
+                              if t.get("date") == today_str and t.get("mode") == "LIVE"]
+            strategy_stats = pnl_tracker.get_strategy_summary("forex")
+            fx_notify.send_run_summary(
+                session        = session,
+                entries        = total_entries,
+                exits          = total_exits,
+                holdings       = len(positions),
+                equity         = equity,
+                today_trades   = today_trades,
+                strategy_stats = strategy_stats,
+                healed_stops   = healed_stops,
+                healed_tp      = healed_tp,
+            )
+        except Exception as exc:
+            logger.warning(f"Run-summary email failed: {exc}")
+
     return {"exits": total_exits, "entries": total_entries,
             "holding": len(positions), "dry_run": dry_run}
 

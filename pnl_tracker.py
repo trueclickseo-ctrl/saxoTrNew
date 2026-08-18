@@ -394,6 +394,50 @@ def get_closed_trades(module: str = None, limit: int = 100,
         return [dict(r) for r in c.execute(q, args).fetchall()]
 
 
+def get_strategy_summary(module: str = "forex") -> list[dict]:
+    """
+    Per-strategy P&L breakdown within a module.
+    Returns list of dicts sorted by total_pnl descending.
+    Only includes strategies with at least one closed trade.
+    """
+    with _conn() as c:
+        rows = c.execute("""
+            SELECT strategy,
+                   COUNT(*)                                                     AS n,
+                   SUM(realized_pnl)                                            AS total_pnl,
+                   SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END)           AS wins,
+                   SUM(CASE WHEN realized_pnl < 0 THEN 1 ELSE 0 END)           AS losses,
+                   SUM(CASE WHEN realized_pnl > 0 THEN realized_pnl ELSE 0 END) AS gross_profit,
+                   SUM(CASE WHEN realized_pnl < 0 THEN realized_pnl ELSE 0 END) AS gross_loss,
+                   MAX(realized_pnl)                                            AS best,
+                   MIN(realized_pnl)                                            AS worst,
+                   COUNT(CASE WHEN status='open' THEN 1 END)                   AS open_count
+              FROM trades
+             WHERE module=?
+             GROUP BY strategy
+             ORDER BY total_pnl DESC
+        """, (module,)).fetchall()
+
+    result = []
+    for r in rows:
+        n  = r["n"] or 0
+        gp = r["gross_profit"] or 0.0
+        gl = abs(r["gross_loss"] or 0.0)
+        result.append({
+            "strategy":      r["strategy"] or "—",
+            "trades":        n,
+            "wins":          r["wins"]   or 0,
+            "losses":        r["losses"] or 0,
+            "open":          r["open_count"] or 0,
+            "win_rate":      round((r["wins"] or 0) / n * 100, 1) if n else 0.0,
+            "total_pnl":     round(r["total_pnl"] or 0.0, 2),
+            "profit_factor": round(gp / gl, 2) if gl > 0 else None,
+            "best":          round(r["best"]  or 0.0, 2),
+            "worst":         round(r["worst"] or 0.0, 2),
+        })
+    return result
+
+
 def get_summary(module: str = None) -> dict:
     """
     Return P&L summary. If module given, returns stats for that module only.
