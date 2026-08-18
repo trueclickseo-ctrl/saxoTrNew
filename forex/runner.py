@@ -11,7 +11,6 @@ Strategies:
   pullback    — EMA(20) pullback in EMA(50) trend (~70% win rate, tight stops)
   gap         — Weekend gap fill — fade Sunday open vs Friday close (~80-85% WR)
   supertrend  — SuperTrend(10,3) + EMA(200) trend-following (~65% WR)
-  carry       — Interest rate differential carry trade + ADX trend filter (~62% WR)
   zscore      — Z-score mean reversion: fade 2σ extremes back to mean (~63% WR)
   ml          — Logistic regression on 7 technical features (~57-62% WR)
 
@@ -63,7 +62,6 @@ import forex.strategy_bb          as strat_bb
 import forex.strategy_pullback    as strat_pullback
 import forex.strategy_gap         as strat_gap
 import forex.strategy_supertrend  as strat_supertrend
-import forex.strategy_carry       as strat_carry
 import forex.strategy_zscore      as strat_zscore
 import forex.strategy_ml          as strat_ml
 import pnl_tracker
@@ -85,14 +83,13 @@ STRATEGIES = {
     "pullback":    strat_pullback,
     "gap":         strat_gap,
     "supertrend":  strat_supertrend,
-    "carry":       strat_carry,
     "zscore":      strat_zscore,
     "ml":          strat_ml,
 }
 SLOTS_PER_STRATEGY = {
     "ema": 4, "rsi": 34, "donchian": 4, "bb": 4,
     "pullback": 34, "gap": 34,
-    "supertrend": 20, "carry": 20, "zscore": 20, "ml": 20,
+    "supertrend": 20, "zscore": 20, "ml": 20,
 }
 
 # ── Session-aware pair groups ──────────────────────────────────────────────────
@@ -679,7 +676,7 @@ if __name__ == "__main__":
                     help="Check stops only — no new entries (intraday stop check)")
     ap.add_argument("--strategy", default="all",
                     choices=["all", "ema", "rsi", "donchian", "bb", "pullback", "gap",
-                             "supertrend", "carry", "zscore", "ml"],
+                             "supertrend", "zscore", "ml"],
                     help="Which strategy to run (default: all)")
     ap.add_argument("--status",   action="store_true",
                     help="Print open positions and exit")

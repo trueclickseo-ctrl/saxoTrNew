@@ -74,7 +74,6 @@ STRAT_COL = {
     "pullback":   BL,
     "gap":        WH,
     "supertrend": "\033[38;5;208m",   # orange
-    "carry":      "\033[38;5;214m",   # amber
     "zscore":     "\033[38;5;147m",   # lavender
     "ml":         "\033[38;5;119m",   # lime
 }
@@ -154,12 +153,11 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append(f"  {BD}{CY}╔{'═'*W_TOTAL}╗{W}")
     src_tag = "SAXO LIVE" if price_src == "saxo" else "n/a (token expired)"
     L.append(f"  {BD}{CY}║{'  FOREX QUANT DASHBOARD':^{W_TOTAL}}║{W}")
-    L.append(f"  {BD}{CY}║{f'  10 Strategies  |  34 FX Pairs  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
+    L.append(f"  {BD}{CY}║{f'  9 Strategies  |  34 FX Pairs  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
     L.append(f"  {BD}{CY}╚{'═'*W_TOTAL}╝{W}")
     L.append("")
 
     OR  = "\033[38;5;208m"
-    AM  = "\033[38;5;214m"
     LV  = "\033[38;5;147m"
     LM  = "\033[38;5;119m"
     # ── Strategy legend ───────────────────────────────────────────
@@ -171,11 +169,10 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
              f"{BL}{BD}■ Pullback{W}  ~70% WR   "
              f"{WH}{BD}■ Gap Fill{W}  ~80% WR   "
              f"{OR}{BD}■ SuperTrend{W}  trend   "
-             f"{AM}{BD}■ Carry{W}  swap   "
              f"{LV}{BD}■ Z-Score{W}  mean-rev   "
              f"{LM}{BD}■ ML{W}  ML signals")
     L.append(f"  {DM}Scheduler: 06:20/14:00/18:00 PKT Mon-Fri  |  22:00 PKT Sun (gap)  |  "
-             f"10 strategies  |  34 pairs: 7 majors + 27 crosses  |  Max slots vary per strategy{W}")
+             f"9 strategies  |  34 pairs: 7 majors + 27 crosses  |  Max slots vary per strategy{W}")
     L.append(HR)
     L.append("")
 
@@ -203,7 +200,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     if positions:
         # Group by strategy for cleaner display
         strat_order = ["ema", "rsi", "donchian", "bb", "pullback", "gap",
-                       "supertrend", "carry", "zscore", "ml"]
+                       "supertrend", "zscore", "ml"]
         grouped: dict = {}
         for p in positions:
             grouped.setdefault(p["strategy"], []).append(p)
@@ -311,7 +308,6 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         "pullback":   ("EMA Pullback ★",   "EMA(20) in EMA(50)",    "~70% WR",      "34"),
         "gap":        ("Gap Fill ★★",      "Weekend gap fade",      "~80-85% WR",   "34"),
         "supertrend": ("SuperTrend",       "ST(10,3)+EMA(200)",     "~65% WR",      "20"),
-        "carry":      ("Carry Trade",      "Rate diff+ADX(18)",     "~62% WR",      "20"),
         "zscore":     ("Z-Score Rev",      "20-day z-score fade",   "~63% WR",      "20"),
         "ml":         ("ML Signals",       "Logistic reg (7 feat)", "~60% WR",      "20"),
     }
