@@ -121,7 +121,7 @@ BASE_URL    = "https://gateway.saxobank.com/sim/openapi"
 DATA_DIR    = os.path.join(_ROOT, "data")
 STATE_FILE  = os.path.join(DATA_DIR, "forex_state.json")
 ORDERS_FILE = os.path.join(DATA_DIR, "forex_orders.json")
-CHART_BARS  = 220   # enough for EMA(200) + buffer
+CHART_BARS  = 340   # enough for ML strategy: EMA(200) + 126 lookback + 14 buffer
 
 
 # ── Saxo HTTP helpers ─────────────────────────────────────────────────────────
@@ -175,8 +175,11 @@ def _account() -> tuple[float, str]:
 # ── Price data ────────────────────────────────────────────────────────────────
 
 def _fetch_history(uic: int, count: int = CHART_BARS) -> pd.DataFrame | None:
-    """Fetch daily OHLC for an FxSpot instrument. Mid = (Ask+Bid)/2."""
-    min_bars = max(strat.MIN_BARS for strat in STRATEGIES.values())
+    """Fetch daily OHLC for an FxSpot instrument. Mid = (Ask+Bid)/2.
+
+    Each strategy enforces its own MIN_BARS; we just need at least a few rows
+    here to confirm the instrument responded with real data.
+    """
     try:
         resp = _get("/chart/v3/charts", {
             "Uic": uic, "AssetType": ASSET_TYPE,
@@ -201,9 +204,9 @@ def _fetch_history(uic: int, count: int = CHART_BARS) -> pd.DataFrame | None:
                 continue
             if c > 0:
                 rows.append({"Open": o, "High": h, "Low": l, "Close": c})
-        if len(rows) >= min_bars:
+        if len(rows) >= 5:
             return pd.DataFrame(rows)
-        logger.debug(f"UIC {uic}: only {len(rows)} bars (need {min_bars})")
+        logger.debug(f"UIC {uic}: only {len(rows)} bars returned")
         return None
     except Exception as exc:
         logger.warning(f"Chart fetch failed for UIC {uic}: {exc}")
@@ -824,6 +827,52 @@ if __name__ == "__main__":
             sun_str = f"{r['sunday_open']:.5f}" if r['sunday_open'] > 0 else "n/a"
             print(f"  {r['symbol']:<10} {r['friday_close']:>10.5f} {sun_str:>10} "
                   f"{gap_str:>8} {pct_str:>6}  {r['signal']}")
+
+        # Panel 7 — SuperTrend
+        print(f"\n[SUPERTREND] SuperTrend(10,3) + EMA(200)  (~65% WR)")
+        rows = strat_supertrend.scan_summary(market_data)
+        print(f"  {'Pair':<10} {'Close':>10} {'Direction':>10} {'ST Level':>10} {'EMA200':>10} {'ATR':>8}  Status")
+        print("  " + "-" * 80)
+        for r in rows:
+            if r["status"] != "ok":
+                print(f"  {r['symbol']:<10}  no data" if r["status"] == "no_data"
+                      else f"  {r['symbol']:<10}  error"); continue
+            dir_str = "BULL ↑" if r["direction"] == 1 else "BEAR ↓"
+            ema_flag = ">" if r["close"] > r["ema200"] else "<"
+            print(f"  {r['symbol']:<10} {r['close']:>10.5f} {dir_str:>10} "
+                  f"{r['st_level']:>10.5f} {r['ema200']:>10.5f} {r['atr']:>8.5f}"
+                  f"  price {ema_flag} EMA200")
+
+        # Panel 8 — Z-Score Mean Reversion
+        print(f"\n[ZSCORE] Z-Score(20) mean reversion + EMA(200)  (~63% WR)")
+        rows = strat_zscore.scan_summary(market_data)
+        print(f"  {'Pair':<10} {'Close':>10} {'Z-Score':>8} {'ATR':>10}  Signal")
+        print("  " + "-" * 60)
+        for r in rows:
+            if r["status"] != "ok":
+                print(f"  {r['symbol']:<10}  no data"); continue
+            z = r["zscore"]
+            flag = ""
+            if z < -2.0:   flag = "  *** OVERSOLD → LONG ***"
+            elif z > 2.0:  flag = "  *** OVERBOUGHT → SHORT ***"
+            print(f"  {r['symbol']:<10} {r['close']:>10.5f} {z:>+8.2f} {r['atr']:>10.5f}{flag}")
+
+        # Panel 9 — ML Signals
+        print(f"\n[ML] Logistic Regression signals  (~57-62% WR)  [requires 336 bars]")
+        rows = strat_ml.scan_summary(market_data)
+        print(f"  {'Pair':<10} {'Close':>10} {'ML Prob':>8}  Signal")
+        print("  " + "-" * 50)
+        for r in rows:
+            if r["status"] != "ok":
+                print(f"  {r['symbol']:<10}  no data"); continue
+            prob = r["ml_prob"]
+            if prob is None:
+                print(f"  {r['symbol']:<10} {r['close']:>10.5f}  {'—':>8}  insufficient bars"); continue
+            flag = ""
+            if prob >= 0.58:    flag = f"  *** BUY  (conf={prob:.2f}) ***"
+            elif prob <= 0.42:  flag = f"  *** SELL (conf={1-prob:.2f}) ***"
+            print(f"  {r['symbol']:<10} {r['close']:>10.5f} {prob:>8.3f}{flag}")
+
         sys.exit(0)
 
     active = list(STRATEGIES) if args.strategy == "all" else [args.strategy]
