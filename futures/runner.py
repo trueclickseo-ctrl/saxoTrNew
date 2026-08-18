@@ -116,8 +116,17 @@ SLOTS_PER_STRATEGY = {
     "trend_ma": 5,
 }
 
-# ── Daily loss limit ───────────────────────────────────────────────────────────
-DAILY_LOSS_LIMIT_PCT = -3.0   # block new entries if today's realised P&L < -3% equity
+# ── Portfolio risk limits ─────────────────────────────────────────────────────
+DAILY_LOSS_LIMIT_PCT  = -3.0  # block new entries if today's realised P&L < -3% equity
+PORTFOLIO_HEAT_LIMIT  = 0.06  # max total open risk (sum of ATR stops) as fraction of equity
+DRAWDOWN_PAUSE_PCT    = 0.10  # pause all entries if equity is >10% below rolling peak
+PEAK_EQUITY_FILE      = os.path.join(os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), "data"), "futures_peak_equity.json")
+
+# Correlated market pairs — never hold the same direction in both
+CORRELATED_PAIRS = [
+    {"ES", "NQ"},   # S&P and NASDAQ: >0.95 correlation — treat as same exposure
+]
 
 _LOG_DIR  = os.path.join(_ROOT, "logs")
 os.makedirs(_LOG_DIR, exist_ok=True)
@@ -367,6 +376,107 @@ def _entries_blocked_by_loss_limit(equity: float) -> bool:
     return False
 
 
+# ── Portfolio heat guard ──────────────────────────────────────────────────────
+
+def _portfolio_heat_pct(positions: dict, market_data: dict, universe: dict,
+                        equity: float) -> float:
+    """Return total open risk as a fraction of equity.
+
+    For each position: risk = ATR_stop_distance × qty (in price units).
+    Summed across all positions and divided by equity.
+    """
+    if equity <= 0:
+        return 0.0
+    total_risk = 0.0
+    for key, pos in positions.items():
+        sym = key.split(":", 1)[-1]
+        df  = market_data.get(sym)
+        if df is None:
+            continue
+        entry  = float(pos.get("entry_price", 0))
+        stop   = float(pos.get("stop_price", 0))
+        qty    = float(pos.get("quantity", 1))
+        if entry > 0 and stop > 0:
+            total_risk += abs(entry - stop) * qty
+    return total_risk / equity
+
+
+def _heat_allows_entry(positions: dict, market_data: dict, universe: dict,
+                       equity: float) -> bool:
+    """Return False if adding another position would breach the heat limit."""
+    heat = _portfolio_heat_pct(positions, market_data, universe, equity)
+    if heat >= PORTFOLIO_HEAT_LIMIT:
+        logger.warning(
+            f"⚠  PORTFOLIO HEAT: {heat*100:.1f}% of equity at risk "
+            f"(limit {PORTFOLIO_HEAT_LIMIT*100:.0f}%). Blocking new entries."
+        )
+        return False
+    logger.debug(f"Portfolio heat: {heat*100:.1f}% / {PORTFOLIO_HEAT_LIMIT*100:.0f}%")
+    return True
+
+
+# ── Drawdown circuit breaker ──────────────────────────────────────────────────
+
+def _update_peak_equity(equity: float) -> float:
+    """Load rolling peak equity, update if equity is new high, return peak."""
+    peak = equity
+    try:
+        if os.path.exists(PEAK_EQUITY_FILE):
+            with open(PEAK_EQUITY_FILE) as f:
+                data = json.load(f)
+            peak = float(data.get("peak", equity))
+    except Exception:
+        pass
+    if equity > peak:
+        peak = equity
+        try:
+            with open(PEAK_EQUITY_FILE, "w") as f:
+                json.dump({"peak": peak, "updated": date.today().isoformat()}, f)
+        except Exception:
+            pass
+    return peak
+
+
+def _drawdown_allows_entry(equity: float) -> bool:
+    """Return False and log if equity is >DRAWDOWN_PAUSE_PCT below rolling peak."""
+    peak = _update_peak_equity(equity)
+    if peak <= 0:
+        return True
+    dd = (peak - equity) / peak
+    if dd >= DRAWDOWN_PAUSE_PCT:
+        logger.warning(
+            f"⛔  DRAWDOWN CIRCUIT BREAKER: equity {equity:,.0f} is "
+            f"{dd*100:.1f}% below peak {peak:,.0f} "
+            f"(limit {DRAWDOWN_PAUSE_PCT*100:.0f}%). Pausing new entries."
+        )
+        return False
+    if dd > 0.05:
+        logger.info(f"Drawdown from peak: {dd*100:.1f}% (breaker at {DRAWDOWN_PAUSE_PCT*100:.0f}%)")
+    return True
+
+
+# ── Correlation guard ─────────────────────────────────────────────────────────
+
+def _correlation_blocks_signal(sig: dict, positions: dict) -> bool:
+    """Return True if a correlated position is already open in the same direction."""
+    sym_new  = sig["symbol"]
+    dir_new  = sig["direction"]
+    for pair in CORRELATED_PAIRS:
+        if sym_new not in pair:
+            continue
+        # Check if any OTHER symbol in this correlation group is open same direction
+        for key, pos in positions.items():
+            sym_open = key.split(":", 1)[-1]
+            if sym_open in pair and sym_open != sym_new:
+                if pos.get("direction") == dir_new:
+                    logger.info(
+                        f"  [{sym_new}] Skipped: correlated position "
+                        f"{sym_open} {dir_new} already open"
+                    )
+                    return True
+    return False
+
+
 # ── Strategy dispatch helpers ──────────────────────────────────────────────
 
 def _run_strategy_exits(strat_name: str, strat_mod, positions: dict,
@@ -467,6 +577,12 @@ def _run_strategy_entries(strat_name: str, strat_mod, positions: dict,
     entries = 0
 
     for sig in signals[:slots_free]:
+        # Portfolio-level guards per signal
+        if _correlation_blocks_signal(sig, positions):
+            continue
+        if not _heat_allows_entry(positions, market_data, universe, equity):
+            break  # Heat limit is portfolio-wide — no point checking remaining signals
+
         sym        = sig["symbol"]
         info       = universe[sym]
         uic        = info["uic"]
@@ -595,8 +711,10 @@ def run_daily(dry_run: bool = True,
     total_exits  = 0
     total_entries = 0
 
-    # Check daily loss limit once, before any entries
-    loss_limit_hit = not dry_run and _entries_blocked_by_loss_limit(equity)
+    # Check portfolio-level entry gates once, before any entries
+    loss_limit_hit  = not dry_run and _entries_blocked_by_loss_limit(equity)
+    drawdown_paused = not dry_run and not _drawdown_allows_entry(equity)
+    entries_blocked = loss_limit_hit or drawdown_paused
 
     for name in active_strategies:
         mod = STRATEGIES[name]
@@ -606,14 +724,15 @@ def run_daily(dry_run: bool = True,
         exits   = _run_strategy_exits(name, mod, positions, market_data,
                                       universe, equity, akey, today_str, dry_run)
 
-        if loss_limit_hit:
-            logger.info(f"  [{name}] Entries BLOCKED — daily loss limit active")
+        if entries_blocked:
+            reason = "daily loss limit" if loss_limit_hit else "drawdown circuit breaker"
+            logger.info(f"  [{name}] Entries BLOCKED — {reason} active")
             entries = 0
         else:
             entries = _run_strategy_entries(name, mod, positions, market_data,
                                             universe, equity, akey, today_str, dry_run)
 
-        if entries == 0 and not loss_limit_hit:
+        if entries == 0 and not entries_blocked:
             open_in = sum(1 for k in positions if k.startswith(f"{name}:"))
             logger.info(f"  [{name}] No signals today  |  Holding: {open_in}")
 

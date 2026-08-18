@@ -51,7 +51,11 @@ ATR_PERIOD    = 14
 ATR_STOP_MULT = 2.0
 RISK_PCT      = 0.01
 TIME_STOP_DAYS = 20
-SIGNAL_LOOKBACK = 2    # bars to look back for a fresh MACD crossover
+SIGNAL_LOOKBACK = 3    # bars to look back for a fresh MACD crossover
+# Zero-line: MACD must have been positive at some point in this lookback window
+# (relaxed from strict cur_macd > 0 to allow crossovers slightly below zero
+#  when momentum was recently bullish — catches more valid signals)
+ZERO_LINE_LOOKBACK = 10  # bars to look back for a positive MACD reading
 MIN_BARS      = MACD_SLOW + MACD_SIGNAL + ADX_PERIOD + 5
 
 LONG_ONLY_MARKETS     = {"ES", "NQ", "CL"}
@@ -140,12 +144,18 @@ def generate_signals(market_data: dict, regime_symbol: str = "ES",
         if sym in EQUITY_FUTURES and es_risk_off:
             long_x = False
 
-        if long_x and cur_macd > 0:
+        # Relaxed zero-line filter: MACD was positive recently OR is positive now.
+        # This catches crossovers from slightly below zero (common in mid-trend).
+        lookback_vals = macd_l.iloc[-ZERO_LINE_LOOKBACK:]
+        recently_positive = bool((lookback_vals > 0).any())
+        recently_negative = bool((lookback_vals < 0).any())
+
+        if long_x and (cur_macd > 0 or recently_positive):
             stop = cur_close - ATR_STOP_MULT * cur_atr
             signals.append({"symbol": sym, "direction": "Buy",
                             "score": abs(cur_macd), "macd": cur_macd,
                             "atr": cur_atr, "close": cur_close, "stop_price": stop})
-        elif sym in BIDIRECTIONAL_MARKETS and short_x and cur_macd < 0:
+        elif sym in BIDIRECTIONAL_MARKETS and short_x and (cur_macd < 0 or recently_negative):
             stop = cur_close + ATR_STOP_MULT * cur_atr
             signals.append({"symbol": sym, "direction": "Sell",
                             "score": abs(cur_macd), "macd": cur_macd,

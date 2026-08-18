@@ -78,7 +78,8 @@ def _kc(highs, lows, closes, period=KC_EMA_PERIOD, mult=KC_ATR_MULT):
         (highs - closes.shift(1)).abs(),
         (lows  - closes.shift(1)).abs(),
     ], axis=1).max(axis=1)
-    atr   = tr.ewm(alpha=1.0/ATR_PERIOD, adjust=False, min_periods=ATR_PERIOD).mean()
+    # Use same period as midline (KC_EMA_PERIOD=20) so bands are on a consistent base
+    atr   = tr.ewm(alpha=1.0/period, adjust=False, min_periods=period).mean()
     upper = mid + mult * atr
     lower = mid - mult * atr
     return upper, mid, lower

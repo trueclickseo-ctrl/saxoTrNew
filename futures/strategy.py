@@ -53,21 +53,21 @@ TIME_STOP_DAYS  = 30    # calendar days before time-stop fires
 
 # Markets that can be sold short (bonds and gold trend well in both directions)
 LONG_ONLY_MARKETS   = {"ES", "NQ", "CL"}   # equity + oil: no shorting
-BIDIRECTIONAL_MARKETS = {"GC", "ZN"}       # gold + bonds: long AND short
+BIDIRECTIONAL_MARKETS = {"GC", "ZB"}       # gold + bonds: long AND short
 
 MIN_BARS        = BREAKOUT_PERIOD + ATR_PERIOD + 5
 
 
 def _atr(highs: pd.Series, lows: pd.Series, closes: pd.Series,
          period: int = ATR_PERIOD) -> pd.Series:
-    """Average True Range."""
+    """Wilder ATR (RMA smoothing, consistent with all other strategy modules)."""
     prev = closes.shift(1)
     tr   = pd.concat([
         highs - lows,
         (highs - prev).abs(),
         (lows  - prev).abs(),
     ], axis=1).max(axis=1)
-    return tr.rolling(period).mean()
+    return tr.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
 
 
 EQUITY_FUTURES = {"ES", "NQ"}   # regime filter only gates these two markets
@@ -175,7 +175,15 @@ def should_exit(
     if len(closes) < EXIT_PERIOD + 2:
         return False, ""
 
-    today       = float(closes.iloc[-1])
+    closes = df["Close"].dropna()
+    lows   = df["Low"].dropna()
+    highs  = df["High"].dropna()
+    if len(closes) < EXIT_PERIOD + 2:
+        return False, ""
+
+    today      = float(closes.iloc[-1])
+    cur_low    = float(lows.iloc[-1])
+    cur_high   = float(highs.iloc[-1])
     entry_price = float(position.get("entry_price", 0))
     stop_price  = float(position.get("stop_price", 0))
     direction   = position.get("direction", "Buy")
@@ -192,17 +200,17 @@ def should_exit(
         return True, f"time-stop ({calendar_days_held}d)  P&L {pnl_pct:+.1f}%"
 
     if is_long:
-        # B — hard stop below entry
-        if stop_price > 0 and today <= stop_price:
-            return True, f"ATR-stop {pnl_pct:.1f}% (stop {stop_price:.4f})"
+        # B — hard stop: compare against intraday low, not close
+        if stop_price > 0 and cur_low <= stop_price:
+            return True, f"ATR-stop {pnl_pct:.1f}% (low {cur_low:.4f} ≤ stop {stop_price:.4f})"
         # A — Donchian trailing: 10-day lowest close
         low10 = float(closes.iloc[-(EXIT_PERIOD + 1):-1].min())
         if not pd.isna(low10) and today <= low10:
             return True, f"Donchian-exit ({EXIT_PERIOD}d low {low10:.4f})  {pnl_pct:+.1f}%"
     else:
-        # B — hard stop above entry (for shorts, stop is above)
-        if stop_price > 0 and today >= stop_price:
-            return True, f"ATR-stop {pnl_pct:.1f}% (stop {stop_price:.4f})"
+        # B — hard stop: compare against intraday high
+        if stop_price > 0 and cur_high >= stop_price:
+            return True, f"ATR-stop {pnl_pct:.1f}% (high {cur_high:.4f} ≥ stop {stop_price:.4f})"
         # A — Donchian trailing: 10-day highest close (price rising against short)
         high10 = float(closes.iloc[-(EXIT_PERIOD + 1):-1].max())
         if not pd.isna(high10) and today >= high10:
