@@ -127,6 +127,12 @@ STATE_FILE  = os.path.join(DATA_DIR, "forex_state.json")
 ORDERS_FILE = os.path.join(DATA_DIR, "forex_orders.json")
 CHART_BARS  = 340   # enough for ML strategy: EMA(200) + 126 lookback + 14 buffer
 
+# ── Portfolio risk limits ─────────────────────────────────────────────────────
+PORTFOLIO_HEAT_LIMIT  = 0.06   # pause new entries when heat ≥ 6% of equity
+DRAWDOWN_PAUSE_PCT    = 0.10   # pause entries when drawdown > 10% from rolling peak
+DAILY_LOSS_LIMIT_PCT  = 0.03   # block entries if today's realised P&L ≤ −3% of equity
+PEAK_EQUITY_FILE      = os.path.join(DATA_DIR, "forex_peak_equity.json")
+
 
 # ── Saxo HTTP helpers ─────────────────────────────────────────────────────────
 
@@ -387,6 +393,71 @@ def _update_exposure(exposure: dict, sym: str, direction: str) -> None:
         exposure[quote] = exposure.get(quote, 0) + 1
 
 
+# ── Portfolio risk guard helpers ──────────────────────────────────────────────
+
+def _portfolio_heat_pct(positions: dict, equity: float) -> float:
+    """Sum of |entry-stop| × qty across all open positions, as fraction of equity."""
+    if equity <= 0:
+        return 0.0
+    heat = sum(
+        abs(float(pos.get("entry_price", 0)) - float(pos.get("stop_price", 0)))
+        * float(pos.get("quantity", 0))
+        for pos in positions.values()
+    )
+    return heat / equity
+
+
+def _heat_allows_entry(positions: dict, equity: float) -> bool:
+    heat = _portfolio_heat_pct(positions, equity)
+    if heat >= PORTFOLIO_HEAT_LIMIT:
+        logger.info(f"  [HEAT] Portfolio heat {heat:.1%} >= {PORTFOLIO_HEAT_LIMIT:.0%} — blocking entries")
+        return False
+    return True
+
+
+def _update_peak_equity(equity: float) -> None:
+    peak = 0.0
+    if os.path.exists(PEAK_EQUITY_FILE):
+        try:
+            with open(PEAK_EQUITY_FILE) as f:
+                peak = float(json.load(f).get("peak", 0))
+        except Exception:
+            pass
+    if equity > peak:
+        with open(PEAK_EQUITY_FILE, "w") as f:
+            json.dump({"peak": equity, "updated": datetime.now().isoformat()}, f)
+
+
+def _drawdown_allows_entry(equity: float) -> bool:
+    try:
+        with open(PEAK_EQUITY_FILE) as f:
+            peak = float(json.load(f).get("peak", equity))
+    except Exception:
+        return True
+    if peak <= 0:
+        return True
+    dd = (peak - equity) / peak
+    if dd > DRAWDOWN_PAUSE_PCT:
+        logger.warning(f"  [DRAWDOWN] {dd:.1%} from peak {peak:,.0f} — pausing new entries")
+        return False
+    return True
+
+
+def _entries_blocked_by_loss_limit(equity: float) -> bool:
+    today = date.today().isoformat()
+    try:
+        trades    = pnl_tracker.get_closed_trades(module="forex", limit=500, since=today)
+        daily_pnl = sum(t.get("realized_pnl") or 0 for t in trades)
+    except Exception:
+        return False
+    limit = -(DAILY_LOSS_LIMIT_PCT * equity)
+    if daily_pnl <= limit:
+        logger.warning(f"  [LOSS_LIMIT] Today's realised P&L {daily_pnl:+,.0f} <= "
+                       f"-{DAILY_LOSS_LIMIT_PCT:.0%} of equity — blocking new entries")
+        return True
+    return False
+
+
 # ── Per-strategy exit / entry helpers ─────────────────────────────────────────
 
 def _run_exits(strat_name: str, strat_mod, positions: dict,
@@ -499,6 +570,8 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] "
                         f"— currency exposure limit (max {MAX_CURRENCY_EXPOSURE})")
             continue
+        if not _heat_allows_entry(positions, equity):
+            break   # heat cap reached — stop all entries for this strategy
         pair_info = get_pair(sym)
         uic       = pair_info["uic"]
         qty       = strat_mod.size_position(equity, sig["atr"], pair_info["min_units"])
@@ -799,6 +872,18 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
     logger.info(f"FX pairs scanned: {len(active_pairs)} of {len(PAIRS)} ({session} session)")
     logger.info(f"Strategies     : {strat_label}")
 
+    # ── Portfolio risk pre-flight ─────────────────────────────────────────────
+    if not dry_run:
+        _update_peak_equity(equity)
+    loss_limit_hit  = not dry_run and _entries_blocked_by_loss_limit(equity)
+    drawdown_paused = not dry_run and not _drawdown_allows_entry(equity)
+    entries_blocked = loss_limit_hit or drawdown_paused
+    if entries_blocked:
+        reason = "daily loss limit" if loss_limit_hit else "drawdown circuit breaker"
+        logger.warning(f"  [RISK] New entries BLOCKED for this run — {reason}")
+    heat_pct = _portfolio_heat_pct(positions, equity)
+    logger.info(f"Portfolio heat : {heat_pct:.1%}  (limit {PORTFOLIO_HEAT_LIMIT:.0%})")
+
     # ── Heal missing stop / TP orders (e.g. from prior API failures) ────────────
     healed_stops = healed_tp = 0
     if not dry_run:
@@ -837,9 +922,11 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
 
         exits   = _run_exits(strat_name, strat_mod, positions,
                              market_data, akey, dry_run, today_str)
-        entries = _run_entries(strat_name, strat_mod, positions,
-                               market_data, equity, akey, dry_run, today_str,
-                               live_prices=live_prices, agreement=agreement)
+        entries = 0
+        if not entries_blocked:
+            entries = _run_entries(strat_name, strat_mod, positions,
+                                   market_data, equity, akey, dry_run, today_str,
+                                   live_prices=live_prices, agreement=agreement)
 
         if exits == 0 and entries == 0:
             remaining = sum(1 for k in positions if k.startswith(prefix))
