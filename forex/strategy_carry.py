@@ -54,12 +54,19 @@ MIN_BARS       = EMA_SLOW + ATR_PERIOD + 5
 # Carry direction: +1 = Long the pair, -1 = Short the pair
 # Derived from rate differentials: high-yield base vs low-yield quote = Long
 CARRY_DIRECTION: dict[str, int] = {
+    # vs JPY (0.1%) / CHF (1.0%) — both low-yield funding currencies
     "AUDJPY":  1,  "NZDJPY":  1,  "CADJPY":  1,  "GBPJPY":  1,  "EURJPY":  1,
     "AUDCHF":  1,  "NZDCHF":  1,  "CADCHF":  1,  "GBPCHF":  1,  "EURCHF":  1,
-    "CHFJPY": -1,  # CHF vs JPY: both low-yield but CHF slightly higher → short CHF
-    "EURNOK": -1,  "EURSEK": -1,  "EURUSD": -1,  # EUR lower than NOK/SEK/USD yield
-    "USDNOK": -1,  "USDSEK": -1,  "USDDKK": -1,  "USDMXN": -1,
-    "AUDNZD":  1,  "AUDCAD":  1,  "NZDCAD": -1,
+    "CHFJPY":  1,  # CHF (1.0%) > JPY (0.1%) → Long CHFJPY earns carry
+    # EUR (2.5%) vs higher-yield currencies → Short EUR pays carry
+    "EURNOK": -1,  "EURSEK": -1,  "EURUSD": -1,
+    # USD (5.5%) vs lower-yield currencies → Long USD earns carry
+    "USDNOK":  1,  "USDSEK":  1,  "USDDKK":  1,
+    "USDMXN": -1,  # MXN (11%) > USD (5.5%) → Short USDMXN earns carry
+    # Cross rates (base yield vs quote yield)
+    "AUDNZD": -1,  # NZD (5.25%) > AUD (4.35%) → Short AUDNZD earns carry
+    "AUDCAD": -1,  # CAD (4.75%) > AUD (4.35%) → Short AUDCAD earns carry
+    "NZDCAD":  1,  # NZD (5.25%) > CAD (4.75%) → Long NZDCAD earns carry
 }
 
 

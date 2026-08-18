@@ -66,7 +66,18 @@ CLEAR = "\033[2J"
 
 WH = "\033[97m"   # bright white
 
-STRAT_COL = {"ema": CY, "rsi": MG, "donchian": GR, "bb": YL, "pullback": BL, "gap": WH}
+STRAT_COL = {
+    "ema":        CY,
+    "rsi":        MG,
+    "donchian":   GR,
+    "bb":         YL,
+    "pullback":   BL,
+    "gap":        WH,
+    "supertrend": "\033[38;5;208m",   # orange
+    "carry":      "\033[38;5;214m",   # amber
+    "zscore":     "\033[38;5;147m",   # lavender
+    "ml":         "\033[38;5;119m",   # lime
+}
 
 
 def _read_positions() -> list:
@@ -143,20 +154,28 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append(f"  {BD}{CY}╔{'═'*W_TOTAL}╗{W}")
     src_tag = "SAXO LIVE" if price_src == "saxo" else "n/a (token expired)"
     L.append(f"  {BD}{CY}║{'  FOREX QUANT DASHBOARD':^{W_TOTAL}}║{W}")
-    L.append(f"  {BD}{CY}║{f'  EMA · RSI(2) · Donchian · BB · Pullback · Gap  |  27 FX Pairs  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
+    L.append(f"  {BD}{CY}║{f'  10 Strategies  |  34 FX Pairs  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
     L.append(f"  {BD}{CY}╚{'═'*W_TOTAL}╝{W}")
     L.append("")
 
+    OR  = "\033[38;5;208m"
+    AM  = "\033[38;5;214m"
+    LV  = "\033[38;5;147m"
+    LM  = "\033[38;5;119m"
     # ── Strategy legend ───────────────────────────────────────────
     L.append(f"  {BD}STRATEGIES{W}   "
-             f"{CY}{BD}■ EMA(5/30)+ADX(14){W}  trend   "
-             f"{MG}{BD}■ RSI(2){W}  mean-rev   "
-             f"{GR}{BD}■ Donchian(20){W}  breakout   "
+             f"{CY}{BD}■ EMA{W}  trend   "
+             f"{MG}{BD}■ RSI(2){W}  pullback   "
+             f"{GR}{BD}■ Donchian(30){W}  breakout   "
              f"{YL}{BD}■ BB(20,2){W}  fade   "
-             f"{BL}{BD}■ Pullback-to-EMA{W}  ~70% WR   "
-             f"{WH}{BD}■ Gap Fill{W}  ~80% WR")
+             f"{BL}{BD}■ Pullback{W}  ~70% WR   "
+             f"{WH}{BD}■ Gap Fill{W}  ~80% WR   "
+             f"{OR}{BD}■ SuperTrend{W}  trend   "
+             f"{AM}{BD}■ Carry{W}  swap   "
+             f"{LV}{BD}■ Z-Score{W}  mean-rev   "
+             f"{LM}{BD}■ ML{W}  ML signals")
     L.append(f"  {DM}Scheduler: 06:20/14:00/18:00 PKT Mon-Fri  |  22:00 PKT Sun (gap)  |  "
-             f"Max 4 slots × 6 strategies = 24 positions  |  27 pairs: 7 majors + 20 crosses{W}")
+             f"10 strategies  |  34 pairs: 7 majors + 27 crosses  |  Max slots vary per strategy{W}")
     L.append(HR)
     L.append("")
 
@@ -183,7 +202,8 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
 
     if positions:
         # Group by strategy for cleaner display
-        strat_order = ["ema", "rsi", "donchian", "bb", "pullback", "gap"]
+        strat_order = ["ema", "rsi", "donchian", "bb", "pullback", "gap",
+                       "supertrend", "carry", "zscore", "ml"]
         grouped: dict = {}
         for p in positions:
             grouped.setdefault(p["strategy"], []).append(p)
@@ -284,15 +304,19 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append("")
 
     strat_labels = {
-        "ema":      ("EMA Trend",       "EMA(5/30)+ADX(14)",     "Sharpe 1.13",  "4 slots"),
-        "rsi":      ("RSI Pullback",    "RSI(2)<10 dip-buy",     "mean-rev",     "4 slots"),
-        "donchian": ("Donchian Break",  "20-day high/low",       "Sharpe 1.62",  "4 slots"),
-        "bb":       ("BB Reversion",    "BB(20,2)+RSI(14) fade", "8d stop",      "4 slots"),
-        "pullback": ("EMA Pullback ★",  "EMA(20) in EMA(50)",    "~70% WR",      "4 slots"),
-        "gap":      ("Gap Fill ★★",     "Weekend gap fade",      "~80-85% WR",   "4 slots"),
+        "ema":        ("EMA Trend",        "EMA(5/30)+ADX(14)",     "Sharpe 1.62",  "4"),
+        "rsi":        ("RSI Pullback",     "RSI(2)<10 dip-buy",     "mean-rev",     "34"),
+        "donchian":   ("Donchian Break",   "30-day high/low",       "EMA+ADX gate", "4"),
+        "bb":         ("BB Reversion",     "BB(20,2)+RSI(14) fade", "8d stop",      "4"),
+        "pullback":   ("EMA Pullback ★",   "EMA(20) in EMA(50)",    "~70% WR",      "34"),
+        "gap":        ("Gap Fill ★★",      "Weekend gap fade",      "~80-85% WR",   "34"),
+        "supertrend": ("SuperTrend",       "ST(10,3)+EMA(200)",     "~65% WR",      "20"),
+        "carry":      ("Carry Trade",      "Rate diff+ADX(18)",     "~62% WR",      "20"),
+        "zscore":     ("Z-Score Rev",      "20-day z-score fade",   "~63% WR",      "20"),
+        "ml":         ("ML Signals",       "Logistic reg (7 feat)", "~60% WR",      "20"),
     }
 
-    for strat, (label, desc, metric, slots) in strat_labels.items():
+    for strat, (label, desc, metric, max_slots) in strat_labels.items():
         sc    = STRAT_COL.get(strat, DM)
         count = sum(1 for p in positions if p["strategy"] == strat)
         pnl_s = 0.0
@@ -306,8 +330,8 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
                 pnl_s += raw * p["qty"]
         pnl_col = GR if pnl_s >= 0 else RD
         L.append(
-            f"  {sc}{BD}{label:<18}{W}  {DM}{desc:<22}{W}  {metric:<14}  "
-            f"{slots:<8}  {count}/4 active  "
+            f"  {sc}{BD}{label:<18}{W}  {DM}{desc:<24}{W}  {metric:<14}  "
+            f"max {max_slots:<4}  {count}/{max_slots} active  "
             f"P&L: {pnl_col}{BD}{pnl_s:>+,.0f} USD{W}"
         )
 

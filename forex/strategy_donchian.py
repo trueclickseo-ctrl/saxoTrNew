@@ -138,15 +138,15 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
     if direction == "Buy":
         if stop_px > 0 and float(l.iloc[-1]) <= stop_px:
             return True, f"hard_stop ({stop_px:.5f})"
-        low10 = float(c.iloc[-(EXIT_PERIOD + 1):-1].min())
-        if today <= low10:
-            return True, f"donchian_exit ({EXIT_PERIOD}d low {low10:.5f})"
+        low15 = float(c.iloc[-(EXIT_PERIOD + 1):-1].min())
+        if today <= low15:
+            return True, f"donchian_exit ({EXIT_PERIOD}d low {low15:.5f})"
     else:
         if stop_px > 0 and float(h.iloc[-1]) >= stop_px:
             return True, f"hard_stop ({stop_px:.5f})"
-        high10 = float(c.iloc[-(EXIT_PERIOD + 1):-1].max())
-        if today >= high10:
-            return True, f"donchian_exit ({EXIT_PERIOD}d high {high10:.5f})"
+        high15 = float(c.iloc[-(EXIT_PERIOD + 1):-1].max())
+        if today >= high15:
+            return True, f"donchian_exit ({EXIT_PERIOD}d high {high15:.5f})"
 
     return False, ""
 
