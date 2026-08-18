@@ -230,14 +230,34 @@ def _place_bracket(post_fn, account_key, uic, asset_type,
     except Exception as exc:
         logger.warning(
             f"[bracket] {label}  bracket order rejected ({exc}) — "
-            f"falling back to entry + separate stop"
+            f"falling back to entry + separate stop + separate TP"
         )
-        # Fallback: place entry alone, then separate stop
+        # Fallback: place entry + stop, then a separate GTC Limit for TP
         entry_oid, stop_oid = _place_entry_then_stop(
             post_fn, account_key, uic, asset_type,
             amount, buy_sell, close_side, stop_type, stop_price, dur, label,
             stop_limit_price=stop_limit_price)
-        return entry_oid, stop_oid, None
+
+        tp_oid = None
+        try:
+            tp_body = {
+                "AccountKey":    account_key,
+                "Uic":           uic,
+                "AssetType":     asset_type,
+                "Amount":        amount,
+                "BuySell":       close_side,
+                "OrderType":     "Limit",
+                "OrderPrice":    tp_price,
+                "OrderDuration": dur,
+                "ManualOrder":   False,
+            }
+            tp_resp = post_fn("/trade/v2/orders", tp_body)
+            tp_oid  = str(tp_resp.get("OrderId", "?"))
+            logger.info(f"[tp] {label}  separate Limit@{tp_price}  tp_id={tp_oid}")
+        except Exception as tp_exc:
+            logger.warning(f"[tp] {label}  separate TP order FAILED: {tp_exc}")
+
+        return entry_oid, stop_oid, tp_oid
 
 
 def _place_entry_then_stop(post_fn, account_key, uic, asset_type,

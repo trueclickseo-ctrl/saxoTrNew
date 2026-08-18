@@ -505,6 +505,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             "entry_date":    today_str,
             "atr_at_entry":  sig["atr"],
             "stop_order_id": stop_oid,
+            "tp_order_id":   tp_oid if not dry_run else None,
         }
         if "gap_target" in sig:
             pos_record["gap_target"]   = sig["gap_target"]
@@ -523,20 +524,42 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
     return entries
 
 
-# ── Heal missing stop orders ──────────────────────────────────────────────────
+# ── Heal missing stop / TP orders ─────────────────────────────────────────────
+
+def _fetch_open_orders(akey: str) -> set | None:
+    """
+    Return set of (uic, buy_sell, order_type) for all open GTC orders.
+    Returns None if the query fails (heal will be skipped to avoid duplicates).
+    """
+    try:
+        resp   = _get("/port/v1/orders/me", {"AssetType": ASSET_TYPE})
+        orders = resp.get("Data", [])
+        result = set()
+        for o in orders:
+            dur = o.get("Duration", {}).get("DurationType", "")
+            if dur == "GoodTillCancel":
+                result.add((o.get("Uic"), o.get("BuySell"), o.get("OrderType")))
+        return result
+    except Exception as exc:
+        logger.warning(f"[heal] Could not fetch open orders from Saxo: {exc} — skipping heal")
+        return None
+
 
 def _heal_missing_stops(positions: dict, akey: str) -> int:
     """
-    Place GTC stop orders for any open position that has no stop_order_id.
-    Returns the number of stops successfully placed.
-    Called automatically at the start of every --live run.
+    Place GTC stop orders for positions missing a stop_order_id.
+    Queries Saxo first to avoid creating duplicate stops.
+    Returns number of stops successfully placed.
     """
     missing = [(k, v) for k, v in positions.items()
                if v.get("stop_order_id") is None]
     if not missing:
         return 0
 
-    logger.info(f"[heal_stops] {len(missing)} position(s) missing stop — placing now...")
+    open_orders = _fetch_open_orders(akey)
+    if open_orders is None:
+        return 0  # can't safely distinguish existing from missing — skip
+
     healed = 0
     for key, pos in missing:
         sym        = key.split(":", 1)[1] if ":" in key else key
@@ -548,6 +571,14 @@ def _heal_missing_stops(positions: dict, akey: str) -> int:
         dp         = 3 if sym.upper().endswith("JPY") else 5
         rounded    = round(stop_price, dp)
 
+        if (uic, close_side, "Stop") in open_orders or \
+           (uic, close_side, "StopLimit") in open_orders:
+            # Stop already exists in Saxo — just record it
+            pos["stop_order_id"] = "synced"
+            logger.debug(f"  [heal_stops] {key}  stop already in Saxo (synced)")
+            continue
+
+        logger.info(f"[heal_stops] {key} missing stop — placing {close_side} Stop@{rounded}...")
         stop_body = {
             "AccountKey":    akey,
             "Uic":           uic,
@@ -563,11 +594,66 @@ def _heal_missing_stops(positions: dict, akey: str) -> int:
             resp     = _post("/trade/v2/orders", stop_body)
             stop_oid = str(resp.get("OrderId", "?"))
             pos["stop_order_id"] = stop_oid
-            logger.info(f"  [heal_stops] {key}  {close_side} Stop@{rounded}  "
-                        f"stop_id={stop_oid}  ✓")
+            logger.info(f"  [heal_stops] {key}  stop_id={stop_oid}  ✓")
             healed += 1
         except Exception as exc:
             logger.warning(f"  [heal_stops] FAILED for {key}: {exc}")
+    return healed
+
+
+def _heal_missing_tp(positions: dict, akey: str) -> int:
+    """
+    Place GTC Limit TP orders for gap positions that have a gap_target but no tp_order_id.
+    Queries Saxo first to avoid duplicates.
+    Returns number of TP orders successfully placed.
+    """
+    missing = [(k, v) for k, v in positions.items()
+               if k.startswith("gap:") and
+               v.get("gap_target") is not None and
+               v.get("tp_order_id") is None]
+    if not missing:
+        return 0
+
+    open_orders = _fetch_open_orders(akey)
+    if open_orders is None:
+        return 0
+
+    healed = 0
+    for key, pos in missing:
+        sym        = key.split(":", 1)[1] if ":" in key else key
+        uic        = pos["uic"]
+        direction  = pos.get("direction", "Buy")
+        qty        = pos["quantity"]
+        tp_price   = pos["gap_target"]
+        close_side = "Sell" if direction == "Buy" else "Buy"
+        dp         = 3 if sym.upper().endswith("JPY") else 5
+        rounded_tp = round(tp_price, dp)
+
+        if (uic, close_side, "Limit") in open_orders:
+            pos["tp_order_id"] = "synced"
+            logger.debug(f"  [heal_tp] {key}  TP already in Saxo (synced)")
+            continue
+
+        logger.info(f"[heal_tp] {key} missing TP — placing {close_side} Limit@{rounded_tp}...")
+        tp_body = {
+            "AccountKey":    akey,
+            "Uic":           uic,
+            "AssetType":     ASSET_TYPE,
+            "Amount":        qty,
+            "BuySell":       close_side,
+            "OrderType":     "Limit",
+            "OrderPrice":    rounded_tp,
+            "OrderDuration": {"DurationType": "GoodTillCancel"},
+            "ManualOrder":   False,
+        }
+        try:
+            resp   = _post("/trade/v2/orders", tp_body)
+            tp_oid = str(resp.get("OrderId", "?"))
+            pos["tp_order_id"] = tp_oid
+            logger.info(f"  [heal_tp] {key}  tp_id={tp_oid}  ✓")
+            healed += 1
+        except Exception as exc:
+            logger.warning(f"  [heal_tp] FAILED for {key}: {exc}")
     return healed
 
 
@@ -599,7 +685,7 @@ def run_exits_only(dry_run: bool = True,
     logger.info(f"Pairs checked  : {len(active_pairs)} ({session} session)")
 
     if not dry_run:
-        healed = _heal_missing_stops(positions, akey)
+        healed = _heal_missing_stops(positions, akey) + _heal_missing_tp(positions, akey)
         if healed:
             _save_state(state)
 
@@ -666,11 +752,11 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
     logger.info(f"FX pairs scanned: {len(active_pairs)} of {len(PAIRS)} ({session} session)")
     logger.info(f"Strategies     : {strat_label}")
 
-    # ── Heal any positions missing a stop order (e.g. from a prior API failure) ─
+    # ── Heal missing stop / TP orders (e.g. from prior API failures) ────────────
     if not dry_run:
-        healed = _heal_missing_stops(positions, akey)
+        healed = _heal_missing_stops(positions, akey) + _heal_missing_tp(positions, akey)
         if healed:
-            _save_state(state)   # persist updated stop_order_ids immediately
+            _save_state(state)
 
     # ── Fetch price history once for active session pairs ─────────────────────
     market_data: dict[str, pd.DataFrame | None] = {}
