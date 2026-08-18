@@ -64,6 +64,7 @@ import forex.strategy_gap         as strat_gap
 import forex.strategy_supertrend  as strat_supertrend
 import forex.strategy_zscore      as strat_zscore
 import forex.strategy_ml          as strat_ml
+import forex.strategy_cnn_lstm    as strat_cnn_lstm
 import pnl_tracker
 import trade_logger
 import forex.notifier      as fx_notify
@@ -87,11 +88,12 @@ STRATEGIES = {
     "supertrend":  strat_supertrend,
     "zscore":      strat_zscore,
     "ml":          strat_ml,
+    "cnn_lstm":    strat_cnn_lstm,
 }
 SLOTS_PER_STRATEGY = {
     "ema": 4, "rsi": 34, "donchian": 4, "bb": 4,
     "pullback": 34, "gap": 34,
-    "supertrend": 20, "zscore": 20, "ml": 20,
+    "supertrend": 20, "zscore": 20, "ml": 20, "cnn_lstm": 20,
 }
 
 # ── Session-aware pair groups ──────────────────────────────────────────────────

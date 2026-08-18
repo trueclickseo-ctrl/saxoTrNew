@@ -64,6 +64,12 @@ STOP_BINANCE
 # Backtest cache pickles (re-downloadable via --reset)
 data/*.pkl
 
+# CNN-LSTM model artifacts (large, regenerated via --train)
+data/cnn_lstm/model.pt
+data/cnn_lstm/scaler.json
+data/cnn_lstm/report.json
+data/cnn_lstm/config.json
+
 # OS clutter
 .DS_Store
 Thumbs.db
