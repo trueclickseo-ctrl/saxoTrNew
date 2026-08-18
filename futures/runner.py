@@ -75,11 +75,17 @@ SLOTS_PER_STRATEGY = {
     "ma_cross": 5,
 }
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-7s  %(message)s",
-    datefmt="%H:%M:%S",
-)
+_LOG_DIR  = os.path.join(_ROOT, "logs")
+os.makedirs(_LOG_DIR, exist_ok=True)
+_LOG_FILE = os.path.join(_LOG_DIR, f"futures_{date.today():%Y-%m-%d}.log")
+
+_fmt = logging.Formatter("%(asctime)s  %(levelname)-7s  %(message)s", datefmt="%H:%M:%S")
+_fh  = logging.FileHandler(_LOG_FILE, encoding="utf-8")
+_fh.setFormatter(_fmt)
+_sh  = logging.StreamHandler()
+_sh.setFormatter(_fmt)
+
+logging.basicConfig(level=logging.INFO, handlers=[_sh, _fh])
 logger = logging.getLogger("futures.runner")
 
 # ── Constants ──────────────────────────────────────────────────────────────
@@ -373,10 +379,34 @@ def _run_strategy_entries(strat_name: str, strat_mod, positions: dict,
         if dry_run:
             logger.info(f"[DRY][{strat_name}] {direction} {qty}x {sym}[{tag}] "
                         f"@ ~{sig['close']:.4f}  stop={sig['stop_price']:.4f}")
-        else:
+            _log_order({"strategy": strat_name, "side": direction, "symbol": sym,
+                        "uic": uic, "quantity": qty, "entry_price": sig["close"],
+                        "stop_price": sig["stop_price"], "dry_run": True})
+            entries += 1
+            continue  # DRY: do not write to state or post order
+
+        try:
             resp = _post("/trade/v2/orders", order)
-            logger.info(f"[{strat_name}] {direction} {resp.get('OrderId','?')}: "
-                        f"{qty}x {sym}[{tag}] @ ~{sig['close']:.4f}  stop={sig['stop_price']:.4f}")
+        except requests.exceptions.HTTPError as _err:
+            _sc = _err.response.status_code if _err.response is not None else 0
+            try:
+                _body = _err.response.json() if _err.response is not None else {}
+            except Exception:
+                _body = {}
+            _ec   = (_body.get("ErrorInfo") or {}).get("ErrorCode", "")
+            _msg  = (_body.get("ErrorInfo") or {}).get("Message", "") or _body.get("Message", "")
+            if _sc == 403:
+                if _ec == "NotAllowedForApplication":
+                    logger.warning(f"[{strat_name}] SKIP {sym}: CME ContractFutures not enabled on this SIM app")
+                else:
+                    logger.warning(f"[{strat_name}] SKIP {sym}: 403 Forbidden — {_ec} {_msg}")
+                continue
+            if _sc == 409:
+                logger.warning(f"[{strat_name}] SKIP {sym}: 409 Conflict — {_ec} {_msg} (position/order already exists?)")
+                continue
+            raise
+        logger.info(f"[{strat_name}] {direction} {resp.get('OrderId','?')}: "
+                    f"{qty}x {sym}[{tag}] @ ~{sig['close']:.4f}  stop={sig['stop_price']:.4f}")
 
         positions[f"{strat_name}:{sym}"] = {
             "uic":          uic,
@@ -389,11 +419,11 @@ def _run_strategy_entries(strat_name: str, strat_mod, positions: dict,
             "atr_at_entry": sig["atr"],
             "strategy":     strat_name,
         }
-        oid = resp.get("OrderId") if not dry_run else None
+        oid = resp.get("OrderId")
         _log_order({"strategy": strat_name, "side": direction, "symbol": sym,
                     "uic": uic, "quantity": qty, "entry_price": sig["close"],
-                    "stop_price": sig["stop_price"], "dry_run": dry_run})
-        if not dry_run:
+                    "stop_price": sig["stop_price"], "dry_run": False})
+        if True:  # always true now (dry_run path has already continued)
             pnl_tracker.log_open("futures", strat_name, sym, direction, qty,
                                  sig["close"], sig["stop_price"],
                                  order_id=oid, timestamp=today_str)
