@@ -2,7 +2,7 @@
 
 **Module**: `futures/runner.py`  
 **Markets**: ES, NQ, GC, CL, ZB  (5 CME futures)  
-**6 strategies × 5 slots = 30 max open positions**  
+**7 strategies × 5 slots = 35 max open positions**  
 **Risk per trade**: 1% of equity, ATR-based sizing
 
 ---
@@ -31,6 +31,7 @@
 | MACD(12/26) | Daily after close      | ~12-18 / yr       | 10-20 days   |
 | BB Squeeze  | Daily after close      | ~10-15 / yr       | 5-10 days    |
 | MA Cross    | Daily after close      | ~4-8 / yr         | 15-40 days   |
+| Trend MA    | Daily after close      | ~15-25 / yr       | 18-35 days   |
 
 ---
 
@@ -245,18 +246,87 @@ Edge: highest signal quality of all 6 strategies — classic large winners (oil 
 
 ---
 
+## Strategy 7 — MA(20/100) Medium-Term Trend
+
+**File**: `futures/strategy_trend_ma.py`  
+**Type**: Medium-term trend following with volatility filter  
+**Markets**: All 5 (long only for ES/NQ/CL, bidirectional for GC/ZB)
+
+### Concept
+
+MA(20) vs MA(100) sits between the fast EMA(5/20) and the slow SMA(50/200), capturing multi-week trends that last 1–6 weeks — the sweet spot for liquid futures. It generates more signals than the Golden Cross (which waits for 50/200 separation) but is more committed than the EMA crossover (which fires on 1-week moves).
+
+**Trend Strength (TS)** normalises the MA gap by price: only trade when `|TS| > 0.3%`. This filters weak crossovers where the MAs have barely separated and the signal is noise.
+
+**Volatility regime filter**: skip new entries when the 20-day realised vol is in the top 80th percentile of its own 252-day history. High-vol regimes widen ATR stops and cause frequent whipsaws — sit out.
+
+**Trailing stop follows MA(50) ± 1.5×ATR**, ratcheting in the favourable direction. This keeps winners running through normal pullbacks while a structural trend reversal (MA50 breaking below the bar) exits the trade.
+
+**Daily loss limit**: new entries are blocked for the rest of the day if realised P&L falls below −3% of equity.
+
+### Entry
+
+| Direction | Condition                                                                 |
+|-----------|---------------------------------------------------------------------------|
+| Long      | MA20 > MA100 AND TS > +0.003 AND vol < 80th pct AND not risk-off equity  |
+| Short     | MA20 < MA100 AND TS < −0.003 AND vol < 80th pct (GC/ZB only)             |
+
+Equity index longs (ES/NQ) are additionally blocked when ES < SMA(200) (risk-off regime).
+
+### Exit (first condition hit)
+
+| Condition | Rule                                      |
+|-----------|-------------------------------------------|
+| A         | MA50 ± 1.5×ATR trailing stop (ratchets)  |
+| B         | 2×ATR hard stop from entry               |
+| C         | 60 calendar-day time stop                |
+
+### Parameters
+
+```python
+FAST_MA        = 20     # fast moving average
+SLOW_MA        = 100    # slow moving average
+TRAIL_MA       = 50     # MA used for trailing stop
+ATR_PERIOD     = 20     # ATR period (one trading month)
+ATR_STOP_MULT  = 2.0    # initial hard stop: 2×ATR from entry
+TRAIL_MULT     = 1.5    # trailing stop band: MA50 ± 1.5×ATR
+TS_THRESHOLD   = 0.003  # minimum trend strength (0.3% of price)
+RISK_PCT       = 0.01   # 1% equity per trade
+TIME_STOP_DAYS = 60     # 60 calendar days
+VOL_LOOKBACK   = 252    # 1 year vol history
+VOL_BLOCK_PCT  = 0.80   # block when vol > 80th percentile
+```
+
+### Daily Loss Limit
+
+`runner.py` checks realised P&L from `data/futures_orders.json` before any entry loop. If today's P&L as a fraction of account equity ≤ −3%, ALL strategy entries are blocked until the next calendar day. Exits are never blocked.
+
+```python
+DAILY_LOSS_LIMIT_PCT = -3.0  # in runner.py
+```
+
+### Expected Results
+
+~15–25 signals/yr | WR ~50–55% | Avg hold ~28 days  
+Win rate is moderate — trend-following edge comes from large winners, not high WR.  
+Fills the gap between EMA(5/20) [too fast, 9d avg] and SMA(50/200) [too slow, 25d avg].
+
+---
+
 ## Strategy Comparison
 
-| Strategy      | Signals/yr | Win Rate   | Hold Time   | Stop       | Direction      |
-|---------------|------------|------------|-------------|------------|----------------|
-| Donchian      | 20-30      | 45-55%     | ~12d        | 5×ATR      | L + GC/ZB short|
-| RSI Pullback  | 25-35      | 58-64%     | ~6d         | 2×ATR      | L + GC/ZB short|
-| EMA Crossover | 30-40      | 50-56%     | ~9d         | 2×ATR      | L + GC/ZB short|
-| MACD Momentum | 12-18      | 52-58%     | ~14d        | 2×ATR      | L + GC/ZB short|
-| BB Squeeze    | 10-15      | 60-65%     | ~8d         | 2×ATR      | L + GC/ZB short|
-| MA Cross ★    | 4-8        | 65-70%     | ~25d        | 2.5×ATR    | L + GC/ZB short|
+| Strategy      | Signals/yr | Win Rate   | Hold Time   | Stop             | Direction      |
+|---------------|------------|------------|-------------|------------------|----------------|
+| Donchian      | 20-30      | 45-55%     | ~12d        | 5×ATR            | L + GC/ZB short|
+| RSI Pullback  | 25-35      | 58-64%     | ~6d         | 2×ATR            | L + GC/ZB short|
+| EMA Crossover | 30-40      | 50-56%     | ~9d         | 2×ATR            | L + GC/ZB short|
+| MACD Momentum | 12-18      | 52-58%     | ~14d        | 2×ATR            | L + GC/ZB short|
+| BB Squeeze    | 10-15      | 60-65%     | ~8d         | 2×ATR            | L + GC/ZB short|
+| MA Cross ★    | 4-8        | 65-70%     | ~25d        | 2.5×ATR          | L + GC/ZB short|
+| Trend MA ◆    | 15-25      | 50-55%     | ~28d        | 2×ATR + MA50 trail| L + GC/ZB short|
 
-★ MA Cross = highest quality, lowest frequency
+★ MA Cross = highest quality, lowest frequency  
+◆ Trend MA = fills medium-term gap between EMA(5/20) and SMA(50/200)
 
 ---
 
@@ -300,3 +370,4 @@ python futures/runner.py --status
 - **MACD**: MACD line, signal, histogram, zone (bull/bear)
 - **SQUEEZE**: BB width, TTM momentum, squeeze status
 - **MA CROSS**: SMA(50/200) levels, gap %, regime (BULL/BEAR)
+- **TREND MA**: MA(20/100) trend strength, vol percentile, bias (BULL/BEAR/flat)

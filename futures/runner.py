@@ -84,12 +84,13 @@ def _send_trade_alert(strat: str, direction: str, sym: str, qty: int,
         logger.info(f"[alert] Email sent → {cfg['recipient_email']}")
     except Exception as exc:
         logger.warning(f"[alert] Email failed: {exc}")
-import futures.strategy          as strat_donchian
-import futures.strategy_rsi      as strat_rsi
-import futures.strategy_ema      as strat_ema
-import futures.strategy_macd     as strat_macd
-import futures.strategy_squeeze  as strat_squeeze
-import futures.strategy_ma_cross as strat_ma_cross
+import futures.strategy            as strat_donchian
+import futures.strategy_rsi        as strat_rsi
+import futures.strategy_ema        as strat_ema
+import futures.strategy_macd       as strat_macd
+import futures.strategy_squeeze    as strat_squeeze
+import futures.strategy_ma_cross   as strat_ma_cross
+import futures.strategy_trend_ma   as strat_trend_ma
 import pnl_tracker
 import trade_logger
 
@@ -101,6 +102,7 @@ STRATEGIES = {
     "macd":     strat_macd,
     "squeeze":  strat_squeeze,
     "ma_cross": strat_ma_cross,
+    "trend_ma": strat_trend_ma,
 }
 
 # Positions-per-strategy slot limit (independent of each other)
@@ -111,7 +113,11 @@ SLOTS_PER_STRATEGY = {
     "macd":     5,
     "squeeze":  5,
     "ma_cross": 5,
+    "trend_ma": 5,
 }
+
+# ── Daily loss limit ───────────────────────────────────────────────────────────
+DAILY_LOSS_LIMIT_PCT = -3.0   # block new entries if today's realised P&L < -3% equity
 
 _LOG_DIR  = os.path.join(_ROOT, "logs")
 os.makedirs(_LOG_DIR, exist_ok=True)
@@ -309,6 +315,58 @@ def _log_order(entry: dict) -> None:
     )
 
 
+# ── Daily loss guard ──────────────────────────────────────────────────────────
+
+def _todays_realised_pnl_pct(equity: float) -> float:
+    """
+    Sum realised P&L from all futures exits logged today.
+    Returns the P&L as a fraction of current equity (negative = loss).
+    Uses the orders log (data/futures_orders.json) — no Saxo API call needed.
+    """
+    if equity <= 0 or not os.path.exists(ORDERS_FILE):
+        return 0.0
+    try:
+        with open(ORDERS_FILE) as f:
+            orders = json.load(f)
+    except Exception:
+        return 0.0
+
+    today = date.today().isoformat()
+    total_pnl_pts = 0.0
+    for o in orders:
+        ts = o.get("timestamp", "")[:10]
+        if ts != today:
+            continue
+        # Only closed positions carry a pnl_pct
+        pnl_pct = o.get("pnl_pct")
+        if pnl_pct is None:
+            continue
+        ep = o.get("entry_price") or o.get("exit_price") or 0
+        qty = o.get("quantity", 1)
+        # Convert pnl_pct (% of entry price) to absolute P&L in equity terms
+        # Approximation: pnl in price points × qty, divided by equity
+        if ep > 0 and qty > 0:
+            total_pnl_pts += (float(pnl_pct) / 100.0) * float(ep) * float(qty)
+
+    return total_pnl_pts / equity
+
+
+def _entries_blocked_by_loss_limit(equity: float) -> bool:
+    """Return True and log a warning if today's P&L has hit the daily limit."""
+    pnl_pct = _todays_realised_pnl_pct(equity) * 100
+    if pnl_pct <= DAILY_LOSS_LIMIT_PCT:
+        logger.warning(
+            f"⛔  DAILY LOSS LIMIT HIT: today's realised P&L = {pnl_pct:.2f}% "
+            f"(limit {DAILY_LOSS_LIMIT_PCT:.1f}%). "
+            f"Blocking ALL new entries for the rest of the day."
+        )
+        return True
+    if pnl_pct < 0:
+        remaining = DAILY_LOSS_LIMIT_PCT - pnl_pct
+        logger.info(f"Daily P&L: {pnl_pct:.2f}%  (limit buffer: {remaining:.2f}% remaining)")
+    return False
+
+
 # ── Strategy dispatch helpers ──────────────────────────────────────────────
 
 def _run_strategy_exits(strat_name: str, strat_mod, positions: dict,
@@ -332,8 +390,18 @@ def _run_strategy_exits(strat_name: str, strat_mod, positions: dict,
         if df is not None:
             atr_now  = float(strat_mod._atr(df["High"], df["Low"], df["Close"]).iloc[-1])
             cur_stop = float(pos.get("stop_price", 0))
-            new_stop = strat_mod.trailing_stop_update(
-                cur_stop, float(df["Close"].iloc[-1]), atr_now, pos.get("direction", "Buy"))
+            direction_now = pos.get("direction", "Buy")
+            # trend_ma uses MA50 for its trailing stop — pass it when available
+            import inspect
+            trail_sig = inspect.signature(strat_mod.trailing_stop_update)
+            if "ma50" in trail_sig.parameters:
+                ma50_now = float(strat_mod._sma(df["Close"], 50).iloc[-1])
+                new_stop = strat_mod.trailing_stop_update(
+                    cur_stop, float(df["Close"].iloc[-1]), atr_now,
+                    direction_now, ma50=ma50_now)
+            else:
+                new_stop = strat_mod.trailing_stop_update(
+                    cur_stop, float(df["Close"].iloc[-1]), atr_now, direction_now)
             if round(new_stop, 6) != round(cur_stop, 6) and new_stop > 0:
                 pos["stop_price"] = round(new_stop, 6)
 
@@ -527,6 +595,9 @@ def run_daily(dry_run: bool = True,
     total_exits  = 0
     total_entries = 0
 
+    # Check daily loss limit once, before any entries
+    loss_limit_hit = not dry_run and _entries_blocked_by_loss_limit(equity)
+
     for name in active_strategies:
         mod = STRATEGIES[name]
         logger.info(f"{'─'*60}")
@@ -534,9 +605,15 @@ def run_daily(dry_run: bool = True,
 
         exits   = _run_strategy_exits(name, mod, positions, market_data,
                                       universe, equity, akey, today_str, dry_run)
-        entries = _run_strategy_entries(name, mod, positions, market_data,
-                                        universe, equity, akey, today_str, dry_run)
-        if entries == 0:
+
+        if loss_limit_hit:
+            logger.info(f"  [{name}] Entries BLOCKED — daily loss limit active")
+            entries = 0
+        else:
+            entries = _run_strategy_entries(name, mod, positions, market_data,
+                                            universe, equity, akey, today_str, dry_run)
+
+        if entries == 0 and not loss_limit_hit:
             open_in = sum(1 for k in positions if k.startswith(f"{name}:"))
             logger.info(f"  [{name}] No signals today  |  Holding: {open_in}")
 
