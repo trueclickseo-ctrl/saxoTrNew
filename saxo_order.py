@@ -19,7 +19,7 @@ Per-asset-type rules applied automatically:
 
   Asset type        Stop type   Close side  Duration        Price dp
   ──────────────────────────────────────────────────────────────────
-  FxSpot            Stop        Sell/Buy    GoodTillCancel  5
+  FxSpot            Stop        Sell/Buy    GoodTillCancel  5 (3 for JPY crosses)
   CfdOnIndex        StopLimit   Sell/Buy    GoodTillCancel  2
   ContractFutures   StopLimit   Sell/Buy    DayOrder        4
   CdfOnEtf          StopLimit   Sell/Buy    GoodTillCancel  2
@@ -50,7 +50,7 @@ _DURATION: dict[str, str] = {
 }
 
 _PRICE_DP: dict[str, int] = {
-    "FxSpot":          5,
+    "FxSpot":          5,   # overridden per-symbol for JPY crosses (3dp)
     "CfdOnIndex":      2,
     "ContractFutures": 4,
     "CdfOnEtf":        4,
@@ -59,12 +59,18 @@ _PRICE_DP: dict[str, int] = {
     "CfdOnStock":      2,
 }
 
+# FX pairs whose quote currency needs 3 dp instead of 5
+_JPY_SUFFIX = "JPY"
+
 # Long-only assets — stop/limit close side is always Sell.
 _LONG_ONLY: set[str] = {"Etf", "Stock"}
 
 
-def _round_price(price: float, asset_type: str) -> float:
+def _round_price(price: float, asset_type: str, symbol: str = "") -> float:
     dp = _PRICE_DP.get(asset_type, 5)
+    # JPY crosses quote in 3 decimal places, not 5 (Saxo rejects 5dp for JPY)
+    if asset_type == "FxSpot" and symbol.upper().endswith(_JPY_SUFFIX):
+        dp = 3
     return round(price, dp)
 
 
@@ -92,9 +98,12 @@ def _stop_type(buy_sell: str, asset_type: str) -> str:
     return "StopLimit" if asset_type in _STOP_LIMIT_TYPES else "Stop"
 
 
-def _stop_limit_price(order_price: float, close_side: str, asset_type: str) -> float:
+def _stop_limit_price(order_price: float, close_side: str, asset_type: str,
+                      symbol: str = "") -> float:
     """Compute StopLimitPrice: 1% beyond trigger to absorb slippage."""
     dp = _PRICE_DP.get(asset_type, 2)
+    if asset_type == "FxSpot" and symbol.upper().endswith(_JPY_SUFFIX):
+        dp = 3
     if close_side == "Sell":
         return round(order_price * 0.99, dp)
     else:
@@ -111,6 +120,7 @@ def place_with_stop(
     stop_price: float,
     label: str = "",
     take_profit_price: float | None = None,
+    symbol: str = "",
 ) -> tuple:
     """
     Place a Market entry + native Saxo stop-loss (and optional take-profit).
@@ -129,6 +139,8 @@ def place_with_stop(
     take_profit_price : take-profit level (optional).
                         When provided, a bracket OCO is sent so Saxo
                         cancels the other leg automatically on fill.
+    symbol            : FX pair string e.g. "AUDJPY" — used to detect
+                        JPY crosses and round to 3dp instead of 5dp.
 
     Returns
     -------
@@ -139,12 +151,12 @@ def place_with_stop(
     close = _close_side(buy_sell, asset_type)
     stype = _stop_type(buy_sell, asset_type)
     dur   = _stop_duration(asset_type)
-    rstop = _round_price(stop_price, asset_type)
+    rstop = _round_price(stop_price, asset_type, symbol)
 
-    slp = _stop_limit_price(rstop, close, asset_type) if stype == "StopLimit" else None
+    slp = _stop_limit_price(rstop, close, asset_type, symbol) if stype == "StopLimit" else None
 
     if take_profit_price is not None:
-        rtp = _round_price(take_profit_price, asset_type)
+        rtp = _round_price(take_profit_price, asset_type, symbol)
         return _place_bracket(post_fn, account_key, uic, asset_type,
                               amount, buy_sell, close, stype, rstop, rtp, dur, label,
                               stop_limit_price=slp)

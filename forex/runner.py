@@ -488,6 +488,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 stop_price        = sig["stop_price"],
                 label             = f"{strat_name}:{sym}",
                 take_profit_price = tp,
+                symbol            = sym,
             )
             tp_info = f"  tp_order={tp_oid}" if tp_oid else ""
             logger.info(f"  {direction} {entry_oid}: {qty:,}x {sym}[{tag}] "
