@@ -2,7 +2,7 @@
 
 **Module**: `forex/`  
 **Universe**: 34 FX pairs — 7 G7 majors + 27 crosses (incl. Scandinavian & EM)  
-**Strategies**: 4 × 4 + 1 × 10 + 1 × 25 = **51 max open positions**  
+**Strategies**: 4 × 4 + 2 × 25 = **66 max open positions**  
 **Risk per trade**: 1% of account equity  
 
 ---
@@ -253,7 +253,7 @@ This is the genuine ceiling for a legitimate FX strategy. The edge is market mic
 | 2 | RSI(2) Pullback | Reversion in trend | ~60% | RSI(2) + EMA(200) | 2.0×ATR | 10d | 4 |
 | 3 | Donchian Breakout | Momentum | ~50% | 20d High/Low channel | 2.0×ATR | 60d | 4 |
 | 4 | BB Reversion | Mean-reversion | ~60% | BB(20,2) + RSI(14) | 2.0×ATR | 8d | 4 |
-| 5 | **Pullback-to-EMA** ★ | Trend continuation | **~70%+** | EMA(20/50) + ADX(14) | 1.5×ATR | 25d | **10** |
+| 5 | **Pullback-to-EMA** ★ | Trend continuation | **~70%+** | EMA(20/50) + ADX(14) | 1.5×ATR | 25d | **25** |
 | 6 | **Weekend Gap Fill** ★★ | Structural mean-rev | **~80–85%** | Gap % + live price | 1.5×gap | 7d | **25** |
 
 ---

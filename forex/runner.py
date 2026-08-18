@@ -77,7 +77,7 @@ STRATEGIES = {
     "pullback": strat_pullback,
     "gap":      strat_gap,
 }
-SLOTS_PER_STRATEGY = {"ema": 4, "rsi": 4, "donchian": 4, "bb": 4, "pullback": 10, "gap": 25}
+SLOTS_PER_STRATEGY = {"ema": 4, "rsi": 4, "donchian": 4, "bb": 4, "pullback": 25, "gap": 25}
 
 # ── Session-aware pair groups ──────────────────────────────────────────────────
 # asian  : 06:20 PKT  — Tokyo/Sydney session (JPY crosses, AUD, NZD)
