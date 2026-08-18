@@ -114,6 +114,8 @@ class _BaseStrategy:
 
     @staticmethod
     def _sma(closes: List[float], period: int) -> float:
+        if len(closes) < period:
+            return 0.0
         tail = closes[-period:]
         return sum(tail) / len(tail) if tail else 0.0
 
@@ -151,7 +153,7 @@ class SectorRotationStrategy(_BaseStrategy):
                 continue
             uic = inst.get("Identifier")
             closes = self._history(uic, self.LOOKBACK)
-            if not closes or len(closes) < self.LOOKBACK // 2:
+            if not closes:
                 logger.debug(f"SectorRotation: insufficient history for {symbol}")
                 continue
             ret_3m = closes[-1] / closes[0] - 1.0

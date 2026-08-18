@@ -97,11 +97,17 @@ class ETFExecutor:
         logger.info(f"ETF budget: {allocation_budget:.0f} cash-ccy  "
                     f"({slots_free} free slots, {per_position_budget:.0f} per position)")
 
-        for signal in signals[:slots_free]:
+        # Iterate ALL signals (not just top-N) so that already-held positions
+        # don't waste free slots — stop only when slots_free entries have been made.
+        slots_filled = 0
+        for signal in signals:
+            if slots_filled >= slots_free:
+                break
             if self.state.get_position(signal.uic):
                 logger.debug(f"Already holding {signal.symbol} — skipping")
                 continue
             self._enter_position(signal, per_position_budget)
+            slots_filled += 1
 
     def _enter_position(self, signal: ETFSignal, budget_ccy: float) -> None:
         if budget_ccy <= 0:
@@ -126,18 +132,20 @@ class ETFExecutor:
         }
 
         stop_price = round(price * (1 - self.cfg.risk.stop_loss_pct), 4)
+        tp_price   = round(price * (1 + self.cfg.risk.take_profit_pct), 2)
+        stop_oid   = None
+        tp_oid     = None
 
         if self.cfg.dry_run:
             logger.info(f"[DRY RUN] Would BUY {quantity}x {signal.symbol} "
                         f"(UIC {signal.uic}) score={signal.score:.3f} "
                         f"~{budget_ccy:.0f} {signal.currency} @ ~{price:.2f}  "
-                        f"stop={stop_price:.2f}")
+                        f"stop={stop_price:.2f}  tp={tp_price:.2f}")
             order_id = "DRY_RUN"
         else:
             def _client_post(path, body):
                 return self.client.post(path, json_body=body)
 
-            tp_price = round(price * (1 + self.cfg.risk.take_profit_pct), 2)
             order_id, stop_oid, tp_oid = saxo_order.place_with_stop(
                 post_fn           = _client_post,
                 account_key       = self._account_key,
@@ -154,11 +162,15 @@ class ETFExecutor:
                         f"stop={stop_price:.2f}  stop_order={stop_oid}{tp_info}")
 
         self.state.upsert_position(signal.uic, {
-            "symbol":      signal.symbol,
-            "quantity":    quantity,
-            "entry_price": price,          # stored so review_exits() can compute P&L
-            "entry_score": signal.score,
-            "order_id":    order_id,
+            "symbol":        signal.symbol,
+            "quantity":      quantity,
+            "entry_price":   price,
+            "stop_price":    stop_price,    # persisted so review_exits() uses entry stop, not current config
+            "tp_price":      tp_price,
+            "entry_score":   signal.score,
+            "order_id":      order_id,
+            "stop_order_id": stop_oid,
+            "tp_order_id":   tp_oid,
         })
         self.state.log_order({
             "uic": signal.uic, "symbol": signal.symbol,
@@ -181,21 +193,64 @@ class ETFExecutor:
                                  quantity, price, order_id=order_id)
 
     # ------------------------------------------------------------------
-    # Exits — stop-loss / take-profit
+    # Saxo position sync — removes phantom state from GTC-triggered exits
+    # ------------------------------------------------------------------
+
+    def _sync_with_saxo(self) -> int:
+        """
+        Cross-check local state against Saxo's actual open ETF positions.
+        Removes any positions from state that Saxo no longer has (closed by GTC
+        stop/TP or manual close since last run). Returns number removed.
+        Must be called BEFORE review_exits to prevent phantom SELL orders.
+        """
+        if self.cfg.dry_run:
+            return 0   # no Saxo call in dry_run; nothing to sync
+        try:
+            resp = self.client.get("/port/v1/netpositions/me", params={
+                "AssetType": "Etf",
+                "FieldGroups": "NetPositionBase",
+            })
+            saxo_uics: set[int] = set()
+            for row in resp.get("Data", []):
+                base   = row.get("NetPositionBase", {})
+                uic    = base.get("Uic")
+                amount = float(base.get("Amount", 0) or 0)
+                if uic is not None and abs(amount) > 0:
+                    saxo_uics.add(int(uic))
+        except Exception as exc:
+            logger.warning(f"[sync] Could not fetch Saxo ETF positions: {exc} — skipping sync")
+            return 0
+
+        removed = 0
+        for uic_str in list(self.state.all_positions()):
+            if int(uic_str) not in saxo_uics:
+                sym = self.state.get_position(int(uic_str) if uic_str.isdigit() else 0)
+                label = sym.get("symbol", uic_str) if sym else uic_str
+                logger.info(f"[sync] {label} no longer open in Saxo — removing phantom state")
+                self.state.remove_position(int(uic_str))
+                removed += 1
+
+        if removed:
+            logger.info(f"[sync] Removed {removed} phantom position(s) from state")
+        return removed
+
+    # ------------------------------------------------------------------
+    # Exits — stop-loss / take-profit (soft check after GTC sync)
     # ------------------------------------------------------------------
 
     def review_exits(self) -> None:
         """
-        Fetches live prices via /trade/v1/infoprices and closes positions
-        that have hit their stop-loss or take-profit threshold.
-        Respects dry_run — logs the intent but skips the actual SELL order.
+        1. Sync state with Saxo — remove any positions already closed by GTC orders.
+        2. For remaining live positions, fetch current price and close those that
+           breached stop_loss_pct or take_profit_pct (safety net for GTC failures).
+        Respects dry_run — logs intent but skips actual SELL in dry mode.
         """
+        # Remove phantom positions before checking exits — prevents duplicate SELL orders
+        self._sync_with_saxo()
+
         positions = self.state.all_positions()
         if not positions:
             return
-
-        sl = self.cfg.risk.stop_loss_pct
-        tp = self.cfg.risk.take_profit_pct
 
         for uic_str, pos in list(positions.items()):
             uic         = int(uic_str)
@@ -205,17 +260,21 @@ class ETFExecutor:
                 logger.warning(f"No entry_price recorded for {symbol} — skipping exit check")
                 continue
 
+            # Use persisted stop/tp prices (not current config) to avoid config-drift errors
+            sl_price = pos.get("stop_price") or (entry_price * (1 - self.cfg.risk.stop_loss_pct))
+            tp_price = pos.get("tp_price")   or (entry_price * (1 + self.cfg.risk.take_profit_pct))
+
             live = self._get_live_price(uic, symbol)
             if live is None:
                 continue
 
             pnl = (live - entry_price) / entry_price
             logger.debug(f"{symbol}: entry={entry_price:.2f}  live={live:.2f}  P&L={pnl*100:+.1f}%  "
-                         f"SL={-sl*100:.0f}%  TP=+{tp*100:.0f}%")
+                         f"SL={sl_price:.2f}  TP={tp_price:.2f}")
 
-            if pnl <= -sl:
+            if live <= sl_price:
                 self._exit_position(uic, pos, live, f"STOP_LOSS ({pnl*100:.1f}%)")
-            elif pnl >= tp:
+            elif live >= tp_price:
                 self._exit_position(uic, pos, live, f"TAKE_PROFIT (+{pnl*100:.1f}%)")
 
     def _get_live_price(self, uic: int, symbol: str) -> Optional[float]:
