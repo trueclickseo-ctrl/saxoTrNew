@@ -172,13 +172,13 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     # ── MACD histogram (normalized by ATR) ───────────────────────────────────
     feat["macd_h"] = _macd_hist(c) / (atr + 1e-10)
 
-    # ── Day-of-week encoding (cyclical) ──────────────────────────────────────
+    # ── Day-of-week encoding (cyclical, kept as pd.Series for DataFrame compat)
     if isinstance(df.index, pd.DatetimeIndex):
-        dow = df.index.dayofweek.astype(float)
+        dow_vals = pd.Series(df.index.dayofweek.astype(float), index=df.index)
     else:
-        dow = pd.Series(range(len(df))) % 5
-    feat["day_sin"] = np.sin(2 * math.pi * dow / 5)
-    feat["day_cos"] = np.cos(2 * math.pi * dow / 5)
+        dow_vals = pd.Series(np.arange(len(df), dtype=float) % 5, index=df.index)
+    feat["day_sin"] = np.sin(2 * math.pi * dow_vals / 5)
+    feat["day_cos"] = np.cos(2 * math.pi * dow_vals / 5)
 
     result = pd.DataFrame(feat, index=df.index)
     # Clip extreme values to ±5σ to reduce outlier impact on training
@@ -665,7 +665,15 @@ def _fetch_yf_data(yf_ticker: str, period: str = "5y") -> pd.DataFrame | None:
                          auto_adjust=True, progress=False)
         if df is None or len(df) < 250:
             return None
+        # yfinance 1.5+ returns MultiIndex columns ('Close', 'EURUSD=X') for
+        # single-ticker downloads — flatten to simple column names
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
         df = df[["Open", "High", "Low", "Close"]].copy()
+        # Ensure all columns are 1-D Series (not DataFrames)
+        for col in df.columns:
+            if hasattr(df[col], "squeeze"):
+                df[col] = df[col].squeeze()
         df.index = pd.to_datetime(df.index)
         df = df.sort_index()
         df = df.dropna()
