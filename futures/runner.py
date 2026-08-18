@@ -365,7 +365,8 @@ def _run_strategy_entries(strat_name: str, strat_mod, positions: dict,
         info       = universe[sym]
         uic        = info["uic"]
         asset_type = info["asset_type"]
-        qty        = strat_mod.size_position(equity, sig["atr"])
+        contract_size = info.get("contract_size", 1)
+        qty        = strat_mod.size_position(equity, sig["atr"], contract_size)
         direction  = sig["direction"]
 
         order = {
@@ -403,6 +404,9 @@ def _run_strategy_entries(strat_name: str, strat_mod, positions: dict,
                 continue
             if _sc == 409:
                 logger.warning(f"[{strat_name}] SKIP {sym}: 409 Conflict — {_ec} {_msg} (position/order already exists?)")
+                continue
+            if _sc == 400 and "OrderSizeGreaterThanMaximumAllowed" in _ec:
+                logger.warning(f"[{strat_name}] SKIP {sym}: 400 order size {qty} exceeds broker max — reduce sizing")
                 continue
             raise
         logger.info(f"[{strat_name}] {direction} {resp.get('OrderId','?')}: "
