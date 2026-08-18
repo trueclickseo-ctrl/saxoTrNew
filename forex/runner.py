@@ -472,6 +472,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         detail = (f"rsi={sig['rsi']:.1f}" if "rsi" in sig
                   else f"breakout={sig.get('breakout_level', 0):.5f}" if "breakout_level" in sig
                   else f"adx={sig.get('adx', 0):.1f}")
+        stop_oid = None
         if dry_run:
             logger.info(f"  [DRY] {direction:<4} {qty:,}x {sym}[{tag}] "
                         f"({strat_name})  @ {sig['close']:.5f}  "
@@ -496,13 +497,14 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                         f"  stop_order={stop_oid}{tp_info}")
 
         pos_record = {
-            "uic":          uic,
-            "direction":    direction,
-            "entry_price":  sig["close"],
-            "stop_price":   sig["stop_price"],
-            "quantity":     qty,
-            "entry_date":   today_str,
-            "atr_at_entry": sig["atr"],
+            "uic":           uic,
+            "direction":     direction,
+            "entry_price":   sig["close"],
+            "stop_price":    sig["stop_price"],
+            "quantity":      qty,
+            "entry_date":    today_str,
+            "atr_at_entry":  sig["atr"],
+            "stop_order_id": stop_oid,
         }
         if "gap_target" in sig:
             pos_record["gap_target"]   = sig["gap_target"]
@@ -519,6 +521,54 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                                  sig["close"], sig["stop_price"], order_id=oid)
         entries += 1
     return entries
+
+
+# ── Heal missing stop orders ──────────────────────────────────────────────────
+
+def _heal_missing_stops(positions: dict, akey: str) -> int:
+    """
+    Place GTC stop orders for any open position that has no stop_order_id.
+    Returns the number of stops successfully placed.
+    Called automatically at the start of every --live run.
+    """
+    missing = [(k, v) for k, v in positions.items()
+               if v.get("stop_order_id") is None]
+    if not missing:
+        return 0
+
+    logger.info(f"[heal_stops] {len(missing)} position(s) missing stop — placing now...")
+    healed = 0
+    for key, pos in missing:
+        sym        = key.split(":", 1)[1] if ":" in key else key
+        uic        = pos["uic"]
+        direction  = pos.get("direction", "Buy")
+        qty        = pos["quantity"]
+        stop_price = pos["stop_price"]
+        close_side = "Sell" if direction == "Buy" else "Buy"
+        dp         = 3 if sym.upper().endswith("JPY") else 5
+        rounded    = round(stop_price, dp)
+
+        stop_body = {
+            "AccountKey":    akey,
+            "Uic":           uic,
+            "AssetType":     ASSET_TYPE,
+            "Amount":        qty,
+            "BuySell":       close_side,
+            "OrderType":     "Stop",
+            "OrderPrice":    rounded,
+            "OrderDuration": {"DurationType": "GoodTillCancel"},
+            "ManualOrder":   False,
+        }
+        try:
+            resp     = _post("/trade/v2/orders", stop_body)
+            stop_oid = str(resp.get("OrderId", "?"))
+            pos["stop_order_id"] = stop_oid
+            logger.info(f"  [heal_stops] {key}  {close_side} Stop@{rounded}  "
+                        f"stop_id={stop_oid}  ✓")
+            healed += 1
+        except Exception as exc:
+            logger.warning(f"  [heal_stops] FAILED for {key}: {exc}")
+    return healed
 
 
 # ── Main daily cycle ──────────────────────────────────────────────────────────
@@ -547,6 +597,11 @@ def run_exits_only(dry_run: bool = True,
 
     logger.info(f"Open positions : {len(positions)}")
     logger.info(f"Pairs checked  : {len(active_pairs)} ({session} session)")
+
+    if not dry_run:
+        healed = _heal_missing_stops(positions, akey)
+        if healed:
+            _save_state(state)
 
     market_data: dict[str, pd.DataFrame | None] = {}
     for pair in active_pairs:
@@ -610,6 +665,12 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
     logger.info(f"Open positions : {len(positions)} / {total_slots} total slots")
     logger.info(f"FX pairs scanned: {len(active_pairs)} of {len(PAIRS)} ({session} session)")
     logger.info(f"Strategies     : {strat_label}")
+
+    # ── Heal any positions missing a stop order (e.g. from a prior API failure) ─
+    if not dry_run:
+        healed = _heal_missing_stops(positions, akey)
+        if healed:
+            _save_state(state)   # persist updated stop_order_ids immediately
 
     # ── Fetch price history once for active session pairs ─────────────────────
     market_data: dict[str, pd.DataFrame | None] = {}
