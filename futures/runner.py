@@ -1,21 +1,25 @@
 """
 futures/runner.py
 -----------------
-Daily execution runner for 3 independent futures strategies.
+Daily execution runner for 6 independent futures strategies.
 
-STRATEGIES (each runs with its own position slots):
+STRATEGIES (each runs with its own position slots, 5 markets each):
   donchian  — Donchian Channel 30-day breakout         ~8-9 signals/yr
-  rsi       — RSI(5) pullback within trend              ~50-60 signals/yr
+  rsi       — RSI(2) pullback within trend              ~50-60 signals/yr
   ema       — EMA(5/20) crossover + ADX(14) filter      ~20-25 signals/yr
-  TOTAL                                                 ~80 signals/yr (~weekly)
+  macd      — MACD(12,26,9) momentum crossover          ~12-18 signals/yr
+  squeeze   — Bollinger Band Squeeze breakout           ~10-15 signals/yr
+  ma_cross  — SMA(50/200) Golden/Death Cross            ~4-8 signals/yr
+  TOTAL                                                 ~104-135 signals/yr
+  MAX POSITIONS                                         30 (6 strategies × 5 slots)
 
 Usage:
-    python futures/runner.py              # all 3 strategies, dry-run
-    python futures/runner.py --live       # all 3 strategies, real orders
-    python futures/runner.py --strategy donchian|rsi|ema  # single strategy
+    python futures/runner.py              # all 6 strategies, dry-run
+    python futures/runner.py --live       # all 6 strategies, real orders
+    python futures/runner.py --strategy donchian|rsi|ema|macd|squeeze|ma_cross
     python futures/runner.py --discover   # refresh UIC cache then exit
     python futures/runner.py --status     # print open positions then exit
-    python futures/runner.py --scan       # multi-strategy snapshot
+    python futures/runner.py --scan       # 6-panel market snapshot
 
 State:
     data/futures_state.json     — open positions (keyed by strategy:symbol)
@@ -42,9 +46,12 @@ import pandas as pd
 import saxo_auth
 
 from futures.universe import load_universe, MARKETS
-import futures.strategy     as strat_donchian
-import futures.strategy_rsi as strat_rsi
-import futures.strategy_ema as strat_ema
+import futures.strategy          as strat_donchian
+import futures.strategy_rsi      as strat_rsi
+import futures.strategy_ema      as strat_ema
+import futures.strategy_macd     as strat_macd
+import futures.strategy_squeeze  as strat_squeeze
+import futures.strategy_ma_cross as strat_ma_cross
 import pnl_tracker
 import trade_logger
 
@@ -53,6 +60,9 @@ STRATEGIES = {
     "donchian": strat_donchian,
     "rsi":      strat_rsi,
     "ema":      strat_ema,
+    "macd":     strat_macd,
+    "squeeze":  strat_squeeze,
+    "ma_cross": strat_ma_cross,
 }
 
 # Positions-per-strategy slot limit (independent of each other)
@@ -60,6 +70,9 @@ SLOTS_PER_STRATEGY = {
     "donchian": 5,
     "rsi":      5,
     "ema":      5,
+    "macd":     5,
+    "squeeze":  5,
+    "ma_cross": 5,
 }
 
 logging.basicConfig(
@@ -74,7 +87,7 @@ BASE_URL    = "https://gateway.saxobank.com/sim/openapi"
 DATA_DIR    = os.path.join(_ROOT, "data")
 STATE_FILE  = os.path.join(DATA_DIR, "futures_state.json")
 ORDERS_FILE = os.path.join(DATA_DIR, "futures_orders.json")
-CHART_BARS  = 80          # daily bars to fetch — enough for all three strategies
+CHART_BARS  = 260         # daily bars to fetch — 260 covers SMA(200) + buffer for MA Cross
 MIN_BARS    = 55          # minimum valid bars (covers Donchian 30 + ATR 14 + buffer)
 
 # Chart API horizon: 1440 = daily bars.
@@ -575,6 +588,46 @@ if __name__ == "__main__":
             print(f"  {sym:<6} {row['close']:>10.4f} {row['fast_ema']:>10.4f} "
                   f"{row['slow_ema']:>10.4f} {row['gap_pct']:>7.2f}% "
                   f"{row['adx']:>6.1f}  {row['trend']} / {adx_lbl}")
+
+        # ── MACD scan ──────────────────────────────────────────────────────
+        print(f"\n[MACD] 12/26/9 momentum crossover + ADX(14)")
+        print(f"  {'Sym':<6} {'Price':>10} {'MACD':>9} {'Signal':>9} {'Hist':>8} {'ADX':>6}  Zone")
+        print("  " + "-" * 60)
+        for row in strat_macd.scan_summary(market_data):
+            sym = row["symbol"]
+            if row["status"] != "ok":
+                print(f"  {sym:<6}  no data"); continue
+            zone = "BULL" if row["macd"] > 0 else "bear"
+            hist_mark = "+" if row["hist"] > 0 else "-"
+            print(f"  {sym:<6} {row['close']:>10.4f} {row['macd']:>9.4f} "
+                  f"{row['signal']:>9.4f} {row['hist']:>7.4f}{hist_mark} "
+                  f"{row['adx']:>6.1f}  {zone}")
+
+        # ── Squeeze scan ────────────────────────────────────────────────────
+        print(f"\n[SQUEEZE] Bollinger Band Squeeze (BB inside Keltner)")
+        print(f"  {'Sym':<6} {'Price':>10} {'BB-Width':>9} {'Momentum':>10}  Squeeze")
+        print("  " + "-" * 52)
+        for row in strat_squeeze.scan_summary(market_data):
+            sym = row["symbol"]
+            if row["status"] != "ok":
+                print(f"  {sym:<6}  no data"); continue
+            sq_flag = "**SQUEEZE**" if row["squeeze"] else "       off"
+            mom_dir = "+" if row["momentum"] > 0 else "-"
+            print(f"  {sym:<6} {row['close']:>10.4f} {row['bb_width']:>9.4f} "
+                  f"{row['momentum']:>9.4f}{mom_dir}  {sq_flag}")
+
+        # ── MA Cross scan ───────────────────────────────────────────────────
+        print(f"\n[MA CROSS] SMA(50/200) Golden/Death Cross + ADX(14)")
+        print(f"  {'Sym':<6} {'Price':>10} {'SMA50':>10} {'SMA200':>10} {'Gap%':>7} {'ADX':>6}  Regime")
+        print("  " + "-" * 68)
+        for row in strat_ma_cross.scan_summary(market_data):
+            sym = row["symbol"]
+            if row["status"] != "ok":
+                print(f"  {sym:<6}  no data"); continue
+            print(f"  {sym:<6} {row['close']:>10.4f} {row['sma50']:>10.4f} "
+                  f"{row['sma200']:>10.4f} {row['gap_pct']:>7.2f}% "
+                  f"{row['adx']:>6.1f}  {row['cross']}")
+
         sys.exit(0)
 
     active = list(STRATEGIES.keys()) if args.strategy == "all" else [args.strategy]
