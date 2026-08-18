@@ -1,23 +1,19 @@
 """
 forex/strategy_donchian.py
 --------------------------
-FX Strategy 3 — Donchian Channel Breakout.
+FX Strategy 3 — Donchian Channel Breakout (strict mode).
 
 CONCEPT:
-  A 20-day high/low channel breakout applied to FX pairs.
-  When price closes above its 20-day high, the pair is breaking out to the upside.
-  When price closes below its 20-day low, it's breaking down.
-  All 7 pairs are fully bidirectional — FX trends in both directions equally well.
+  A 30-day high/low channel breakout with mandatory trend + momentum filters.
+  Fires only when EMA(200) trend AND ADX(14) ≥ 25 both confirm the breakout.
+  This eliminates counter-trend entries and choppy-range false breakouts.
 
-  No regime filter needed: unlike equity futures, FX pairs don't follow a
-  single macro regime. EUR/USD and USD/JPY often move in opposite directions.
-
-ENTRY:
-  Long  (all pairs): close > 20-day highest close
-  Short (all pairs): close < 20-day lowest close
+ENTRY (all three must be true):
+  Long : close > 30-day highest close  AND  close > EMA(200)  AND  ADX ≥ 25
+  Short: close < 30-day lowest close   AND  close < EMA(200)  AND  ADX ≥ 25
 
 EXIT (first hit):
-  A. Donchian trailing: 10-day lowest close (long) / highest close (short)
+  A. Donchian trailing: 15-day lowest close (long) / highest close (short)
   B. ATR hard stop: 2.0 × ATR(14)
   C. Time stop: 30 calendar days
 
@@ -29,15 +25,18 @@ THIS MODULE IS PURE — no I/O, no orders, no state.
 import numpy as np
 import pandas as pd
 
-BREAKOUT_PERIOD = 20
-EXIT_PERIOD     = 10
+BREAKOUT_PERIOD = 30      # wider channel = fewer but cleaner breakouts
+EXIT_PERIOD     = 15      # proportional exit channel
 ATR_PERIOD      = 14
+EMA_TREND       = 200     # macro trend filter
+ADX_PERIOD      = 14
+ADX_MIN         = 25      # require confirmed trend strength
 ATR_STOP_MULT   = 2.0
 RISK_PCT        = 0.01
 MAX_POSITIONS   = 4
 TIME_STOP_DAYS  = 30
 LOT_ROUND       = 1_000
-MIN_BARS        = BREAKOUT_PERIOD + ATR_PERIOD + 5
+MIN_BARS        = EMA_TREND + ATR_PERIOD + 5
 
 
 def _atr(highs: pd.Series, lows: pd.Series, closes: pd.Series,
@@ -51,8 +50,20 @@ def _atr(highs: pd.Series, lows: pd.Series, closes: pd.Series,
     return tr.ewm(alpha=1.0/period, adjust=False, min_periods=period).mean()
 
 
+def _adx(h: pd.Series, l: pd.Series, c: pd.Series, period: int = ADX_PERIOD) -> pd.Series:
+    prev_c = c.shift(1); prev_h = h.shift(1); prev_l = l.shift(1)
+    tr = pd.concat([h - l, (h - prev_c).abs(), (l - prev_c).abs()], axis=1).max(axis=1)
+    dm_plus  = ((h - prev_h).clip(lower=0)).where(h - prev_h > prev_l - l, 0)
+    dm_minus = ((prev_l - l).clip(lower=0)).where(prev_l - l > h - prev_h, 0)
+    atr14     = tr.ewm(alpha=1/period, adjust=False, min_periods=period).mean()
+    di_plus   = 100 * dm_plus.ewm(alpha=1/period, adjust=False, min_periods=period).mean() / atr14
+    di_minus  = 100 * dm_minus.ewm(alpha=1/period, adjust=False, min_periods=period).mean() / atr14
+    dx        = 100 * (di_plus - di_minus).abs() / (di_plus + di_minus + 1e-9)
+    return dx.ewm(alpha=1/period, adjust=False, min_periods=period).mean()
+
+
 def generate_signals(market_data: dict, open_symbols: set = None) -> list:
-    """Return Donchian breakout signals for all FX pairs (fully bidirectional)."""
+    """Return strict Donchian breakout signals: EMA(200) + ADX(25) both required."""
     if open_symbols is None:
         open_symbols = set()
 
@@ -66,36 +77,44 @@ def generate_signals(market_data: dict, open_symbols: set = None) -> list:
         h, l, c = df["High"], df["Low"], df["Close"]
         today    = float(c.iloc[-1])
         history  = c.iloc[-(BREAKOUT_PERIOD + 1):-1]
-        high20   = float(history.max())
-        low20    = float(history.min())
+        high30   = float(history.max())
+        low30    = float(history.min())
         atr_val  = float(_atr(h, l, c).iloc[-1])
+        ema200   = float(c.ewm(span=EMA_TREND, adjust=False).mean().iloc[-1])
+        adx_val  = float(_adx(h, l, c).iloc[-1])
 
-        if np.isnan(high20) or np.isnan(low20) or atr_val <= 0:
+        if np.isnan(high30) or np.isnan(low30) or atr_val <= 0:
+            continue
+        if np.isnan(ema200) or np.isnan(adx_val):
+            continue
+        if adx_val < ADX_MIN:          # trend not strong enough — skip
             continue
 
-        if today > high20:
+        if today > high30 and today > ema200:          # breakout WITH macro trend
             stop  = today - ATR_STOP_MULT * atr_val
-            score = (today - high20) / atr_val
+            score = (today - high30) / atr_val
             signals.append({
-                "symbol":          sym,
-                "direction":       "Buy",
-                "score":           float(score),
-                "atr":             float(atr_val),
-                "close":           today,
-                "stop_price":      float(stop),
-                "breakout_level":  float(high20),
+                "symbol":         sym,
+                "direction":      "Buy",
+                "score":          float(score),
+                "atr":            float(atr_val),
+                "close":          today,
+                "stop_price":     float(stop),
+                "breakout_level": float(high30),
+                "adx":            float(adx_val),
             })
-        elif today < low20:
+        elif today < low30 and today < ema200:         # breakdown WITH macro trend
             stop  = today + ATR_STOP_MULT * atr_val
-            score = (low20 - today) / atr_val
+            score = (low30 - today) / atr_val
             signals.append({
-                "symbol":          sym,
-                "direction":       "Sell",
-                "score":           float(score),
-                "atr":             float(atr_val),
-                "close":           today,
-                "stop_price":      float(stop),
-                "breakout_level":  float(low20),
+                "symbol":         sym,
+                "direction":      "Sell",
+                "score":          float(score),
+                "atr":            float(atr_val),
+                "close":          today,
+                "stop_price":     float(stop),
+                "breakout_level": float(low30),
+                "adx":            float(adx_val),
             })
 
     signals.sort(key=lambda x: x["score"], reverse=True)
