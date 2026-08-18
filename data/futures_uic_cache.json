@@ -5,8 +5,7 @@
     "description": "S&P 500 Index CFD",
     "currency": "USD",
     "symbol": "ES",
-    "yf_ticker": "SPY",
-    "contract_size": 50
+    "yf_ticker": "SPY"
   },
   "NQ": {
     "uic": 4912,
@@ -14,8 +13,7 @@
     "description": "NASDAQ-100 Index CFD",
     "currency": "USD",
     "symbol": "NQ",
-    "yf_ticker": "QQQ",
-    "contract_size": 20
+    "yf_ticker": "QQQ"
   },
   "GC": {
     "uic": 8176,
@@ -23,26 +21,24 @@
     "description": "Gold Spot (XAU/USD)",
     "currency": "USD",
     "symbol": "GC",
-    "yf_ticker": "GLD",
-    "contract_size": 1
+    "yf_ticker": "GLD"
   },
   "CL": {
-    "uic": 55278986,
+    "uic": 46093448,
     "asset_type": "ContractFutures",
-    "description": "WTI Light Sweet Crude Oil (ICE) - Sep 2026",
+    "description": "Light Sweet Crude Oil (WTI) - Sep 2026",
     "currency": "USD",
     "symbol": "CL",
     "yf_ticker": "USO",
-    "contract_sym": "WBSU6",
-    "contract_size": 1000
+    "contract_sym": "CLU6"
   },
   "ZB": {
-    "uic": 3441903,
-    "asset_type": "CfdOnEtf",
-    "description": "iShares 20+ Year Treasury Bond ETF (TLT proxy for ZB)",
+    "uic": 55981420,
+    "asset_type": "ContractFutures",
+    "description": "U.S. Treasury Bond - Sep 2026",
     "currency": "USD",
     "symbol": "ZB",
     "yf_ticker": "TLT",
-    "contract_size": 1
+    "contract_sym": "ZBU6"
   }
 }

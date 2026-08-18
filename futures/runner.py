@@ -520,8 +520,12 @@ def _run_strategy_exits(strat_name: str, strat_mod, positions: dict,
             continue
 
         info       = universe.get(sym, {})
-        uic        = info.get("uic") or pos.get("uic")
-        asset_type = info.get("asset_type") or pos.get("asset_type", "CfdOnIndex")
+        # Always prefer the UIC stored ON THE POSITION — that's the instrument
+        # Saxo has the open order on. The universe UIC may have changed (e.g. after
+        # --discover rolls to a new front-month contract). Closing on the new UIC
+        # would send the close order to the wrong instrument.
+        uic        = pos.get("uic") or info.get("uic")
+        asset_type = pos.get("asset_type") or info.get("asset_type", "CfdOnIndex")
         qty        = pos.get("quantity", 1)
         direction  = pos.get("direction", "Buy")
         is_long    = direction == "Buy"
