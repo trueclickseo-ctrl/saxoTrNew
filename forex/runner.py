@@ -66,7 +66,8 @@ import forex.strategy_zscore      as strat_zscore
 import forex.strategy_ml          as strat_ml
 import pnl_tracker
 import trade_logger
-import forex.notifier as fx_notify
+import forex.notifier      as fx_notify
+import forex.signal_filter as signal_filter
 
 logging.basicConfig(
     level=logging.INFO,
@@ -444,6 +445,10 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
                     "reason": reason, "pnl_pct": round(pnl_pct, 3), "dry_run": dry_run})
         if not dry_run:
             pnl_tracker.log_close("forex", sym, live_px, reason, strategy=strat_name)
+            # Label the signal-log outcome for ML training data
+            raw_pnl = ((live_px - pos["entry_price"]) * qty if is_long
+                       else (pos["entry_price"] - live_px) * qty)
+            signal_filter.label_outcome(key, won=raw_pnl > 0)
         del positions[key]
         exits += 1
     return exits
@@ -452,7 +457,8 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
 def _run_entries(strat_name: str, strat_mod, positions: dict,
                  market_data: dict, equity: float, akey: str,
                  dry_run: bool, today_str: str,
-                 live_prices: dict | None = None) -> int:
+                 live_prices: dict | None = None,
+                 agreement: dict | None = None) -> int:
     max_slots  = SLOTS_PER_STRATEGY[strat_name]
     prefix     = f"{strat_name}:"
     held       = sum(1 for k in positions if k.startswith(prefix))
@@ -467,7 +473,8 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
     else:
         signals = strat_mod.generate_signals(market_data, open_symbols=open_syms)
 
-    exposure = _currency_exposure(positions)
+    exposure  = _currency_exposure(positions)
+    agreement = agreement or {}
 
     entries = 0
     for sig in signals:
@@ -475,6 +482,16 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             break
         sym       = sig["symbol"]
         direction = sig["direction"]
+
+        # ── Signal filter: consensus + ML meta-filter ──────────────────────
+        passes, features, reason = signal_filter.evaluate(
+            sym, direction, sig, agreement, STRATEGIES)
+        if not passes:
+            logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] "
+                        f"— signal_filter: {reason}")
+            continue
+        agrees = features["agreement_count"]
+        ml_info = (f"  ml_prob={features['ml_prob']}" if features.get("ml_prob") else "")
 
         if not _currency_ok(sym, direction, exposure):
             logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] "
@@ -488,11 +505,12 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         detail = (f"rsi={sig['rsi']:.1f}" if "rsi" in sig
                   else f"breakout={sig.get('breakout_level', 0):.5f}" if "breakout_level" in sig
                   else f"adx={sig.get('adx', 0):.1f}")
-        stop_oid = None
+        stop_oid = None; tp_oid = None
+        agree_tag = f"  agree={agrees}/{len(STRATEGIES)}{ml_info}"
         if dry_run:
             logger.info(f"  [DRY] {direction:<4} {qty:,}x {sym}[{tag}] "
                         f"({strat_name})  @ {sig['close']:.5f}  "
-                        f"stop={sig['stop_price']:.5f}  {detail}")
+                        f"stop={sig['stop_price']:.5f}  {detail}{agree_tag}")
         else:
             tp = sig.get("gap_target")   # only gap strategy provides a fixed target
             entry_oid, stop_oid, tp_oid = saxo_order.place_with_stop(
@@ -510,8 +528,9 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             tp_info = f"  tp_order={tp_oid}" if tp_oid else ""
             logger.info(f"  {direction} {entry_oid}: {qty:,}x {sym}[{tag}] "
                         f"({strat_name})  @ {sig['close']:.5f}  stop={sig['stop_price']:.5f}"
-                        f"  stop_order={stop_oid}{tp_info}")
+                        f"  stop_order={stop_oid}{tp_info}{agree_tag}")
 
+        pos_key = f"{strat_name}:{sym}"
         pos_record = {
             "uic":           uic,
             "direction":     direction,
@@ -527,8 +546,8 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             pos_record["gap_target"]   = sig["gap_target"]
             pos_record["friday_close"] = sig.get("friday_close", sig["gap_target"])
             pos_record["gap_pct"]      = sig.get("gap_pct", 0.0)
-        positions[f"{strat_name}:{sym}"] = pos_record
-        _update_exposure(exposure, sym, direction)   # keep exposure current for next signal
+        positions[pos_key] = pos_record
+        _update_exposure(exposure, sym, direction)
         oid = entry_oid if not dry_run else None
         _log_order({"side": direction, "symbol": sym, "strategy": strat_name,
                     "uic": uic, "quantity": qty, "entry_price": sig["close"],
@@ -536,6 +555,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         if not dry_run:
             pnl_tracker.log_open("forex", strat_name, sym, direction, qty,
                                  sig["close"], sig["stop_price"], order_id=oid)
+            signal_filter.log_signal(pos_key, features)   # builds ML training data
         entries += 1
     return entries
 
@@ -797,6 +817,13 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
     if live_prices:
         logger.info(f"Live prices fetched : {len(live_prices)} pairs")
 
+    # ── Pre-compute cross-strategy agreement map for signal filter ────────────
+    agreement = signal_filter.compute_agreement(market_data, live_prices, STRATEGIES)
+    sf_status  = signal_filter.training_status()
+    logger.info(f"Signal filter: consensus active | "
+                f"ML training data: {sf_status['labeled_trades']}/{signal_filter.MIN_TRADES_FOR_ML} trades "
+                f"| ML model: {'✓ active' if sf_status['model_exists'] else '— not yet (need more data)'}")
+
     # ── Run each strategy ─────────────────────────────────────────────────────
     total_exits = total_entries = 0
     for strat_name in active_strategies:
@@ -810,7 +837,7 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
                              market_data, akey, dry_run, today_str)
         entries = _run_entries(strat_name, strat_mod, positions,
                                market_data, equity, akey, dry_run, today_str,
-                               live_prices=live_prices)
+                               live_prices=live_prices, agreement=agreement)
 
         if exits == 0 and entries == 0:
             remaining = sum(1 for k in positions if k.startswith(prefix))
