@@ -48,7 +48,7 @@ from forex.cnn_lstm_trainer import (
 logger = logging.getLogger("forex.strategy_cnn_lstm")
 
 # ── Config ────────────────────────────────────────────────────────────────────
-CONFIDENCE_THRESHOLD = 0.60  # softmax prob threshold to emit a signal
+CONFIDENCE_THRESHOLD = 0.45  # softmax prob threshold to emit a signal
 ADX_MIN              = 15    # minimum trend strength (skip choppy pairs)
 ATR_PERIOD           = 14
 ATR_STOP_MULT        = 2.5
