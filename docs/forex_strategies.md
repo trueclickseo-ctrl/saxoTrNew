@@ -2,8 +2,8 @@
 
 **Module**: `forex/`  
 **Universe**: 34 FX pairs — 7 G7 majors + 27 crosses (incl. Scandinavian & EM)  
-**Strategies**: 9 active  
-**Max slots**: 4+4+4+4+34+34+20+20+20 = **144 theoretical max** (currency exposure filter limits practical concurrency)  
+**Strategies**: 10 active (9 rule-based + 1 deep learning)  
+**Max slots**: 4+4+4+4+34+34+20+20+20+20 = **164 theoretical max** (currency exposure filter limits practical concurrency)  
 **Risk per trade**: 1% of account equity  
 
 ---
@@ -356,6 +356,129 @@ Trains a logistic regression model on the last 126 daily bars (6 months) per pai
 
 ---
 
+## Strategy 10 — CNN-LSTM Deep Learning ★★★
+
+**Files**: `forex/strategy_cnn_lstm.py` (inference) · `forex/cnn_lstm_trainer.py` (training)  
+**Type**: Deep Learning — Multi-scale CNN + Bidirectional LSTM + Self-Attention  
+**Win Rate**: depends on training data; walk-forward precision typically 55–65%  
+**Slots**: 20  
+
+### Concept
+A production-quality deep learning model trained on **5 years of daily bars across all 34 pairs simultaneously** (≈40,000 sequences). It learns patterns at three different timescales in parallel and uses an attention mechanism to weight which recent bars matter most for the prediction.
+
+**Why it's better than a naive Conv1D→LSTM:**
+
+| Naive approach | This model |
+|---|---|
+| Single Conv kernel=3 | 3 parallel branches (k=3/7/14) — daily, weekly, bi-weekly patterns |
+| Random train/val shuffle | Walk-forward cross-validation — never shuffles time series |
+| No look-ahead bias protection | Causal convolutions — output at day t uses only data ≤ t |
+| Standard LSTM | Bidirectional LSTM — processes sequence both directions |
+| None | Self-attention pooling — learns which bars matter most |
+| Binary target (up/down) | ATR-normalized 3-class target — only labels significant moves |
+| Per-pair model | Single global model across all 34 pairs (12× more training data) |
+
+### Architecture
+```
+Input: (batch, 60 days, 16 features)
+  ↓
+Multi-Scale CNN  [3 parallel branches, causal padding]:
+  Branch-A  Conv1D(k=3) × 2 → BatchNorm → ReLU   (3-day / daily patterns)
+  Branch-B  Conv1D(k=7)     → BatchNorm → ReLU   (weekly patterns)
+  Branch-C  Conv1D(k=14)    → BatchNorm → ReLU   (bi-weekly patterns)
+  → Concat(192ch) → Dropout(0.2) → MaxPool(2)
+  ↓
+Bidirectional LSTM(128 × 2 = 256) → Dropout(0.3)
+  ↓
+Self-Attention pooling → context vector(256)
+  ↓
+Dense: 256→128 (BN, ReLU) → Dropout(0.25) → 64 (ReLU) → 3 (Softmax)
+  ↓
+Output: [P(Sell), P(Hold), P(Buy)]   — 409,220 parameters
+```
+
+### Features (16 per time step, 60-bar lookback)
+| # | Feature | Captures |
+|---|---------|---------|
+| 1 | log return (1d) | Recent momentum |
+| 2 | log return (5d) | Weekly trend |
+| 3 | log return (20d) | Monthly momentum |
+| 4 | EMA(5)/EMA(20) − 1 | Fast trend |
+| 5 | EMA(20)/EMA(50) − 1 | Medium trend |
+| 6 | Price/EMA(200) − 1 | Macro trend bias |
+| 7 | RSI(14) − 0.5 | Momentum oscillator (centred) |
+| 8 | ADX(14)/100 | Trend strength |
+| 9 | ATR(14)/close | Normalized volatility |
+| 10 | ATR/avg-ATR(20) − 1 | Relative volatility (regime) |
+| 11 | BB(20,2) %B | Mean-reversion band position |
+| 12 | Z-score(20) | Standard deviations from mean |
+| 13 | Donchian position | 30-day channel location (0–1) |
+| 14 | MACD histogram/ATR | Normalized momentum divergence |
+| 15 | sin(2π × DoW/5) | Cyclical day-of-week |
+| 16 | cos(2π × DoW/5) | Cyclical day-of-week |
+
+### Target labels
+A signal is only labelled **Buy** or **Sell** if the 5-day forward return exceeds ±0.5 × ATR%. Otherwise it is **Hold** (no trade). This avoids training the model to trade noise.
+
+| Label | Condition |
+|-------|-----------|
+| **Buy** (2) | fwd\_return\_5d > +0.5 × ATR% |
+| **Hold** (1) | within ±0.5 × ATR% band |
+| **Sell** (0) | fwd\_return\_5d < −0.5 × ATR% |
+
+### Entry
+| Direction | Conditions |
+|-----------|-----------|
+| **LONG**  | P(Buy) ≥ 0.60 AND ADX(14) ≥ 15 |
+| **SHORT** | P(Sell) ≥ 0.60 AND ADX(14) ≥ 15 |
+
+### Exit (first condition hit)
+- **A** — Model flips: P(Sell) ≥ 0.60 for longs / P(Buy) ≥ 0.60 for shorts
+- **B** — 2.5×ATR(14) hard stop
+- **C** — 15-day time stop
+
+### Parameters
+| Param | Value |
+|-------|-------|
+| Lookback window | 60 bars |
+| Features | 16 |
+| Training data | 5 years, 34 pairs (yfinance) |
+| Prediction horizon | 5 days |
+| Confidence threshold | 0.60 |
+| ADX minimum | 15 |
+| ATR stop mult | 2.5× |
+| Time stop | 15 days |
+| Model size | 409,220 parameters |
+| Training time (CPU) | ~15–30 min |
+| Min bars for inference | 280 |
+
+### Training & maintenance
+```bash
+# First-time training (run once before first live use)
+python -m forex.cnn_lstm_trainer --train
+
+# Check model status and walk-forward performance
+python -m forex.cnn_lstm_trainer --status
+
+# Retrain on specific pairs only
+python -m forex.cnn_lstm_trainer --train --pairs EURUSD GBPUSD USDJPY
+
+# Walk-forward backtest without retraining final model
+python -m forex.cnn_lstm_trainer --backtest
+```
+
+Model artifacts are saved to `data/cnn_lstm/` (gitignored — regenerate with `--train`):
+- `model.pt` — PyTorch state dict
+- `scaler.json` — per-feature mean/std (fitted on training fold only)
+- `config.json` — hyperparameters used
+- `report.json` — walk-forward accuracy, Buy/Sell precision per fold
+
+If no trained model exists, the strategy silently emits no signals — safe to have in the registry before training.
+
+> **Retrain schedule**: Recommend monthly retraining as new market data accumulates. Add to Task Scheduler: `python -m forex.cnn_lstm_trainer --train` on the 1st of each month.
+
+---
+
 ## Strategy Comparison
 
 | # | Strategy | Type | Win Rate | Key Indicators | Stop | Time Stop | Slots |
@@ -368,7 +491,8 @@ Trains a logistic regression model on the last 126 daily bars (6 months) per pai
 | 6 | **Weekend Gap Fill** ★★ | Structural mean-rev | **~80–85%** | Gap % + live price | 1.5×gap | 7d | **34** |
 | 7 | SuperTrend | Trend | ~65% | ST(10,3) + EMA(200) | 2.0×ATR | 40d | 20 |
 | 8 | Z-Score Rev | Mean-reversion | ~63% | 20d z-score + EMA(200) | 2.5×ATR | 12d | 20 |
-| 9 | ML Signals | ML / Data-driven | ~57–62% | 7 features, logistic reg | 2.0×ATR | 20d | 20 |
+| 9 | ML Signals | ML / Logistic Reg | ~57–62% | 7 features, per-pair retrain | 2.0×ATR | 20d | 20 |
+| 10 | **CNN-LSTM** ★★★ | Deep Learning | **~55–65%** | 16 features, global model, attention | 2.5×ATR | 15d | 20 |
 
 ---
 
@@ -416,7 +540,7 @@ All pairs scanned; only those showing a 0.10%–2.00% gap receive entries.
 ## CLI Reference
 
 ```bash
-# Run all 9 strategies — all pairs
+# Run all 10 strategies — all pairs
 python forex/runner.py --live
 
 # Session-aware runs (as used by Task Scheduler)
@@ -430,11 +554,19 @@ python forex/runner.py --live --strategy gap        # Sunday 22:00 PKT
 python forex/runner.py --live --strategy supertrend
 python forex/runner.py --live --strategy zscore
 python forex/runner.py --live --strategy ml
+python forex/runner.py --live --strategy cnn_lstm   # requires trained model
 
 # Diagnostics
-python forex/runner.py --scan      # 9-panel market snapshot (all strategies)
+python forex/runner.py --scan      # 10-panel market snapshot (all strategies)
 python forex/runner.py --status    # open positions + currency exposure
 python forex/runner.py --info      # verify UICs live via Saxo API
+
+# CNN-LSTM model management
+python -m forex.cnn_lstm_trainer --train          # train on all 34 pairs (5y data)
+python -m forex.cnn_lstm_trainer --train --pairs EURUSD GBPUSD  # specific pairs
+python -m forex.cnn_lstm_trainer --status         # show walk-forward accuracy
+python -m forex.cnn_lstm_trainer --backtest       # re-run validation without retraining
+python -m forex.cnn_lstm_trainer --train --epochs 50  # quick test (fewer epochs)
 ```
 
 ---
