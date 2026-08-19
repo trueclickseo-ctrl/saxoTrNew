@@ -3,9 +3,91 @@
 **Module**: `futures/runner.py`  
 **Markets**: ES, NQ, GC, CL, ZB  (5 CME futures via Saxo SIM)  
 **7 strategies × 5 slots = 35 max open positions**  
-**Risk per trade**: 1% of equity, ATR-based sizing  
+**Risk per trade**: 1% of `risk_equity_eur` (config), ATR-based sizing  
 **Scheduled**: daily at 06:15 PKT (01:15 UTC) via `run_futures_daily.bat`  
 **Last updated**: 2026-08-19
+
+---
+
+## Audit — 2026-08-19
+
+| # | Finding | Severity | Status |
+|---|---------|----------|--------|
+| 1 | Dry runs deleted live position state, orphaning positions at the broker | **Critical** | Fixed `a34ffd0` |
+| 2 | Sizing ran off 957,732 EUR of SIM demo credit (~34× intended capital) | **High** | Fixed `a34ffd0` |
+| 3 | `max(1, …)` contract floor silently over-risked small accounts | **High** | Fixed `a34ffd0` |
+| 4 | **6 of 7 strategies have no backtest at all** | **High** | Open |
+| 5 | Backtest uses ETF proxies, not the live instruments; ZB proxied by TLT | Medium | Open |
+| 6 | No reconciliation between local state and actual broker positions | Medium | Open |
+| 7 | Documented parameters did not match code (`ATR_STOP_MULT` 5.0 vs 1.5) | Medium | Fixed here |
+| 8 | Sharpe documented as 1.62; measured 0.750 | Medium | Fixed here |
+
+### Finding 1 — dry runs destroyed state (critical)
+
+`run_daily()` simulates exits into the in-memory `positions` dict in dry-run mode
+exactly as in live mode, then called `_save_state()` unconditionally. Any dry run
+whose exit rules fired wrote an **emptied** positions dict over
+`data/futures_state.json`.
+
+The positions remain open at the broker — the runner simply forgets them. No stop
+management, no time stop, no exit, no record. Combined with Finding 6 (nothing
+reconciles against broker positions) they are orphaned permanently.
+
+This explains the live `macd:CL` and `macd:ZB` positions that filled 2026-08-18
+18:16 (order ids `5039683399`/`5039683400`, **7,972 contracts short ZB**) and were
+absent from state by 06:15 the next morning, with `Exits: 0` and no exit logged.
+
+Reproduced during this audit — a dry run wiped `donchian:GC` and `donchian:NQ`.
+Both restored. Dry runs no longer write state.
+
+### Finding 2 — sizing ran off demo credit
+
+`_account()` read Saxo `TotalValue` uncapped: **957,732 EUR** of SIM credit, not
+real capital. The broker rejected the resulting orders outright:
+
+```
+[macd]    SKIP CL: 400 order size 1311 exceeds broker max
+[squeeze] SKIP ZB: 400 order size 5227 exceeds broker max
+```
+
+So MACD and Squeeze could never place a trade. Sizing is now capped at
+`strategies.futures.risk_equity_eur` (27,800 EUR ≈ 300,000 SEK).
+
+> **Confirm this number.** 27,800 EUR assumes futures gets the *entire* stated
+> account. Lower it if futures should share capital with the ATOS equity sleeves.
+
+### Finding 3 — the 1-contract floor
+
+`size_position()` returns `max(1, …)`. Where the risk-correct size is below one
+contract, that floor turns "too small to trade" into "far over-risked" — one CL
+contract risks 1.5 × 2.5 × 1000 = $3,750, i.e. **12.5%** of a 27,800 EUR account,
+not 1%. `MAX_RISK_OVERSHOOT` (1.5×) now skips such signals with an explicit
+reason. Several instruments (ZC, DAX, NQ) are simply too large at this equity —
+now visible in the log rather than silently over-risked.
+
+### Finding 4 — six strategies are unvalidated (open)
+
+`backtest_futures.py` imports only `futures.strategy` (Donchian). **RSI, EMA,
+MACD, Squeeze, MA Cross and Trend MA have no backtest anywhere in the repo.** The
+"Expected results" figures quoted in their sections below are assertions, not
+measurements — treat them as hypotheses.
+
+### Verified as correct
+
+Not everything was broken. Confirmed sound by inspection:
+
+- **ADX** — textbook Wilder implementation (correct `+DM`/`−DM` selection, RMA
+  smoothing; the `1/period` factors correctly cancel between DI numerator and ATR
+  denominator).
+- **ATR** — correct Wilder RMA (`ewm(alpha=1/period, adjust=False)`), consistent
+  across all modules.
+- **Donchian lookback** — `closes.iloc[-(N+1):-1]` correctly **excludes the
+  current bar**, so there is no lookahead bias in the breakout test.
+- **Stop comparison** — hard stops compare against the intraday low/high rather
+  than the close, which is the conservative choice.
+- **Portfolio guards** — correlation groups, portfolio heat cap (6%), drawdown
+  circuit breaker (10%) and the daily loss limit (−3%) are all implemented and
+  wired into the entry path.
 
 ---
 
@@ -51,19 +133,37 @@ Price breaking above the highest high of the past 30 days signals a genuine brea
 - Regime filter applies to ES/NQ
 
 ### Exit (first condition)
-1. 5×ATR hard stop
-2. 30-day time stop
+1. **Donchian trailing**: close below the 5-day lowest close (longs) / above the 5-day highest close (shorts)
+2. 1.5×ATR hard stop — compared against the intraday low/high, not the close
+3. 30-day time stop
 
 ### Parameters
 ```
-BREAKOUT_PERIOD = 30
-ATR_STOP_MULT   = 5.0
+BREAKOUT_PERIOD = 30     # entry: close above N-day highest close
+EXIT_PERIOD     = 5      # exit:  close below N-day lowest close (trailing)
+ATR_PERIOD      = 14
+ATR_STOP_MULT   = 1.5
 TIME_STOP_DAYS  = 30
 RISK_PCT        = 0.01
 ```
 
-### Expected results
-~20-30 signals/yr | WR ~45-55% | Avg hold ~12 days | **Sharpe ~1.62** (grid-optimal)
+### Measured results (`python backtest_futures.py`, 2026-08-19)
+
+| Metric | Value |
+|--------|-------|
+| Sharpe | **0.750** |
+| Win rate | 43.1% |
+| Max drawdown | 9.8% |
+| CAGR | 8.7% |
+| Trades | 248 (5y, 5 markets) |
+
+Passes the enable thresholds (Sharpe ≥ 0.70, WR ≥ 35%, MaxDD < 30%, N ≥ 30).
+
+> **This is the only futures strategy with a backtest.** See
+> [Audit](#audit--2026-08-19). The backtest also runs on **ETF proxies**
+> (SPY/QQQ/GLD/USO/TLT), not the CFD/FxSpot/ContractFutures instruments actually
+> traded live, and proxies ZB with TLT — so even this figure is indicative, not
+> a measurement of the live system.
 
 ---
 
@@ -122,12 +222,13 @@ When the fast EMA(5) crosses above slow EMA(20) with ADX confirming a trend (ADX
 
 ### Parameters
 ```
-FAST_EMA       = 5
-SLOW_EMA       = 20
-ADX_MIN        = 20
-ATR_STOP_MULT  = 2.0
-TIME_STOP_DAYS = 20
-RISK_PCT       = 0.01
+FAST_EMA        = 5
+SLOW_EMA        = 20
+ADX_MIN         = 20
+ATR_STOP_MULT   = 2.0
+TIME_STOP_DAYS  = 25    # code value (docs previously said 20)
+SIGNAL_LOOKBACK = 3     # bars; code value (docs previously said 2)
+RISK_PCT        = 0.01
 ```
 
 ### Expected results
@@ -330,18 +431,65 @@ Fills the gap between EMA(5/20) [too fast, 9d avg] and SMA(50/200) [too slow, 25
 ★ MA Cross = highest quality, lowest frequency  
 ◆ Trend MA = fills medium-term gap between EMA(5/20) and SMA(50/200)
 
+> **Every figure in this table except Donchian's is an estimate, not a
+> measurement** — see [Finding 4](#finding-4--six-strategies-are-unvalidated-open).
+> Only Donchian has a backtest, and it measured Sharpe 0.750, not the 1.62
+> previously documented.
+
+---
+
+## Adding More Strategies — not yet (2026-08-19)
+
+The module already runs **7 strategies of which 6 have never been backtested**.
+Adding an 8th would widen an unmeasured surface, not diversify a measured one.
+
+The correct next step is to **backtest the six existing strategies** — the harness
+already exists (`backtest_futures.py`); it needs a signal/exit adapter per module
+rather than new code from scratch. Expect some of the six to fail their thresholds;
+that is the point. A strategy that fails is worth more removed than left running.
+
+**Order of work:**
+
+1. Fix the audit's open findings (4, 5, 6) — especially broker/state reconciliation
+2. Backtest all six unvalidated strategies on the same footing as Donchian
+3. Retire whichever fail Sharpe ≥ 0.70 / WR ≥ 35% / MaxDD < 30% / N ≥ 30
+4. Re-measure the survivors *together* — 7 strategies on 5 markets overlap heavily,
+   and portfolio Sharpe is not the average of individual Sharpes
+5. Only then consider an 8th
+
+**On profitability:** Donchian is the only one that can currently be called
+profitable, at Sharpe 0.750 / CAGR 8.7% on ETF proxies. That is a genuine but
+modest edge, and it has not yet been demonstrated on the live instruments.
+Nothing in the module currently justifies expanding it.
+
 ---
 
 ## Position Sizing
 
 All strategies use ATR-based position sizing:
 ```
-risk_amount   = account_equity × 1%
+risk_equity   = min(broker TotalValue, risk_equity_eur)   # config cap
+risk_amount   = risk_equity × 1%
 stop_distance = ATR_STOP_MULT × ATR × contract_size
 quantity      = max(1, int(risk_amount / stop_distance))
+
+# Guard: skip the signal entirely when even 1 contract over-risks
+if stop_distance > risk_amount × MAX_RISK_OVERSHOOT:  # 1.5×
+    skip
 ```
 
 This automatically sizes down in high-volatility markets and sizes up in low-volatility ones.
+
+**Two caps matter here.** `risk_equity_eur` stops SIM demo credit from inflating
+sizes (Finding 2). `MAX_RISK_OVERSHOOT` stops the `max(1, …)` floor from taking a
+position that risks far more than 1% when the correct size is under one contract
+(Finding 3).
+
+> **Known gap:** equity is in **EUR** (the account currency) while `ATR` and
+> `contract_size` are in the *instrument's* currency — USD for ES/NQ/GC/CL/ZB, EUR
+> for DAX, HKD for HK50. `futures/runner.py` performs **no FX conversion**, so
+> non-EUR instruments are mis-sized by their exchange rate (~1.08× for USD,
+> ~9× for HKD). Small next to Findings 2–3, but real and still open.
 
 ---
 
