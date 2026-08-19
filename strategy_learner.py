@@ -146,14 +146,25 @@ def run_learning_pass(module: str) -> dict:
     if not unprocessed:
         return {"module": module, "new_trades": 0, "weights": weights}
 
-    if num_processed < MIN_TRADES_TO_LEARN:
-        # Warm-up: count trades but don't shift weights yet
-        meta["num_processed"] = num_processed + len(unprocessed)
-        meta["last_updated"]  = date.today().isoformat()
-        _save_weights(module, weights, meta)
-        logger.info(f"[strategy_learner] {module}: warming up "
-                    f"({meta['num_processed']}/{MIN_TRADES_TO_LEARN} trades) — weights unchanged")
-        return {"module": module, "new_trades": len(unprocessed), "weights": weights}
+    # Warm-up: first MIN_TRADES_TO_LEARN trades counted but weights not shifted.
+    # Handle partial batches: skip only the trades still inside the warm-up window,
+    # then fall through to learn from the remainder in the same call.
+    remaining_warmup = max(0, MIN_TRADES_TO_LEARN - num_processed)
+    if remaining_warmup > 0:
+        if remaining_warmup >= len(unprocessed):
+            # Entire batch still inside warm-up — skip learning for now
+            meta["num_processed"] = num_processed + len(unprocessed)
+            meta["last_updated"]  = date.today().isoformat()
+            _save_weights(module, weights, meta)
+            logger.info(f"[strategy_learner] {module}: warming up "
+                        f"({meta['num_processed']}/{MIN_TRADES_TO_LEARN} trades) — weights unchanged")
+            return {"module": module, "new_trades": len(unprocessed), "weights": weights}
+        # Partial warm-up: skip the first N trades, learn from the rest
+        logger.info(f"[strategy_learner] {module}: exiting warm-up after "
+                    f"{remaining_warmup} skipped trades — learning from remaining "
+                    f"{len(unprocessed) - remaining_warmup}")
+        num_processed += remaining_warmup
+        unprocessed    = unprocessed[remaining_warmup:]
 
     weights_before = dict(weights)
 
