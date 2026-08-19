@@ -498,8 +498,10 @@ def run_open_scan(log_fn=None) -> dict:
     todays_actions: list = []
 
     # ── US Blend (cross-sectional momentum) ───────────────────────
-    blend_budget = cash_sek * BLEND_CASH_PCT
-    _log(f"  US Blend — budget: {blend_budget:,.0f} SEK ({BLEND_CASH_PCT*100:.0f}% of cash)")
+    # Cap at starting_capital_sek so SIM demo credit never inflates position sizes.
+    _max_deploy = CAP.starting_capital_sek() * CAP.max_deploy_pct()
+    blend_budget = min(cash_sek * BLEND_CASH_PCT, _max_deploy * BLEND_CASH_PCT)
+    _log(f"  US Blend — budget: {blend_budget:,.0f} SEK ({BLEND_CASH_PCT*100:.0f}% of cash, capped at {_max_deploy * BLEND_CASH_PCT:,.0f} SEK)")
     try:
         run_us_momentum(feat_data, open_trades, todays_actions,
                         available_cash_sek=blend_budget)
@@ -507,8 +509,8 @@ def run_open_scan(log_fn=None) -> dict:
         _log(f"  [US Blend ERROR] {e}")
 
     # ── US Reversion (mean reversion) ─────────────────────────────
-    rev_budget = cash_sek * REV_CASH_PCT
-    _log(f"  US Reversion — budget: {rev_budget:,.0f} SEK ({REV_CASH_PCT*100:.0f}% of cash)")
+    rev_budget = min(cash_sek * REV_CASH_PCT, _max_deploy * REV_CASH_PCT)
+    _log(f"  US Reversion — budget: {rev_budget:,.0f} SEK ({REV_CASH_PCT*100:.0f}% of cash, capped at {_max_deploy * REV_CASH_PCT:,.0f} SEK)")
     try:
         run_us_reversion(feat_data, db.get_open_trades(), todays_actions,
                          available_cash_sek=rev_budget)
@@ -862,9 +864,10 @@ def run_cycle():
                 })
 
     # ── 6c. US momentum rebalance (the validated strategy) ────────
-    blend_budget = cash_sek * BLEND_CASH_PCT
+    _max_deploy2 = CAP.starting_capital_sek() * CAP.max_deploy_pct()
+    blend_budget = min(cash_sek * BLEND_CASH_PCT, _max_deploy2 * BLEND_CASH_PCT)
     if US_MOMENTUM_ENABLED:
-        print(f"  Running US momentum strategy... (budget: {blend_budget:,.0f} SEK = {BLEND_CASH_PCT*100:.0f}% of {cash_sek:,.0f})")
+        print(f"  Running US momentum strategy... (budget: {blend_budget:,.0f} SEK = {BLEND_CASH_PCT*100:.0f}% of capital, capped at {_max_deploy2 * BLEND_CASH_PCT:,.0f})")
         try:
             run_us_momentum(feat_data, db.get_open_trades(), todays_actions,
                             available_cash_sek=blend_budget)
@@ -872,9 +875,9 @@ def run_cycle():
             print(f"  [US momentum] ERROR: {e}")
 
     # ── 6d. US mean reversion (Option 3 — enable after backtest) ──
-    rev_budget = cash_sek * REV_CASH_PCT
+    rev_budget = min(cash_sek * REV_CASH_PCT, _max_deploy2 * REV_CASH_PCT)
     if US_REVERSION_ENABLED:
-        print(f"  Running US reversion strategy... (budget: {rev_budget:,.0f} SEK = {REV_CASH_PCT*100:.0f}% of {cash_sek:,.0f})")
+        print(f"  Running US reversion strategy... (budget: {rev_budget:,.0f} SEK = {REV_CASH_PCT*100:.0f}% of capital, capped at {_max_deploy2 * REV_CASH_PCT:,.0f})")
         try:
             run_us_reversion(feat_data, db.get_open_trades(), todays_actions,
                              available_cash_sek=rev_budget)
