@@ -117,12 +117,31 @@ def t_reversion_universe_pct():
 _run("Reversion max_universe_pct = 10%", t_reversion_universe_pct)
 
 def t_reversion_slot_math():
-    universe_size = 61
-    pct = CAP.reversion_max_universe_pct()
-    min_slots = CAP.reversion_min_slots()
-    max_slots = max(min_slots, round(universe_size * pct))
-    assert max_slots == 6, f"expected 6 slots for 61 stocks at 10%, got {max_slots}"
-_run("Reversion: 61 stocks x 10% = 6 max slots", t_reversion_slot_math)
+    # Exercise the real function the runner uses, not a copy of the formula.
+    assert CAP.reversion_slots(61) == 6, \
+        f"61 stocks x 10% = 6, got {CAP.reversion_slots(61)}"
+    # Floor: tiny universe still gets min_slots.
+    assert CAP.reversion_slots(5) == CAP.reversion_min_slots(), \
+        f"small universe should floor at min_slots, got {CAP.reversion_slots(5)}"
+    # Ceiling: the regression that mattered — the live 385-stock universe would
+    # give 38 unclamped, shrinking each slot below the share price of 13% of it.
+    assert CAP.reversion_slots(385) == CAP.reversion_max_slots(), \
+        f"385 stocks must clamp to max_slots, got {CAP.reversion_slots(385)}"
+    assert CAP.reversion_slots(385) <= 10, \
+        f"slot count ran away: {CAP.reversion_slots(385)}"
+_run("Reversion slots: floor, 10% band, and max_slots ceiling", t_reversion_slot_math)
+
+def t_reversion_slots_match_live_universe():
+    from atos.universe import US_TICKERS as _UT
+    slots = CAP.reversion_slots(len(_UT))
+    budget = CAP.starting_capital_sek() * CAP.max_deploy_pct() * CAP.reversion_allocation_pct()
+    slot_sek = budget / slots
+    # Guard the failure mode: a slot too small to buy a normal share silently
+    # drops candidates at order time instead of surfacing as a signal.
+    assert slot_sek > 10_000, (
+        f"reversion slot {slot_sek:,.0f} SEK too small — {slots} slots on a "
+        f"{len(_UT)}-stock universe will skip expensive tickers")
+_run("Reversion slot size is large enough to fill", t_reversion_slots_match_live_universe)
 
 def t_reversion_risk_params():
     stop = CAP.reversion_stop_pct()

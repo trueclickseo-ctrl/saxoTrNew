@@ -1,7 +1,7 @@
 # US Equities Strategy Playbook
 
 **Module**: `atos/` + `atos_runner.py`  
-**Universe**: 108 S&P 500 blue-chip stocks  
+**Universe**: 385 S&P 500 / large-cap US stocks  
 **Strategies**: 2 concurrent (Momentum Blend + Mean Reversion)  
 **Capital**: 85% of live SIM account (split 50/50 between strategies)  
 **Scheduled**: 06:00 PKT daily (main) + 5× intraday (19:00–00:30 PKT)  
@@ -11,7 +11,10 @@
 
 ## Universe
 
-**108 S&P 500 blue-chip stocks** — defined in `atos/universe.py` (`US_TICKERS`).
+**385 S&P 500 / large-cap US stocks** — defined in `atos/universe.py` (`US_TICKERS`).
+
+> The universe was expanded from 61 to 385 names. Anything that *derives* a value
+> from `len(US_TICKERS)` scales with it — see the reversion slot ceiling below.
 
 ### Selection criteria
 - Daily dollar volume > $200M (sufficient liquidity for the position sizes we trade)
@@ -39,7 +42,7 @@ US Equities total:   85% of account
   │    8 slots (6 offense + 2 defense)
   │    Each position ≈ 6.25% of Blend sleeve
   └─ US Reversion:   50% of 85% = 42.5% of account
-       6 max slots (10% × 108 stocks = max 10 universe %)
+       6 max slots (10% of universe, clamped to max_slots = 6)
        Each position ≈ 8.3% of Reversion sleeve
 ```
 
@@ -82,12 +85,12 @@ Equal-weight within the sleeve. Budget = 50% of live SIM cash / 8 slots.
 | CAGR | 24.4% |
 | Sharpe | 1.30 |
 | Max Drawdown | 21.3% |
-| Universe | 108 stocks |
+| Universe | 385 stocks |
 
 ### Parameters
 | Param | Value |
 |-------|-------|
-| Universe | 108 stocks (`atos/universe.py`) |
+| Universe | 385 stocks (`atos/universe.py`) |
 | Momentum lookback | 120 trading days (≈ 6 months) |
 | Offense slots | 6 |
 | Defense slots | 2 |
@@ -192,9 +195,25 @@ The reversion scanner also runs **5 times per session** (19:00, 20:30, 22:00, 23
 OOS was never touched during parameter selection. Verdict: **5/5 — edge survives clean OOS test.**
 
 ### Position Sizing
-- Budget: 50% of live SIM cash
-- Max slots: `max_universe_pct (10%) × 108 stocks = 10 max` (practical limit: 6 due to budget)
-- Each position: `budget / max_slots`
+- Budget: 50% of live SIM cash, **capped at `starting_capital_sek × max_deploy_pct`** so SIM demo credit cannot inflate sizes (135,000 SEK today)
+- Max slots: `CAP.reversion_slots(universe_size)` = `min_slots (2) ≤ round(universe × 10%) ≤ max_slots (6)` → **6 slots**
+- Each position: `budget / slots` = **22,500 SEK**
+
+#### Why `max_slots` exists (added 2026-08-19)
+
+Slot count used to derive from universe size alone. When the universe grew 61 → 385,
+10% silently became **38 concurrent slots** against the **2–3** the strategy was
+validated at. Each slot fell to ~3,550 SEK (~$370), with two consequences:
+
+| | 38 slots (before) | 6 slots (now) |
+|---|---|---|
+| Slot size | 3,553 SEK (~$370) | 22,500 SEK (~$2,344) |
+| Universe unbuyable at 1 share | **50 tickers (13%)** | 2 tickers (1%) |
+| Broker minimum commission | large fraction of a $370 position | negligible |
+
+The unbuyable names — NVR, AZO, ASML, LLY, BLK, GS, COST… — were dropped at order
+time (`slot too small for 1 share — skip`), never surfacing as rejected signals.
+A ceiling is the fix; the 10% rule alone cannot express "don't shrink below tradeable".
 
 ### Parameters
 | Param | Value | Source |
@@ -205,8 +224,8 @@ OOS was never touched during parameter selection. Verdict: **5/5 — edge surviv
 | Stop | -4% | capital.json |
 | Time stop | 10 trading days | capital.json |
 | Sleeve DD cap | 10% | capital.json |
-| Max slots | 10% of universe = 10 | capital.json |
-| Capital | 50% of live SIM cash | capital.json |
+| Max slots | `min 2 ≤ 10% of universe ≤ max 6` → 6 | capital.json (`max_slots`) |
+| Capital | 50% of live SIM cash, capped at 135,000 SEK | capital.json |
 
 ---
 
@@ -256,7 +275,7 @@ Data source: yfinance (free tier, ~75% accuracy on earnings dates).
 | File | Purpose |
 |------|---------|
 | `atos_runner.py` | Daily orchestrator — `run_cycle()` + `run_intraday_cycle()` |
-| `atos/universe.py` | 108-stock universe (`US_TICKERS` list) |
+| `atos/universe.py` | 385-stock universe (`US_TICKERS` list) |
 | `atos/us_momentum.py` | Blend strategy: momentum scoring, rebalance logic, risk-off gate |
 | `atos/us_reversion.py` | Reversion strategy: RSI/dip signal, exits, sleeve drawdown cap |
 | `atos/intraday_reversion.py` | Intraday scanner: live 5-min bars + bad-news filters |
@@ -277,7 +296,7 @@ Data source: yfinance (free tier, ~75% accuracy on earnings dates).
 
 ### US Momentum Blend — LIVE
 ```
-Universe:  108 stocks (S&P 500 blue-chip, market cap >$30B, daily vol >$200M)
+Universe:  385 stocks (S&P 500 / large-cap, market cap >$30B, daily vol >$200M)
 Rebalance: Fortnightly (REBAL_DAYS=14)
 Config:    Top-6 momentum + 2 low-vol, daily risk-off, vol-target 15%
 CAGR:      24.4% | Sharpe: 1.30 | MaxDD: 21.3%
@@ -286,7 +305,7 @@ VERDICT:   LIVE
 
 ### US Mean Reversion — LIVE ON SIM
 ```
-Universe:  108 stocks (same as Blend)
+Universe:  385 stocks (same as Blend)
 Hold:      3-10 trading days
 Config:    RSI<38, Dip>5%, Vol>1.5x, Stop4%, 6 max slots (10% of universe)
 IS (2024-2025): Sharpe 2.08, WR 66%, MaxDD 12.5%

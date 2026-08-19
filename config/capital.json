@@ -21,6 +21,7 @@
       "allocation_pct": 0.50,
       "max_universe_pct": 0.10,
       "min_slots": 2,
+      "max_slots": 6,
       "stop_pct": 0.04,
       "max_hold_days": 10,
       "sleeve_dd_cap": 0.10,

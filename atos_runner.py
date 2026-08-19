@@ -955,7 +955,7 @@ def run_cycle():
         _rev_cands_logged = len(_rev_signals)
         _rev_executed     = sum(1 for c in _rev_signals if c.get("ticker") in
                                 {a["ticker"] for a in todays_actions if a.get("strategy") == "US Reversion"})
-        _rev_max          = max(2, round(len(US_TICKERS) * __import__("atos.us_reversion", fromlist=["MAX_UNIVERSE_PCT"]).MAX_UNIVERSE_PCT))
+        _rev_max          = CAP.reversion_slots(len(US_TICKERS))
         _blend_tgts       = _blend_signal.get("targets", [])
         _blend_risk_off   = _blend_signal.get("risk_off", False)
         _last_reb_state   = _load_us_state()
@@ -1507,10 +1507,13 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
                 except Exception as e:
                     print(f"  {tag} sell {ticker} FAILED: {e}")
 
-    # ── Max positions: percentage of universe (never < 2) ────────────
-    # USR.MAX_UNIVERSE_PCT × len(US_TICKERS) scales with the universe so
-    # nothing is hardcoded. e.g. 61 stocks × 10% = 6 max concurrent slots.
-    max_positions = max(2, round(len(US_TICKERS) * USR.MAX_UNIVERSE_PCT))
+    # ── Max positions: percentage of universe, clamped both ends ─────
+    # min_slots <= round(universe × max_universe_pct) <= max_slots.
+    # The max_slots ceiling matters: the universe grew 61 -> 385, and an
+    # unclamped 10% would give 38 slots against the 2-3 this strategy was
+    # actually validated at, shrinking each slot below the share price of
+    # 13% of the universe. See capital_config.reversion_slots().
+    max_positions = CAP.reversion_slots(len(US_TICKERS))
 
     # ── Entry scan — only if slots are available ───────────────────
     # Re-read open trades after exits (some may have just been closed)
@@ -1712,10 +1715,7 @@ def run_intraday_cycle():
     # ── 1. Check how many reversion slots are already filled ──────────
     open_trades   = db.get_open_trades()
     rev_open_now  = [t for t in open_trades if "Reversion" in (t.get("strategy") or "")]
-    max_positions = max(
-        CAP.reversion_min_slots(),
-        round(len(US_TICKERS) * CAP.reversion_max_universe_pct())
-    )
+    max_positions = CAP.reversion_slots(len(US_TICKERS))
     slots_free = max_positions - len(rev_open_now)
     if slots_free <= 0:
         print(f"  Reversion full ({max_positions}/{max_positions} slots). Nothing to do.")
@@ -1779,9 +1779,15 @@ def run_intraday_cycle():
         print(f"  Cannot fetch account balance: {e}. Aborting.")
         return
 
-    rev_budget = cash_sek * CAP.reversion_allocation_pct()
-    slot_sek   = rev_budget / max_positions
-    print(f"  Rev budget: {rev_budget:,.0f} SEK | slot: {slot_sek:,.0f} SEK each")
+    # Cap at starting_capital_sek so SIM demo credit never inflates position sizes.
+    # (The daily path already does this; this intraday path did not, so an inflated
+    # SIM CashBalance could still oversize intraday reversion entries.)
+    _max_deploy = CAP.starting_capital_sek() * CAP.max_deploy_pct()
+    _rev_pct    = CAP.reversion_allocation_pct()
+    rev_budget  = min(cash_sek * _rev_pct, _max_deploy * _rev_pct)
+    slot_sek    = rev_budget / max_positions
+    print(f"  Rev budget: {rev_budget:,.0f} SEK (capped at {_max_deploy * _rev_pct:,.0f}) "
+          f"| slot: {slot_sek:,.0f} SEK each")
 
     # ── 5. Place orders for top signals (up to slots_free) ───────────
     todays_actions = []

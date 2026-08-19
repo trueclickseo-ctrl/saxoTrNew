@@ -3,9 +3,8 @@ atos/us_reversion.py
 ---------------------
 US Mean Reversion strategy — second independent ATOS strategy.
 
-STATUS: DISABLED by default (US_REVERSION_ENABLED = False in atos_runner.py).
-Enable only after the backtest in backtest_us_reversion.py shows positive
-risk-adjusted returns on at least 2 years of out-of-sample data.
+STATUS: LIVE ON SIM since 2026-08-08 (US_REVERSION_ENABLED = True in atos_runner.py).
+Observe 6-8 weeks before committing real capital.
 
 LOGIC:
   Strong stocks sometimes dip sharply due to sector rotation, macro noise, or
@@ -14,14 +13,14 @@ LOGIC:
 
 ENTRY (all conditions must hold simultaneously):
   1. Price > EMA200 — stock is in a long-term uptrend (not a falling knife)
-  2. RSI(14) < RSI_ENTRY (28) — short-term oversold
-  3. Price is > DIP_PCT (4%) below its 20-day SMA — meaningful dip
+  2. RSI(14) < RSI_ENTRY (38) — short-term oversold
+  3. Price is > DIP_PCT (5%) below its 20-day SMA — meaningful dip
   4. Volume today >= VOL_MULT (1.5x) × 20-day avg volume — capitulation signal
 
 EXIT (first condition hit):
-  A. RSI(14) > RSI_EXIT (default 60) — recovery complete
+  A. RSI(14) > RSI_EXIT (60) — recovery complete
   B. Price rises back to 20-day SMA (mean-reversion target hit)
-  C. Hard stop: price drops STOP_PCT (5%) below entry
+  C. Hard stop: price drops STOP_PCT (4%, from capital.json) below entry
   D. Max hold: MAX_HOLD_DAYS (10) trading days — time-stop, no dead positions
 
 BACKTEST RESULTS (full 486-combo grid, 2023-2026, rank #1):
@@ -29,7 +28,15 @@ BACKTEST RESULTS (full 486-combo grid, 2023-2026, rank #1):
 
 CAPITAL:
   Separate sleeve of REVERSION_SLEEVE_SEK. Never touches the US Blend sleeve.
-  Max MAX_POSITIONS (3) concurrent positions; equal-weight within the sleeve.
+  Concurrent positions are decided by CAP.reversion_slots(universe_size) —
+  min_slots <= round(universe x max_universe_pct) <= max_slots — NOT by the
+  MAX_POSITIONS constant below. Equal-weight within the sleeve.
+
+  NOTE (2026-08-19): max_slots was added because slot count had been derived
+  from universe size alone. The universe grew 61 -> 385, so 10% silently became
+  38 concurrent slots against the 2-3 this strategy was validated at, cutting
+  each slot to ~3,550 SEK (~$370) — below the share price of 13% of the
+  universe, which was then skipped without ever appearing as a signal.
 
 CORRELATION WITH US BLEND:
   Momentum and mean-reversion are structurally anti-correlated:
@@ -57,7 +64,9 @@ MAX_HOLD_DAYS        = CAP.reversion_max_hold_days()
 MAX_UNIVERSE_PCT     = CAP.reversion_max_universe_pct()
 SLEEVE_DD_CAP        = CAP.reversion_sleeve_dd_cap()
 REVERSION_SLEEVE_SEK = CAP.reversion_fallback_sleeve_sek()
-MAX_POSITIONS        = CAP.reversion_min_slots()
+# Display/preview only. The live paths call CAP.reversion_slots(len(US_TICKERS))
+# because the real count depends on universe size; this constant cannot.
+MAX_POSITIONS        = CAP.reversion_max_slots()
 # ─────────────────────────────────────────────────────────────────────────
 
 

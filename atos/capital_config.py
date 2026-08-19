@@ -94,6 +94,27 @@ def reversion_min_slots() -> int:
     return int(_load()["strategies"]["us_reversion"].get("min_slots", 2))
 
 
+def reversion_max_slots() -> int:
+    """Hard ceiling on concurrent reversion positions.
+
+    max_universe_pct alone scales slots with universe size, which broke when the
+    universe grew 61 -> 385 (10% => 38 slots, vs the 2-3 the strategy was actually
+    validated at). At 38 slots each slot is ~3,550 SEK (~$370): 13% of the universe
+    costs more than one share and is silently skipped, and Saxo's minimum commission
+    becomes a large fraction of each position. This caps the derived value.
+    """
+    return int(_load()["strategies"]["us_reversion"].get("max_slots", 6))
+
+
+def reversion_slots(universe_size: int) -> int:
+    """The single source of truth for reversion slot count.
+
+    min_slots <= round(universe_size * max_universe_pct) <= max_slots
+    """
+    derived = round(universe_size * reversion_max_universe_pct())
+    return max(reversion_min_slots(), min(derived, reversion_max_slots()))
+
+
 def reversion_stop_pct() -> float:
     return float(_load()["strategies"]["us_reversion"].get("stop_pct", 0.04))
 
