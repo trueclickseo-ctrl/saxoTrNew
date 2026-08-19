@@ -302,23 +302,34 @@ def _fetch_history_h1(uic: int, count: int = 48) -> pd.DataFrame | None:
 def _detect_gap_session() -> str | None:
     """Return the active gap session based on current UTC time, or None.
 
-    Windows:
-      weekly  — Monday 00:00-05:00 UTC (captures Sunday 22:00 UTC FX reopen)
-      london  — Mon-Fri 07:00-08:30 UTC (first 90 min of London session)
-      tokyo   — Mon-Fri 00:00-01:30 UTC (first 90 min of Tokyo session)
-      newyork — Mon-Fri 12:00-13:30 UTC (first 90 min of NY session)
+    FX session opens (UTC):
+      Sydney/Weekly — Sunday 22:00 UTC (FX market reopens after weekend close)
+      Tokyo         — Monday-Friday 00:00 UTC
+      London        — Monday-Friday 07:00 UTC  (largest daily volume, 35% of FX)
+      New York      — Monday-Friday 12:00 UTC
+
+    Entry windows (first 90 minutes of each session):
+      weekly  — Sun 22:00 UTC through Mon 06:00 UTC
+                (Sunday 22:00 PKT Mon 03:00 → correct: dow=7, h>=22)
+      tokyo   — Mon-Fri 00:00-01:30 UTC   (skipped on Monday — covered by weekly)
+      london  — Mon-Fri 07:00-08:30 UTC
+      newyork — Mon-Fri 12:00-13:30 UTC
     """
     now  = datetime.now(timezone.utc)
     dow  = now.isoweekday()   # 1=Mon … 7=Sun
     h    = now.hour
     m    = now.minute
 
-    if dow == 1 and h < 5:
+    # Weekly: Sunday 22:00 UTC → Monday 06:00 UTC (FX reopens Sunday night)
+    if (dow == 7 and h >= 22) or (dow == 1 and h < 6):
         return "weekly"
+
+    # Session gaps: Monday-Friday only
     if 1 <= dow <= 5:
         if h == 7 or (h == 8 and m < 30):
             return "london"
-        if h == 0 or (h == 1 and m < 30):
+        # Tokyo: skip Monday (00:00-01:30 UTC Monday is already covered by weekly window above)
+        if dow >= 2 and (h == 0 or (h == 1 and m < 30)):
             return "tokyo"
         if h == 12 or (h == 13 and m < 30):
             return "newyork"
@@ -723,13 +734,12 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
     open_syms = {k.split(":", 1)[1] for k in positions if k.startswith(prefix)}
 
     if strat_name == "gap" and gap_session != "weekly":
-        # Session gap (London / NY / Tokyo): use H1 bars for the session pair set
-        cfg = strat_gap.SESSION_GAPS[gap_session]
+        # Session gap (London / NY / Tokyo): fetch H1 bars for ALL 34 pairs.
+        # No pair-list restriction — gap_pct filter selects only pairs that actually
+        # gapped (EURNOK, USDSEK, NZDJPY, AUDCHF etc. all get a fair look).
         h1_data: dict = {}
-        for sym in cfg["pairs"]:
-            pi = get_pair(sym)
-            if pi:
-                h1_data[sym] = _fetch_history_h1(pi["uic"])
+        for pi in PAIRS:
+            h1_data[pi["symbol"]] = _fetch_history_h1(pi["uic"])
         signals = strat_mod.generate_session_signals(
             gap_session, h1_data, open_symbols=open_syms, live_prices=live_prices or {}
         )

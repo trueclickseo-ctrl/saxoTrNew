@@ -62,44 +62,35 @@ NEEDS_LIVE_PRICES = True
 #   NY open 12:00 UTC     → reference = bar that closed at 11:00 UTC (hour=11)
 #   Tokyo open 00:00 UTC  → reference = bar that closed at 23:00 UTC (hour=23)
 SESSION_GAPS = {
+    # All sessions scan the FULL 34-pair universe — the gap_pct filter selects
+    # only pairs that actually gapped. No pair list restriction: if EURNOK gaps
+    # at London open, it generates a signal; if it didn't gap, it doesn't.
     "london": {
-        "open_hour_utc":    7,      # London opens 07:00 UTC
-        "ref_hour_utc":     6,      # last Asian hour bar (06:00-07:00 UTC)
-        "min_gap_pct":      0.05,   # tighter: session moves are smaller
+        "open_hour_utc":    7,      # London opens 07:00 UTC = 12:00 PKT
+        "ref_hour_utc":     6,      # reference: last Asian bar (06:00-07:00 UTC close)
+        "min_gap_pct":      0.05,   # tighter than weekly — session moves are smaller
         "max_gap_pct":      0.40,
-        "stop_mult":        2.0,    # wider relative stop — shorter time horizon
-        "time_stop_hours":  8,      # exit if not filled within one London session
-        "risk_pct":         0.005,  # half-size (0.5%) — lower WR than weekly
-        "pairs": [                  # London-centric pairs
-            "EURUSD", "GBPUSD", "EURJPY", "GBPJPY",
-            "EURCHF", "USDCHF", "EURGBP",
-        ],
+        "stop_mult":        2.0,    # wider relative stop for shorter time horizon
+        "time_stop_hours":  8,      # exit if gap not filled within London session
+        "risk_pct":         0.005,  # 0.5% per trade (lower WR than weekly ~65%)
     },
     "newyork": {
-        "open_hour_utc":    12,
-        "ref_hour_utc":     11,     # last European morning hour bar
+        "open_hour_utc":    12,     # New York opens 12:00 UTC = 17:00 PKT
+        "ref_hour_utc":     11,     # reference: last European morning bar
         "min_gap_pct":      0.05,
         "max_gap_pct":      0.40,
         "stop_mult":        2.0,
-        "time_stop_hours":  6,
+        "time_stop_hours":  6,      # exit if gap not filled within NY morning
         "risk_pct":         0.005,
-        "pairs": [                  # NY-active pairs
-            "EURUSD", "GBPUSD", "USDJPY", "AUDUSD",
-            "USDCAD", "NZDUSD", "USDCHF",
-        ],
     },
     "tokyo": {
-        "open_hour_utc":    0,      # Tokyo opens 00:00 UTC (midnight)
-        "ref_hour_utc":     23,     # last NY afternoon hour bar
-        "min_gap_pct":      0.04,
+        "open_hour_utc":    0,      # Tokyo/Asia opens 00:00 UTC = 05:00 PKT
+        "ref_hour_utc":     23,     # reference: last NY afternoon bar (23:00 UTC close)
+        "min_gap_pct":      0.04,   # smaller threshold — Asian moves tend to be tighter
         "max_gap_pct":      0.30,
         "stop_mult":        2.0,
-        "time_stop_hours":  7,      # covers Tokyo + early London
+        "time_stop_hours":  7,      # covers full Asian session + early London overlap
         "risk_pct":         0.005,
-        "pairs": [                  # JPY, AUD, NZD most active in Tokyo
-            "USDJPY", "AUDJPY", "NZDJPY", "CADJPY",
-            "AUDUSD", "NZDUSD", "AUDCAD",
-        ],
     },
 }
 
@@ -196,12 +187,9 @@ def generate_session_signals(session: str,
     if live_prices is None:
         live_prices = {}
 
-    target_pairs = set(cfg["pairs"])
     signals = []
 
     for sym, df in market_data_h1.items():
-        if sym not in target_pairs:
-            continue
         if sym in open_symbols:
             continue
         if df is None or len(df) < 4:
