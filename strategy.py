@@ -44,7 +44,8 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
         (df["High"] - prev_close).abs(),
         (df["Low"] - prev_close).abs(),
     ], axis=1).max(axis=1)
-    df["atr"] = tr.rolling(config.ATR_PERIOD).mean()
+    df["atr"] = tr.ewm(alpha=1.0 / config.ATR_PERIOD, adjust=False,
+                       min_periods=config.ATR_PERIOD).mean()
 
     # Signal: +1 when fast MA is above slow MA (uptrend), else 0
     df["trend_up"] = (df["fast_ma"] > df["slow_ma"]).astype(int)

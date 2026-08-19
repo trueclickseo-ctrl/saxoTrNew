@@ -45,14 +45,14 @@ def _ema(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _atr(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
-    """Average True Range — used for stop-loss placement and position sizing."""
+    """Average True Range — Wilder smoothing (same as TradingView / industry standard)."""
     prev_close = df["Close"].shift(1)
     tr = pd.concat([
         df["High"] - df["Low"],
         (df["High"] - prev_close).abs(),
         (df["Low"]  - prev_close).abs(),
     ], axis=1).max(axis=1)
-    df["atr"] = tr.rolling(period).mean()
+    df["atr"] = tr.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
     return df
 
 
@@ -74,12 +74,14 @@ def _adx(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
     dm_minus = ((prev_low - low).clip(lower=0)
                 .where(prev_low - low > high - prev_high, 0))
 
-    atr14     = tr.rolling(period).mean()
-    di_plus   = 100 * dm_plus.rolling(period).mean()  / atr14.replace(0, np.nan)
-    di_minus  = 100 * dm_minus.rolling(period).mean() / atr14.replace(0, np.nan)
-    dx        = (100 * (di_plus - di_minus).abs()
-                 / (di_plus + di_minus).replace(0, np.nan))
-    df["adx"] = dx.rolling(period).mean()
+    # Wilder smoothing for ATR14, DI, and ADX — matches standard charting tools
+    _alpha   = 1.0 / period
+    atr14    = tr.ewm(alpha=_alpha, adjust=False, min_periods=period).mean()
+    di_plus  = 100 * dm_plus.ewm(alpha=_alpha, adjust=False, min_periods=period).mean()  / atr14.replace(0, np.nan)
+    di_minus = 100 * dm_minus.ewm(alpha=_alpha, adjust=False, min_periods=period).mean() / atr14.replace(0, np.nan)
+    dx       = (100 * (di_plus - di_minus).abs()
+                / (di_plus + di_minus).replace(0, np.nan))
+    df["adx"] = dx.ewm(alpha=_alpha, adjust=False, min_periods=period).mean()
     return df
 
 

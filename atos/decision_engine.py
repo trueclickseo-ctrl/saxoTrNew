@@ -199,7 +199,9 @@ def consensus_evaluate(df: pd.DataFrame, market_group: str,
     # Step 1: Run the v2 detector engine for reference
     row = df.iloc[-1]
     v2_decision = evaluate(row, market_group, weights, is_open_position)
-    regime = getattr(v2_decision, 'regime', 'TRANSITION')
+    # Regime comes from the features DataFrame, not the Decision NamedTuple
+    # (Decision has no regime field — getattr would always return 'TRANSITION')
+    regime = row.get("regime", "TRANSITION") if hasattr(row, 'get') else "TRANSITION"
     
     # Step 2: Run each strategy
     breakdown = {}

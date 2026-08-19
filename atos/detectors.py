@@ -74,14 +74,14 @@ class Detector2_Momentum:
                 score += 40    # momentum just crossed — strongest signal
             elif 50 <= rsi <= 65:
                 score += 25    # healthy momentum zone
+            elif rsi > 75:
+                score -= 20    # overbought — exit risk (must precede rsi>65)
             elif rsi > 65:
                 score += 10    # still bullish but getting stretched
-            elif rsi > 75:
-                score -= 20    # overbought — exit risk
+            elif rsi < 30:
+                score += 30    # deeply oversold (must precede rsi<35)
             elif rsi < 35:
                 score += 20    # oversold bounce potential (with trend confirmation)
-            elif rsi < 30:
-                score += 30    # deeply oversold
             elif rsi < 50:
                 score -= 10    # below momentum line
 

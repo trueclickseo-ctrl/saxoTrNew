@@ -202,28 +202,32 @@ class S4_BreakoutVol(Strategy):
         row = df.iloc[-1]
         prev = df.iloc[-2]
         close = row.get('Close', 0)
-        donchian_high = row.get('donchian_high', 0)
-        donchian_low_10 = df['Low'].rolling(self.params['exit_period']).min().iloc[-1]
+        # Use the precomputed breakout flag (compares Close to PREVIOUS period's high,
+        # not today's — avoids the impossible Close > today's High condition)
+        breakout_up = row.get('donchian_breakout_up', False)
+        # Shift by 1 so exit compares close against YESTERDAY's 10-day low
+        donchian_low_10 = df['Low'].rolling(self.params['exit_period']).min().shift(1).iloc[-1]
         atr = row.get('atr', 0)
         prev_atr = prev.get('atr', 0)
         vol_ratio = row.get('vol_ratio', 1.0)
-        
-        if any(pd.isna(v) for v in [close, donchian_high, atr, prev_atr]):
+
+        if any(pd.isna(v) for v in [close, atr, prev_atr]):
             return 'HOLD'
-        
+
         # BUY: Price breaks Donchian high + at least ONE confirmation (ATR
         # expansion OR volume surge). Requiring both simultaneously fired ~1
         # trade / 2y across 39 US names — far too strict.
         atr_expanding = atr > prev_atr * self.params['vol_expansion'] if prev_atr > 0 else False
         volume_ok = pd.notna(vol_ratio) and vol_ratio > self.params['volume_threshold']
 
-        if close >= donchian_high and (atr_expanding or volume_ok):
+        if breakout_up and (atr_expanding or volume_ok):
             return 'BUY'
-        
-        # SELL: Price breaks 10-day low
-        if pd.notna(donchian_low_10) and close <= donchian_low_10:
+
+        # SELL: Price breaks 10-day low (vs yesterday's trailing low to avoid
+        # the impossible close <= today's low-of-lows condition)
+        if pd.notna(donchian_low_10) and close < donchian_low_10:
             return 'SELL'
-        
+
         return 'HOLD'
     
     def stop_loss(self, df, entry_price):
