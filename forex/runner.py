@@ -134,6 +134,12 @@ DRAWDOWN_PAUSE_PCT    = 0.10   # pause entries when drawdown > 10% from rolling 
 DAILY_LOSS_LIMIT_PCT  = 0.03   # block entries if today's realised P&L ≤ −3% of equity
 PEAK_EQUITY_FILE      = os.path.join(DATA_DIR, "forex_peak_equity.json")
 
+# ── Breakeven stop parameters ─────────────────────────────────────────────────
+# Trend strategies: move stop to entry_price once profit ≥ this many ATRs
+BREAKEVEN_THRESHOLD_ATR = 1.0
+# Gap strategy: move stop to entry_price once price is this % toward the gap target
+BREAKEVEN_GAP_FILL_PCT  = 0.50
+
 
 # ── Saxo HTTP helpers ─────────────────────────────────────────────────────────
 
@@ -159,6 +165,12 @@ def _get(path: str, params: dict | None = None) -> dict:
 
 def _post(path: str, body: dict) -> dict:
     r = requests.post(f"{BASE_URL}{path}", headers=_hdrs(), json=body, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+
+def _patch(path: str, body: dict) -> dict:
+    r = requests.patch(f"{BASE_URL}{path}", headers=_hdrs(), json=body, timeout=15)
     r.raise_for_status()
     return r.json()
 
@@ -459,6 +471,86 @@ def _entries_blocked_by_loss_limit(equity: float) -> bool:
     return False
 
 
+# ── Breakeven stop helpers ────────────────────────────────────────────────────
+
+def _amend_stop_order(order_id: str, new_price: float, sym: str, akey: str) -> bool:
+    """Amend an existing Saxo GTC stop order to a new price via PATCH."""
+    dp = 3 if sym.upper().endswith("JPY") else 5
+    rounded = round(new_price, dp)
+    try:
+        _patch(f"/trade/v2/orders/{order_id}", {
+            "AccountKey":    akey,
+            "OrderPrice":    rounded,
+            "OrderDuration": {"DurationType": "GoodTillCancel"},
+        })
+        logger.info(f"  [BREAKEVEN] Stop order {order_id} amended → {rounded:.{dp}f}  ✓")
+        return True
+    except Exception as exc:
+        logger.warning(f"  [BREAKEVEN] Could not amend stop {order_id}: {exc} "
+                       f"— heal will re-place on next run")
+        return False
+
+
+def _apply_breakeven_stop(key: str, pos: dict, df, strat_name: str,
+                           akey: str, dry_run: bool) -> bool:
+    """Move stop to entry_price (breakeven) once position is sufficiently in profit.
+
+    Trend strategies : triggers when unrealised profit >= BREAKEVEN_THRESHOLD_ATR × ATR_at_entry
+    Gap strategy     : triggers when price is >= BREAKEVEN_GAP_FILL_PCT toward gap_target
+
+    One-shot per position — stored as pos["breakeven_triggered"] = True.
+    Returns True if the stop was moved this call.
+    """
+    if pos.get("breakeven_triggered"):
+        return False
+    if df is None or len(df) < 1:
+        return False
+
+    direction   = pos.get("direction", "Buy")
+    entry_price = float(pos.get("entry_price", 0))
+    cur_stop    = float(pos.get("stop_price", 0))
+    cur_close   = float(df["Close"].iloc[-1])
+    cur_high    = float(df["High"].iloc[-1])
+    cur_low     = float(df["Low"].iloc[-1])
+
+    if strat_name == "gap":
+        gap_target = float(pos.get("gap_target", entry_price))
+        if abs(gap_target - entry_price) < 1e-8:
+            return False
+        if direction == "Buy":
+            fill_pct      = (cur_high - entry_price) / (gap_target - entry_price)
+            should_trigger = fill_pct >= BREAKEVEN_GAP_FILL_PCT and cur_stop < entry_price
+        else:
+            fill_pct      = (entry_price - cur_low) / (entry_price - gap_target)
+            should_trigger = fill_pct >= BREAKEVEN_GAP_FILL_PCT and cur_stop > entry_price
+    else:
+        atr_entry = float(pos.get("atr_at_entry", 0))
+        if atr_entry <= 0:
+            return False
+        threshold = BREAKEVEN_THRESHOLD_ATR * atr_entry
+        if direction == "Buy":
+            should_trigger = (cur_close - entry_price) >= threshold and cur_stop < entry_price
+        else:
+            should_trigger = (entry_price - cur_close) >= threshold and cur_stop > entry_price
+
+    if not should_trigger:
+        return False
+
+    sym = key.split(":", 1)[1] if ":" in key else key
+    tag = "[DRY] " if dry_run else ""
+    logger.info(f"  {tag}[BREAKEVEN] {key}: stop {cur_stop:.5f} → {entry_price:.5f} (entry)")
+
+    pos["stop_price"]          = entry_price
+    pos["breakeven_triggered"] = True
+
+    if not dry_run:
+        stop_oid = pos.get("stop_order_id")
+        if stop_oid and stop_oid not in ("synced", None, ""):
+            _amend_stop_order(stop_oid, entry_price, sym, akey)
+
+    return True
+
+
 # ── Per-strategy exit / entry helpers ─────────────────────────────────────────
 
 def _run_exits(strat_name: str, strat_mod, positions: dict,
@@ -486,6 +578,9 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
                     pos["stop_price"] = round(new_stop, 6)
             except Exception:
                 pass
+
+        # Breakeven stop — move to entry_price once profit threshold reached
+        _apply_breakeven_stop(key, pos, df, strat_name, akey, dry_run)
 
         exit_flag, reason = strat_mod.should_exit(pos, df, cal_days)
         if not exit_flag:
