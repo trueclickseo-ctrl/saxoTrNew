@@ -3,9 +3,28 @@ atos/us_momentum.py
 -------------------
 US cross-sectional momentum — the validated strategy (see STRATEGY_NOTES.md).
 Holds the top momentum names from a 61-stock universe above their EMA200, with
-a weekly rebalance and a daily market risk-off overlay.
+a fortnightly rebalance and a daily market risk-off overlay.
 
 10y backtest: Sharpe 1.30, MaxDD 21.3%, CAGR 24.4% (beats buy&hold Sharpe 1.27).
+
+REBALANCE CADENCE (REBAL_DAYS = 14, changed from 7 on 2026-08-19)
+  Swept 4d/7d/10d/15d/21d/30d/quarterly on the 10y panel (385 names, TOPN=8,
+  daily regime + vol target). Full sample favoured ~15 calendar days:
+      weekly   Sharpe 0.98  CAGR 21.4%  MaxDD 33.6%
+      15 days  Sharpe 1.13  CAGR 25.9%  MaxDD 30.6%
+      monthly  Sharpe 0.68  CAGR 14.1%  MaxDD 48.8%
+  A single-sample peak is usually curve-fit, so it was re-scored by mean rank
+  over 8 independent tests (3 sub-periods x 5 TOPN settings):
+      15d 2.31 | weekly 2.56 | 21d 2.56 | monthly 5.31 | quarterly 6.31
+  The top three are a statistical tie (0.25 rank spread = noise). The tiebreak
+  is TRADING COST — weekly decays much faster as costs rise:
+      cost/side     0.11%   0.20%   0.35%   0.50%
+      weekly        0.98    0.84    0.62    0.39
+      15 days       1.13    1.04    0.90    0.75
+  At ~37,500 SEK per slot Saxo's real cost lands near 0.15-0.25%/side, squarely
+  where weekly starts bleeding. 14 (not 15) is used so rebalances land on the
+  same weekday each time instead of drifting through the week.
+  Monthly and slower ranked 5th-7th in EVERY test — do not go there.
 
 POSITION COUNT IS DYNAMIC — not fixed at 4:
   Strong bull market (many stocks qualify):   up to MOM_N_MAX + LOWVOL_N positions
@@ -13,7 +32,7 @@ POSITION COUNT IS DYNAMIC — not fixed at 4:
   Weak / narrow momentum:                     2–3 positions
   Risk-off (index below 200d SMA):            0 positions → full cash
 
-Selection from 61-stock universe each week:
+Selection from 61-stock universe each rebalance:
   Step 1 — filter: price > EMA200 AND 6-month return > MOM_THRESHOLD (5%)
   Step 2 — offense: all qualifying stocks ranked by (6m return / 60d vol),
             take top MOM_N_MAX (up to 6)
@@ -32,7 +51,7 @@ import atos.capital_config as CAP
 LOOKBACK       = 120    # ~6-month momentum signal window
 MOM_THRESHOLD  = 0.05   # minimum 6-month return to qualify for offense (5%)
 TARGET_VOL     = 0.15   # annualized vol target
-REBAL_DAYS     = 7      # calendar days between rebalances (weekly)
+REBAL_DAYS     = 14     # calendar days between rebalances (fortnightly — see note below)
 US_SLEEVE_SEK  = 1_095_000.0   # fallback fixed sleeve (overridden by dynamic cash %)
 
 # Position slots — loaded from config/capital.json

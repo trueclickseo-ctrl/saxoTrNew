@@ -52,7 +52,7 @@ All percentages live in `config/capital.json` — the **single source of truth**
 **File**: `atos/us_momentum.py`  
 **Type**: Cross-sectional momentum + low-volatility defensive blend  
 **Status**: LIVE — running since 2026-08-07  
-**Rebalance**: Every 7 calendar days (`REBAL_DAYS = 7`)  
+**Rebalance**: Every 14 calendar days (`REBAL_DAYS = 14`) — see [Rebalance Cadence](#rebalance-cadence-why-14-days) below  
 
 ### Concept
 Two uncorrelated factors are blended in one portfolio sleeve:
@@ -71,7 +71,7 @@ Factor correlation: ~0.44 — low enough that the blend outperforms either facto
 Daily check: if SPY/QQQ index closes below its 200-day SMA, all Blend positions are sold and cash is held. Re-enters when index recovers above the SMA.
 
 ### Exit
-Triggered by the weekly rebalance: if a stock is no longer in the top-6 momentum or top-2 defense selection, it is sold and replaced. No individual stop-loss — the rebalance is the exit mechanism.
+Triggered by the fortnightly rebalance: if a stock is no longer in the top-6 momentum or top-2 defense selection, it is sold and replaced. No individual stop-loss — the rebalance is the exit mechanism.
 
 ### Position Sizing
 Equal-weight within the sleeve. Budget = 50% of live SIM cash / 8 slots.
@@ -93,8 +93,56 @@ Equal-weight within the sleeve. Budget = 50% of live SIM cash / 8 slots.
 | Defense slots | 2 |
 | Min momentum return | 5% |
 | Trend filter | Price > EMA(200) |
-| Rebalance period | 7 calendar days |
+| Rebalance period | 14 calendar days |
 | Capital | 50% of live SIM cash |
+
+### Rebalance Cadence — why 14 days
+
+Changed from 7 → 14 on **2026-08-19**. Swept 4d / 7d / 10d / 15d / 21d / monthly /
+quarterly through the production engine (`backtest_us_momentum.py`) on the 10-year
+panel — 385 names, TOPN=8, daily regime overlay + vol targeting.
+
+**Full sample:**
+
+| Interval | CAGR | Sharpe | MaxDD |
+|----------|------|--------|-------|
+| 4 days | 15.6% | 0.75 | 37.7% |
+| 7 days (old) | 21.4% | 0.98 | 33.6% |
+| **15 days** | **25.9%** | **1.13** | **30.6%** |
+| 21 days | 20.5% | 0.94 | 37.1% |
+| monthly | 14.1% | 0.68 | 48.8% |
+| quarterly | 8.8% | 0.47 | 44.9% |
+
+A single-sample peak is usually curve-fit, so it was re-scored by **mean rank across
+8 independent tests** (3 sub-periods × 5 TOPN settings):
+
+| Interval | Mean rank | Worst rank | Verdict |
+|----------|-----------|------------|---------|
+| 15 days | 2.31 | 4 | robust |
+| 7 days | 2.56 | 6 | unstable |
+| 21 days | 2.56 | 4 | robust |
+| 10 days | 3.50 | 6 | unstable |
+| monthly | 5.31 | 7 | avoid |
+| quarterly | 6.31 | 7 | avoid |
+
+The top three are a **statistical tie** (0.25 rank spread = noise). The tiebreak is
+**trading cost** — weekly decays far faster as costs rise:
+
+| Interval | 0.11%/side | 0.20% | 0.35% | 0.50% |
+|----------|-----------|-------|-------|-------|
+| 7 days | 0.98 | 0.84 | 0.62 | 0.39 |
+| **15 days** | **1.13** | **1.04** | **0.90** | **0.75** |
+| 21 days | 0.94 | 0.88 | 0.78 | 0.67 |
+| monthly | 0.68 | 0.63 | 0.55 | 0.46 |
+
+At ~37,500 SEK per slot, Saxo's real all-in cost lands near 0.15–0.25%/side — squarely
+in the band where weekly starts bleeding and the fortnightly cadence does not. It also
+halves commission drag and portfolio churn.
+
+**14 rather than 15** so rebalances land on the same weekday each time instead of
+drifting through the week.
+
+> Monthly and slower ranked 5th–7th in **every** test. Do not extend past ~21 days.
 
 ---
 
@@ -184,7 +232,7 @@ All notifications go to `heyitskaxhif@gmail.com` automatically.
 
 | Event | Trigger |
 |-------|---------|
-| **Blend rebalance** | Weekly — targets list, offense/defense split, risk-off status |
+| **Blend rebalance** | Fortnightly — targets list, offense/defense split, risk-off status |
 | **Reversion entry signal** | Per scan — RSI, dip%, vol, BUY vs QUEUED per ticker |
 | **Reversion exit** | Per exit — P&L %, P&L SEK, hold days, exit reason |
 | **BUY executed** | Per order — strategy, shares, price, value SEK, account balance |
@@ -230,7 +278,7 @@ Data source: yfinance (free tier, ~75% accuracy on earnings dates).
 ### US Momentum Blend — LIVE
 ```
 Universe:  108 stocks (S&P 500 blue-chip, market cap >$30B, daily vol >$200M)
-Rebalance: Weekly (REBAL_DAYS=7)
+Rebalance: Fortnightly (REBAL_DAYS=14)
 Config:    Top-6 momentum + 2 low-vol, daily risk-off, vol-target 15%
 CAGR:      24.4% | Sharpe: 1.30 | MaxDD: 21.3%
 VERDICT:   LIVE

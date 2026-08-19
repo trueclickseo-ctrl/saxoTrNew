@@ -352,7 +352,7 @@ def _next_rebalance() -> str:
             try:
                 from atos.us_momentum import REBAL_DAYS
             except Exception:
-                REBAL_DAYS = 7
+                REBAL_DAYS = 14
             nxt       = last_dt + timedelta(days=REBAL_DAYS)
             days_left = (nxt - date.today()).days
             label     = nxt.strftime("%b %d").lstrip("0")

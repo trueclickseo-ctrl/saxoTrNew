@@ -1569,7 +1569,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     from atos import us_momentum as _USM
                     rebal_days = _USM.REBAL_DAYS
                 except Exception:
-                    rebal_days = 7
+                    rebal_days = 14
                 if last:
                     from datetime import timedelta as _td
                     next_rebal = (_date.fromisoformat(last) + _td(days=rebal_days)).isoformat()

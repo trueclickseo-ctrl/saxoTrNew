@@ -18,8 +18,8 @@ repeat work. Update this every time a strategy or its parameters change.
 | Low-volatility | 0.80–1.05 | ~14–17% | defense |
 | Short-term reversal (10d) | 1.00 | 22.5% | optional 3rd |
 
-**LIVE STRATEGY: US Momentum+Low-Vol Blend** — 61-stock universe, weekly rebalance
-(REBAL_DAYS=7), dynamic 2–8 positions (up to 6 offense + 2 defense), 1,095,000 SEK
+**LIVE STRATEGY: US Momentum+Low-Vol Blend** — 61-stock universe, fortnightly rebalance
+(REBAL_DAYS=14), dynamic 2–8 positions (up to 6 offense + 2 defense), 1,095,000 SEK
 compounding sleeve. Beats every single strategy on risk-adjusted return because
 momentum & low-vol only correlate 0.44. Running since 2026-08-07.
 
@@ -269,7 +269,7 @@ less drawdown — the real value of the strategy is DD reduction, not beating B&
 | Parameter | Value | Config source |
 |---|---|---|
 | Universe (scan) | 61 stocks | `atos/universe.py` |
-| Rebalance | Every 7 calendar days | `us_momentum.py` REBAL_DAYS |
+| Rebalance | Every 14 calendar days | `us_momentum.py` REBAL_DAYS (swept 2026-08-19) |
 | Offense slots | Up to 6 stocks | `config/capital.json` offense_slots |
 | Defense slots | Always 2 stocks | `config/capital.json` defense_slots |
 | Total positions held | 2–8 (dynamic) | Deduped offense + defense |
@@ -277,11 +277,40 @@ less drawdown — the real value of the strategy is DD reduction, not beating B&
 | Capital allocation | **50% of live SIM cash** | `config/capital.json` allocation_pct |
 | Risk-off | Daily | Equal-weight index < 200d SMA -> full cash |
 | Corporate events | Every cycle | Auto-exit 3d before ex-div; skip 2d before earnings |
-| Last rebalance | 2026-08-07 | AMD, UNH, BAC, V (4 open positions) |
-| Next rebalance | ~2026-08-14 | — |
+| Last rebalance | 2026-08-14 | PANW, DELL, FTNT, HUM, CRWD, U, AES (7 open positions) |
+| Next rebalance | ~2026-08-28 | first run on the new 14-day cadence |
 
 **Example position size** (if SIM account = 10M SEK):
 50% x 10M = 5M SEK / 8 slots = **625K SEK per stock**
+
+### Rebalance cadence study — 2026-08-19 (REBAL_DAYS 7 -> 14)
+
+Swept 4d / 7d / 10d / 15d / 21d / monthly / quarterly through `backtest_us_momentum.py`
+on the 10y panel (385 names, TOPN=8, daily regime + vol target).
+
+| Interval | CAGR | Sharpe | MaxDD |
+|---|---|---|---|
+| 4 days | 15.6% | 0.75 | 37.7% |
+| 7 days (old) | 21.4% | 0.98 | 33.6% |
+| **15 days** | **25.9%** | **1.13** | **30.6%** |
+| 21 days | 20.5% | 0.94 | 37.1% |
+| monthly | 14.1% | 0.68 | 48.8% |
+| quarterly | 8.8% | 0.47 | 44.9% |
+
+Full-sample winners are usually curve-fit, so it was re-scored by mean rank over 8
+independent tests (3 sub-periods x 5 TOPN settings): **15d 2.31 | 7d 2.56 | 21d 2.56 |
+10d 3.50 | monthly 5.31 | quarterly 6.31**. Top three are a statistical tie (0.25 rank
+spread). Tiebreak was trading cost — Sharpe as cost/side rises:
+
+| Interval | 0.11% | 0.20% | 0.35% | 0.50% |
+|---|---|---|---|---|
+| 7 days | 0.98 | 0.84 | 0.62 | 0.39 |
+| **15 days** | **1.13** | **1.04** | **0.90** | **0.75** |
+| monthly | 0.68 | 0.63 | 0.55 | 0.46 |
+
+Weekly collapses under realistic cost; fortnightly does not. At ~37,500 SEK/slot Saxo's
+all-in cost is ~0.15-0.25%/side. **14 not 15** so rebalances stay on a fixed weekday.
+Monthly and slower ranked 5th-7th in every test — do not extend past ~21 days.
 
 OMX/CPH per-instrument strategies PAUSED — backtesting showed no reliable edge over 10y.
 

@@ -169,7 +169,7 @@ Daily cycle (atos_runner.py) — Task Scheduler 06:00 PKT
 3. Corporate events — exit 3d before ex-div, skip 2d before earnings
 4. US Momentum Blend:
      - Risk-off check: index vs 200d SMA -> cash if bearish
-     - If REBAL_DAYS (7) elapsed: sell all -> rebuy top 6 momentum + 2 low-vol
+     - If REBAL_DAYS (14) elapsed: sell all -> rebuy top 6 momentum + 2 low-vol
      - Budget: BLEND_CASH_PCT (50%) of live SIM cash
 5. US Mean Reversion:
      - Exit checks: RSI>60 / SMA20 hit / -4% stop / 10-day time-stop
@@ -250,7 +250,7 @@ Loaded via `atos/capital_config.py`. Printed at startup of every run.
 | Defense | Always 2 stocks: lowest 60d vol above EMA200 |
 | Positions | 2-8 dynamic (deduped) |
 | Weight | Equal-weight within budget |
-| Rebalance | Every 7 calendar days |
+| Rebalance | Every 14 calendar days (swept 2026-08-19; see `docs/stocks_strategies.md`) |
 | Risk-off | Daily: index < 200d SMA -> full cash |
 | Capital | 50% of live SIM cash (from capital.json) |
 
@@ -494,7 +494,7 @@ whenever the relevant event occurs.
 
 | Trigger | Subject example | Contents |
 |---|---|---|
-| **Blend rebalance** (weekly) | `ATOS Blend — Targets: AAPL, MSFT... [date]` | Full target list, offense/defense split, risk-off flag, sleeve value |
+| **Blend rebalance** (fortnightly) | `ATOS Blend — Targets: AAPL, MSFT... [date]` | Full target list, offense/defense split, risk-off flag, sleeve value |
 | **Reversion entry signal** | `ATOS Reversion Signal — 3 Candidates [date]` | Table of RSI / Dip% / Vol / Price per ticker, BUY vs QUEUED |
 | **Reversion exit** | `ATOS Reversion Exit — NVDA +2.3% [date]` | Ticker, P&L %, P&L SEK, hold days, exit reason, account balance |
 | **Any BUY executed** | `ATOS BUY — AAPL 18 shares [date]` | Strategy, shares, price USD, value SEK, account balance |
@@ -570,7 +570,7 @@ Tasks 3-7 — Intraday reversion scans
 ### US Momentum Blend — LIVE
 ```
 Universe:  108 stocks (S&P 500 blue-chip, market cap >$30B, daily vol >$200M)
-Rebalance: Weekly (REBAL_DAYS=7)
+Rebalance: Fortnightly (REBAL_DAYS=14)
 Config:    Top-6 momentum + 2 low-vol, daily risk-off, vol-target 15%
 CAGR:      24.4% | Sharpe: 1.30 | MaxDD: 21.3%
 VERDICT:   LIVE

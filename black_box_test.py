@@ -475,8 +475,8 @@ _run("compute_targets({}, []) returns dict without crash", t_momentum_compute_ta
 
 def t_momentum_rebal_days_positive():
     assert USM.REBAL_DAYS > 0
-    assert USM.REBAL_DAYS == 7, f"expected weekly (7), got {USM.REBAL_DAYS}"
-_run("REBAL_DAYS = 7 (weekly rebalance)", t_momentum_rebal_days_positive)
+    assert USM.REBAL_DAYS == 14, f"expected fortnightly (14), got {USM.REBAL_DAYS}"
+_run("REBAL_DAYS = 14 (fortnightly rebalance)", t_momentum_rebal_days_positive)
 
 
 # ══════════════════════════════════════════════════════════════════
