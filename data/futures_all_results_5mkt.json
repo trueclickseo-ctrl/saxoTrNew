@@ -1,0 +1,90 @@
+{
+  "generated": "2026-08-20",
+  "years": 5,
+  "markets": [
+    "CL",
+    "ES",
+    "GC",
+    "NQ",
+    "ZB"
+  ],
+  "results": {
+    "donchian": {
+      "n_trades": 183,
+      "sharpe": 0.397,
+      "win_rate": 43.2,
+      "max_dd": 12.2,
+      "cagr": 3.8,
+      "final": 120785,
+      "avg_hold": 12.4,
+      "insufficient": false,
+      "verdict": "FAIL"
+    },
+    "rsi": {
+      "n_trades": 110,
+      "sharpe": 0.477,
+      "win_rate": 60.9,
+      "max_dd": 6.1,
+      "cagr": 2.6,
+      "final": 113794,
+      "avg_hold": 3.9,
+      "insufficient": false,
+      "verdict": "FAIL"
+    },
+    "ema": {
+      "n_trades": 47,
+      "sharpe": 0.22,
+      "win_rate": 38.3,
+      "max_dd": 6.3,
+      "cagr": 0.8,
+      "final": 104114,
+      "avg_hold": 17.3,
+      "insufficient": false,
+      "verdict": "FAIL"
+    },
+    "macd": {
+      "n_trades": 72,
+      "sharpe": 0.275,
+      "win_rate": 48.6,
+      "max_dd": 5.1,
+      "cagr": 1.2,
+      "final": 106312,
+      "avg_hold": 11.2,
+      "insufficient": false,
+      "verdict": "FAIL"
+    },
+    "squeeze": {
+      "n_trades": 22,
+      "sharpe": -0.947,
+      "win_rate": 13.6,
+      "max_dd": 10.7,
+      "cagr": -2.0,
+      "final": 90465,
+      "avg_hold": 8.4,
+      "insufficient": false,
+      "verdict": "INSUFFICIENT"
+    },
+    "ma_cross": {
+      "n_trades": 10,
+      "sharpe": -0.102,
+      "win_rate": 30.0,
+      "max_dd": 4.4,
+      "cagr": -0.2,
+      "final": 98764,
+      "avg_hold": 38.5,
+      "insufficient": false,
+      "verdict": "INSUFFICIENT"
+    },
+    "trend_ma": {
+      "n_trades": 323,
+      "sharpe": 0.935,
+      "win_rate": 40.9,
+      "max_dd": 13.3,
+      "cagr": 10.4,
+      "final": 164313,
+      "avg_hold": 12.2,
+      "insufficient": false,
+      "verdict": "PASS"
+    }
+  }
+}

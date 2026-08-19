@@ -1,0 +1,98 @@
+{
+  "generated": "2026-08-20",
+  "years": 5,
+  "markets": [
+    "CL",
+    "DAX",
+    "ES",
+    "GC",
+    "HK50",
+    "NG",
+    "NQ",
+    "SI",
+    "YM",
+    "ZB",
+    "ZC",
+    "ZS",
+    "ZW"
+  ],
+  "results": {
+    "donchian": {
+      "n_trades": 496,
+      "sharpe": -0.021,
+      "win_rate": 37.9,
+      "max_dd": 36.6,
+      "cagr": -2.4,
+      "final": 88429,
+      "avg_hold": 11.1,
+      "insufficient": false,
+      "verdict": "FAIL"
+    },
+    "rsi": {
+      "n_trades": 343,
+      "sharpe": 0.291,
+      "win_rate": 59.8,
+      "max_dd": 15.4,
+      "cagr": 2.5,
+      "final": 112707,
+      "avg_hold": 3.7,
+      "insufficient": false,
+      "verdict": "FAIL"
+    },
+    "ema": {
+      "n_trades": 129,
+      "sharpe": 0.218,
+      "win_rate": 41.1,
+      "max_dd": 14.3,
+      "cagr": 1.4,
+      "final": 107146,
+      "avg_hold": 17.5,
+      "insufficient": false,
+      "verdict": "FAIL"
+    },
+    "macd": {
+      "n_trades": 184,
+      "sharpe": -0.16,
+      "win_rate": 37.0,
+      "max_dd": 13.6,
+      "cagr": -1.5,
+      "final": 92640,
+      "avg_hold": 10.3,
+      "insufficient": false,
+      "verdict": "FAIL"
+    },
+    "squeeze": {
+      "n_trades": 98,
+      "sharpe": -0.875,
+      "win_rate": 30.6,
+      "max_dd": 20.4,
+      "cagr": -4.2,
+      "final": 80412,
+      "avg_hold": 10.1,
+      "insufficient": false,
+      "verdict": "FAIL"
+    },
+    "ma_cross": {
+      "n_trades": 41,
+      "sharpe": -0.359,
+      "win_rate": 26.8,
+      "max_dd": 11.4,
+      "cagr": -1.9,
+      "final": 90781,
+      "avg_hold": 35.7,
+      "insufficient": false,
+      "verdict": "FAIL"
+    },
+    "trend_ma": {
+      "n_trades": 563,
+      "sharpe": -0.096,
+      "win_rate": 38.5,
+      "max_dd": 42.1,
+      "cagr": -3.4,
+      "final": 83826,
+      "avg_hold": 12.7,
+      "insufficient": false,
+      "verdict": "FAIL"
+    }
+  }
+}

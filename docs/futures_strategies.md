@@ -18,12 +18,17 @@
 | 3 | `max(1, …)` contract floor silently over-risked small accounts | **High** | Fixed `a34ffd0` |
 | 4 | **6 of 7 strategies have no backtest at all** | **High** | Open |
 | 5 | Backtest uses ETF proxies, not the live instruments; ZB proxied by TLT | Medium | Open |
-| 6 | No reconciliation between local state and actual broker positions | Medium | Open |
+| 6 | No reconciliation between local state and actual broker positions | Medium | Fixed `852eac2` |
 | 7 | Documented parameters did not match code (`ATR_STOP_MULT` 5.0 vs 1.5) | Medium | Fixed here |
 | 8 | Sharpe documented as 1.62; measured 0.750 | Medium | Fixed here |
-| 9 | Universe grew 5 → 13 markets; 8 of them never backtested, 3 currencies | **High** | Open |
+| 9 | Universe grew 5 → 13 markets; 8 of them never backtested, 3 currencies | **High** | Measured — see 12 |
 | 10 | Equity in EUR, ATR/`contract_size` in instrument currency, no FX conversion | Medium | Open |
 | 11 | Source files contain mojibake (`â€"`) in comments/docstrings | Low | Open |
+| 12 | **Expanding 5 → 13 markets turns every strategy negative** | **Critical** | Open — needs your call |
+
+> **Findings 4 and 6 are now closed.** All 7 strategies are backtested
+> (`backtest_futures_all.py`) and state reconciles against the broker
+> (`--reconcile`). Finding 12 is what those two pieces of work uncovered.
 
 ### Finding 1 — dry runs destroyed state (critical)
 
@@ -68,12 +73,126 @@ not 1%. `MAX_RISK_OVERSHOOT` (1.5×) now skips such signals with an explicit
 reason. Several instruments (ZC, DAX, NQ) are simply too large at this equity —
 now visible in the log rather than silently over-risked.
 
-### Finding 4 — six strategies are unvalidated (open)
+### Finding 4 — six strategies were unvalidated (CLOSED 2026-08-20)
 
-`backtest_futures.py` imports only `futures.strategy` (Donchian). **RSI, EMA,
-MACD, Squeeze, MA Cross and Trend MA have no backtest anywhere in the repo.** The
-"Expected results" figures quoted in their sections below are assertions, not
-measurements — treat them as hypotheses.
+`backtest_futures.py` imported only `futures.strategy` (Donchian), so RSI, EMA,
+MACD, Squeeze, MA Cross and Trend MA had no backtest anywhere in the repo.
+
+**Now measured** — see [Backtest Results](#backtest-results--all-7-strategies-2026-08-20).
+`backtest_futures_all.py` drives the **real strategy modules** (their own
+`generate_signals` / `should_exit` / `size_position`) rather than reimplementing
+the rules, so what it measures is what `runner.py` executes.
+
+The results overturned the previous assumptions. Donchian — the only strategy
+that had ever been "validated" — **fails**, while Trend MA, which had never been
+tested, is the only one that passes.
+
+### Finding 6 — broker/state reconciliation (CLOSED 2026-08-20)
+
+Nothing compared local state to the broker, so any state loss left positions open
+with no stop management and no record. `reconcile_positions()` now surfaces both
+directions:
+
+- **ORPHAN** — open at the broker, absent from state: unmanaged risk
+- **STALE** — in state, gone at the broker: phantom position holding a slot
+
+Two details decide whether it works:
+
+1. **Rolled contracts.** CL/ZB/NG/ZC/ZW/ZS roll monthly, so the UIC traded last
+   month is not the UIC in today's universe. Matching only current UICs missed
+   exactly the position most likely to be orphaned — the first version reported a
+   clean "OK" while a real orphan sat on a rolled-out contract. The UIC set is now
+   the current universe **∪ every UIC ever ordered**.
+2. **Attribution.** `futures_orders.json` records strategy, entry and stop per
+   order, so an orphan is re-attributed from its order-log entry and `--adopt`
+   restores the *original* entry and stop rather than assuming current price.
+
+```bash
+python futures/runner.py --reconcile           # report only
+python futures/runner.py --reconcile --adopt   # import orphans, drop stale
+```
+
+Also runs report-only inside `run_daily()` before trading.
+
+**Applied to the live account:** found `macd:CL` (uic 55278986, 1 contract) open
+and untracked since 2026-08-18, attributed it to `[macd]`, adopted it with its
+original entry 84.86 / stop 77.33. It previously had no stop of any kind. The
+7,972-contract ZB short from that same session was confirmed **not** open.
+
+### Backtest Results — all 7 strategies (2026-08-20)
+
+`python backtest_futures_all.py` — 5 years, ETF proxies, next-open fills, 0.05%
+commission per side, 5 slots per strategy, `MAX_RISK_OVERSHOOT` guard applied.
+Thresholds: Sharpe ≥ 0.70, WR ≥ 35%, MaxDD < 30%, N ≥ 30.
+
+#### Core 5 markets (ES, NQ, GC, CL, ZB)
+
+| Strategy | Trades | Sharpe | WR | MaxDD | CAGR | Hold | Verdict |
+|----------|-------:|-------:|---:|------:|-----:|-----:|---------|
+| **trend_ma** | 323 | **0.935** | 40.9% | 13.3% | **10.4%** | 12.2d | ✅ **PASS** |
+| rsi | 110 | 0.477 | 60.9% | 6.1% | 2.6% | 3.9d | ❌ FAIL |
+| donchian | 183 | 0.397 | 43.2% | 12.2% | 3.8% | 12.4d | ❌ FAIL |
+| macd | 72 | 0.275 | 48.6% | 5.1% | 1.2% | 11.2d | ❌ FAIL |
+| ema | 47 | 0.220 | 38.3% | 6.3% | 0.8% | 17.3d | ❌ FAIL |
+| ma_cross | 10 | −0.102 | 30.0% | 4.4% | −0.2% | 38.5d | ⚠️ too few trades |
+| squeeze | 22 | −0.947 | 13.6% | 10.7% | −2.0% | 8.4d | ⚠️ too few trades |
+
+#### All 13 markets — every strategy fails
+
+| Strategy | Trades | Sharpe | WR | MaxDD | CAGR | Verdict |
+|----------|-------:|-------:|---:|------:|-----:|---------|
+| rsi | 343 | 0.291 | 59.8% | 15.4% | 2.5% | ❌ FAIL |
+| ema | 129 | 0.218 | 41.1% | 14.3% | 1.4% | ❌ FAIL |
+| donchian | 496 | −0.021 | 37.9% | 36.6% | −2.4% | ❌ FAIL |
+| trend_ma | 563 | −0.096 | 38.5% | **42.1%** | −3.4% | ❌ FAIL |
+| macd | 184 | −0.160 | 37.0% | 13.6% | −1.5% | ❌ FAIL |
+| ma_cross | 41 | −0.359 | 26.8% | 11.4% | −1.9% | ❌ FAIL |
+| squeeze | 98 | −0.875 | 30.6% | 20.4% | −4.2% | ❌ FAIL |
+
+#### Harness validation
+
+The new harness reproduces the original `backtest_futures.py` trade generation
+under matched assumptions — **249 trades vs its 248** — which is what confirms the
+strategy modules are being driven correctly. Isolating each change to Donchian:
+
+| Configuration | Sharpe | MaxDD | N |
+|---------------|-------:|------:|--:|
+| 5 mkts, close fill, no risk guard (≈ original) | 0.528 | 25.8% | 249 |
+| + `MAX_RISK_OVERSHOOT` guard | 0.452 | 11.7% | 184 |
+| + realistic next-open fills | 0.397 | 12.2% | 183 |
+| **+ expand to 13 markets** | **−0.021** | **36.6%** | 496 |
+
+The residual gap to the originally-reported 0.750 is the date window (this harness
+includes ~10 extra months) and equity-curve construction; the matching trade count
+is the meaningful check.
+
+### 🔴 Finding 12 — the universe expansion destroyed the edge (2026-08-20)
+
+The single most damaging line above: **going from 5 to 13 markets takes Donchian
+from Sharpe 0.397 to −0.021 and triples drawdown 12.2% → 36.6%.** Trend MA falls
+even harder, 0.935 → −0.096 with a 42.1% drawdown.
+
+This is not dilution by a couple of weak markets — it is every strategy turning
+negative at once. The 8 added markets (YM, DAX, HK50, SI, NG, ZC, ZW, ZS) are
+lower-quality trend vehicles, and adding them multiplied correlated equity-index
+exposure (ES/NQ/YM/DAX/HK50 are five expressions of one trade) while the grain
+complex added noise.
+
+**Recommendation, in priority order:**
+
+1. **Restrict `load_universe()` to ES, NQ, GC, CL, ZB.** This is the highest-value
+   single change in the module — it is the difference between a losing system and
+   a marginal-to-good one.
+2. **Keep `trend_ma`** — the only strategy passing thresholds (Sharpe 0.935).
+3. **Retire `squeeze` and `ma_cross`** — negative Sharpe, and only 22 and 10 trades
+   in 5 years. They cannot be evaluated and are not earning their slot.
+4. **Demote `donchian` from primary.** It fails at 0.397 and is the strategy the
+   module was built around. Its documented 1.62 Sharpe never existed.
+5. `rsi`, `macd`, `ema` are mildly positive but below threshold — keep only if you
+   want breadth; none is carrying the portfolio.
+
+> These results are on ETF proxies, not live instruments (Finding 5), so treat the
+> *ranking* as more reliable than the absolute numbers.
 
 ### Finding 9 — universe grew 5 → 13 markets (open)
 
@@ -495,35 +614,45 @@ Fills the gap between EMA(5/20) [too fast, 9d avg] and SMA(50/200) [too slow, 25
 ◆ Trend MA = fills medium-term gap between EMA(5/20) and SMA(50/200)
 
 > **Every figure in this table except Donchian's is an estimate, not a
-> measurement** — see [Finding 4](#finding-4--six-strategies-are-unvalidated-open).
+> measurement** — all seven are now measured; see
+> [Backtest Results](#backtest-results--all-7-strategies-2026-08-20).
 > Only Donchian has a backtest, and it measured Sharpe 0.750, not the 1.62
 > previously documented.
 
 ---
 
-## Adding More Strategies — not yet (2026-08-19)
+## Adding More Strategies — no; subtract instead (updated 2026-08-20)
 
-The module already runs **7 strategies of which 6 have never been backtested**.
-Adding an 8th would widen an unmeasured surface, not diversify a measured one.
+All seven are now measured, and the results say the module needs **subtraction,
+not addition**.
 
-The correct next step is to **backtest the six existing strategies** — the harness
-already exists (`backtest_futures.py`); it needs a signal/exit adapter per module
-rather than new code from scratch. Expect some of the six to fail their thresholds;
-that is the point. A strategy that fails is worth more removed than left running.
+On the full 13-market universe every strategy is negative. On the core 5, exactly
+one clears the thresholds. Adding an 8th to a system where six of seven fail would
+add noise to a portfolio already losing to breadth.
 
 **Order of work:**
 
-1. Fix the audit's open findings (4, 5, 6) — especially broker/state reconciliation
-2. Backtest all six unvalidated strategies on the same footing as Donchian
-3. Retire whichever fail Sharpe ≥ 0.70 / WR ≥ 35% / MaxDD < 30% / N ≥ 30
-4. Re-measure the survivors *together* — 7 strategies on 13 markets overlap heavily,
-   and portfolio Sharpe is not the average of individual Sharpes
-5. Only then consider an 8th
+1. **Restrict the universe to ES, NQ, GC, CL, ZB** (Finding 12). Highest-value
+   single change — it decides whether anything works at all.
+2. **Retire `squeeze` and `ma_cross`** — negative Sharpe on 22 and 10 trades in
+   5 years. Not evaluable, not earning their slots.
+3. **Re-measure the survivors *together*.** Every table here treats each strategy
+   in isolation with its own 5 slots. Run concurrently they compete for capital and
+   take correlated positions in the same 5 markets, so portfolio Sharpe is *not*
+   the average of the individual Sharpes. This is the biggest remaining unknown and
+   no number in this document answers it.
+4. Validate on the **live instruments** rather than ETF proxies (Finding 5).
+5. Only then consider an 8th strategy.
 
-**On profitability:** Donchian is the only one that can currently be called
-profitable, at Sharpe 0.750 / CAGR 8.7% on ETF proxies. That is a genuine but
-modest edge, and it has not yet been demonstrated on the live instruments.
-Nothing in the module currently justifies expanding it.
+**On profitability:** on the core 5 markets `trend_ma` is genuinely good — Sharpe
+0.935, CAGR 10.4%, MaxDD 13.3% over 323 trades. `rsi` is interesting for a
+different reason: a 60.9% win rate at a 3.9-day hold, the only mean-reversion
+profile in the set, so it may diversify the trend strategies even while below
+threshold.
+
+Everything else is at or below noise. Donchian — the strategy this module was built
+around, and the only one previously believed validated — measures **0.397**. Its
+documented 1.62 Sharpe never existed.
 
 ---
 
