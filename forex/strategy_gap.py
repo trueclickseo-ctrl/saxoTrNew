@@ -98,12 +98,14 @@ SESSION_GAPS = {
 # ── Weekly gap — signal generation ────────────────────────────────────────────
 
 def generate_signals(market_data: dict, open_symbols: set = None,
-                     live_prices: dict = None) -> list:
+                     live_prices: dict = None,
+                     exhausted_symbols: set = None) -> list:
     """Detect weekend gaps and return fade signals.
 
-    market_data   : {symbol: pd.DataFrame} — daily bars, most recent = Friday close
-    open_symbols  : symbols already held by this strategy (skip them)
-    live_prices   : {symbol: float} — Sunday open mid prices from Saxo infoprices
+    market_data       : {symbol: pd.DataFrame} — daily bars, most recent = Friday close
+    open_symbols      : symbols already held by this strategy (skip them)
+    live_prices       : {symbol: float} — Sunday open mid prices from Saxo infoprices
+    exhausted_symbols : symbols that already traded a gap this week (skip them)
 
     Returns list of signal dicts sorted by gap_pct descending.
     """
@@ -111,11 +113,13 @@ def generate_signals(market_data: dict, open_symbols: set = None,
         open_symbols = set()
     if live_prices is None:
         live_prices = {}
+    if exhausted_symbols is None:
+        exhausted_symbols = set()
 
     signals = []
 
     for sym, df in market_data.items():
-        if sym in open_symbols:
+        if sym in open_symbols or sym in exhausted_symbols:
             continue
         if df is None or len(df) < MIN_BARS:
             continue
@@ -168,13 +172,15 @@ def generate_signals(market_data: dict, open_symbols: set = None,
 def generate_session_signals(session: str,
                               market_data_h1: dict,
                               open_symbols: set = None,
-                              live_prices: dict = None) -> list:
+                              live_prices: dict = None,
+                              exhausted_symbols: set = None) -> list:
     """Detect London / NY / Tokyo session-open gaps using H1 bars.
 
-    session        : "london", "newyork", or "tokyo"
-    market_data_h1 : {symbol: pd.DataFrame} — H1 bars with a 'Time' column (UTC hour int)
-    open_symbols   : symbols already held by this strategy (skip them)
-    live_prices    : {symbol: float} — current session-open mid price
+    session           : "london", "newyork", or "tokyo"
+    market_data_h1    : {symbol: pd.DataFrame} — H1 bars with a 'Time' column (UTC hour int)
+    open_symbols      : symbols already held by this strategy (skip them)
+    live_prices       : {symbol: float} — current session-open mid price
+    exhausted_symbols : symbols that already traded a gap this week (skip them)
 
     Returns list of signal dicts (same shape as generate_signals).
     """
@@ -186,11 +192,13 @@ def generate_session_signals(session: str,
         open_symbols = set()
     if live_prices is None:
         live_prices = {}
+    if exhausted_symbols is None:
+        exhausted_symbols = set()
 
     signals = []
 
     for sym, df in market_data_h1.items():
-        if sym in open_symbols:
+        if sym in open_symbols or sym in exhausted_symbols:
             continue
         if df is None or len(df) < 4:
             continue

@@ -463,6 +463,42 @@ def _save_state(state: dict) -> None:
                 os.remove(tmp)
 
 
+GAP_COOLDOWN_FILE = os.path.join(DATA_DIR, "gap_cooldown.json")
+
+
+def _gap_week_key() -> str:
+    """ISO week key for the current week, e.g. '2026-W34'."""
+    today = datetime.now(timezone.utc)
+    return f"{today.isocalendar()[0]}-W{today.isocalendar()[1]:02d}"
+
+
+def _load_gap_cooldown() -> set:
+    """Return the set of symbols exhausted for this week's gap event."""
+    week = _gap_week_key()
+    if os.path.exists(GAP_COOLDOWN_FILE):
+        try:
+            with open(GAP_COOLDOWN_FILE) as f:
+                data = json.load(f)
+            if data.get("week_key") == week:
+                return set(data.get("exhausted", []))
+        except Exception:
+            pass
+    return set()
+
+
+def _mark_gap_exhausted(sym: str) -> None:
+    """Add sym to this week's gap cooldown so it cannot re-enter."""
+    week = _gap_week_key()
+    exhausted = _load_gap_cooldown()
+    exhausted.add(sym)
+    os.makedirs(DATA_DIR, exist_ok=True)
+    try:
+        with open(GAP_COOLDOWN_FILE, "w") as f:
+            json.dump({"week_key": week, "exhausted": sorted(exhausted)}, f, indent=2)
+    except Exception as e:
+        logger.warning(f"gap_cooldown: could not write {GAP_COOLDOWN_FILE}: {e}")
+
+
 def _log_order(entry: dict) -> None:
     os.makedirs(DATA_DIR, exist_ok=True)
     orders = []
@@ -749,6 +785,8 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
                     "reason": reason, "pnl_pct": round(pnl_pct, 3), "dry_run": dry_run})
         if not dry_run:
             pnl_tracker.log_close("forex", sym, live_px, reason, strategy=strat_name)
+            if strat_name == "gap":
+                _mark_gap_exhausted(sym)
             # Label the signal-log outcome for ML training data
             raw_pnl = ((live_px - pos["entry_price"]) * qty if is_long
                        else (pos["entry_price"] - live_px) * qty)
@@ -810,16 +848,25 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         # Session gap (London / NY / Tokyo): fetch H1 bars for ALL 34 pairs.
         # No pair-list restriction — gap_pct filter selects only pairs that actually
         # gapped (EURNOK, USDSEK, NZDJPY, AUDCHF etc. all get a fair look).
+        gap_exhausted = _load_gap_cooldown()
+        if gap_exhausted:
+            logger.info(f"  [gap:{gap_session}] cooldown: skipping {sorted(gap_exhausted)}")
         h1_data: dict = {}
         for pi in PAIRS:
             h1_data[pi["symbol"]] = _fetch_history_h1(pi["uic"])
         signals = strat_mod.generate_session_signals(
-            gap_session, h1_data, open_symbols=open_syms, live_prices=live_prices or {}
+            gap_session, h1_data, open_symbols=open_syms, live_prices=live_prices or {},
+            exhausted_symbols=gap_exhausted,
         )
         logger.info(f"  [gap:{gap_session}] {len(h1_data)} pairs scanned → {len(signals)} signal(s)")
     elif getattr(strat_mod, "NEEDS_LIVE_PRICES", False):
-        signals = strat_mod.generate_signals(market_data, open_symbols=open_syms,
-                                             live_prices=live_prices or {})
+        kw: dict = {"open_symbols": open_syms, "live_prices": live_prices or {}}
+        if strat_name == "gap":
+            gap_exhausted = _load_gap_cooldown()
+            if gap_exhausted:
+                logger.info(f"  [gap:weekly] cooldown: skipping {sorted(gap_exhausted)}")
+            kw["exhausted_symbols"] = gap_exhausted
+        signals = strat_mod.generate_signals(market_data, **kw)
     else:
         signals = strat_mod.generate_signals(market_data, open_symbols=open_syms)
 

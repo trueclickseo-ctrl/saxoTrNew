@@ -33,6 +33,8 @@ data/atos_scan_state.json
 data/binance_equity_state.json
 # strategy monitor state
 data/strategy_monitor.json
+# gap strategy cooldown — per-week, per-pair re-entry block (runtime state, machine-local)
+data/gap_cooldown.json
 # generated HTML dashboard (was uploaded to namazic.com)
 dashboard/
 
