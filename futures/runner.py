@@ -195,6 +195,143 @@ def _post(path: str, body: dict) -> dict:
 
 # ── Account ────────────────────────────────────────────────────────────────
 
+def _broker_positions() -> dict[int, dict]:
+    """Open positions at the broker, aggregated by UIC.
+
+    Returns {uic: {"amount": net_float, "open_price": float, "asset_type": str}}.
+    Amounts for the same UIC are summed so partial fills collapse into one row.
+    """
+    out: dict[int, dict] = {}
+    try:
+        data = _get("/port/v1/positions/me").get("Data", [])
+    except Exception as exc:
+        logger.warning(f"Could not read broker positions: {exc}")
+        return out
+    for p in data:
+        base = p.get("PositionBase", {}) or {}
+        uic  = base.get("Uic")
+        amt  = base.get("Amount")
+        if uic is None or amt is None:
+            continue
+        uic = int(uic)
+        row = out.setdefault(uic, {"amount": 0.0, "open_price": base.get("OpenPrice"),
+                                   "asset_type": base.get("AssetType")})
+        row["amount"] += float(amt)
+    return {u: r for u, r in out.items() if abs(r["amount"]) > 1e-9}
+
+
+def _attribute_orphan(uic: int) -> dict | None:
+    """Recover which strategy opened a UIC, from the order log.
+
+    futures_orders.json records strategy/entry/stop per placed order, so an
+    orphaned broker position can usually be re-attributed rather than guessed.
+    Returns the most recent non-dry order for that UIC, or None.
+    """
+    try:
+        with open(ORDERS_FILE) as f:
+            orders = json.load(f)
+    except Exception:
+        return None
+    hits = [o for o in orders
+            if o.get("uic") == uic and not o.get("dry_run", False)]
+    return hits[-1] if hits else None
+
+
+def reconcile_positions(positions: dict, universe: dict,
+                        adopt: bool = False) -> dict:
+    """Compare tracked state against actual broker positions.
+
+    Nothing reconciled state against the broker, so any state loss (see the
+    dry-run bug) left positions open with no stop management and no record.
+    This surfaces the two failure directions:
+
+      ORPHAN — open at the broker, absent from state: unmanaged risk.
+      STALE  — in state, gone at the broker: phantom position, blocks a slot.
+
+    Only UICs belonging to the futures universe are considered; forex, equity
+    and ETF positions from the other modules are ignored.
+    Returns {"orphans": [...], "stale": [...], "matched": [...]}.
+    """
+    broker  = _broker_positions()
+    uic_map = {int(info["uic"]): sym for sym, info in universe.items()
+               if info.get("uic")}
+
+    # CL/ZB/ZC/ZW/ZS/NG roll monthly, so the UIC this module traded last month is
+    # NOT the UIC in today's universe. An orphan sitting on a rolled-out contract
+    # would be invisible if we only checked current UICs — which is precisely the
+    # position most likely to be orphaned. Add every UIC we have ever ordered.
+    try:
+        with open(ORDERS_FILE) as f:
+            for o in json.load(f):
+                if o.get("dry_run", False):
+                    continue
+                u, s = o.get("uic"), o.get("symbol")
+                if u and s:
+                    uic_map.setdefault(int(u), s)
+    except Exception:
+        pass
+
+    tracked = {int(p["uic"]): key for key, p in positions.items() if p.get("uic")}
+
+    orphans, stale, matched = [], [], []
+
+    for uic, sym in uic_map.items():
+        at_broker = uic in broker
+        in_state  = uic in tracked
+        if at_broker and in_state:
+            matched.append((tracked[uic], sym, broker[uic]["amount"]))
+        elif at_broker and not in_state:
+            orphans.append((sym, uic, broker[uic]))
+        elif in_state and not at_broker:
+            stale.append((tracked[uic], sym))
+
+    if not orphans and not stale:
+        logger.info(f"  Reconcile: OK — {len(matched)} position(s) match the broker")
+        return {"orphans": orphans, "stale": stale, "matched": matched}
+
+    logger.warning("  " + "=" * 58)
+    for sym, uic, info in orphans:
+        src = _attribute_orphan(uic)
+        who = f"opened by [{src['strategy']}]" if src else "origin unknown"
+        logger.warning(
+            f"  ORPHAN {sym} (uic {uic}): {info['amount']:+.0f} open at broker, "
+            f"NOT tracked — {who}. No stop or time-stop is being applied.")
+    for key, sym in stale:
+        logger.warning(
+            f"  STALE  {key}: tracked in state but not open at the broker — "
+            f"occupying a slot for a position that no longer exists.")
+    logger.warning("  Run:  python futures/runner.py --reconcile --adopt")
+    logger.warning("  " + "=" * 58)
+
+    if adopt:
+        for sym, uic, info in orphans:
+            src = _attribute_orphan(uic)
+            if not src:
+                logger.warning(f"  Cannot adopt {sym}: no order-log entry for uic {uic}")
+                continue
+            key = f"{src['strategy']}:{sym}"
+            positions[key] = {
+                "uic":          uic,
+                "asset_type":   info.get("asset_type") or universe[sym]["asset_type"],
+                "direction":    "Buy" if info["amount"] > 0 else "Sell",
+                "entry_price":  float(src.get("entry_price") or info.get("open_price") or 0),
+                "stop_price":   float(src.get("stop_price") or 0),
+                "quantity":     abs(int(info["amount"])),
+                "entry_date":   str(src.get("timestamp", ""))[:10] or date.today().isoformat(),
+                "atr_at_entry": 0.0,
+                "score":        0.0,
+                "adopted":      True,
+            }
+            logger.info(f"  ADOPTED {key}: qty={abs(int(info['amount']))} "
+                        f"entry={positions[key]['entry_price']} "
+                        f"stop={positions[key]['stop_price']} — now under exit management")
+        for key, sym in stale:
+            positions.pop(key, None)
+            logger.info(f"  DROPPED {key}: no longer open at the broker")
+
+    return {"orphans": orphans, "stale": stale, "matched": matched}
+
+
 def _risk_equity(raw_equity: float) -> float:
     """Equity base used for position sizing — capped at configured real capital.
 
@@ -795,6 +932,13 @@ def run_daily(dry_run: bool = True,
     raw_equity, akey = _account()
     equity = _risk_equity(raw_equity)
 
+    # Reconcile before trading: a position open at the broker but missing from
+    # state has no stop management, and a stale entry blocks a slot for nothing.
+    try:
+        reconcile_positions(positions, universe, adopt=False)
+    except Exception as exc:
+        logger.warning(f"Reconcile check failed (continuing): {exc}")
+
     total_slots = sum(SLOTS_PER_STRATEGY[s] for s in active_strategies)
     if equity < raw_equity:
         logger.info(f"Account equity : {raw_equity:,.0f} EUR (broker) "
@@ -921,7 +1065,28 @@ if __name__ == "__main__":
                     help="Print open positions and exit (no orders)")
     ap.add_argument("--scan",     action="store_true",
                     help="Show all-strategy snapshot for all markets")
+    ap.add_argument("--reconcile", action="store_true",
+                    help="Compare tracked state against actual broker positions")
+    ap.add_argument("--adopt",    action="store_true",
+                    help="With --reconcile: import orphaned broker positions into "
+                         "state and drop stale entries (writes state)")
     args = ap.parse_args()
+
+    if args.reconcile:
+        from futures.universe import load_universe as _lu
+        _state     = _load_state()
+        _positions = _state.get("positions", {})
+        _universe  = _lu()
+        logger.info(f"Reconciling {len(_positions)} tracked position(s) "
+                    f"against the broker...")
+        _res = reconcile_positions(_positions, _universe, adopt=args.adopt)
+        if args.adopt:
+            _state["positions"] = _positions
+            _save_state(_state)
+            logger.info("State updated.")
+        else:
+            logger.info("Report only — no state written. Re-run with --adopt to apply.")
+        sys.exit(0)
 
     if args.discover:
         logger.info("Discovering futures instrument UICs from Saxo SIM...")
