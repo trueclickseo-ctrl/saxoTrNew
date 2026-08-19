@@ -9,6 +9,60 @@
 
 ---
 
+## Audit — 2026-08-19
+
+Full review of all stock strategies. **US Blend is healthy. US Reversion had two live
+defects**, both from the same root cause: a value *derived* from something that later
+changed underneath it, with no ceiling and no test guarding the result.
+
+| # | Finding | Severity | Status |
+|---|---------|----------|--------|
+| 1 | Intraday reversion budget was never capped — daily path capped, intraday path not | **High** | Fixed `9af26d3` |
+| 2 | Reversion slot count scaled with universe → 38 slots vs the 2–3 validated | **High** | Fixed `9af26d3` |
+| 3 | US Blend rebalanced weekly; cost-sensitivity favours fortnightly | Medium | Fixed `7e7a9bb` |
+| 4 | Aug 14 positions oversized (239,788 SEK vs 135,000 cap) | Medium | Resizes at Aug 21 rebalance |
+| 5 | `us_reversion.py` docstring wrong on every parameter incl. enabled/disabled | Low | Fixed `9af26d3` |
+| 6 | Universe documented as 108 *and* 61; actually 385 | Low | Fixed `9af26d3` |
+| 7 | Slot-math test re-implemented the formula it was meant to guard | Low | Fixed `9af26d3` |
+
+### Finding 1 — intraday budget was uncapped
+
+`starting_capital_sek` capping was added to the daily path but not to
+`run_intraday_cycle()`, which runs **5× per session**. It used raw
+`cash_sek × allocation_pct`, so inflated SIM demo cash could oversize entries — the
+same defect that produced the 670-share UNH position:
+
+| SIM cash | Daily path | Intraday path (before) |
+|---|---|---|
+| 300,000 SEK | 135,000 | 150,000 (1.1×) |
+| 1,000,000 SEK | 135,000 | 500,000 (3.7×) |
+| 10,400,000 SEK | 135,000 | **5,200,000 (38×)** |
+
+Both paths now use `min(cash × pct, starting_capital × max_deploy × pct)`.
+
+**Lesson:** the original fix changed two call sites and missed a third. A cap belongs in
+one function that every path calls, not repeated at each site.
+
+### Finding 2 — slot count scaled with the universe
+
+See [Why `max_slots` exists](#why-max_slots-exists-added-2026-08-19). Worst part was the
+failure mode: the 13% of the universe that became unbuyable was dropped at *order* time,
+not signal time, so it never appeared in any log, dashboard, or rejected-signal list.
+
+**Lesson:** a derived value needs a ceiling whenever what it derives from can grow.
+`max_universe_pct` alone cannot express "never shrink a slot below tradeable size".
+
+### Still open
+
+- **US Reversion has zero closed trades** since going live 2026-08-08. Not a bug — the
+  scanner genuinely finds no signals (verified 2026-08-19), and entry needs four
+  conditions at once. But it means the strategy is **completely unvalidated live**, and
+  until Finding 2 was fixed, 13% of its universe was unreachable.
+- **Live params drift from the validated winner** — see
+  [Validated vs live parameters](#validated-vs-live-parameters).
+
+---
+
 ## Universe
 
 **385 S&P 500 / large-cap US stocks** — defined in `atos/universe.py` (`US_TICKERS`).
@@ -87,6 +141,34 @@ Equal-weight within the sleeve. Budget = 50% of live SIM cash / 8 slots.
 | Max Drawdown | 21.3% |
 | Universe | 385 stocks |
 
+### Live Performance (2026-08-07 → 2026-08-19, SIM)
+
+| Metric | All trades | Excluding the oversized UNH trade |
+|--------|-----------|---------------|
+| Closed trades | 31 | 30 |
+| Win rate | 29.0% | 30.0% |
+| Gross profit | 77,057 SEK | 77,057 SEK |
+| Gross loss | −87,930 SEK | −20,831 SEK |
+| Net P&L | **−10,872 SEK** | **+56,226 SEK** |
+| Profit factor | 0.88× | **3.7×** |
+| Worst trade | −67,099 SEK (UNH) | −9,683 SEK (AMD) |
+| Best trade | +41,340 SEK | +41,340 SEK |
+
+The single oversized UNH fill accounts for **76% of all gross losses**. The next worst
+loss is −9,683 SEK — an order of magnitude smaller, and in line with normal position
+sizing. (A second, correctly-sized UNH trade lost only −3,786 SEK.)
+
+**Read this carefully before concluding the strategy is losing.** The entire net loss is
+one trade. UNH was sized at 670 shares on a 300,000 SEK account because Saxo SIM's
+`CashBalance` included the full demo credit and `blend_budget = cash × 0.5` was computed
+off it. That was a **sizing bug, not a signal failure** — fixed in `9c2482d`.
+
+A 29% win rate is also normal for cross-sectional momentum: the strategy is designed to
+take many small losses and a few large wins. Judge it on profit factor, not win rate.
+
+> Live sample is 12 days and 31 trades — far too small to conclude anything either way.
+> The backtest figures above remain the better estimate of expected behaviour.
+
 ### Parameters
 | Param | Value |
 |-------|-------|
@@ -97,7 +179,7 @@ Equal-weight within the sleeve. Budget = 50% of live SIM cash / 8 slots.
 | Min momentum return | 5% |
 | Trend filter | Price > EMA(200) |
 | Rebalance period | 14 calendar days |
-| Capital | 50% of live SIM cash |
+| Capital | 50% of live SIM cash, capped at 135,000 SEK |
 
 ### Rebalance Cadence — why 14 days
 
@@ -193,6 +275,41 @@ The reversion scanner also runs **5 times per session** (19:00, 20:30, 22:00, 23
 | **OOS: Jun 2025 – Aug 2026** | **2.39** | **70%** | **5.9%** | **23** | **47%** |
 
 OOS was never touched during parameter selection. Verdict: **5/5 — edge survives clean OOS test.**
+
+### Validated vs live parameters
+
+The OOS result above validated a *specific* parameter set. Live has drifted from it on
+four axes — worth knowing when judging live results against that Sharpe 2.39:
+
+| Param | Validated winner | Live now | Note |
+|-------|-----------------|----------|------|
+| RSI entry | 33 | **38** | Deliberate: extended grid top-1 (120 trades, Sharpe 1.73, WR 60%) — looser entry, more trades, lower Sharpe |
+| Dip | 5% | 5% | ✓ matches |
+| Volume | 1.5× | 1.5× | ✓ matches |
+| Stop | 5% | **4%** | From `capital.json`; tighter than validated |
+| Sleeve DD cap | 15% | **10%** | From `capital.json`; more conservative |
+| Concurrent positions | 3 (grid was `[2,3]`) | **6** | Was **38** before 2026-08-19 — see Finding 2 |
+
+The stop and DD-cap changes are conservative (they can only reduce risk), and the RSI
+change was a deliberate, separately-backtested trade-off. **The position count was not
+deliberate** — it drifted silently when the universe grew. 6 is still 2× the validated
+3; it was chosen to keep slot size tradeable rather than to match the grid. If live
+results disappoint, this is the first parameter to bring back toward 3.
+
+### Live status (as of 2026-08-19)
+
+**Zero closed trades. Zero open positions.** Live since 2026-08-08 (11 days).
+
+This is *not* a malfunction — running the scanner on 2026-08-19 produced no signals at
+all. Entry requires RSI<38 **and** a 5% dip **and** 1.5× volume **and** price above
+EMA200 simultaneously, which is rare in a strong uptrend (exactly the regime that has
+been feeding the momentum Blend). Backtest trade frequency implies roughly 2–5 trades
+per month, so a quiet 11 days sits within the expected range.
+
+What it does mean: **the strategy has no live validation whatsoever.** Nothing about its
+real-world fills, slippage, or commission drag has been observed. Treat the OOS Sharpe
+as an expectation, not a track record — and note that until the Finding 2 fix, 13% of
+its universe could not have been bought even if it had signalled.
 
 ### Position Sizing
 - Budget: 50% of live SIM cash, **capped at `starting_capital_sek × max_deploy_pct`** so SIM demo credit cannot inflate sizes (135,000 SEK today)
@@ -307,9 +424,10 @@ VERDICT:   LIVE
 ```
 Universe:  385 stocks (same as Blend)
 Hold:      3-10 trading days
-Config:    RSI<38, Dip>5%, Vol>1.5x, Stop4%, 6 max slots (10% of universe)
+Config:    RSI<38, Dip>5%, Vol>1.5x, Stop4%, 6 slots (10% of universe, capped)
 IS (2024-2025): Sharpe 2.08, WR 66%, MaxDD 12.5%
 OOS (2025-2026): Sharpe 2.39, WR 70%, MaxDD 5.9% — clean OOS pass
+LIVE:      0 closed trades as of 2026-08-19 — no live validation yet
 VERDICT:   LIVE ON SIM — watch 6-8 weeks before real capital
 ```
 
@@ -324,6 +442,40 @@ VERDICT:   LIVE ON SIM — watch 6-8 weeks before real capital
 | ML probability model | Walk-forward OOS AUC 0.52 = coin flip; no edge |
 | Residual momentum | Same return as raw momentum; no added value in blend |
 | Plain momentum / mom252 / 52-week-high | All beaten by risk-adjusted momentum |
+
+---
+
+## Adding a Third Strategy — not yet (2026-08-19)
+
+**Recommendation: do not add a new stock strategy right now.** Reasons, in order:
+
+1. **Only one of the two existing strategies has produced any live data.** US Reversion
+   has zero closed trades. Adding a third means debugging three strategies concurrently
+   while the second is still unproven.
+2. **Both existing strategies changed this week** — Blend cadence 7d→14d and budget cap;
+   Reversion slot ceiling and intraday budget cap. None of those changes has been
+   observed through even one full cycle yet.
+3. **The audit found two live sizing defects in 11 days of operation.** That rate says
+   the priority is hardening what exists, not widening the surface area.
+
+### Revisit when
+
+- US Reversion has **~20 closed trades**, so its live Sharpe can be compared to the 2.39 OOS figure
+- Blend has run **3+ rebalances** on the 14-day cadence with correct sizing
+- Both have run a month without a sizing or config defect
+
+### What the actual gap is, when that time comes
+
+Every current stock strategy is **long-only**. Blend goes to cash in risk-off; Reversion
+simply stops finding entries. So in a sustained downturn all US equity exposure converges
+to the same place — flat — and none of it profits. The genuine diversifier is **short or
+inverse exposure**, not a third long strategy that would correlate with the other two
+precisely when it matters least.
+
+A second candidate is a **different holding period**: Blend is fortnightly, Reversion is
+3–10 days. Nothing occupies the multi-month horizon.
+
+> Do not add a strategy because the system feels idle. Idle is a position.
 
 ---
 
