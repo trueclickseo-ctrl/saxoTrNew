@@ -92,6 +92,7 @@ import futures.strategy_squeeze    as strat_squeeze
 import futures.strategy_ma_cross   as strat_ma_cross
 import futures.strategy_trend_ma   as strat_trend_ma
 import pnl_tracker
+import strategy_learner
 import trade_logger
 
 # Registry: name → strategy module
@@ -567,10 +568,12 @@ def _run_strategy_exits(strat_name: str, strat_mod, positions: dict,
 def _run_strategy_entries(strat_name: str, strat_mod, positions: dict,
                           market_data: dict, universe: dict,
                           equity: float, akey: str,
-                          today_str: str, dry_run: bool) -> int:
+                          today_str: str, dry_run: bool,
+                          weight: float = 1.0) -> int:
     """Process entries for one strategy. Returns entry count."""
     prefix    = f"{strat_name}:"
-    max_slots = SLOTS_PER_STRATEGY[strat_name]
+    base_slots = SLOTS_PER_STRATEGY[strat_name]
+    max_slots  = max(1, int(base_slots * strategy_learner.slot_scale(weight)))
     open_in_strat = {k[len(prefix):] for k in positions if k.startswith(prefix)}
     slots_free = max_slots - len(open_in_strat)
     if slots_free <= 0 or equity <= 0:
@@ -720,10 +723,21 @@ def run_daily(dry_run: bool = True,
     drawdown_paused = not dry_run and not _drawdown_allows_entry(equity)
     entries_blocked = loss_limit_hit or drawdown_paused
 
+    # ── Load strategy weights — higher weight runs first (priority access) ────
+    strat_weights = strategy_learner.get_weights("futures")
+    strategy_learner.log_weights_table("futures")
+    active_strategies = sorted(
+        active_strategies,
+        key=lambda s: strat_weights.get(s, 1.0),
+        reverse=True,
+    )
+
     for name in active_strategies:
         mod = STRATEGIES[name]
+        w   = strat_weights.get(name, 1.0)
         logger.info(f"{'─'*60}")
-        logger.info(f"  Strategy: {name.upper()}")
+        logger.info(f"  Strategy: {name.upper()}  weight={w:.3f}  "
+                    f"slots_scale=×{strategy_learner.slot_scale(w):.2f}")
 
         exits   = _run_strategy_exits(name, mod, positions, market_data,
                                       universe, equity, akey, today_str, dry_run)
@@ -734,7 +748,8 @@ def run_daily(dry_run: bool = True,
             entries = 0
         else:
             entries = _run_strategy_entries(name, mod, positions, market_data,
-                                            universe, equity, akey, today_str, dry_run)
+                                            universe, equity, akey, today_str,
+                                            dry_run, weight=w)
 
         if entries == 0 and not entries_blocked:
             open_in = sum(1 for k in positions if k.startswith(f"{name}:"))
@@ -762,6 +777,15 @@ def run_daily(dry_run: bool = True,
 
     state["last_run"] = datetime.now().isoformat()
     _save_state(state)
+
+    # ── Strategy learning pass — update weights from today's closed trades ────
+    try:
+        learn_result = strategy_learner.run_learning_pass("futures")
+        if learn_result["new_trades"] > 0:
+            logger.info(f"  [learner] Processed {learn_result['new_trades']} new trade(s) — "
+                        f"weights updated")
+    except Exception as exc:
+        logger.warning(f"  [learner] Learning pass failed: {exc}")
 
     return {
         "exits":    total_exits,

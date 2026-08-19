@@ -67,6 +67,7 @@ import forex.strategy_ml          as strat_ml
 import forex.strategy_cnn_lstm    as strat_cnn_lstm
 import pnl_tracker
 import trade_logger
+import strategy_learner
 import forex.notifier      as fx_notify
 import forex.signal_filter as signal_filter
 
@@ -531,8 +532,10 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                  market_data: dict, equity: float, akey: str,
                  dry_run: bool, today_str: str,
                  live_prices: dict | None = None,
-                 agreement: dict | None = None) -> int:
-    max_slots  = SLOTS_PER_STRATEGY[strat_name]
+                 agreement: dict | None = None,
+                 weight: float = 1.0) -> int:
+    base_slots = SLOTS_PER_STRATEGY[strat_name]
+    max_slots  = max(1, int(base_slots * strategy_learner.slot_scale(weight)))
     prefix     = f"{strat_name}:"
     held       = sum(1 for k in positions if k.startswith(prefix))
     slots_free = max_slots - held
@@ -911,14 +914,27 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
                 f"ML training data: {sf_status['labeled_trades']}/{signal_filter.MIN_TRADES_FOR_ML} trades "
                 f"| ML model: {'✓ active' if sf_status['model_exists'] else '— not yet (need more data)'}")
 
+    # ── Load strategy weights — higher weight runs first (priority access) ────
+    strat_weights = strategy_learner.get_weights("forex")
+    strategy_learner.log_weights_table("forex")
+    # Sort active strategies by weight descending so proven winners get first
+    # pick of currency exposure slots and portfolio heat capacity
+    active_strategies = sorted(
+        active_strategies,
+        key=lambda s: strat_weights.get(s, 1.0),
+        reverse=True,
+    )
+
     # ── Run each strategy ─────────────────────────────────────────────────────
     total_exits = total_entries = 0
     for strat_name in active_strategies:
         strat_mod = STRATEGIES[strat_name]
         prefix    = f"{strat_name}:"
         holding   = sum(1 for k in positions if k.startswith(prefix))
+        w         = strat_weights.get(strat_name, 1.0)
         logger.info(f"{'─'*60}")
-        logger.info(f"  Strategy: {strat_name.upper()}")
+        logger.info(f"  Strategy: {strat_name.upper()}  weight={w:.3f}  "
+                    f"slots_scale=×{strategy_learner.slot_scale(w):.2f}")
 
         exits   = _run_exits(strat_name, strat_mod, positions,
                              market_data, akey, dry_run, today_str)
@@ -926,7 +942,8 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
         if not entries_blocked:
             entries = _run_entries(strat_name, strat_mod, positions,
                                    market_data, equity, akey, dry_run, today_str,
-                                   live_prices=live_prices, agreement=agreement)
+                                   live_prices=live_prices, agreement=agreement,
+                                   weight=w)
 
         if exits == 0 and entries == 0:
             remaining = sum(1 for k in positions if k.startswith(prefix))
@@ -956,6 +973,15 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
 
     state["last_run"] = datetime.now().isoformat()
     _save_state(state)
+
+    # ── Strategy learning pass — update weights from today's closed trades ────
+    try:
+        learn_result = strategy_learner.run_learning_pass("forex")
+        if learn_result["new_trades"] > 0:
+            logger.info(f"  [learner] Processed {learn_result['new_trades']} new trade(s) — "
+                        f"weights updated")
+    except Exception as exc:
+        logger.warning(f"  [learner] Learning pass failed: {exc}")
 
     # ── Run-summary email (live only) ─────────────────────────────────────────
     if not dry_run:
