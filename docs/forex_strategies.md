@@ -9,6 +9,175 @@
 
 ---
 
+## Audit — 2026-08-20
+
+| # | Finding | Severity | Status |
+|---|---------|----------|--------|
+| 1 | **Position sizing ignored the quote currency — 447× risk spread** | **Critical** | Fixed `5bf8a5f` |
+| 2 | Dry runs permanently deleted live position tracking | **Critical** | Fixed `5bf8a5f` |
+| 3 | Sizing ran off ~945,000 EUR of SIM demo credit (~33× intended) | **High** | Fixed `5bf8a5f` |
+| 4 | **10 of 11 strategies have no backtest** | **High** | Open |
+| 5 | **CNN-LSTM emits zero signals and is ~chance accuracy** | **High** | Open |
+| 6 | Signals computed on the incomplete, still-forming daily bar | Medium | Open |
+| 7 | No broker/state reconciliation — orphaned positions undetectable | Medium | Open |
+| 8 | No file logging — unattended runs leave no audit trail | Medium | Open |
+| 9 | Bar timestamps discarded on fetch — stale data undetectable | Low | Open |
+
+### 🔴 Finding 1 — sizing ignored the quote currency (fixed)
+
+`size_position()` computes `units = (equity × RISK_PCT) / (mult × ATR)`. ATR — and
+therefore stop distance — is denominated in the pair's **quote currency**, while
+equity is in **EUR**. Nothing converted between them, so realised risk scaled with
+the *numeric size of the quote currency*.
+
+Measured on the 14 live open positions, each converted to EUR at live rates:
+
+| Position | Units | Risk (EUR) | % of account |
+|----------|------:|-----------:|-------------:|
+| ema:USDJPY | 5,000 | 24 | 0.1% |
+| pullback:EURJPY | 5,000 | 46 | 0.2% |
+| ml:AUDJPY | 5,000 | 46 | 0.2% |
+| ml:CADJPY | 6,000 | 51 | 0.2% |
+| pullback:EURNOK | 81,000 | 872 | 3.1% |
+| ema:GBPUSD | 958,000 | 3,587 | 12.9% |
+| donchian:EURUSD | 974,000 | 4,547 | 16.4% |
+| donchian:GBPUSD | 722,000 | 6,018 | 21.6% |
+| ema:USDCAD | 1,223,000 | 6,180 | 22.2% |
+| donchian:AUDUSD | 1,063,000 | 8,538 | 30.7% |
+| **pullback:NZDCHF** | 1,602,000 | **10,674** | **38.4%** |
+
+Every one of those is nominally a **1% risk** trade. Actual spread: **447×**.
+JPY-quoted pairs were effectively not trading (0.1% risk); USD/CAD/CHF pairs risked
+up to 38% of the account on a single position.
+
+**Fix:** restate the risk budget in the quote currency before sizing
+(`_equity_in_quote` / `_eur_per_unit`, using the existing `fx` module). Applied at
+the single sizing call site in the runner, so all 11 strategies inherit it without
+touching each module. If a quote currency has no rate the signal is now **skipped**
+rather than sized without conversion.
+
+**Verified after the fix** — same 14 positions, same stops:
+
+| | Before | After |
+|---|---|---|
+| Risk range | 24 – 10,674 EUR | 269 – 278 EUR |
+| Spread | **447×** | **1.0×** |
+| Per trade | 0.1% – 38.4% | 0.97% – 1.00% |
+
+Residual variation is `min_units` rounding only.
+
+### Finding 2 — dry runs deleted live positions (fixed)
+
+Same defect found in futures (`a34ffd0`), and worse here. `_process_exits()` does
+`del positions[key]` **unconditionally** — outside the `if not dry_run` block — and
+both `run_daily()` and `run_exits_only()` called `_save_state()` unconditionally.
+
+Any dry run whose exit rules fired would have permanently wiped tracking for real
+open positions, leaving all 14 open at the broker with no stop management and no
+record. Found by reading before running, so it was never triggered here.
+
+### Finding 3 — sizing ran off demo credit (fixed)
+
+`_account()` read `TotalValue` uncapped — `forex_peak_equity.json` confirms
+**945,669 EUR**, roughly 33× the intended 300,000 SEK. Now capped by
+`strategies.forex.risk_equity_eur`.
+
+Unlike futures, this does **not** reduce what can be traded: FX deals in 1,000-unit
+increments, so positions scale down cleanly rather than whole pairs becoming
+untradeable.
+
+### Finding 4 — 10 of 11 strategies are unvalidated (open)
+
+`backtest_forex.py` covers **only Strategy 1 (EMA + ADX)**, and reimplements the
+rules inline rather than importing `forex.strategy` — so it validates a *copy*, not
+the code that trades. RSI, Donchian, BB, Pullback, Gap, SuperTrend, Z-Score, ML and
+London Breakout have **no backtest anywhere in the repo**.
+
+The win rates quoted in each strategy section below are therefore assertions, not
+measurements. `backtest_futures_all.py` shows the pattern for fixing this: drive the
+real modules over truncated data. The forex modules share a uniform
+`generate_signals` / `should_exit` / `size_position` interface, so the same approach
+ports directly.
+
+### 🔴 Finding 5 — CNN-LSTM never fires (open)
+
+Strategy 10 is marked ★★★ in this document. Its own walk-forward report
+(`data/cnn_lstm/report.json`) says otherwise:
+
+| Fold | Train end | Accuracy | Buy prec. | Sell prec. | **Signal rate** |
+|-----:|-----------|---------:|----------:|-----------:|----------------:|
+| 1 | 2023-12-06 | 36.8% | 40.6% | 34.1% | **0.0** |
+| 2 | 2024-05-22 | 39.0% | 39.5% | 38.0% | **0.0** |
+| 3 | 2024-11-06 | 37.7% | 39.7% | 36.7% | **0.0** |
+| 4 | 2025-04-28 | 35.6% | 35.5% | 34.2% | **0.0** |
+| 5 | 2025-10-13 | 35.6% | 35.9% | 32.0% | **0.0** |
+| | **mean** | **36.9%** | 38.2% | — | **0.0** |
+
+Two independent problems:
+
+1. **Accuracy is chance.** This is a 3-class problem (Buy / Sell / Hold), so random
+   is 33.3%. 36.9% is not a demonstrated edge.
+2. **Signal rate is 0.0 in every fold.** At the configured `CONFIDENCE = 0.58`
+   threshold the model never produced a single tradeable signal in five folds of
+   walk-forward testing. It holds no live positions either.
+
+The model trains, loads and runs correctly — it simply never emits anything. It is
+carrying a PyTorch dependency, a training pipeline and a ★★★ rating for zero output.
+**Either lower the confidence threshold and re-validate, or retire it.**
+
+> The *engineering* here is sound — the trainer does proper walk-forward with a
+> `max_date` cutoff and never shuffles time-series data. The model just has no edge.
+
+### Finding 6 — signals use the incomplete current bar (open)
+
+`_fetch_history()` returns every bar the chart API gives, **including the current,
+still-forming daily bar**. The scheduled runs fire at 01:20, 09:00 and 13:00 UTC —
+all mid-session — so `closes.iloc[-1]` is a partial bar, not a close.
+
+Two consequences:
+
+- Daily-bar strategies were designed and (where backtested) validated on *completed*
+  bars. Acting on a partial bar is a different strategy.
+- The runner fires 3× per day, so the same forming bar is evaluated three times with
+  different values. A Donchian breakout or RSI extreme can trigger on an intraday
+  spike the daily close never confirms.
+
+This is a live-vs-backtest mismatch affecting **all 11 strategies**. Fixing it means
+dropping the last bar (signal on yesterday's close, trade today) — a material change
+to signal timing, so it needs a deliberate decision rather than a silent edit.
+
+### Findings 7–9 — operational gaps (open)
+
+- **No reconciliation.** Nothing compares state to broker positions; forex has the
+  same orphaning exposure futures had. `futures/runner.py --reconcile` (`852eac2`)
+  is the working template.
+- **No file logging.** `logging.basicConfig()` with no `FileHandler` — console only.
+  Every other module writes `logs/*.log`. Unattended runs (5 scheduled tasks/day)
+  leave no trace, which is why no forex log exists to audit.
+- **Timestamps discarded.** `_fetch_history()` builds rows of OHLC only, dropping the
+  bar `Time`, so stale or gapped data cannot be detected.
+
+### Verified as correct
+
+Not everything was broken. Confirmed sound by inspection:
+
+- **RSI** — proper Wilder smoothing (`ewm(alpha=1/period)`) on separated gains and
+  losses, in both `strategy_rsi.py` and `strategy_bb.py`.
+- **ATR** — correct Wilder RMA, consistent across all modules.
+- **ADX** — textbook Wilder `+DM`/`−DM` selection and smoothing.
+- **Bollinger** — `ddof=0` (population std), the standard convention.
+- **Z-Score** — `ddof=1` rolling mean/std; uses only past and current bars.
+- **SuperTrend** — correct band ratcheting and direction-flip logic, with NaN
+  handling before the first valid ATR.
+- **ML (logistic regression)** — **no lookahead**: labels use `shift(-1)` correctly,
+  the training window ends at `len-2` so the last label is knowable today, and the
+  normalisation `mu`/`sigma` are fitted on the training window only, never including
+  the prediction row.
+- **CNN-LSTM trainer** — time-series-safe walk-forward with `max_date` cutoff and no
+  shuffling.
+
+---
+
 ## Daily Schedule
 
 | Task (Task Scheduler)       | Time PKT       | UTC           | Session        | Pairs |
@@ -360,12 +529,20 @@ Trains a logistic regression model on the last 126 daily bars (6 months) per pai
 
 ---
 
-## Strategy 10 — CNN-LSTM Deep Learning ★★★
+## Strategy 10 — CNN-LSTM Deep Learning ⚠️ NOT TRADING
 
 **Files**: `forex/strategy_cnn_lstm.py` (inference) · `forex/cnn_lstm_trainer.py` (training)  
 **Type**: Deep Learning — Multi-scale CNN + Bidirectional LSTM + Self-Attention  
-**Win Rate**: depends on training data; walk-forward precision typically 55–65%  
-**Slots**: 20  
+**Measured**: walk-forward accuracy **36.9%** on a 3-class problem (chance = 33.3%);
+buy precision 35–41%, sell precision 32–38%; **signal rate 0.0 in all 5 folds**  
+**Slots**: 20 (none ever used)  
+
+> **This section previously claimed ★★★ and "walk-forward precision typically
+> 55–65%". Its own report — `data/cnn_lstm/report.json` — contradicts both.** The
+> model has never emitted a signal at `CONFIDENCE = 0.58` and holds no positions.
+> See [Finding 5](#-finding-5--cnn-lstm-never-fires-open). Either lower the
+> threshold and re-validate, or retire the strategy.
+
 
 ### Concept
 A production-quality deep learning model trained on **5 years of daily bars across all 34 pairs simultaneously** (≈40,000 sequences). It learns patterns at three different timescales in parallel and uses an attention mechanism to weight which recent bars matter most for the prediction.
