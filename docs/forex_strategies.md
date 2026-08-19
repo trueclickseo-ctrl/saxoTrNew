@@ -22,6 +22,62 @@
 | 7 | No broker/state reconciliation — orphaned positions undetectable | Medium | Open |
 | 8 | No file logging — unattended runs leave no audit trail | Medium | Open |
 | 9 | Bar timestamps discarded on fetch — stale data undetectable | Low | Open |
+| 10 | **London Breakout: sized off the whole account, not its 15,000 SEK book** | **High** | Fixed `0b855b2` |
+| 11 | **LBO: hardcoded `/10.7` "USDSEK" rate on a EUR account** | **High** | Fixed `0b855b2` |
+| 12 | **LBO: `MAX_UNITS` cap was doing the sizing on 5 of 7 pairs** | **High** | Fixed `0b855b2` |
+| 13 | LBO `_atr()` uses a simple mean, not Wilder — inconsistent with every other module | Low | Open |
+
+### Per-strategy formula audit
+
+Every strategy's indicators and signal construction were read. Results:
+
+| # | Strategy | Indicators | Lookahead | Sizing | Verdict |
+|---|----------|-----------|-----------|--------|---------|
+| 1 | EMA + ADX | ✅ Wilder | ✅ none | fixed `5bf8a5f` | OK |
+| 2 | RSI(2) | ✅ Wilder | ✅ none | fixed `5bf8a5f` | OK |
+| 3 | Donchian | ✅ Wilder | ✅ `[-(N+1):-1]` excludes current bar | fixed `5bf8a5f` | OK |
+| 4 | Bollinger | ✅ `ddof=0` | ✅ none | fixed `5bf8a5f` | OK |
+| 5 | Pullback | ✅ Wilder | ✅ none | fixed `5bf8a5f` | OK |
+| 6 | Gap Fill | ✅ n/a | ✅ none | fixed `5bf8a5f` | OK |
+| 7 | SuperTrend | ✅ correct ratcheting | ✅ none | fixed `5bf8a5f` | OK |
+| 8 | Z-Score | ✅ `ddof=1` | ✅ none | fixed `5bf8a5f` | OK |
+| 9 | ML (logistic) | ✅ correct | ✅ **verified none** | fixed `5bf8a5f` | OK |
+| 10 | CNN-LSTM | ✅ correct | ✅ walk-forward safe | n/a | ⚠️ **no edge, never fires** |
+| 11 | London Breakout | ⚠️ SMA not Wilder | ✅ none | ❌ **4 defects** | fixed `0b855b2` |
+
+The indicator maths is sound across the board — the defects were all in **capital
+and currency handling**, not in the signal logic.
+
+### 🔴 Findings 10–12 — London Breakout sizing (fixed)
+
+LBO is the day-trading book and was the last strategy audited. Four defects sat in
+the same six lines:
+
+1. **Wrong book.** It is documented as a separate book with 15,000 SEK and 1.5%
+   risk. `runner.py` passed `account_equity=equity` — the *whole account* — so the
+   `15_000.0` default was always overridden. Off the uncapped SIM equity that was
+   ~14,185 EUR of risk per trade.
+2. **Hardcoded wrong-currency rate.** `equity_usd = account_equity / 10.7  #
+   approximate USDSEK`, on an account denominated in **EUR**. Wrong constant, wrong
+   pair, and nothing updates it.
+3. **Quote-currency error, and the Finding 1 fix did not reach it.** LBO returns
+   precomputed `units` in its signal, and the runner uses `sig["units"]` directly —
+   bypassing the conversion added in `5bf8a5f`. LBO trades USDJPY and GBPJPY, so
+   those were sized against a JPY stop distance using an unconverted budget.
+4. **The cap was doing the sizing.** With inflated equity, **5 of 7 pairs pinned at
+   `MAX_UNITS = 50,000`** — position size was set by the clamp, not by risk. And
+   `max(MIN_UNITS, …)` floored small sizes *up*, silently over-risking any trade
+   whose correct size was below one lot; those are now skipped instead.
+
+**Verified across all 7 LBO pairs** at representative session ranges:
+
+| | Before | After |
+|---|---|---|
+| Risk range | 7 – 107 EUR | 20.85 EUR flat |
+| Spread | **15×** (5 of 7 pinned at cap) | **1.00×** |
+| Per trade | uncontrolled | exactly 1.5% of the 1,390 EUR book |
+
+Book capital now lives in `strategies.forex.lbo_capital_eur` (1,390 EUR ≈ 15,000 SEK).
 
 ### 🔴 Finding 1 — sizing ignored the quote currency (fixed)
 
