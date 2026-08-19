@@ -41,6 +41,17 @@
     "futures": {
       "enabled": true,
       "risk_equity_eur": 27800
+    },
+
+    "_forex_comment": [
+      "Same story as futures: forex/runner.py sized off the raw SIM TotalValue",
+      "(~945,000 EUR of demo credit), making positions roughly 33x the intended",
+      "300,000 SEK. Unlike futures, FX trades in fine unit increments, so capping",
+      "scales positions down cleanly instead of making markets untradeable."
+    ],
+    "forex": {
+      "enabled": true,
+      "risk_equity_eur": 27800
     }
 
   }

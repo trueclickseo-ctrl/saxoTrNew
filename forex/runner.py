@@ -203,12 +203,76 @@ def _verify_token(scheduled_time: str = "") -> bool:
         return False
 
 
+_QUOTE_RATE_CACHE: dict[str, float] = {}
+
+
+def _eur_per_unit(ccy: str) -> float | None:
+    """EUR value of one unit of `ccy`, via the shared fx module (SEK-based)."""
+    if ccy == "EUR":
+        return 1.0
+    if ccy in _QUOTE_RATE_CACHE:
+        return _QUOTE_RATE_CACHE[ccy]
+    try:
+        import fx as _fx
+        sek_per_ccy = float(_fx.get_rate_to_sek(ccy))
+        sek_per_eur = float(_fx.get_eur_sek_rate())
+        if sek_per_ccy <= 0 or sek_per_eur <= 0:
+            return None
+        rate = sek_per_ccy / sek_per_eur
+    except Exception as exc:
+        logger.warning(f"FX rate lookup failed for {ccy}: {exc}")
+        return None
+    _QUOTE_RATE_CACHE[ccy] = rate
+    return rate
+
+
+def _equity_in_quote(equity_eur: float, symbol: str) -> float | None:
+    """Restate EUR equity in a pair's quote currency, for position sizing.
+
+    ATR (and therefore stop distance) is quoted in the pair's quote currency.
+    Dividing an EUR risk budget by a JPY distance is a unit error, so the
+    budget is converted first.
+    """
+    quote = symbol[3:6] if len(symbol) >= 6 else ""
+    if not quote:
+        return None
+    rate = _eur_per_unit(quote)
+    if not rate or rate <= 0:
+        return None
+    return equity_eur / rate
+
+
+def _risk_equity(raw_equity: float) -> float:
+    """Cap the sizing base at configured real capital.
+
+    The broker figure is SIM demo credit (~945,000 EUR), not the user's money.
+    Sizing off it made positions ~33x the intended 300,000 SEK. FX trades in
+    fine unit increments, so this scales positions down cleanly rather than
+    making pairs untradeable (contrast futures, where lumpy contract sizes mean
+    the cap blocks whole markets).
+    """
+    try:
+        import atos.capital_config as _CAP
+        cap = _CAP.forex_risk_equity_eur()
+    except Exception as exc:
+        logger.warning(f"Could not read forex risk equity cap: {exc}")
+        return raw_equity
+    if cap <= 0:
+        return raw_equity
+    return min(raw_equity, cap) if raw_equity > 0 else cap
+
+
 def _account() -> tuple[float, str]:
     equity, key = 0.0, ""
     try:
         bal    = _get("/port/v1/balances/me")
         equity = float(bal.get("TotalValue") or bal.get("NetEquityForMargin")
                        or bal.get("CashBalance") or 0)
+        raw    = equity
+        equity = _risk_equity(equity)
+        if equity < raw:
+            logger.info(f"  Equity {raw:,.0f} EUR (broker) -> sizing off "
+                        f"{equity:,.0f} EUR (capped at configured capital)")
     except Exception as exc:
         logger.warning(f"Could not read equity: {exc}")
     try:
@@ -902,7 +966,20 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         if "units" in sig:
             qty = sig["units"]   # london_breakout pre-computes sizing from SEK capital
         else:
-            qty = strat_mod.size_position(equity, sig["atr"], pair_info["min_units"], **rp_kw)
+            # size_position() computes units = (equity * RISK_PCT) / (mult * ATR).
+            # ATR is in the pair's QUOTE currency but equity is in EUR, so without
+            # converting, realised risk scales with the numeric size of the quote
+            # currency: JPY pairs risked ~0.1% while USD/CHF pairs risked 20-38%,
+            # a 447x spread across positions that are all nominally "1%".
+            # Converting equity into the quote currency makes the division
+            # dimensionally correct and gives every pair the same real risk.
+            eq_quote = _equity_in_quote(equity, sym)
+            if eq_quote is None:
+                logger.warning(f"  [{strat_name}] SKIP {sym}: no FX rate for quote "
+                               f"currency — refusing to size without conversion")
+                continue
+            qty = strat_mod.size_position(eq_quote, sig["atr"],
+                                          pair_info["min_units"], **rp_kw)
 
         tag    = "LONG" if direction == "Buy" else "SHORT"
         detail = (f"rsi={sig['rsi']:.1f}" if "rsi" in sig
@@ -1179,8 +1256,13 @@ def run_exits_only(dry_run: bool = True,
                     f"P&L {pnl_pct:+.2f}%  stop={pos['stop_price']:.5f}  {held}d")
     logger.info("=" * 60)
 
-    state["last_exits_check"] = datetime.now().isoformat()
-    _save_state(state)
+    # See run_daily() — dry-run exits mutate `positions`, so saving would delete
+    # real open positions from tracking.
+    if dry_run:
+        logger.info("  [DRY] state NOT saved — open positions left untouched")
+    else:
+        state["last_exits_check"] = datetime.now().isoformat()
+        _save_state(state)
     return {"exits": total_exits, "holding": len(positions), "dry_run": dry_run}
 
 
@@ -1327,8 +1409,16 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
                     f"P&L {pnl_pct:+.2f}%  stop={pos['stop_price']:.5f}  {held}d")
     logger.info("=" * 60)
 
-    state["last_run"] = datetime.now().isoformat()
-    _save_state(state)
+    # NEVER persist state from a dry run. _process_exits() does `del positions[key]`
+    # unconditionally — simulated exits mutate the dict exactly like real ones — so
+    # saving here would permanently delete tracking for real open positions. They
+    # would stay open at the broker with no stop management and no record.
+    # (Same defect was found and fixed in futures/runner.py; see a34ffd0.)
+    if dry_run:
+        logger.info("  [DRY] state NOT saved — open positions left untouched")
+    else:
+        state["last_run"] = datetime.now().isoformat()
+        _save_state(state)
 
     # ── Strategy learning pass — update weights from today's closed trades ────
     try:

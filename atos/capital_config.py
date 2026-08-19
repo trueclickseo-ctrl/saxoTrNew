@@ -129,6 +129,18 @@ def futures_risk_equity_eur() -> float:
         return 27_800.0
 
 
+def forex_risk_equity_eur() -> float:
+    """Equity base (EUR) that forex sizing risks RISK_PCT of per trade.
+
+    Without this, forex sized off the raw SIM TotalValue (~945,000 EUR of demo
+    credit) rather than real capital. See futures_risk_equity_eur().
+    """
+    try:
+        return float(_load()["strategies"]["forex"]["risk_equity_eur"])
+    except Exception:
+        return 27_800.0
+
+
 def reversion_stop_pct() -> float:
     return float(_load()["strategies"]["us_reversion"].get("stop_pct", 0.04))
 
