@@ -46,34 +46,46 @@ def _atr(h, l, c, period=ATR_PERIOD):
 def _supertrend(h, l, c):
     hl2 = (h + l) / 2
     atr = _atr(h, l, c)
-    upper_basic = hl2 + ST_MULT * atr
-    lower_basic = hl2 - ST_MULT * atr
+    upper_basic = (hl2 + ST_MULT * atr).values
+    lower_basic = (hl2 - ST_MULT * atr).values
+    close       = c.values
+    n           = len(close)
 
-    upper = upper_basic.copy()
-    lower = lower_basic.copy()
-    direction = pd.Series(1, index=c.index)   # 1 = uptrend, -1 = downtrend
+    upper     = upper_basic.copy()
+    lower     = lower_basic.copy()
+    direction = np.ones(n, dtype=int)
 
-    for i in range(1, len(c)):
+    # Find first valid ATR index to avoid NaN propagation through the loop
+    first_valid = 0
+    while first_valid < n and np.isnan(upper_basic[first_valid]):
+        first_valid += 1
+
+    for i in range(first_valid + 1, n):
+        if np.isnan(upper_basic[i]):
+            upper[i]     = upper[i - 1]
+            lower[i]     = lower[i - 1]
+            direction[i] = direction[i - 1]
+            continue
         # Upper band
-        if upper_basic.iloc[i] < upper.iloc[i - 1] or c.iloc[i - 1] > upper.iloc[i - 1]:
-            upper.iloc[i] = upper_basic.iloc[i]
-        else:
-            upper.iloc[i] = upper.iloc[i - 1]
+        upper[i] = (upper_basic[i]
+                    if upper_basic[i] < upper[i - 1] or close[i - 1] > upper[i - 1]
+                    else upper[i - 1])
         # Lower band
-        if lower_basic.iloc[i] > lower.iloc[i - 1] or c.iloc[i - 1] < lower.iloc[i - 1]:
-            lower.iloc[i] = lower_basic.iloc[i]
-        else:
-            lower.iloc[i] = lower.iloc[i - 1]
+        lower[i] = (lower_basic[i]
+                    if lower_basic[i] > lower[i - 1] or close[i - 1] < lower[i - 1]
+                    else lower[i - 1])
         # Direction
-        if direction.iloc[i - 1] == -1 and c.iloc[i] > upper.iloc[i - 1]:
-            direction.iloc[i] = 1
-        elif direction.iloc[i - 1] == 1 and c.iloc[i] < lower.iloc[i - 1]:
-            direction.iloc[i] = -1
+        if direction[i - 1] == -1 and close[i] > upper[i - 1]:
+            direction[i] = 1
+        elif direction[i - 1] == 1 and close[i] < lower[i - 1]:
+            direction[i] = -1
         else:
-            direction.iloc[i] = direction.iloc[i - 1]
+            direction[i] = direction[i - 1]
 
-    st_line = lower.where(direction == 1, upper)
-    return st_line, direction
+    idx       = c.index
+    st_line   = pd.Series(np.where(direction == 1, lower, upper), index=idx)
+    dir_series = pd.Series(direction, index=idx)
+    return st_line, dir_series
 
 
 def generate_signals(market_data: dict, open_symbols: set = None) -> list:

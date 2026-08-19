@@ -190,7 +190,8 @@ class ETFExecutor:
         )
         if not self.cfg.dry_run:
             pnl_tracker.log_open("etf", "ETF Rotation", signal.symbol, "Buy",
-                                 quantity, price, order_id=order_id)
+                                 quantity, price, order_id=order_id,
+                                 asset_type="ETF")
 
     # ------------------------------------------------------------------
     # Saxo position sync — removes phantom state from GTC-triggered exits
@@ -333,4 +334,5 @@ class ETFExecutor:
             notes    = reason,
         )
         if not self.cfg.dry_run:
-            pnl_tracker.log_close("etf", symbol, live_price, reason, strategy="ETF Rotation")
+            pnl_tracker.log_close("etf", symbol, live_price, reason, strategy="ETF Rotation",
+                                  asset_type="ETF")

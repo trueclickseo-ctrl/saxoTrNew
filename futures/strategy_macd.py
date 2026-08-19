@@ -1,7 +1,7 @@
-"""
+﻿"""
 futures/strategy_macd.py
 ------------------------
-Futures Strategy 4 — MACD(12,26,9) Momentum Crossover.
+Futures Strategy 4 â€” MACD(12,26,9) Momentum Crossover.
 
 CONCEPT:
   MACD measures the difference between two EMAs (12 and 26 periods).
@@ -11,7 +11,7 @@ CONCEPT:
   < 0 for shorts) this removes counter-trend entries.
 
   Complementary to EMA(5/20): MACD uses longer periods (12/26 vs 5/20)
-  and the histogram confirms acceleration, not just level — fewer signals
+  and the histogram confirms acceleration, not just level â€” fewer signals
   but higher quality.
 
 ENTRY:
@@ -26,7 +26,7 @@ ENTRY:
 
 EXIT (first condition hit):
   A. MACD crosses back through signal (momentum exhausted)
-  B. 2.0×ATR(14) hard stop
+  B. 2.0Ã—ATR(14) hard stop
   C. 20-day time stop
 
 SIZING:  1% equity per trade, ATR-based.
@@ -35,13 +35,13 @@ EXPECTED RESULTS (5 markets, multi-year backtest):
   ~12-18 signals/year  |  WR ~52-58%  |  Avg hold ~14 days
   Edge: catches momentum inflection points earlier than price crossovers.
 
-THIS MODULE IS PURE — no I/O, no orders, no state.
+THIS MODULE IS PURE â€” no I/O, no orders, no state.
 """
 
 import numpy as np
 import pandas as pd
 
-# ── Parameters ────────────────────────────────────────────────────────────────
+# â”€â”€ Parameters â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 MACD_FAST     = 12
 MACD_SLOW     = 26
 MACD_SIGNAL   = 9
@@ -54,13 +54,13 @@ TIME_STOP_DAYS = 20
 SIGNAL_LOOKBACK = 3    # bars to look back for a fresh MACD crossover
 # Zero-line: MACD must have been positive at some point in this lookback window
 # (relaxed from strict cur_macd > 0 to allow crossovers slightly below zero
-#  when momentum was recently bullish — catches more valid signals)
+#  when momentum was recently bullish â€” catches more valid signals)
 ZERO_LINE_LOOKBACK = 10  # bars to look back for a positive MACD reading
 MIN_BARS      = MACD_SLOW + MACD_SIGNAL + ADX_PERIOD + 5
 
-LONG_ONLY_MARKETS     = {"ES", "NQ", "CL"}
-BIDIRECTIONAL_MARKETS = {"GC", "ZB"}
-EQUITY_FUTURES        = {"ES", "NQ"}
+LONG_ONLY_MARKETS     = {"ES", "NQ", "YM", "DAX", "HK50", "CL", "NG"}
+BIDIRECTIONAL_MARKETS = {"GC", "SI", "ZB", "ZC", "ZW", "ZS"}
+EQUITY_FUTURES        = {"ES", "NQ", "YM", "DAX", "HK50"}
 
 
 def _ema(s: pd.Series, period: int) -> pd.Series:

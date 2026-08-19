@@ -9,4 +9,4 @@ REM (e.g. 20:00 PKT = 15:00 UTC = 10:00 ET)
 REM IMPORTANT: must run from the parent app directory so saxo_auth can find
 REM saxo_token.json (which lives in E:\SaxoTrNew\SaxoTrNew\, not the ETF subdir).
 cd /d E:\SaxoTrNew\SaxoTrNew
-python -X utf8 saxo_etf_strategy\run_etf_bot.py
+pythonw -X utf8 saxo_etf_strategy\run_etf_bot.py >> "E:\SaxoTrNew\SaxoTrNew\data\etf_scheduler.log" 2>&1

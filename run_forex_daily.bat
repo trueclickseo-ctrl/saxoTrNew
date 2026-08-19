@@ -10,4 +10,4 @@ REM
 REM Must run from the project root so saxo_token.json is found.
 
 cd /d E:\SaxoTrNew\SaxoTrNew
-python -X utf8 forex\runner.py --live --session asian >> "E:\SaxoTrNew\SaxoTrNew\data\forex_scheduler.log" 2>&1
+pythonw -X utf8 forex\runner.py --live --session asian >> "E:\SaxoTrNew\SaxoTrNew\data\forex_scheduler.log" 2>&1

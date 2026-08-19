@@ -12,6 +12,7 @@ Nothing here imports from the shares strategies.
 """
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -331,6 +332,99 @@ class DualMAStrategy(_BaseStrategy):
 
 
 # ---------------------------------------------------------------------------
+# Strategy 5: Full-universe Momentum Scan
+# ---------------------------------------------------------------------------
+
+class MomentumScanStrategy(_BaseStrategy):
+    """
+    Scans the full 8,924-ETF universe to find top performers by 3-month momentum.
+
+    Stage 1 — Filter to liquid US candidates:
+      - Exchange: NYSE_ARCA or NASDAQ only
+      - Base ticker length ≤ 5 chars (proxy for size/liquidity)
+      - Description excludes leveraged/inverse keywords (ULTRA, 2X, 3X, BEAR, SHORT, INVERSE)
+      - Take top MAX_CANDIDATES (200) sorted by ticker length ascending
+
+    Stage 2 — Fetch price history and score:
+      - Requires at least LOOKBACK bars of history
+      - Price must be above SMA(20) — uptrend confirmation
+      - 3-month return must be positive
+      - Score = (price / price_63d_ago) - 1
+
+    Stage 3 — Return top cfg.max_candidates_per_run as BUY signals.
+
+    Runtime: ~3-5 minutes for 200 API calls. Schedule weekly or after market close.
+    """
+    LOOKBACK      = 63    # 3 months of trading days
+    SMA_CONFIRM   = 20    # price must be above SMA20
+    MAX_CANDIDATES = 200  # pre-filter size before API calls
+    CALL_DELAY    = 0.25  # seconds between history API calls (rate-limit safety)
+    EXCHANGES     = {"NYSE_ARCA", "NASDAQ"}
+    EXCLUDE_KW    = {"ultra", "2x", "3x", "-2", "-3", "bear", "short", "inverse",
+                     "proshares ultra", "direxion"}
+
+    def generate_signals(self, universe: List[dict]) -> List[ETFSignal]:
+        # Stage 1: filter to liquid US ETFs
+        candidates = []
+        for inst in universe:
+            if inst.get("ExchangeId") not in self.EXCHANGES:
+                continue
+            base = str(inst.get("Symbol", "")).split(":")[0]
+            if not base or len(base) > 5:
+                continue
+            desc = str(inst.get("Description", "")).lower()
+            if any(kw in desc for kw in self.EXCLUDE_KW):
+                continue
+            candidates.append((len(base), inst))
+
+        candidates.sort(key=lambda x: x[0])   # shorter ticker = more established
+        candidates = [inst for _, inst in candidates[:self.MAX_CANDIDATES]]
+        logger.info(f"MomentumScan: {len(candidates)} candidates after exchange/leverage filter "
+                    f"(from {len(universe)} total ETFs)")
+
+        # Stage 2: fetch history and rank
+        scored = []
+        for i, inst in enumerate(candidates):
+            uic    = inst.get("Identifier")
+            closes = self._history(uic, self.LOOKBACK)
+            if closes and len(closes) >= self.LOOKBACK // 2:
+                last  = closes[-1]
+                first = closes[0]
+                sma20 = self._sma(closes, min(self.SMA_CONFIRM, len(closes)))
+                ret   = last / first - 1.0
+                if last > sma20 and ret > 0:
+                    base = str(inst.get("Symbol", "")).split(":")[0]
+                    scored.append((ret, base, inst, uic, last, closes))
+            if (i + 1) % 25 == 0:
+                logger.info(f"  MomentumScan progress: {i+1}/{len(candidates)} "
+                            f"({len(scored)} qualifying so far)")
+            time.sleep(self.CALL_DELAY)
+
+        scored.sort(reverse=True)
+        top_n = self.cfg.max_candidates_per_run
+        logger.info(f"MomentumScan: {len(scored)} qualify → selecting top {top_n}")
+        if scored:
+            logger.info("  Ranking: " +
+                        ", ".join(f"{s}={r*100:+.1f}%" for r, s, *_ in scored[:10]))
+
+        signals = []
+        for rank, (ret, symbol, inst, uic, last_price, closes) in enumerate(scored):
+            if rank >= top_n:
+                break
+            sma20 = self._sma(closes, self.SMA_CONFIRM)
+            signals.append(ETFSignal(
+                uic=uic, symbol=symbol,
+                description=inst.get("Description", ""),
+                exchange_id=inst.get("ExchangeId", ""),
+                currency=inst.get("CurrencyCode", "USD"),
+                action="BUY", score=ret,
+                last_price=last_price,
+                fast_ma=last_price, slow_ma=sma20,
+            ))
+        return signals
+
+
+# ---------------------------------------------------------------------------
 # Public dispatcher
 # ---------------------------------------------------------------------------
 
@@ -344,6 +438,7 @@ class ETFStrategyEngine:
         "risk_off":        RiskOffStrategy,
         "mean_reversion":  MeanReversionStrategy,
         "dual_ma":         DualMAStrategy,
+        "momentum_scan":   MomentumScanStrategy,
     }
 
     def __init__(self, client: SaxoClient, cfg: ETFStrategyConfig):

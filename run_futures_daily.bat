@@ -9,4 +9,4 @@ REM
 REM Must run from the project root so saxo_token.json is found.
 
 cd /d E:\SaxoTrNew\SaxoTrNew
-python -X utf8 futures\runner.py --live
+pythonw -X utf8 futures\runner.py --live >> "E:\SaxoTrNew\SaxoTrNew\data\futures_scheduler.log" 2>&1

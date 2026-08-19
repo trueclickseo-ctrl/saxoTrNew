@@ -2,20 +2,24 @@
 
 **Module**: `forex/`  
 **Universe**: 34 FX pairs — 7 G7 majors + 27 crosses (incl. Scandinavian & EM)  
-**Strategies**: 10 active (9 rule-based + 1 deep learning)  
-**Max slots**: 4+4+4+4+34+34+20+20+20+20 = **164 theoretical max** (currency exposure filter limits practical concurrency)  
-**Risk per trade**: 1% of account equity  
+**Strategies**: 11 active (9 rule-based swing + 1 deep learning swing + 1 day-trading breakout)  
+**Max slots**: 4+4+4+4+34+34+20+20+20+20 = **164 swing** + **7 day-trading** (independent book)  
+**Swing risk per trade**: 1% of account equity  
+**Day-trading capital**: 15,000 SEK dedicated, 1.5% risk per trade  
 
 ---
 
 ## Daily Schedule
 
-| Task (Task Scheduler)  | Time PKT     | Session       | Pairs |
-|------------------------|--------------|---------------|-------|
-| ATOS Forex Daily Run   | 06:20 Mon–Fri | Asian        | 14 (JPY/AUD/NZD crosses) |
-| ATOS Forex Exit Check  | 14:00 Mon–Fri | All          | 34 (stops only — no new entries) |
-| ATOS Forex London Run  | 18:00 Mon–Fri | London       | 20 (EUR/GBP/USD + Scandi/CAD) |
-| ATOS Forex Gap Fill    | 22:00 Sunday  | All          | 34 (gap fill entries only) |
+| Task (Task Scheduler)       | Time PKT       | UTC           | Session        | Pairs |
+|-----------------------------|----------------|---------------|----------------|-------|
+| ATOS Forex Daily Run        | 06:20 Mon–Fri  | 01:20         | Asian          | 14 (JPY/AUD/NZD crosses) |
+| ATOS Forex Exit Check       | 14:00 Mon–Fri  | 09:00         | All            | 34 (stops only — no new entries) |
+| ATOS Forex London Run       | 18:00 Mon–Fri  | 13:00         | London         | 20 (EUR/GBP/USD + Scandi/CAD) |
+| ATOS Forex Gap Fill         | 22:00 Sunday   | 17:00 Sun     | All            | 34 (gap fill entries only) |
+| **LBO London Open**         | **12:00 Mon–Fri** | **07:00**  | **London open** | **7 majors (Asian range break)** |
+| **LBO NY Open**             | **18:00 Mon–Fri** | **13:00**  | **NY open**    | **7 majors (London morning break)** |
+| **LBO Force Close**         | **01:00 daily**   | **20:00**  | **Session end** | **7 (close all LBO positions)** |
 
 ---
 
@@ -481,18 +485,19 @@ If no trained model exists, the strategy silently emits no signals — safe to h
 
 ## Strategy Comparison
 
-| # | Strategy | Type | Win Rate | Key Indicators | Stop | Time Stop | Slots |
-|---|----------|------|----------|---------------|------|-----------|-------|
-| 1 | EMA Crossover | Trend | ~55% | EMA(5/30) + ADX(14) | 1.5×ATR | 45d | 4 |
-| 2 | RSI(2) Pullback | Reversion-in-trend | ~60% | RSI(2) + EMA(200) | 1.5×ATR | 12d | **34** |
-| 3 | Donchian Break | Momentum | ~50% | 30d High/Low + EMA(200) + ADX | 2.0×ATR | 30d | 4 |
-| 4 | BB Reversion | Mean-reversion | ~60% | BB(20,2) + RSI(14) | 2.0×ATR | 8d | 4 |
-| 5 | **Pullback-to-EMA** ★ | Trend continuation | **~70%+** | EMA(20/50) + ADX(14) | 1.5×ATR | 25d | **34** |
-| 6 | **Weekend Gap Fill** ★★ | Structural mean-rev | **~80–85%** | Gap % + live price | 1.5×gap | 7d | **34** |
-| 7 | SuperTrend | Trend | ~65% | ST(10,3) + EMA(200) | 2.0×ATR | 40d | 20 |
-| 8 | Z-Score Rev | Mean-reversion | ~63% | 20d z-score + EMA(200) | 2.5×ATR | 12d | 20 |
-| 9 | ML Signals | ML / Logistic Reg | ~57–62% | 7 features, per-pair retrain | 2.0×ATR | 20d | 20 |
-| 10 | **CNN-LSTM** ★★★ | Deep Learning | **~55–65%** | 16 features, global model, attention | 2.5×ATR | 15d | 20 |
+| # | Strategy | Type | Win Rate | Key Indicators | Stop | Time Stop | Slots | Book |
+|---|----------|------|----------|---------------|------|-----------|-------|------|
+| 1 | EMA Crossover | Trend | ~55% | EMA(5/30) + ADX(14) | 1.5×ATR | 45d | 4 | Swing |
+| 2 | RSI(2) Pullback | Reversion-in-trend | ~60% | RSI(2) + EMA(200) | 1.5×ATR | 12d | **34** | Swing |
+| 3 | Donchian Break | Momentum | ~50% | 30d High/Low + EMA(200) + ADX | 2.0×ATR | 30d | 4 | Swing |
+| 4 | BB Reversion | Mean-reversion | ~60% | BB(20,2) + RSI(14) | 2.0×ATR | 8d | 4 | Swing |
+| 5 | **Pullback-to-EMA** ★ | Trend continuation | **~70%+** | EMA(20/50) + ADX(14) | 1.5×ATR | 25d | **34** | Swing |
+| 6 | **Weekend Gap Fill** ★★ | Structural mean-rev | **~80–85%** | Gap % + live price | 1.5×gap | 7d | **34** | Swing |
+| 7 | SuperTrend | Trend | ~65% | ST(10,3) + EMA(200) | 2.0×ATR | 40d | 20 | Swing |
+| 8 | Z-Score Rev | Mean-reversion | ~63% | 20d z-score + EMA(200) | 2.5×ATR | 12d | 20 | Swing |
+| 9 | ML Signals | ML / Logistic Reg | ~57–62% | 7 features, per-pair retrain | 2.0×ATR | 20d | 20 | Swing |
+| 10 | **CNN-LSTM** ★★★ | Deep Learning | **~55–65%** | 16 features, global model, attention | 2.5×ATR | 15d | 20 | Swing |
+| **11** | **London Breakout** ★★ | **Day Trading** | **~58–63%** | **H1 Asian/London range + session clock** | **Range boundary** | **20:00 UTC** | **7** | **Day** |
 
 ---
 
@@ -540,7 +545,7 @@ All pairs scanned; only those showing a 0.10%–2.00% gap receive entries.
 ## CLI Reference
 
 ```bash
-# Run all 10 strategies — all pairs
+# Run all 10 swing strategies — all pairs
 python forex/runner.py --live
 
 # Session-aware runs (as used by Task Scheduler)
@@ -548,7 +553,12 @@ python forex/runner.py --live --session asian    # 06:20 PKT
 python forex/runner.py --live --session london   # 18:00 PKT
 python forex/runner.py --exits-only --live       # 14:00 PKT (stops only)
 
-# Single strategy
+# London Breakout day-trading strategy (runs INDEPENDENTLY)
+python forex/runner.py --strategy london_breakout --live           # entries (auto-detects London vs NY)
+python forex/runner.py --strategy london_breakout --exits-only --live   # force-close
+python forex/runner.py --strategy london_breakout --scan               # session range dashboard
+
+# Single swing strategy
 python forex/runner.py --live --strategy pullback
 python forex/runner.py --live --strategy gap        # Sunday 22:00 PKT
 python forex/runner.py --live --strategy supertrend
@@ -557,9 +567,12 @@ python forex/runner.py --live --strategy ml
 python forex/runner.py --live --strategy cnn_lstm   # requires trained model
 
 # Diagnostics
-python forex/runner.py --scan      # 10-panel market snapshot (all strategies)
+python forex/runner.py --scan      # 11-panel market snapshot (all strategies)
 python forex/runner.py --status    # open positions + currency exposure
 python forex/runner.py --info      # verify UICs live via Saxo API
+
+# LBO test suite
+python test_london_breakout.py     # 57 tests — run before any LBO change
 
 # CNN-LSTM model management
 python -m forex.cnn_lstm_trainer --train          # train on all 34 pairs (5y data)
@@ -567,6 +580,96 @@ python -m forex.cnn_lstm_trainer --train --pairs EURUSD GBPUSD  # specific pairs
 python -m forex.cnn_lstm_trainer --status         # show walk-forward accuracy
 python -m forex.cnn_lstm_trainer --backtest       # re-run validation without retraining
 python -m forex.cnn_lstm_trainer --train --epochs 50  # quick test (fewer epochs)
+```
+
+---
+
+---
+
+## Strategy 11 — London Breakout (Day Trading) ★★
+
+**File**: `forex/strategy_london_breakout.py`  
+**Type**: Day Trading — Session Range Breakout  
+**Win Rate**: ~58–63%  
+**Capital**: 15,000 SEK dedicated book (independent from swing positions)  
+**Slots**: 7 (one per pair, all 7 majors eligible per session)  
+**No overnight holds** — all positions closed by 20:00 UTC (01:00 PKT)  
+
+### Concept
+FX markets compress during low-liquidity sessions, then release directionally when institutional flows kick in at session opens. We trade the **first directional break** of the compression range at London open (07:00 UTC) and NY open (13:00 UTC).
+
+The stop is on the **opposite boundary of the reference range** — the level that invalidates the breakout thesis. The target is **2× the range size** — giving a 2:1 R/R on every trade. Range size filters (10–120 pips) eliminate thin sessions and chaotic sessions.
+
+**This strategy is isolated from the swing book.** It bypasses portfolio heat checks and the swing drawdown gate via the `DAY_TRADE_STRATEGIES` set in the runner. Only the hard daily loss limit (–3% equity) applies to both books.
+
+### Session Logic
+
+| Session | Entry Window | Reference Range | Target Pairs |
+|---------|-------------|-----------------|-------------|
+| **London** | 07:00–10:00 UTC | Asian session H1 high/low (00:00–06:59 UTC) | EURUSD, GBPUSD, USDJPY, EURGBP, GBPJPY, AUDUSD, USDCAD |
+| **NY** | 13:00–15:00 UTC | London morning H1 high/low (09:00–12:59 UTC) | Same 7 pairs |
+
+### Entry — H1 bar confirmation required
+| Direction | Conditions |
+|-----------|-----------|
+| **BUY**  | H1 close > range_high AND range is 10–120 pips |
+| **SELL** | H1 close < range_low AND range is 10–120 pips |
+
+### Exit (first condition hit)
+- **A — Take profit**: price hits entry ± 2.0 × range size  
+- **B — Stop loss**: price hits opposite range boundary  
+- **C — Time stop**: 20:00 UTC hard close (no overnight holds)
+
+### Parameters
+| Param | Value |
+|-------|-------|
+| Pairs | EURUSD, GBPUSD, USDJPY, EURGBP, GBPJPY, AUDUSD, USDCAD |
+| London entry window | 07:00–10:00 UTC |
+| NY entry window | 13:00–15:00 UTC |
+| Asian range hours | 00:00–06:59 UTC (H1 bars) |
+| London morning range | 09:00–12:59 UTC (H1 bars) |
+| Min range | 10 pips |
+| Max range | 120 pips |
+| TP ratio | 2.0 × range |
+| Stop | Opposite range boundary |
+| Time stop | 20:00 UTC |
+| Risk per trade | 1.5% of equity |
+| Capital | 15,000 SEK dedicated |
+| Data | H1 bars (last 48 hours via Saxo API) |
+
+### Position Sizing (15,000 SEK book)
+```
+risk_SEK = 15,000 × 0.015 = 225 SEK ≈ $21 USD
+stop_distance = range_size (in price)
+units = risk_USD / stop_distance
+        → capped at 1,000 min / 50,000 max
+```
+
+### Scheduled Tasks (Task Scheduler)
+| Task name | Trigger | Action |
+|-----------|---------|--------|
+| `lbo-london-open` | Mon–Fri 12:00 PKT (07:00 UTC) | `run_lbo_london.bat` — entries |
+| `lbo-ny-open` | Mon–Fri 18:00 PKT (13:00 UTC) | `run_lbo_ny.bat` — entries |
+| `lbo-force-close` | Daily 01:00 PKT (20:00 UTC) | `run_lbo_close.bat` — exits only |
+
+### Email Alerts
+Every open and close fires an immediate email via `forex/notifier.py`:
+- **Open alert**: pair, direction, entry, stop, TP, R/R, risk in SEK, session name
+- **Close alert**: WIN/LOSS badge, P&L % and SEK, exit reason (TP / SL / time_stop)
+
+### Key Files
+| File | Purpose |
+|------|---------|
+| `forex/strategy_london_breakout.py` | Strategy: signal generation, exit logic, scan summary |
+| `run_lbo_london.bat` | London open launcher (hidden window via VBS) |
+| `run_lbo_ny.bat` | NY open launcher |
+| `run_lbo_close.bat` | Force-close launcher (exits only) |
+| `test_london_breakout.py` | 57-test suite (unit / functional / blackbox / edge) |
+
+### Test Suite
+```powershell
+python test_london_breakout.py
+# → 57/57 PASS  (unit, functional, exit, scan, blackbox, edge cases)
 ```
 
 ---

@@ -124,9 +124,12 @@ DRAWDOWN_PAUSE_PCT    = 0.10  # pause all entries if equity is >10% below rollin
 PEAK_EQUITY_FILE      = os.path.join(os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), "data"), "futures_peak_equity.json")
 
-# Correlated market pairs — never hold the same direction in both
+# Correlated market groups — never hold the same direction in more than one per group
 CORRELATED_PAIRS = [
-    {"ES", "NQ"},   # S&P and NASDAQ: >0.95 correlation — treat as same exposure
+    {"ES", "NQ", "YM"},          # US equity indices: >0.90 correlation
+    {"GC", "SI"},                 # Gold and silver: precious metals move together
+    {"CL", "NG"},                 # Crude and nat gas: energy sector (lower ~0.6 corr)
+    {"ZC", "ZW", "ZS"},          # Corn, wheat, soybeans: grain complex
 ]
 
 _LOG_DIR  = os.path.join(_ROOT, "logs")
@@ -377,6 +380,54 @@ def _entries_blocked_by_loss_limit(equity: float) -> bool:
     return False
 
 
+# ── Momentum pre-filter ──────────────────────────────────────────────────────
+
+def _momentum_rank_futures(market_data: dict, top_n: int) -> set:
+    """
+    Rank all 13 markets by 20-day normalised momentum (abs price move / ATR).
+    Returns the set of top_n symbol names. Used to restrict entry signals to
+    markets where a meaningful trend is already in motion.
+    Exits are never restricted — stop management always runs on all markets.
+    """
+    import numpy as np
+    scores = {}
+    for sym, df in market_data.items():
+        if df is None or len(df) < 22:
+            continue
+        for col in ("Close", "CloseAsk"):
+            if col in df.columns:
+                c = df[col].dropna()
+                break
+        else:
+            continue
+        if len(c) < 22:
+            continue
+        move = abs(float(c.iloc[-1]) - float(c.iloc[-21]))
+        for hcol in ("High", "HighAsk"):
+            if hcol in df.columns:
+                hi = df[hcol].dropna(); break
+        else:
+            hi = c
+        for lcol in ("Low", "LowAsk"):
+            if lcol in df.columns:
+                lo = df[lcol].dropna(); break
+        else:
+            lo = c
+        tr  = pd.concat([(hi - lo).abs(),
+                          (hi - c.shift(1)).abs(),
+                          (lo - c.shift(1)).abs()], axis=1).max(axis=1)
+        atr = float(tr.rolling(14).mean().iloc[-1])
+        if atr > 0 and not np.isnan(atr):
+            scores[sym] = move / atr
+    ranked   = sorted(scores, key=scores.__getitem__, reverse=True)
+    selected = set(ranked[:top_n])
+    skipped  = sorted(set(scores) - selected)
+    logger.info(f"Futures momentum filter: top {top_n}/{len(scores)} markets → "
+                f"{sorted(selected)}"
+                + (f"  |  filtered: {skipped}" if skipped else ""))
+    return selected
+
+
 # ── Portfolio heat guard ──────────────────────────────────────────────────────
 
 def _portfolio_heat_pct(positions: dict, market_data: dict, universe: dict,
@@ -559,7 +610,8 @@ def _run_strategy_exits(strat_name: str, strat_mod, positions: dict,
                     "exit_price": live_px, "reason": reason,
                     "pnl_pct": round(pnl_pct, 2), "dry_run": dry_run})
         if not dry_run:
-            pnl_tracker.log_close("futures", sym, live_px, reason, strategy=strat_name)
+            pnl_tracker.log_close("futures", sym, live_px, reason, strategy=strat_name,
+                                  asset_type=asset_type)
         del positions[key]
         exits += 1
     return exits
@@ -672,7 +724,8 @@ def _run_strategy_entries(strat_name: str, strat_mod, positions: dict,
         if True:  # always true now (dry_run path has already continued)
             pnl_tracker.log_open("futures", strat_name, sym, direction, qty,
                                  sig["close"], sig["stop_price"],
-                                 order_id=oid, timestamp=today_str)
+                                 order_id=oid, timestamp=today_str,
+                                 asset_type=asset_type)
         entries += 1
     return entries
 
@@ -714,6 +767,13 @@ def run_daily(dry_run: bool = True,
     for sym, info in universe.items():
         market_data[sym] = _fetch_history(info["uic"], info["asset_type"])
 
+    # ── Momentum pre-filter: entries only in top 70% of markets by trend ──
+    # Exits always run on full market_data. Entries only fire on top-momentum
+    # markets, concentrating capital where trends are strongest.
+    _top_n_fut = max(6, round(len(universe) * 0.70))
+    top_markets = _momentum_rank_futures(market_data, top_n=_top_n_fut)
+    entry_market_data = {k: v for k, v in market_data.items() if k in top_markets}
+
     today_str    = date.today().isoformat()
     total_exits  = 0
     total_entries = 0
@@ -747,7 +807,7 @@ def run_daily(dry_run: bool = True,
             logger.info(f"  [{name}] Entries BLOCKED — {reason} active")
             entries = 0
         else:
-            entries = _run_strategy_entries(name, mod, positions, market_data,
+            entries = _run_strategy_entries(name, mod, positions, entry_market_data,
                                             universe, equity, akey, today_str,
                                             dry_run, weight=w)
 

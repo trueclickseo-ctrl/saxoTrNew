@@ -408,3 +408,125 @@ def send_weekly_report(
     subject = (f"FX Autopilot Weekly — ${total_realized:,.0f} realized | "
                f"{open_count} open | {today}")
     _send(subject, _wrap("Weekly Performance Report", body))
+
+
+def send_lbo_trade_opened(
+    symbol:    str,
+    direction: str,
+    entry:     float,
+    stop:      float,
+    tp:        float,
+    units:     int,
+    session:   str,
+    range_pips: float = 0,
+) -> None:
+    """Immediate alert when a London Breakout trade is opened."""
+    now    = datetime.now()
+    time_  = now.strftime("%H:%M")
+    today  = now.strftime("%Y-%m-%d")
+    cls    = "buy" if direction == "Buy" else "sell"
+    tag    = "LONG" if direction == "Buy" else "SHORT"
+    rr     = round(abs(tp - entry) / abs(entry - stop), 1) if abs(entry - stop) > 0 else 0
+    risk_sek = round(abs(entry - stop) * units * 10.7, 0)
+
+    body = f"""
+    <span class="badge {cls}">&#9650; {direction.upper()} OPENED — {tag}</span>
+    <div class="metric-row" style="margin-top:14px">
+      <div class="metric">
+        <div class="lbl">Pair</div>
+        <div class="val" style="font-size:20px">{symbol}</div>
+      </div>
+      <div class="metric">
+        <div class="lbl">Session</div>
+        <div class="val" style="font-size:16px; color:#58a6ff">{session}</div>
+      </div>
+      <div class="metric">
+        <div class="lbl">Units</div>
+        <div class="val" style="font-size:16px">{units:,}</div>
+      </div>
+      <div class="metric">
+        <div class="lbl">R:R</div>
+        <div class="val" style="font-size:16px">{rr}:1</div>
+      </div>
+    </div>
+    <table style="margin-top:10px">
+      <thead><tr>
+        <th>Entry</th><th>Stop Loss</th><th>Take Profit</th>
+        <th>Range</th><th>Risk (SEK)</th>
+      </tr></thead>
+      <tbody><tr>
+        <td class="sym">{entry:.5f}</td>
+        <td class="neg">{stop:.5f}</td>
+        <td class="pos">{tp:.5f}</td>
+        <td class="muted">{range_pips:.0f} pips</td>
+        <td class="neg">~{risk_sek:,.0f} SEK</td>
+      </tr></tbody>
+    </table>
+    <p class="muted" style="margin-top:12px">
+      London Breakout · {session} open · {time_} PKT · {today}<br>
+      Position closes automatically by 01:00 PKT (20:00 UTC) if TP/SL not hit.
+    </p>
+    """
+    subject = f"LBO 📈 {direction.upper()} {symbol} @ {entry:.5f} — {session} open [{time_} PKT]"
+    _send(subject, _wrap(f"Day Trade Opened — {symbol} {tag}", body))
+
+
+def send_lbo_trade_closed(
+    symbol:    str,
+    direction: str,
+    entry:     float,
+    exit_px:   float,
+    pnl_pct:   float,
+    units:     int,
+    reason:    str,
+    session:   str = "",
+) -> None:
+    """Immediate alert when a London Breakout trade is closed."""
+    now    = datetime.now()
+    time_  = now.strftime("%H:%M")
+    today  = now.strftime("%Y-%m-%d")
+    won    = pnl_pct > 0
+    cls    = "buy" if won else "sell"
+    result = "WIN ✓" if won else "LOSS ✗"
+    col    = "#3fb950" if won else "#f85149"
+    sign   = "+" if pnl_pct >= 0 else ""
+    pnl_sek = round(abs(exit_px - entry) * units * 10.7 * (1 if won else -1), 0)
+    pnl_sgn = "+" if pnl_sek >= 0 else ""
+
+    body = f"""
+    <span class="badge {cls}">{result}</span>
+    <div class="metric-row" style="margin-top:14px">
+      <div class="metric">
+        <div class="lbl">Pair</div>
+        <div class="val" style="font-size:20px">{symbol}</div>
+      </div>
+      <div class="metric">
+        <div class="lbl">P&L %</div>
+        <div class="val" style="color:{col}">{sign}{pnl_pct:.2f}%</div>
+      </div>
+      <div class="metric">
+        <div class="lbl">P&L (SEK)</div>
+        <div class="val" style="color:{col}">{pnl_sgn}{pnl_sek:,.0f}</div>
+      </div>
+      <div class="metric">
+        <div class="lbl">Units</div>
+        <div class="val" style="font-size:16px">{units:,}</div>
+      </div>
+    </div>
+    <table style="margin-top:10px">
+      <thead><tr>
+        <th>Direction</th><th>Entry</th><th>Exit</th><th>Exit Reason</th>
+      </tr></thead>
+      <tbody><tr>
+        <td><span class="badge {'buy' if direction=='Buy' else 'sell'}">{direction}</span></td>
+        <td>{entry:.5f}</td>
+        <td class="sym">{exit_px:.5f}</td>
+        <td class="muted">{reason}</td>
+      </tr></tbody>
+    </table>
+    <p class="muted" style="margin-top:12px">
+      London Breakout · {time_} PKT · {today}
+    </p>
+    """
+    subject = f"LBO {'✅' if won else '❌'} {symbol} {result} {sign}{pnl_pct:.2f}% ({pnl_sgn}{pnl_sek:,.0f} SEK) [{time_} PKT]"
+    _send(subject, _wrap(f"Day Trade Closed — {symbol} {result}", body))

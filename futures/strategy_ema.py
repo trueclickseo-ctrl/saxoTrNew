@@ -1,24 +1,24 @@
-"""
+﻿"""
 futures/strategy_ema.py
 -----------------------
-Futures Strategy 3 — EMA(5/20) Crossover with ADX(14) Confirmation.
+Futures Strategy 3 â€” EMA(5/20) Crossover with ADX(14) Confirmation.
 
 STRATEGY:
 
   CONCEPT:
     A shorter-period MA crossover than Donchian, providing more frequent
     trend-change signals.  The ADX(14) filter ensures we only act when
-    there is genuine directional momentum — not random oscillation.
+    there is genuine directional momentum â€” not random oscillation.
 
   ENTRY:
-    EMA(5) crosses above EMA(20) + ADX(14) >= 20 + +DI > -DI → BUY
-    EMA(5) crosses below EMA(20) + ADX(14) >= 20 + -DI > +DI → SELL (GC/ZB only)
+    EMA(5) crosses above EMA(20) + ADX(14) >= 20 + +DI > -DI â†’ BUY
+    EMA(5) crosses below EMA(20) + ADX(14) >= 20 + -DI > +DI â†’ SELL (GC/ZB only)
     Crossover detected within last 3 bars (3-bar lookback window).
     Regime filter: ES/NQ longs blocked when ES < 200d SMA.
 
   EXIT (first condition hit):
     A. Opposite EMA crossover (EMA(5) crosses back through EMA(20))
-    B. ATR hard stop: 2.0 × ATR(14)
+    B. ATR hard stop: 2.0 Ã— ATR(14)
     C. Time stop: 25 calendar days
 
   SIZING:
@@ -34,17 +34,17 @@ WHY THIS WORKS:
 BACKTESTED EXPECTED RESULTS (5 markets):
   ~20-25 signals/year  |  WR ~45-50%  |  Avg hold ~14 days
 
-THIS MODULE IS PURE — no I/O, no orders, no state.
+THIS MODULE IS PURE â€” no I/O, no orders, no state.
 """
 
 import numpy as np
 import pandas as pd
 
-# ── Parameters ────────────────────────────────────────────────────────────────
+# â”€â”€ Parameters â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 FAST_EMA      = 5
 SLOW_EMA      = 20
 ADX_PERIOD    = 14
-ADX_MIN       = 20     # less strict than Forex's 25 — futures trend more cleanly
+ADX_MIN       = 20     # less strict than Forex's 25 â€” futures trend more cleanly
 ATR_PERIOD    = 14
 ATR_STOP_MULT = 2.0
 RISK_PCT      = 0.01
@@ -53,12 +53,12 @@ TIME_STOP_DAYS = 25
 SIGNAL_LOOKBACK = 3    # bars to look back for a fresh crossover
 MIN_BARS      = SLOW_EMA + ADX_PERIOD + 5
 
-LONG_ONLY_MARKETS     = {"ES", "NQ", "CL"}
-BIDIRECTIONAL_MARKETS = {"GC", "ZB"}
-EQUITY_FUTURES        = {"ES", "NQ"}
+LONG_ONLY_MARKETS     = {"ES", "NQ", "YM", "DAX", "HK50", "CL", "NG"}
+BIDIRECTIONAL_MARKETS = {"GC", "SI", "ZB", "ZC", "ZW", "ZS"}
+EQUITY_FUTURES        = {"ES", "NQ", "YM", "DAX", "HK50"}
 
 
-# ── Indicators ────────────────────────────────────────────────────────────────
+# â”€â”€ Indicators â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _ema(series: pd.Series, period: int) -> pd.Series:
     return series.ewm(span=period, adjust=False).mean()
@@ -107,7 +107,7 @@ def _es_risk_off(market_data: dict, regime_symbol: str = "ES") -> bool:
     return float(c.iloc[-1]) < float(_sma(c, 200).iloc[-1])
 
 
-# ── Signal generation ─────────────────────────────────────────────────────────
+# â”€â”€ Signal generation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def generate_signals(market_data: dict, regime_symbol: str = "ES",
                      open_symbols: set = None) -> list:

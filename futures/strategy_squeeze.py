@@ -1,18 +1,18 @@
-"""
+﻿"""
 futures/strategy_squeeze.py
 ---------------------------
-Futures Strategy 5 — Bollinger Band Squeeze Breakout.
+Futures Strategy 5 â€” Bollinger Band Squeeze Breakout.
 
 CONCEPT:
   Markets alternate between periods of low volatility (compression) and
   high volatility (expansion). A "squeeze" occurs when Bollinger Bands
-  (BB, 20d, 2σ) contract inside Keltner Channels (KC, 20d EMA ± 1.5×ATR).
+  (BB, 20d, 2Ïƒ) contract inside Keltner Channels (KC, 20d EMA Â± 1.5Ã—ATR).
   When BB eventually expands back outside KC, it signals an imminent
-  directional breakout — volatility is releasing.
+  directional breakout â€” volatility is releasing.
 
   Inspired by John Carter's TTM Squeeze (popularised in "Mastering the Trade").
-  The squeeze itself is neutral — direction is determined by a momentum
-  oscillator (close − midpoint of 20d high/low range) and ATR-confirmed breakout.
+  The squeeze itself is neutral â€” direction is determined by a momentum
+  oscillator (close âˆ’ midpoint of 20d high/low range) and ATR-confirmed breakout.
 
 ENTRY:
   LONG:  squeeze just released (BB was inside KC, now BB > KC)
@@ -25,24 +25,24 @@ ENTRY:
   Regime filter: ES/NQ longs blocked when ES < 200d SMA.
 
 EXIT (first condition hit):
-  A. Momentum reverses sign (histogram turns from + to − or vice versa)
-  B. 2.0×ATR hard stop
-  C. 15-day time stop (squeezes resolve fast — stale signals cut early)
+  A. Momentum reverses sign (histogram turns from + to âˆ’ or vice versa)
+  B. 2.0Ã—ATR hard stop
+  C. 15-day time stop (squeezes resolve fast â€” stale signals cut early)
 
 SIZING:  1% equity per trade, ATR-based.
 
 EXPECTED RESULTS:
   ~10-15 signals/year  |  WR ~60-65%  |  Avg hold ~8 days
-  Edge: enters at the very start of a volatility expansion → tight stop,
+  Edge: enters at the very start of a volatility expansion â†’ tight stop,
   large potential move relative to risk.
 
-THIS MODULE IS PURE — no I/O, no orders, no state.
+THIS MODULE IS PURE â€” no I/O, no orders, no state.
 """
 
 import numpy as np
 import pandas as pd
 
-# ── Parameters ────────────────────────────────────────────────────────────────
+# â”€â”€ Parameters â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 BB_PERIOD      = 20
 BB_STD         = 2.0
 KC_EMA_PERIOD  = 20
@@ -53,9 +53,9 @@ RISK_PCT       = 0.01
 TIME_STOP_DAYS = 15
 MIN_BARS       = BB_PERIOD + ATR_PERIOD + 5
 
-LONG_ONLY_MARKETS     = {"ES", "NQ", "CL"}
-BIDIRECTIONAL_MARKETS = {"GC", "ZB"}
-EQUITY_FUTURES        = {"ES", "NQ"}
+LONG_ONLY_MARKETS     = {"ES", "NQ", "YM", "DAX", "HK50", "CL", "NG"}
+BIDIRECTIONAL_MARKETS = {"GC", "SI", "ZB", "ZC", "ZW", "ZS"}
+EQUITY_FUTURES        = {"ES", "NQ", "YM", "DAX", "HK50"}
 
 
 def _ema(s, p):   return s.ewm(span=p, adjust=False).mean()

@@ -1,0 +1,91 @@
+﻿<?xml version="1.0" encoding="UTF-16"?>
+
+<Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+
+  <RegistrationInfo>
+
+    <URI>\ATOS Intraday Monitor</URI>
+
+  </RegistrationInfo>
+
+  <Principals>
+
+    <Principal id="Author">
+
+      <UserId>S-1-5-21-3416924990-1585745221-1109109084-1009</UserId>
+
+      <LogonType>InteractiveToken</LogonType>
+
+      <RunLevel>HighestAvailable</RunLevel>
+
+    </Principal>
+
+  </Principals>
+
+  <Settings>
+
+    <DisallowStartIfOnBatteries>true</DisallowStartIfOnBatteries>
+
+    <StopIfGoingOnBatteries>true</StopIfGoingOnBatteries>
+
+    <ExecutionTimeLimit>PT8H</ExecutionTimeLimit>
+
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+
+    <IdleSettings>
+
+      <Duration>PT10M</Duration>
+
+      <WaitTimeout>PT1H</WaitTimeout>
+
+      <StopOnIdleEnd>true</StopOnIdleEnd>
+
+      <RestartOnIdle>false</RestartOnIdle>
+
+    </IdleSettings>
+
+    <UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine>
+
+  </Settings>
+
+  <Triggers>
+
+    <CalendarTrigger>
+
+      <StartBoundary>2026-08-10T18:25:00+05:00</StartBoundary>
+
+      <ScheduleByWeek>
+
+        <WeeksInterval>1</WeeksInterval>
+
+        <DaysOfWeek>
+
+          <Monday />
+
+          <Tuesday />
+
+          <Wednesday />
+
+          <Thursday />
+
+          <Friday />
+
+        </DaysOfWeek>
+
+      </ScheduleByWeek>
+
+    </CalendarTrigger>
+
+  </Triggers>
+
+  <Actions Context="Author">
+
+    <Exec>
+
+      <Command>E:\saxobackup\SaxoTrader\files_kwaseem\start_intraday_monitor.bat</Command>
+
+    </Exec>
+
+  </Actions>
+
+</Task>

@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS trades (
     exit_price       REAL,
     stop_price       REAL    DEFAULT 0,
     realized_pnl     REAL,
+    commission       REAL    DEFAULT 0,
     currency         TEXT    DEFAULT 'USD',
     order_id         TEXT,
     exit_reason      TEXT,
@@ -52,6 +53,24 @@ CREATE INDEX IF NOT EXISTS idx_symbol  ON trades(symbol);
 CREATE INDEX IF NOT EXISTS idx_ts_open ON trades(timestamp_open);
 """
 
+# Per-module commission rates applied at open AND close.
+# ContractFutures: $2.00/contract/side (Saxo typical for CL/ZB).
+# ETF: 0.10% of trade value per side (Saxo ETF, min $5).
+# Forex/CfdOnIndex/FxSpot: spread-embedded, no explicit commission line.
+COMMISSION_FUTURES_PER_CONTRACT = 2.00   # USD per contract per side
+COMMISSION_ETF_PCT              = 0.001  # 0.10% per side
+COMMISSION_ETF_MIN              = 5.00   # USD minimum per trade
+
+
+def calc_commission(module: str, quantity: float, price: float,
+                    asset_type: str = "") -> float:
+    """Return one-side commission in the trade's currency (USD)."""
+    if module == "futures" and asset_type == "ContractFutures":
+        return round(quantity * COMMISSION_FUTURES_PER_CONTRACT, 2)
+    if module == "etf":
+        return round(max(COMMISSION_ETF_MIN, quantity * price * COMMISSION_ETF_PCT), 2)
+    return 0.0   # forex spread-embedded; stock handled by atos.risk
+
 
 # ── Connection ──────────────────────────────────────────────────────
 
@@ -60,6 +79,12 @@ def _conn() -> sqlite3.Connection:
     c = sqlite3.connect(DB_PATH)
     c.row_factory = sqlite3.Row
     c.executescript(_SCHEMA)
+    # One-time migration: add commission column to existing databases
+    try:
+        c.execute("ALTER TABLE trades ADD COLUMN commission REAL DEFAULT 0")
+        c.commit()
+    except sqlite3.OperationalError:
+        pass  # column already exists
     return c
 
 
@@ -68,26 +93,36 @@ def _conn() -> sqlite3.Connection:
 def log_open(module: str, strategy: str, symbol: str, direction: str,
              quantity: float, entry_price: float, stop_price: float = 0,
              currency: str = "USD", order_id: str = None,
-             timestamp: str = None, source_ref: str = None) -> int:
-    """Record a new trade opening. Returns the new row id."""
+             timestamp: str = None, source_ref: str = None,
+             commission: float = 0.0, asset_type: str = "") -> int:
+    """Record a new trade opening. Returns the new row id.
+
+    commission: one-side entry commission in trade currency.
+                Pass 0 to auto-calculate via calc_commission(), or supply
+                explicitly. If both are 0, calc_commission() is called.
+    """
+    if commission == 0.0:
+        commission = calc_commission(module, quantity, entry_price, asset_type)
     ts = timestamp or datetime.now().isoformat()
     with _conn() as c:
         cur = c.execute("""
             INSERT INTO trades
                 (module, strategy, symbol, direction, quantity, entry_price,
-                 stop_price, currency, order_id, status, timestamp_open, source_ref)
-            VALUES (?,?,?,?,?,?,?,?,?,'open',?,?)
+                 stop_price, commission, currency, order_id, status,
+                 timestamp_open, source_ref)
+            VALUES (?,?,?,?,?,?,?,?,?,?,'open',?,?)
         """, (module, strategy, symbol, direction, quantity, entry_price,
-              stop_price, currency, order_id, ts, source_ref))
+              stop_price, commission, currency, order_id, ts, source_ref))
         return cur.lastrowid
 
 
 def log_close(module: str, symbol: str, exit_price: float,
               exit_reason: str = "", strategy: str = None,
-              timestamp: str = None, order_id: str = None) -> float | None:
-    """
-    Close the most-recent open trade for module+symbol (optionally filtered by strategy).
-    Returns realized P&L or None if no matching open trade found.
+              timestamp: str = None, order_id: str = None,
+              commission: float = 0.0, asset_type: str = "") -> float | None:
+    """Close the most-recent open trade for module+symbol.
+
+    Returns net realized P&L (after entry + exit commission) or None if not found.
     """
     ts = timestamp or datetime.now().isoformat()
     q    = "SELECT * FROM trades WHERE module=? AND symbol=? AND status='open'"
@@ -101,18 +136,23 @@ def log_close(module: str, symbol: str, exit_price: float,
         row = c.execute(q, args).fetchone()
         if not row:
             return None
-        ep       = row["entry_price"]
-        qty      = row["quantity"]
+        ep        = row["entry_price"]
+        qty       = row["quantity"]
         direction = row["direction"]
-        raw      = (exit_price - ep) if direction in ("Buy", "BUY") else (ep - exit_price)
-        pnl      = raw * qty
+        raw       = (exit_price - ep) if direction in ("Buy", "BUY") else (ep - exit_price)
+        gross_pnl = raw * qty
+        if commission == 0.0:
+            commission = calc_commission(module, qty, exit_price, asset_type)
+        entry_comm = row["commission"] or 0.0
+        total_comm = entry_comm + commission
+        net_pnl    = gross_pnl - total_comm
         c.execute("""
             UPDATE trades
-               SET exit_price=?, realized_pnl=?, exit_reason=?,
-                   status='closed', timestamp_close=?
+               SET exit_price=?, realized_pnl=?, commission=?,
+                   exit_reason=?, status='closed', timestamp_close=?
              WHERE id=?
-        """, (exit_price, pnl, exit_reason, ts, row["id"]))
-        return pnl
+        """, (exit_price, net_pnl, total_comm, exit_reason, ts, row["id"]))
+        return net_pnl
 
 
 def update_stop(module: str, symbol: str, new_stop: float, strategy: str = None):
@@ -451,6 +491,7 @@ def get_summary(module: str = None) -> dict:
             closed = c.execute("""
                 SELECT COUNT(*) AS n,
                        SUM(realized_pnl)                        AS total_pnl,
+                       SUM(commission)                          AS total_commission,
                        SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) AS wins,
                        SUM(CASE WHEN realized_pnl < 0 THEN 1 ELSE 0 END) AS losses,
                        SUM(CASE WHEN realized_pnl > 0 THEN realized_pnl ELSE 0 END) AS gross_profit,
@@ -469,24 +510,26 @@ def get_summary(module: str = None) -> dict:
 
             n          = closed["n"] or 0
             total_pnl  = closed["total_pnl"] or 0.0
+            total_comm = closed["total_commission"] or 0.0
             wins       = closed["wins"]       or 0
             losses     = closed["losses"]     or 0
             gp         = closed["gross_profit"] or 0.0
             gl         = abs(closed["gross_loss"] or 0.0)
             result[mod] = {
-                "module":         mod,
-                "closed_trades":  n,
-                "open_trades":    open_n,
-                "realized_pnl":   round(total_pnl, 2),
-                "wins":           wins,
-                "losses":         losses,
-                "win_rate":       round(wins / n * 100, 1) if n else 0.0,
-                "profit_factor":  round(gp / gl, 2) if gl > 0 else None,
-                "best_trade":     round(closed["best_trade"] or 0, 2),
-                "worst_trade":    round(closed["worst_trade"] or 0, 2),
-                "avg_pnl":        round(closed["avg_pnl"] or 0, 2),
-                "first_trade":    (closed["first_trade"] or "")[:10],
-                "last_close":     (closed["last_close"]  or "")[:10],
+                "module":           mod,
+                "closed_trades":    n,
+                "open_trades":      open_n,
+                "realized_pnl":     round(total_pnl, 2),
+                "total_commission": round(total_comm, 2),
+                "wins":             wins,
+                "losses":           losses,
+                "win_rate":         round(wins / n * 100, 1) if n else 0.0,
+                "profit_factor":    round(gp / gl, 2) if gl > 0 else None,
+                "best_trade":       round(closed["best_trade"] or 0, 2),
+                "worst_trade":      round(closed["worst_trade"] or 0, 2),
+                "avg_pnl":          round(closed["avg_pnl"] or 0, 2),
+                "first_trade":      (closed["first_trade"] or "")[:10],
+                "last_close":       (closed["last_close"]  or "")[:10],
             }
 
     # Grand total (USD-denominated modules only for clean aggregation)
@@ -542,12 +585,14 @@ def print_statement(module: str = None):
 
         print(f"  {BD}{label:<10}{W}  {DM}{desc}{W}")
         print(f"  {HR}")
+        comm = s.get("total_commission", 0.0)
         print(f"  Closed trades : {BD}{n}{W}       Open : {BD}{s.get('open_trades',0)}{W}")
         print(f"  Win rate      : {BD}{wr:.1f}%{W}        Profit factor : {BD}{pf if pf else '—'}{W}")
         print(f"  Best trade    : {GR}{BD}{s.get('best_trade',0):+.2f} {cur}{W}    "
               f"Worst trade : {RD}{BD}{s.get('worst_trade',0):+.2f} {cur}{W}")
-        print(f"  Avg per trade : {BD}{s.get('avg_pnl',0):+.2f} {cur}{W}")
-        print(f"  {BD}REALIZED P&L  : {pc}{sign}{pnl:,.2f} {cur}{W}")
+        print(f"  Avg per trade : {BD}{s.get('avg_pnl',0):+.2f} {cur}{W}    "
+              f"Commission : {RD}{BD}-{comm:,.2f} {cur}{W}")
+        print(f"  {BD}REALIZED P&L  : {pc}{sign}{pnl:,.2f} {cur}{W}  {DM}(net of commission){W}")
         print(f"  {HR}\n")
 
     if not module:

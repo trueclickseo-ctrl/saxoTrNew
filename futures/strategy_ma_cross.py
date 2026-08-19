@@ -1,7 +1,7 @@
-"""
+﻿"""
 futures/strategy_ma_cross.py
 -----------------------------
-Futures Strategy 6 — SMA(50/200) Golden Cross / Death Cross.
+Futures Strategy 6 â€” SMA(50/200) Golden Cross / Death Cross.
 
 CONCEPT:
   The 50/200 day moving average cross is one of the oldest and most
@@ -11,12 +11,12 @@ CONCEPT:
   opposite.
 
   These signals are rare (~2-4 per market per year) but extremely high
-  quality — they filter out all short-term noise and capture only genuine
+  quality â€” they filter out all short-term noise and capture only genuine
   multi-week trend changes. Win rate is typically 65-70% because by the
   time the cross occurs, the trend is well-established.
 
   IMPORTANT: Golden/Death Cross signals lag by design. The entry is NOT
-  at the start of the trend — it's at confirmation. This trades off some
+  at the start of the trend â€” it's at confirmation. This trades off some
   upside for much higher signal quality. The hard stop and time stop
   protect against the minority of false crosses.
 
@@ -26,32 +26,32 @@ ENTRY:
                            AND ADX(14) >= 15 (minimal trend filter)
   SHORT (GC + ZB only):   SMA(50) crosses below SMA(200) within last 3 bars
                            AND SMA(50) < SMA(200)
-  Regime filter: NOT applied — the cross itself IS the regime filter.
+  Regime filter: NOT applied â€” the cross itself IS the regime filter.
 
 EXIT (first condition hit):
   A. SMA(50) crosses back through SMA(200) (confirmed reversal)
-  B. 2.5×ATR(14) hard stop (wider — gives trend room to breathe)
+  B. 2.5Ã—ATR(14) hard stop (wider â€” gives trend room to breathe)
   C. 60-day time stop (trend crosses resolve over weeks, not days)
 
 SIZING:  1% equity per trade, ATR-based.
 
 EXPECTED RESULTS:
   ~4-8 signals/year  |  WR ~65-70%  |  Avg hold ~25 days
-  Edge: highest signal quality of all 6 strategies — the cross confirms
+  Edge: highest signal quality of all 6 strategies â€” the cross confirms
   the trend has already flipped. Large winners when the trend continues
   post-cross (oil 2022, gold 2023, bonds 2020).
 
-THIS MODULE IS PURE — no I/O, no orders, no state.
+THIS MODULE IS PURE â€” no I/O, no orders, no state.
 """
 
 import numpy as np
 import pandas as pd
 
-# ── Parameters ────────────────────────────────────────────────────────────────
+# â”€â”€ Parameters â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 FAST_MA        = 50
 SLOW_MA        = 200
 ADX_PERIOD     = 14
-ADX_MIN        = 15    # very low — the MA cross itself is the filter
+ADX_MIN        = 15    # very low â€” the MA cross itself is the filter
 ATR_PERIOD     = 14
 ATR_STOP_MULT  = 2.5   # wider stop for longer-term signal
 RISK_PCT       = 0.01
@@ -59,9 +59,9 @@ TIME_STOP_DAYS = 60
 SIGNAL_LOOKBACK = 3
 MIN_BARS       = SLOW_MA + ADX_PERIOD + 5
 
-LONG_ONLY_MARKETS     = {"ES", "NQ", "CL"}
-BIDIRECTIONAL_MARKETS = {"GC", "ZB"}
-EQUITY_FUTURES        = {"ES", "NQ"}
+LONG_ONLY_MARKETS     = {"ES", "NQ", "YM", "DAX", "HK50", "CL", "NG"}
+BIDIRECTIONAL_MARKETS = {"GC", "SI", "ZB", "ZC", "ZW", "ZS"}
+EQUITY_FUTURES        = {"ES", "NQ", "YM", "DAX", "HK50"}
 
 
 def _sma(s, p):  return s.rolling(p, min_periods=p).mean()

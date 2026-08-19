@@ -1,12 +1,12 @@
-"""
+﻿"""
 futures/strategy_trend_ma.py
 -----------------------------
-Futures Strategy 7 — Medium-Term Dual-MA Trend with Trend Strength Filter.
+Futures Strategy 7 â€” Medium-Term Dual-MA Trend with Trend Strength Filter.
 
 CONCEPT:
   The classic medium-term trend signal from your strategy notes.
   MA(20) vs MA(100) sits between the fast EMA(5/20) and the slow SMA(50/200),
-  capturing multi-week trends that last 1–6 weeks — the sweet spot for
+  capturing multi-week trends that last 1â€“6 weeks â€” the sweet spot for
   liquid futures (ES, NQ, GC, CL, ZB).
 
   Trend Strength (TS) normalises the MA gap by price, filtering out
@@ -17,38 +17,38 @@ CONCEPT:
   the top-quartile of its own 252-day history. High-vol regimes punish
   trend entries with wide stops and frequent whipsaws.
 
-  Trailing stop follows MA(50) ± 1.5×ATR, ratcheting in the favourable
-  direction — lets winners run while giving the trend room to breathe.
+  Trailing stop follows MA(50) Â± 1.5Ã—ATR, ratcheting in the favourable
+  direction â€” lets winners run while giving the trend room to breathe.
 
 ENTRY (both directions for GC/ZB; long-only for ES/NQ/CL):
   LONG  : MA20 > MA100  AND  TS > +TS_THRESHOLD  AND  low-vol regime
-  SHORT : MA20 < MA100  AND  TS < −TS_THRESHOLD  AND  low-vol regime
+  SHORT : MA20 < MA100  AND  TS < âˆ’TS_THRESHOLD  AND  low-vol regime
          (GC / ZB only for shorts)
 
 EXIT (first condition hit):
-  A. Trailing stop: MA50 ± 1.5×ATR ratchet (primary trend exit)
-  B. Hard stop: 2×ATR(20) from entry (catastrophic protection)
+  A. Trailing stop: MA50 Â± 1.5Ã—ATR ratchet (primary trend exit)
+  B. Hard stop: 2Ã—ATR(20) from entry (catastrophic protection)
   C. Time stop: 60 calendar days
 
-SIZING: 1% equity per trade, 2×ATR stop distance.
+SIZING: 1% equity per trade, 2Ã—ATR stop distance.
 
 EXPECTED PERFORMANCE:
-  ~15–25 signals/year across 5 markets
-  Win rate ~50–55% (trend-following edge comes from large winners, not WR)
-  Avg hold ~18–35 days
+  ~15â€“25 signals/year across 5 markets
+  Win rate ~50â€“55% (trend-following edge comes from large winners, not WR)
+  Avg hold ~18â€“35 days
   Fills the gap between EMA(5/20) [too fast] and SMA(50/200) [too slow]
 """
 
 import numpy as np
 import pandas as pd
 
-# ── Parameters ────────────────────────────────────────────────────────────────
+# â”€â”€ Parameters â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 FAST_MA        = 20    # fast moving average
 SLOW_MA        = 100   # slow moving average
 TRAIL_MA       = 50    # MA used for trailing stop
 ATR_PERIOD     = 20    # ATR period (20d = one trading month)
-ATR_STOP_MULT  = 2.0   # initial stop: 2×ATR from entry
-TRAIL_MULT     = 1.5   # trailing stop: MA50 ± 1.5×ATR
+ATR_STOP_MULT  = 2.0   # initial stop: 2Ã—ATR from entry
+TRAIL_MULT     = 1.5   # trailing stop: MA50 Â± 1.5Ã—ATR
 TS_THRESHOLD   = 0.003 # trend strength min: 0.3% of price
 RISK_PCT       = 0.01  # 1% equity per trade
 TIME_STOP_DAYS = 60    # 60 calendar days (~3 months)
@@ -58,14 +58,14 @@ VOL_LOOKBACK   = 252   # 1 year of daily bars
 # Skip entries when realised vol is in top fraction of 1-year history
 VOL_BLOCK_PCT  = 0.80  # block if current 20d vol > 80th percentile of 1-year vol
 
-LONG_ONLY_MARKETS     = {"ES", "NQ", "CL"}
-BIDIRECTIONAL_MARKETS = {"GC", "ZB"}
-EQUITY_FUTURES        = {"ES", "NQ"}
+LONG_ONLY_MARKETS     = {"ES", "NQ", "YM", "DAX", "HK50", "CL", "NG"}
+BIDIRECTIONAL_MARKETS = {"GC", "SI", "ZB", "ZC", "ZW", "ZS"}
+EQUITY_FUTURES        = {"ES", "NQ", "YM", "DAX", "HK50"}
 
 MIN_BARS = SLOW_MA + ATR_PERIOD + VOL_LOOKBACK + 5
 
 
-# ── Indicators ────────────────────────────────────────────────────────────────
+# â”€â”€ Indicators â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _sma(s: pd.Series, p: int) -> pd.Series:
     return s.rolling(p, min_periods=p).mean()
@@ -92,7 +92,7 @@ def _vol_percentile(rv: pd.Series, lookback: int = VOL_LOOKBACK) -> pd.Series:
     return rv.rolling(lookback, min_periods=lookback // 2).apply(pct_rank, raw=True)
 
 
-# ── Signal generation ─────────────────────────────────────────────────────────
+# â”€â”€ Signal generation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def generate_signals(market_data: dict, regime_symbol: str = "ES",
                      open_symbols: set | None = None) -> list:
@@ -100,12 +100,12 @@ def generate_signals(market_data: dict, regime_symbol: str = "ES",
     Return Buy/Sell signals for markets that pass all three filters:
       1. MA(20) vs MA(100) alignment + trend strength threshold
       2. Vol regime: current 20d vol below 80th percentile of 1-year history
-      3. Regime filter: ES < SMA200 → skip NEW longs on equity futures
+      3. Regime filter: ES < SMA200 â†’ skip NEW longs on equity futures
     """
     if open_symbols is None:
         open_symbols = set()
 
-    # Regime filter — is S&P in a confirmed downtrend?
+    # Regime filter â€” is S&P in a confirmed downtrend?
     risk_off = False
     es_df = market_data.get(regime_symbol)
     if es_df is not None and len(es_df) >= 202:
@@ -146,7 +146,7 @@ def generate_signals(market_data: dict, regime_symbol: str = "ES",
         # Vol filter: skip if current vol is in top quintile of last year
         in_high_vol = not np.isnan(cur_vol_p) and cur_vol_p >= VOL_BLOCK_PCT
 
-        # ── LONG ──────────────────────────────────────────────────────────
+        # â”€â”€ LONG â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if (ts > TS_THRESHOLD
                 and not in_high_vol
                 and not (risk_off and sym in EQUITY_FUTURES)):
@@ -164,7 +164,7 @@ def generate_signals(market_data: dict, regime_symbol: str = "ES",
                 "vol_pct":    round(cur_vol_p,  3) if not np.isnan(cur_vol_p) else None,
             })
 
-        # ── SHORT (GC / ZB only) ───────────────────────────────────────
+        # â”€â”€ SHORT (GC / ZB only) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         elif (sym in BIDIRECTIONAL_MARKETS
               and ts < -TS_THRESHOLD
               and not in_high_vol):
@@ -186,20 +186,20 @@ def generate_signals(market_data: dict, regime_symbol: str = "ES",
     return signals
 
 
-# ── Exit logic ────────────────────────────────────────────────────────────────
+# â”€â”€ Exit logic â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def should_exit(position: dict, df: pd.DataFrame,
                 calendar_days_held: int) -> tuple[bool, str]:
     """
     Exit when:
-      A. Trailing stop (MA50 ± 1.5×ATR) is hit
-      B. Hard ATR stop (2×ATR from entry)
+      A. Trailing stop (MA50 Â± 1.5Ã—ATR) is hit
+      B. Hard ATR stop (2Ã—ATR from entry)
       C. 60-calendar-day time stop
     """
     if df is None or len(df) < TRAIL_MA + ATR_PERIOD + 5:
         return False, ""
 
-    # C — time stop
+    # C â€” time stop
     if calendar_days_held >= TIME_STOP_DAYS:
         entry = float(position.get("entry_price", 0))
         now   = float(df["Close"].iloc[-1])
@@ -222,18 +222,18 @@ def should_exit(position: dict, df: pd.DataFrame,
     pct     = raw_pnl / entry * 100
 
     if is_long:
-        # B — hard stop
+        # B â€” hard stop
         if stop_px > 0 and cur_low <= stop_px:
             return True, f"hard_stop ({stop_px:.4f})  P&L {pct:+.1f}%"
-        # A — trailing stop: MA50 − 1.5×ATR
+        # A â€” trailing stop: MA50 âˆ’ 1.5Ã—ATR
         trail = ma50 - TRAIL_MULT * cur_atr
         if cur_low <= trail:
             return True, f"trail_stop MA50-{TRAIL_MULT}xATR ({trail:.4f})  P&L {pct:+.1f}%"
     else:
-        # B — hard stop (above entry for shorts)
+        # B â€” hard stop (above entry for shorts)
         if stop_px > 0 and cur_high >= stop_px:
             return True, f"hard_stop ({stop_px:.4f})  P&L {pct:+.1f}%"
-        # A — trailing stop: MA50 + 1.5×ATR
+        # A â€” trailing stop: MA50 + 1.5Ã—ATR
         trail = ma50 + TRAIL_MULT * cur_atr
         if cur_high >= trail:
             return True, f"trail_stop MA50+{TRAIL_MULT}xATR ({trail:.4f})  P&L {pct:+.1f}%"
@@ -241,7 +241,7 @@ def should_exit(position: dict, df: pd.DataFrame,
     return False, ""
 
 
-# ── Trailing stop update (called each bar by runner) ──────────────────────────
+# â”€â”€ Trailing stop update (called each bar by runner) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def trailing_stop_update(current_stop: float, current_price: float,
                          current_atr: float, direction: str = "Buy",
@@ -267,11 +267,11 @@ def trailing_stop_update(current_stop: float, current_price: float,
             return min(current_stop, new_s) if current_stop > 0 else new_s
 
 
-# ── Position sizing ───────────────────────────────────────────────────────────
+# â”€â”€ Position sizing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def size_position(account_equity: float, atr: float,
                   contract_size: float = 1.0) -> int:
-    """Risk 1% of equity over 2×ATR(20) stop distance."""
+    """Risk 1% of equity over 2Ã—ATR(20) stop distance."""
     if atr <= 0 or contract_size <= 0 or account_equity <= 0:
         return 1
     risk_amount       = account_equity * RISK_PCT
@@ -279,7 +279,7 @@ def size_position(account_equity: float, atr: float,
     return max(1, int(risk_amount / risk_per_contract))
 
 
-# ── Dashboard summary ─────────────────────────────────────────────────────────
+# â”€â”€ Dashboard summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def scan_summary(market_data: dict) -> list:
     rows = []

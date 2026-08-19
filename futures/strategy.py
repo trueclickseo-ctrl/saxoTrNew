@@ -1,59 +1,59 @@
-"""
+﻿"""
 futures/strategy.py
 --------------------
-Futures Trend-Following — Donchian Channel Breakout with ATR Position Sizing.
+Futures Trend-Following â€” Donchian Channel Breakout with ATR Position Sizing.
 
 STRATEGY (Turtle Traders variant, academically validated across 40+ years):
 
   ENTRY:
-    Price closes above its 20-day highest close → BUY signal.
+    Price closes above its 20-day highest close â†’ BUY signal.
     Regime filter: only enter when the E-mini S&P 500 (ES) is above its 200d SMA
     to avoid buying commodity/FX breakouts into a macro risk-off environment.
 
   EXIT (first condition hit):
-    A. Donchian trailing: price closes below 10-day lowest close → trend exhausted
-    B. ATR hard stop: price drops 2×ATR(14) below entry → cut losses fast
-    C. Time stop: 30 calendar days held → avoid dead positions (trending markets
+    A. Donchian trailing: price closes below 10-day lowest close â†’ trend exhausted
+    B. ATR hard stop: price drops 2Ã—ATR(14) below entry â†’ cut losses fast
+    C. Time stop: 30 calendar days held â†’ avoid dead positions (trending markets
        move fast; if nothing happened in 30d, the signal was false)
 
   SIZING:
     Risk exactly 1% of account equity per trade.
-    risk_per_contract = ATR_STOP_MULT × ATR × contract_size
-    contracts = floor(equity × RISK_PCT / risk_per_contract)
+    risk_per_contract = ATR_STOP_MULT Ã— ATR Ã— contract_size
+    contracts = floor(equity Ã— RISK_PCT / risk_per_contract)
     This means volatile markets get smaller positions automatically.
 
 WHY THIS WORKS:
   Macro trends (oil super-cycles, gold rallies, bond bear markets, USD moves)
   persist for weeks to months.  The 20-day breakout catches the regime shift
-  early; the trailing 10-day exit lets winners run while cutting losers within 2×ATR.
+  early; the trailing 10-day exit lets winners run while cutting losers within 2Ã—ATR.
   Diversification across 5 uncorrelated markets (equity / metals / energy / bonds /
   FX) reduces max drawdown ~40% vs single-market trading.
 
 BACKTESTED RESULTS (5y, 5 markets, see backtest_futures.py):
-  Sharpe ~0.85–1.10  |  MaxDD ~20–25%  |  CAGR ~14–18%  |  Win rate ~40–45%
+  Sharpe ~0.85â€“1.10  |  MaxDD ~20â€“25%  |  CAGR ~14â€“18%  |  Win rate ~40â€“45%
   (Trend-following wins on a few big trades; most trades are small losses.)
 
-THIS MODULE IS PURE — no I/O, no orders, no state.
+THIS MODULE IS PURE â€” no I/O, no orders, no state.
 All execution lives in futures/runner.py.
 """
 
 import numpy as np
 import pandas as pd
 
-# ── Parameters (grid-optimal: BP=30 EP=5 Mult=1.5 Risk=1%) ──────────────────
+# â”€â”€ Parameters (grid-optimal: BP=30 EP=5 Mult=1.5 Risk=1%) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # 180-combo grid (5y, 5 ETF-proxy markets): Sharpe=0.754, WR=43%, DD=9%, CAGR=8.7%
 # Tighter exit (5d) + longer entry window (30d) = fewer whipsaws, faster profit-taking.
 BREAKOUT_PERIOD = 30    # entry: close above N-day highest close
 EXIT_PERIOD     = 5     # exit:  close below N-day lowest close (tight trailing)
 ATR_PERIOD      = 14    # True Range ATR lookback
-ATR_STOP_MULT   = 1.5   # stop = entry − ATR_STOP_MULT × ATR
+ATR_STOP_MULT   = 1.5   # stop = entry âˆ’ ATR_STOP_MULT Ã— ATR
 RISK_PCT        = 0.01  # 1% of account equity risked per trade
 MAX_POSITIONS   = 5     # one position per market (5 markets)
 TIME_STOP_DAYS  = 30    # calendar days before time-stop fires
 
 # Markets that can be sold short (bonds and gold trend well in both directions)
-LONG_ONLY_MARKETS   = {"ES", "NQ", "CL"}   # equity + oil: no shorting
-BIDIRECTIONAL_MARKETS = {"GC", "ZB"}       # gold + bonds: long AND short
+LONG_ONLY_MARKETS     = {"ES", "NQ", "YM", "DAX", "HK50", "CL", "NG"}   # equity + oil: no shorting
+BIDIRECTIONAL_MARKETS = {"GC", "SI", "ZB", "ZC", "ZW", "ZS"}       # gold + bonds: long AND short
 
 MIN_BARS        = BREAKOUT_PERIOD + ATR_PERIOD + 5
 
@@ -70,7 +70,7 @@ def _atr(highs: pd.Series, lows: pd.Series, closes: pd.Series,
     return tr.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
 
 
-EQUITY_FUTURES = {"ES", "NQ"}   # regime filter only gates these two markets
+EQUITY_FUTURES = {"ES", "NQ", "YM", "DAX", "HK50"}  # regime filter gates all equity indices
 
 
 def _es_risk_off(market_data: dict, regime_symbol: str = "ES") -> bool:
@@ -87,7 +87,7 @@ def _es_risk_off(market_data: dict, regime_symbol: str = "ES") -> bool:
 
 def generate_signals(market_data: dict, regime_symbol: str = "ES",
                      open_symbols: set = None) -> list:
-    """Scan all markets for Donchian breakout signals — LONG and SHORT.
+    """Scan all markets for Donchian breakout signals â€” LONG and SHORT.
 
     Returns both BUY (close > 20d high) and SHORT (close < 20d low) signals,
     sorted by breakout strength (ATR units).
@@ -126,7 +126,7 @@ def generate_signals(market_data: dict, regime_symbol: str = "ES",
         if pd.isna(high20) or pd.isna(low20) or pd.isna(atr_val) or atr_val <= 0:
             continue
 
-        # ── LONG breakout ────────────────────────────────────────────────
+        # â”€â”€ LONG breakout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # Skip equity-futures long entries during risk-off
         if today > high20 and not (risk_off and symbol in EQUITY_FUTURES):
             stop_price = today - ATR_STOP_MULT * atr_val
@@ -141,7 +141,7 @@ def generate_signals(market_data: dict, regime_symbol: str = "ES",
                 "score":          round(score, 4),
             })
 
-        # ── SHORT breakdown (bonds and gold only) ─────────────────────────
+        # â”€â”€ SHORT breakdown (bonds and gold only) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         elif today < low20 and symbol in BIDIRECTIONAL_MARKETS:
             stop_price = today + ATR_STOP_MULT * atr_val   # stop above entry for shorts
             score      = (low20 - today) / atr_val
@@ -195,23 +195,23 @@ def should_exit(
     pnl_raw = (today - entry_price) if is_long else (entry_price - today)
     pnl_pct = pnl_raw / entry_price * 100
 
-    # C — time stop (direction-agnostic)
+    # C â€” time stop (direction-agnostic)
     if calendar_days_held >= TIME_STOP_DAYS:
         return True, f"time-stop ({calendar_days_held}d)  P&L {pnl_pct:+.1f}%"
 
     if is_long:
-        # B — hard stop: compare against intraday low, not close
+        # B â€” hard stop: compare against intraday low, not close
         if stop_price > 0 and cur_low <= stop_price:
-            return True, f"ATR-stop {pnl_pct:.1f}% (low {cur_low:.4f} ≤ stop {stop_price:.4f})"
-        # A — Donchian trailing: 10-day lowest close
+            return True, f"ATR-stop {pnl_pct:.1f}% (low {cur_low:.4f} â‰¤ stop {stop_price:.4f})"
+        # A â€” Donchian trailing: 10-day lowest close
         low10 = float(closes.iloc[-(EXIT_PERIOD + 1):-1].min())
         if not pd.isna(low10) and today <= low10:
             return True, f"Donchian-exit ({EXIT_PERIOD}d low {low10:.4f})  {pnl_pct:+.1f}%"
     else:
-        # B — hard stop: compare against intraday high
+        # B â€” hard stop: compare against intraday high
         if stop_price > 0 and cur_high >= stop_price:
-            return True, f"ATR-stop {pnl_pct:.1f}% (high {cur_high:.4f} ≥ stop {stop_price:.4f})"
-        # A — Donchian trailing: 10-day highest close (price rising against short)
+            return True, f"ATR-stop {pnl_pct:.1f}% (high {cur_high:.4f} â‰¥ stop {stop_price:.4f})"
+        # A â€” Donchian trailing: 10-day highest close (price rising against short)
         high10 = float(closes.iloc[-(EXIT_PERIOD + 1):-1].max())
         if not pd.isna(high10) and today >= high10:
             return True, f"Donchian-exit ({EXIT_PERIOD}d high {high10:.4f})  {pnl_pct:+.1f}%"
@@ -226,7 +226,7 @@ def size_position(
 ) -> int:
     """ATR-based contract count for both longs and shorts.
 
-    Risks exactly RISK_PCT × account_equity per trade.
+    Risks exactly RISK_PCT Ã— account_equity per trade.
     """
     if atr <= 0 or contract_size <= 0 or account_equity <= 0:
         return 1

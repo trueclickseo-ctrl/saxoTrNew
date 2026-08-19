@@ -13,6 +13,7 @@ Strategies:
   supertrend  — SuperTrend(10,3) + EMA(200) trend-following (~65% WR)
   zscore      — Z-score mean reversion: fade 2σ extremes back to mean (~63% WR)
   ml          — Logistic regression on 7 technical features (~57-62% WR)
+  london_breakout — Asian/London range breakout at London open + NY open (~58-63% WR)
 
 Universe:
   34 pairs — 7 G7 majors + 27 crosses (UICs confirmed Saxo SIM; Scandi/EM verify with --info)
@@ -63,8 +64,9 @@ import forex.strategy_pullback    as strat_pullback
 import forex.strategy_gap         as strat_gap
 import forex.strategy_supertrend  as strat_supertrend
 import forex.strategy_zscore      as strat_zscore
-import forex.strategy_ml          as strat_ml
-import forex.strategy_cnn_lstm    as strat_cnn_lstm
+import forex.strategy_ml                as strat_ml
+import forex.strategy_cnn_lstm         as strat_cnn_lstm
+import forex.strategy_london_breakout  as strat_lbo
 import pnl_tracker
 import trade_logger
 import strategy_learner
@@ -88,14 +90,23 @@ STRATEGIES = {
     "gap":         strat_gap,
     "supertrend":  strat_supertrend,
     "zscore":      strat_zscore,
-    "ml":          strat_ml,
-    "cnn_lstm":    strat_cnn_lstm,
+    "ml":              strat_ml,
+    "cnn_lstm":        strat_cnn_lstm,
+    "london_breakout": strat_lbo,
 }
 SLOTS_PER_STRATEGY = {
     "ema": 4, "rsi": 34, "donchian": 4, "bb": 4,
     "pullback": 34, "gap": 34,
     "supertrend": 20, "zscore": 20, "ml": 20, "cnn_lstm": 20,
+    "london_breakout": 7,   # max 7 simultaneous (one per pair)
 }
+
+# Day-trade strategies run independently of the swing book's heat budget.
+# They size conservatively (1-2% risk/trade) and always close same-day,
+# so the shared 6% heat cap would unfairly block them when the swing book
+# is fully deployed. Each day-trade strategy has its own position-count cap
+# (SLOTS_PER_STRATEGY) which already limits maximum concurrent exposure.
+DAY_TRADE_STRATEGIES = {"london_breakout"}
 
 # ── Session-aware pair groups ──────────────────────────────────────────────────
 # asian  : 06:20 PKT  — Tokyo/Sydney session (JPY crosses, AUD, NZD)
@@ -334,6 +345,45 @@ def _detect_gap_session() -> str | None:
         if h == 12 or (h == 13 and m < 30):
             return "newyork"
     return None
+
+
+def _momentum_rank(market_data: dict, top_n: int) -> set:
+    """
+    Rank all pairs by 20-day normalised momentum (price-change / ATR).
+    Returns the set of top_n symbol names. Exits always run on all pairs;
+    only NEW entries are restricted to these top performers.
+    """
+    scores = {}
+    for sym, df in market_data.items():
+        if df is None or len(df) < 22:
+            continue
+        close_col = "Close" if "Close" in df.columns else (
+                    "CloseAsk" if "CloseAsk" in df.columns else None)
+        if close_col is None:
+            continue
+        c = df[close_col].dropna()
+        if len(c) < 22:
+            continue
+        move = abs(float(c.iloc[-1]) - float(c.iloc[-21]))
+        hi   = df["High"].dropna()   if "High"    in df.columns else \
+               df["HighAsk"].dropna() if "HighAsk" in df.columns else c
+        lo   = df["Low"].dropna()    if "Low"     in df.columns else \
+               df["LowAsk"].dropna()  if "LowAsk"  in df.columns else c
+        tr   = pd.concat([(hi - lo).abs(),
+                           (hi - c.shift(1)).abs(),
+                           (lo - c.shift(1)).abs()], axis=1).max(axis=1)
+        atr  = float(tr.rolling(14).mean().iloc[-1])
+        if atr > 0:
+            scores[sym] = move / atr
+    ranked   = sorted(scores, key=scores.__getitem__, reverse=True)
+    selected = set(ranked[:top_n])
+    skipped  = sorted(set(scores) - selected)
+    if skipped:
+        logger.info(f"Momentum pre-filter: top {top_n}/{len(scores)} pairs for entries "
+                    f"| filtered: {skipped}")
+    else:
+        logger.info(f"Momentum pre-filter: all {len(scores)} pairs qualify")
+    return selected
 
 
 def _fetch_live_prices(pairs: list) -> dict:
@@ -703,6 +753,14 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
             raw_pnl = ((live_px - pos["entry_price"]) * qty if is_long
                        else (pos["entry_price"] - live_px) * qty)
             signal_filter.label_outcome(key, won=raw_pnl > 0)
+            if strat_name == "london_breakout":
+                fx_notify.send_lbo_trade_closed(
+                    symbol=sym, direction=direction,
+                    entry=float(pos.get("entry_price", live_px)),
+                    exit_px=live_px, pnl_pct=pnl_pct, units=qty,
+                    reason=reason,
+                    session=pos.get("lbo_session", ""),
+                )
         del positions[key]
         exits += 1
     return exits
@@ -733,7 +791,22 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
 
     open_syms = {k.split(":", 1)[1] for k in positions if k.startswith(prefix)}
 
-    if strat_name == "gap" and gap_session != "weekly":
+    if strat_name == "london_breakout":
+        # London/NY Breakout: fetch H1 bars for the 7 liquid pairs only.
+        lbo_pairs  = strat_lbo.PAIRS
+        h1_lbo: dict = {}
+        pair_meta: dict = {}
+        for pi in PAIRS:
+            sym = pi["symbol"]
+            if sym not in lbo_pairs:
+                continue
+            h1_lbo[sym]  = _fetch_history_h1(pi["uic"])
+            pair_meta[sym] = {"pip_size": pi.get("pip_size", 0.0001)}
+        signals = strat_lbo.generate_signals(
+            h1_lbo, pair_meta, open_syms, account_equity=equity
+        )
+        logger.info(f"  [london_breakout] {len(h1_lbo)} pairs scanned → {len(signals)} signal(s)")
+    elif strat_name == "gap" and gap_session != "weekly":
         # Session gap (London / NY / Tokyo): fetch H1 bars for ALL 34 pairs.
         # No pair-list restriction — gap_pct filter selects only pairs that actually
         # gapped (EURNOK, USDSEK, NZDJPY, AUDCHF etc. all get a fair look).
@@ -774,15 +847,19 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] "
                         f"— currency exposure limit (max {MAX_CURRENCY_EXPOSURE})")
             continue
-        if not _heat_allows_entry(positions, equity):
+        if strat_name not in DAY_TRADE_STRATEGIES and not _heat_allows_entry(positions, equity):
             break   # heat cap reached — stop all entries for this strategy
         pair_info = get_pair(sym)
         uic       = pair_info["uic"]
         rp_kw     = {"risk_pct": sig["risk_pct_override"]} if "risk_pct_override" in sig else {}
-        qty       = strat_mod.size_position(equity, sig["atr"], pair_info["min_units"], **rp_kw)
+        if "units" in sig:
+            qty = sig["units"]   # london_breakout pre-computes sizing from SEK capital
+        else:
+            qty = strat_mod.size_position(equity, sig["atr"], pair_info["min_units"], **rp_kw)
 
         tag    = "LONG" if direction == "Buy" else "SHORT"
         detail = (f"rsi={sig['rsi']:.1f}" if "rsi" in sig
+                  else f"range={sig.get('range_pips', 0):.0f}p" if "range_pips" in sig
                   else f"breakout={sig.get('breakout_level', 0):.5f}" if "breakout_level" in sig
                   else f"adx={sig.get('adx', 0):.1f}")
         stop_oid = None; tp_oid = None
@@ -792,7 +869,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                         f"({strat_name})  @ {sig['close']:.5f}  "
                         f"stop={sig['stop_price']:.5f}  {detail}{agree_tag}")
         else:
-            tp = sig.get("gap_target")   # only gap strategy provides a fixed target
+            tp = sig.get("tp_price") or sig.get("gap_target")   # london_breakout + gap both provide TP
             entry_oid, stop_oid, tp_oid = saxo_order.place_with_stop(
                 post_fn           = _post,
                 account_key       = akey,
@@ -829,6 +906,11 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             pos_record["gap_pct"]      = sig.get("gap_pct", 0.0)
         if "gap_type" in sig:
             pos_record["gap_type"] = sig["gap_type"]   # "weekly"/"london"/"newyork"/"tokyo"
+        if "tp_price" in sig:
+            pos_record["tp_price"]    = sig["tp_price"]
+            pos_record["range_high"]  = sig.get("range_high", 0)
+            pos_record["range_low"]   = sig.get("range_low",  0)
+            pos_record["lbo_session"] = sig.get("session", "")
         positions[pos_key] = pos_record
         _update_exposure(exposure, sym, direction)
         oid = entry_oid if not dry_run else None
@@ -839,6 +921,14 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             pnl_tracker.log_open("forex", strat_name, sym, direction, qty,
                                  sig["close"], sig["stop_price"], order_id=oid)
             signal_filter.log_signal(pos_key, features)   # builds ML training data
+            if strat_name == "london_breakout":
+                fx_notify.send_lbo_trade_opened(
+                    symbol=sym, direction=direction,
+                    entry=sig["close"], stop=sig["stop_price"],
+                    tp=sig.get("tp_price", 0), units=qty,
+                    session=sig.get("session", ""),
+                    range_pips=sig.get("range_pips", 0),
+                )
         entries += 1
     return entries
 
@@ -1105,6 +1195,13 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
     for pair in active_pairs:
         market_data[pair["symbol"]] = _fetch_history(pair["uic"])
 
+    # ── Momentum pre-filter: restrict NEW entries to top trending pairs ────────
+    # Exits always run on the full market_data (we never suppress stop-checks).
+    # Entries only fire on the top 60% of pairs ranked by 20-day momentum / ATR.
+    _top_n_entry = max(8, round(len(active_pairs) * 0.6))
+    top_pairs    = _momentum_rank(market_data, top_n=_top_n_entry)
+    entry_market_data = {k: v for k, v in market_data.items() if k in top_pairs}
+
     # ── Fetch live prices if any strategy needs them (gap strategy) ───────────
     needs_live = any(getattr(STRATEGIES[s], "NEEDS_LIVE_PRICES", False)
                      for s in active_strategies)
@@ -1144,9 +1241,16 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
         exits   = _run_exits(strat_name, strat_mod, positions,
                              market_data, akey, dry_run, today_str)
         entries = 0
-        if not entries_blocked:
+        # Day-trade strategies bypass the swing-book drawdown gate but still
+        # respect the daily loss limit (hard safety rail).
+        run_entries = (not entries_blocked
+                       or (strat_name in DAY_TRADE_STRATEGIES and not loss_limit_hit))
+        if run_entries:
+            # Gap strategy bypasses the momentum filter — it needs all pairs for
+            # gap-percentage detection. All others only look at top-momentum pairs.
+            _edata = market_data if strat_name in ("gap", "london_breakout") else entry_market_data
             entries = _run_entries(strat_name, strat_mod, positions,
-                                   market_data, equity, akey, dry_run, today_str,
+                                   _edata, equity, akey, dry_run, today_str,
                                    live_prices=live_prices, agreement=agreement,
                                    weight=w)
 
@@ -1222,7 +1326,7 @@ if __name__ == "__main__":
                     help="Check stops only — no new entries (intraday stop check)")
     ap.add_argument("--strategy", default="all",
                     choices=["all", "ema", "rsi", "donchian", "bb", "pullback", "gap",
-                             "supertrend", "zscore", "ml"],
+                             "supertrend", "zscore", "ml", "london_breakout"],
                     help="Which strategy to run (default: all)")
     ap.add_argument("--status",   action="store_true",
                     help="Print open positions and exit")

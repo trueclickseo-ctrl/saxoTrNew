@@ -1,9 +1,11 @@
 # Futures Trading — Strategy Playbook
 
 **Module**: `futures/runner.py`  
-**Markets**: ES, NQ, GC, CL, ZB  (5 CME futures)  
+**Markets**: ES, NQ, GC, CL, ZB  (5 CME futures via Saxo SIM)  
 **7 strategies × 5 slots = 35 max open positions**  
-**Risk per trade**: 1% of equity, ATR-based sizing
+**Risk per trade**: 1% of equity, ATR-based sizing  
+**Scheduled**: daily at 06:15 PKT (01:15 UTC) via `run_futures_daily.bat`  
+**Last updated**: 2026-08-19
 
 ---
 
@@ -349,19 +351,35 @@ This automatically sizes down in high-volatility markets and sizes up in low-vol
 # Dry run (default) — no real orders, logs to console
 python futures/runner.py
 
-# Live mode — places real Saxo orders
+# Live mode — places real Saxo orders (runs all 7 strategies)
 python futures/runner.py --live
 
 # Run a single strategy only
-python futures/runner.py --strategy donchian
+python futures/runner.py --strategy donchian --live
 python futures/runner.py --strategy macd --live
+python futures/runner.py --strategy trend_ma --live
 
-# 6-panel market snapshot (no orders)
+# 7-panel market snapshot (no orders)
 python futures/runner.py --scan
 
 # Show open positions
 python futures/runner.py --status
+
+# Discover and cache fresh UICs (CL/ZB change monthly)
+python futures/runner.py --discover
 ```
+
+### UICs (Saxo SIM)
+
+| Symbol | Instrument type | UIC note |
+|--------|----------------|----------|
+| ES | CdfOnIndex | Stable UIC — does not change |
+| NQ | CdfOnIndex | Stable UIC — does not change |
+| GC | FxSpot | Stable UIC — does not change |
+| CL | ContractFutures | Changes monthly — run `--discover` |
+| ZB | ContractFutures | Changes monthly — run `--discover` |
+
+Cache stored in `data/futures_uic_cache.json`. Run `--discover` at the start of each month.
 
 ### Scan panel descriptions
 - **DONCHIAN**: 30d high/low levels vs current price
@@ -371,3 +389,13 @@ python futures/runner.py --status
 - **SQUEEZE**: BB width, TTM momentum, squeeze status
 - **MA CROSS**: SMA(50/200) levels, gap %, regime (BULL/BEAR)
 - **TREND MA**: MA(20/100) trend strength, vol percentile, bias (BULL/BEAR/flat)
+
+### Daily Loss Limit
+Runner checks realized P&L before each entry loop. If today's P&L ≤ −3% of equity, ALL new entries are blocked for the rest of the day. Exits are never blocked.
+
+### State files
+| File | Purpose |
+|------|---------|
+| `data/futures_state.json` | Open positions (keyed `strategy:symbol`, e.g. `donchian:GC`) |
+| `data/futures_orders.json` | Order log (last 500 entries) |
+| `data/futures_uic_cache.json` | CL/ZB UIC cache (refresh monthly with `--discover`) |

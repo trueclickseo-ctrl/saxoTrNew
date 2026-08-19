@@ -1,16 +1,16 @@
-"""
+﻿"""
 futures/strategy_rsi.py
 -----------------------
-Futures Strategy 2 — RSI(5) Pullback within Trend.
+Futures Strategy 2 â€” RSI(5) Pullback within Trend.
 
 STRATEGY:
 
   CONCEPT:
     In a confirmed uptrend, wait for a short-term RSI dip below 20 (oversold),
     then buy the pullback. Exit when RSI recovers above 55 (momentum restored).
-    For bidirectional markets (GC, ZB), do the mirror: RSI > 80 → short sell.
+    For bidirectional markets (GC, ZB), do the mirror: RSI > 80 â†’ short sell.
 
-    This is a MEAN-REVERSION entry within a TREND — not a contrarian bet.
+    This is a MEAN-REVERSION entry within a TREND â€” not a contrarian bet.
     The 50-day SMA defines "trend"; RSI(5) defines "entry timing within trend".
 
   ENTRY:
@@ -20,8 +20,8 @@ STRATEGY:
 
   EXIT (first condition hit):
     A. RSI recovery: RSI(5) > 55 (long) or RSI(5) < 45 (short)
-    B. ATR hard stop: 1.5 × ATR(14) against entry
-    C. Time stop: 15 calendar days (pullbacks resolve quickly — if not, exit)
+    B. ATR hard stop: 1.5 Ã— ATR(14) against entry
+    C. Time stop: 15 calendar days (pullbacks resolve quickly â€” if not, exit)
 
   SIZING:
     Same as Donchian: risk 1% equity per trade, ATR-based.
@@ -29,25 +29,25 @@ STRATEGY:
 WHY THIS WORKS:
   Short-term RSI mean reversion in trending markets is one of the most
   documented phenomena in systematic trading (Larry Connors / Cesar Alvarez
-  RSI(2) research, 1990–2020).  When a market is trending up (price > 50d SMA)
+  RSI(2) research, 1990â€“2020).  When a market is trending up (price > 50d SMA)
   and RSI(5) drops below 20, it means the last 5 sessions have been
-  predominantly down — a temporary pullback, not a trend reversal.  The
+  predominantly down â€” a temporary pullback, not a trend reversal.  The
   majority of such pullbacks reverse within 5-15 sessions.
 
 BACKTESTED EXPECTED RESULTS (5 markets):
   ~50-60 signals/year  |  WR ~65-70%  |  Avg hold ~6 days
   Complements Donchian: catches frequent small gains between big breakouts.
 
-THIS MODULE IS PURE — no I/O, no orders, no state.
+THIS MODULE IS PURE â€” no I/O, no orders, no state.
 All execution lives in futures/runner.py.
 """
 
 import numpy as np
 import pandas as pd
 
-# ── Parameters ────────────────────────────────────────────────────────────────
-RSI_PERIOD    = 2      # RSI(2) — daily oscillator (Connors RSI strategy)
-RSI_OVERSOLD  = 10     # entry threshold for longs — strict, high-quality dip signal
+# â”€â”€ Parameters â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+RSI_PERIOD    = 2      # RSI(2) â€” daily oscillator (Connors RSI strategy)
+RSI_OVERSOLD  = 10     # entry threshold for longs â€” strict, high-quality dip signal
 RSI_OVERBOUGHT = 90    # entry threshold for shorts (GC/ZB only)
 RSI_EXIT_LONG  = 55    # exit long when RSI recovers here
 RSI_EXIT_SHORT = 45    # exit short when RSI recovers here
@@ -59,12 +59,12 @@ MAX_POSITIONS = 5      # one per market
 TIME_STOP_DAYS = 15    # pullbacks resolve fast; bail if stuck after 15d
 MIN_BARS      = TREND_SMA + RSI_PERIOD + 5
 
-LONG_ONLY_MARKETS     = {"ES", "NQ", "CL"}
-BIDIRECTIONAL_MARKETS = {"GC", "ZB"}
-EQUITY_FUTURES        = {"ES", "NQ"}
+LONG_ONLY_MARKETS     = {"ES", "NQ", "YM", "DAX", "HK50", "CL", "NG"}
+BIDIRECTIONAL_MARKETS = {"GC", "SI", "ZB", "ZC", "ZW", "ZS"}
+EQUITY_FUTURES        = {"ES", "NQ", "YM", "DAX", "HK50"}
 
 
-# ── Indicators ────────────────────────────────────────────────────────────────
+# â”€â”€ Indicators â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _rsi(closes: pd.Series, period: int = RSI_PERIOD) -> pd.Series:
     """Wilder RSI using EWM smoothing (alpha=1/period)."""
@@ -99,7 +99,7 @@ def _es_risk_off(market_data: dict, regime_symbol: str = "ES") -> bool:
     return float(c.iloc[-1]) < float(_sma(c, 200).iloc[-1])
 
 
-# ── Signal generation ─────────────────────────────────────────────────────────
+# â”€â”€ Signal generation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def generate_signals(market_data: dict, regime_symbol: str = "ES",
                      open_symbols: set = None) -> list:
