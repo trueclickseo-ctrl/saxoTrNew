@@ -1401,6 +1401,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     _base = (_row['ticker'] or '').split('.')[0].split(':')[0].upper()
                     _db_by_base[_base] = dict(_row)
 
+                # Load ATOS universe so we can exclude ETF positions from live feed
+                import sys as _sys
+                _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                try:
+                    from atos.universe import US_TICKERS as _US_TICKERS
+                    _atos_universe = {t.upper() for t in _US_TICKERS}
+                except Exception:
+                    _atos_universe = None  # fallback: show all
+
                 saxo_token = _load_saxo_token()
                 if saxo_token:
                     positions = _saxo_get_positions(saxo_token)
@@ -1421,6 +1430,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             mkt = 'DAX'
                         else:
                             mkt = disp.get('Currency', '?')
+                        # Skip ETF positions — only show ATOS-universe stocks
+                        _base_sym_check = sym.split(':')[0].upper()
+                        if _atos_universe is not None and _base_sym_check not in _atos_universe:
+                            continue
                         entry_price = pbase.get('OpenPrice') or 0
                         shares      = pbase.get('Amount') or 0
                         pnl         = pview.get('ProfitLossOnTrade') or 0

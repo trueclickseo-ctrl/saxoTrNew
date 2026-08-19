@@ -186,10 +186,16 @@ def _read_trade_log(n: int = 15) -> list:
     except Exception:
         return []
 
-_STOCK_ASSET_TYPES = {"Stock", "CfdOnStock", "Etf", "CfdOnEtf", "CdfOnEtf"}
+_STOCK_ASSET_TYPES = {"Stock", "CfdOnStock"}
+
+try:
+    from atos.universe import US_TICKERS as _US_TICKERS
+    _ATOS_UNIVERSE = {t.upper() for t in _US_TICKERS}
+except Exception:
+    _ATOS_UNIVERSE = None
 
 def _saxo_positions(token: str) -> list:
-    """Fetch open positions from Saxo, filtered to stock/ETF asset types only."""
+    """Fetch open positions from Saxo, filtered to ATOS-universe stocks only (excludes ETFs)."""
     if not token:
         return []
     try:
@@ -202,8 +208,16 @@ def _saxo_positions(token: str) -> list:
         )
         if r.status_code == 200:
             all_pos = r.json().get("Data", [])
-            return [p for p in all_pos
-                    if p.get("PositionBase", {}).get("AssetType") in _STOCK_ASSET_TYPES]
+            out = []
+            for p in all_pos:
+                if p.get("PositionBase", {}).get("AssetType") not in _STOCK_ASSET_TYPES:
+                    continue
+                sym = p.get("DisplayAndFormat", {}).get("Symbol", "")
+                base = sym.split(":")[0].upper()
+                if _ATOS_UNIVERSE is not None and base not in _ATOS_UNIVERSE:
+                    continue
+                out.append(p)
+            return out
     except Exception:
         pass
     return []
