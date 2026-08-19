@@ -121,6 +121,9 @@ SLOTS_PER_STRATEGY = {
 DAILY_LOSS_LIMIT_PCT  = -3.0  # block new entries if today's realised P&L < -3% equity
 PORTFOLIO_HEAT_LIMIT  = 0.06  # max total open risk (sum of ATR stops) as fraction of equity
 DRAWDOWN_PAUSE_PCT    = 0.10  # pause all entries if equity is >10% below rolling peak
+# size_position() floors at 1 contract; skip the signal when that single
+# contract would risk more than this multiple of the per-trade risk budget.
+MAX_RISK_OVERSHOOT    = 1.5
 PEAK_EQUITY_FILE      = os.path.join(os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), "data"), "futures_peak_equity.json")
 
@@ -191,6 +194,25 @@ def _post(path: str, body: dict) -> dict:
 
 
 # ── Account ────────────────────────────────────────────────────────────────
+
+def _risk_equity(raw_equity: float) -> float:
+    """Equity base used for position sizing — capped at configured real capital.
+
+    The broker figure is SIM demo credit (~957,000 EUR), not the user's capital.
+    Sizing off it made positions ~34x too large and got MACD/Squeeze orders
+    rejected by Saxo outright ("order size N exceeds broker max"), so those two
+    strategies could never actually trade.
+    """
+    try:
+        import atos.capital_config as _CAP
+        cap = _CAP.futures_risk_equity_eur()
+    except Exception as exc:
+        logger.warning(f"Could not read futures risk equity cap: {exc}")
+        return raw_equity
+    if cap <= 0:
+        return raw_equity
+    return min(raw_equity, cap) if raw_equity > 0 else cap
+
 
 def _account() -> tuple[float, str]:
     """Returns (equity_float, account_key_str)."""
@@ -650,6 +672,22 @@ def _run_strategy_entries(strat_name: str, strat_mod, positions: dict,
         qty        = strat_mod.size_position(equity, sig["atr"], contract_size)
         direction  = sig["direction"]
 
+        # size_position() floors at 1 contract. When the risk-correct size is
+        # below 1, that floor silently turns "too small to trade" into "far
+        # over-risked" -- 1 CL contract is ~12.5% of a 27,800 EUR account, not
+        # the 1% intended. Skip instead of taking the oversized position.
+        _stop_mult   = getattr(strat_mod, "ATR_STOP_MULT", 2.0)
+        _risk_pct    = getattr(strat_mod, "RISK_PCT", 0.01)
+        _risk_per_ct = _stop_mult * sig["atr"] * contract_size
+        _budget      = equity * _risk_pct
+        if _risk_per_ct > _budget * MAX_RISK_OVERSHOOT:
+            logger.warning(
+                f"  [{strat_name}] SKIP {sym}: 1 contract risks "
+                f"{_risk_per_ct:,.0f} vs {_risk_pct*100:.0f}% budget "
+                f"{_budget:,.0f} ({_risk_per_ct/_budget:.1f}x) — instrument too "
+                f"large for this equity")
+            continue
+
         order = {
             "AccountKey": akey, "Uic": uic, "AssetType": asset_type,
             "Amount": qty, "BuySell": direction,
@@ -754,10 +792,15 @@ def run_daily(dry_run: bool = True,
     for k in old_keys:
         positions[f"donchian:{k}"] = positions.pop(k)
 
-    equity, akey = _account()
+    raw_equity, akey = _account()
+    equity = _risk_equity(raw_equity)
 
     total_slots = sum(SLOTS_PER_STRATEGY[s] for s in active_strategies)
-    logger.info(f"Account equity : {equity:,.0f}")
+    if equity < raw_equity:
+        logger.info(f"Account equity : {raw_equity:,.0f} EUR (broker) "
+                    f"-> sizing off {equity:,.0f} EUR (capped)")
+    else:
+        logger.info(f"Account equity : {equity:,.0f} EUR")
     logger.info(f"Open positions : {len(positions)} / {total_slots} total slots")
     logger.info(f"Markets tracked: {len(universe)}")
     logger.info(f"Strategies     : {strat_label}")
@@ -835,8 +878,16 @@ def run_daily(dry_run: bool = True,
                     f"P&L {pnl_pct:+.1f}%  stop={pos['stop_price']:.4f}  {held}d")
     logger.info(f"{'='*60}")
 
-    state["last_run"] = datetime.now().isoformat()
-    _save_state(state)
+    # NEVER persist state from a dry run. Exits are simulated into `positions`
+    # in dry-run mode just like live, so saving here would delete real open
+    # positions from tracking -- leaving them open at the broker with no stop
+    # management, no time stop, and no record. (This is what silently orphaned
+    # the live macd:CL and macd:ZB positions between 2026-08-18 and 08-19.)
+    if dry_run:
+        logger.info("  [DRY] state NOT saved — open positions left untouched")
+    else:
+        state["last_run"] = datetime.now().isoformat()
+        _save_state(state)
 
     # ── Strategy learning pass — update weights from today's closed trades ────
     try:

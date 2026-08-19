@@ -115,6 +115,20 @@ def reversion_slots(universe_size: int) -> int:
     return max(reversion_min_slots(), min(derived, reversion_max_slots()))
 
 
+# ── Futures ───────────────────────────────────────────────────────────────
+
+def futures_risk_equity_eur() -> float:
+    """Equity base (EUR) that futures sizing risks RISK_PCT of per trade.
+
+    The Saxo account is denominated in EUR. Without this, futures sized off the
+    raw SIM TotalValue (~957,000 EUR of demo credit) instead of real capital.
+    """
+    try:
+        return float(_load()["strategies"]["futures"]["risk_equity_eur"])
+    except Exception:
+        return 27_800.0
+
+
 def reversion_stop_pct() -> float:
     return float(_load()["strategies"]["us_reversion"].get("stop_pct", 0.04))
 

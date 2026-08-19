@@ -26,6 +26,21 @@
       "max_hold_days": 10,
       "sleeve_dd_cap": 0.10,
       "fallback_sleeve_sek": 300000
+    },
+
+    "_futures_comment": [
+      "The Saxo account is denominated in EUR. risk_equity_eur is the equity base",
+      "futures position sizing risks 1% of per trade. It exists because the runner",
+      "previously sized off the raw SIM TotalValue (~957,000 EUR of demo credit),",
+      "which made positions roughly 34x larger than the 300,000 SEK of intended",
+      "capital and got MACD/Squeeze orders rejected outright by the broker.",
+      "27800 EUR is 300,000 SEK at ~10.8 SEK/EUR -- i.e. the whole stated account.",
+      "LOWER THIS if futures should share capital with the ATOS equity sleeves",
+      "rather than assume the full account."
+    ],
+    "futures": {
+      "enabled": true,
+      "risk_equity_eur": 27800
     }
 
   }
