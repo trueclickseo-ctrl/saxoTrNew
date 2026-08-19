@@ -278,7 +278,7 @@ less drawdown — the real value of the strategy is DD reduction, not beating B&
 | Risk-off | Daily | Equal-weight index < 200d SMA -> full cash |
 | Corporate events | Every cycle | Auto-exit 3d before ex-div; skip 2d before earnings |
 | Last rebalance | 2026-08-14 | PANW, DELL, FTNT, HUM, CRWD, U, AES (7 open positions) |
-| Next rebalance | ~2026-08-28 | first run on the new 14-day cadence |
+| Next rebalance | 2026-08-21 | first run on the new 14-day cadence; then fortnightly Fridays (Sep 4, Sep 18, ...) |
 
 **Example position size** (if SIM account = 10M SEK):
 50% x 10M = 5M SEK / 8 slots = **625K SEK per stock**
@@ -311,6 +311,14 @@ spread). Tiebreak was trading cost — Sharpe as cost/side rises:
 Weekly collapses under realistic cost; fortnightly does not. At ~37,500 SEK/slot Saxo's
 all-in cost is ~0.15-0.25%/side. **14 not 15** so rebalances stay on a fixed weekday.
 Monthly and slower ranked 5th-7th in every test — do not extend past ~21 days.
+
+**Transition note (2026-08-19).** The Aug 14 buys predate the budget-cap fix and total
+239,788 SEK against a 135,000 SEK cap (~78% over intended exposure). Letting the cadence
+change push the next rebalance to Aug 28 would have carried that over-exposure an extra
+week, so `data/us_momentum_state.json` `last_rebalance` was backdated 2026-08-14 ->
+2026-08-07 to let Aug 21 fire on schedule and resize the book. The backdated value is a
+scheduling cursor only and self-corrects — the Aug 21 run restamps it to 2026-08-21.
+Cadence then runs fortnightly Fridays from there.
 
 OMX/CPH per-instrument strategies PAUSED — backtesting showed no reliable edge over 10y.
 
