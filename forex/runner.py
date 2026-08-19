@@ -42,7 +42,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
@@ -249,6 +249,80 @@ def _fetch_history(uic: int, count: int = CHART_BARS) -> pd.DataFrame | None:
     except Exception as exc:
         logger.warning(f"Chart fetch failed for UIC {uic}: {exc}")
         return None
+
+
+def _fetch_history_h1(uic: int, count: int = 48) -> pd.DataFrame | None:
+    """Fetch H1 OHLC bars (Horizon=60 minutes) with UTC hour label.
+
+    Returns DataFrame with columns Open/High/Low/Close/HourUTC.
+    Used by the session gap strategy to find the reference bar before each session.
+    """
+    try:
+        resp = _get("/chart/v3/charts", {
+            "Uic": uic, "AssetType": ASSET_TYPE,
+            "Horizon": 60, "Count": count + 2,
+        })
+        rows = []
+        for bar in resp.get("Data", []):
+            if not isinstance(bar, dict):
+                continue
+            # Extract timestamp for HourUTC label
+            ts_raw = bar.get("Time") or bar.get("OpenTime") or ""
+            hour_utc = -1
+            if ts_raw:
+                try:
+                    dt = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+                    hour_utc = dt.astimezone(timezone.utc).hour
+                except Exception:
+                    pass
+
+            if "CloseAsk" in bar and "CloseBid" in bar:
+                ask_c = float(bar["CloseAsk"]); bid_c = float(bar["CloseBid"])
+                o = (float(bar.get("OpenAsk",  ask_c)) + float(bar.get("OpenBid",  bid_c))) / 2
+                h = (float(bar.get("HighAsk",  ask_c)) + float(bar.get("HighBid",  bid_c))) / 2
+                l = (float(bar.get("LowAsk",   ask_c)) + float(bar.get("LowBid",   bid_c))) / 2
+                c = (ask_c + bid_c) / 2
+            elif "Close" in bar:
+                o = float(bar.get("Open",  bar["Close"]))
+                h = float(bar.get("High",  bar["Close"]))
+                l = float(bar.get("Low",   bar["Close"]))
+                c = float(bar["Close"])
+            else:
+                continue
+            if c > 0:
+                rows.append({"Open": o, "High": h, "Low": l, "Close": c, "HourUTC": hour_utc})
+        if len(rows) >= 4:
+            return pd.DataFrame(rows)
+        return None
+    except Exception as exc:
+        logger.warning(f"H1 chart fetch failed for UIC {uic}: {exc}")
+        return None
+
+
+def _detect_gap_session() -> str | None:
+    """Return the active gap session based on current UTC time, or None.
+
+    Windows:
+      weekly  — Monday 00:00-05:00 UTC (captures Sunday 22:00 UTC FX reopen)
+      london  — Mon-Fri 07:00-08:30 UTC (first 90 min of London session)
+      tokyo   — Mon-Fri 00:00-01:30 UTC (first 90 min of Tokyo session)
+      newyork — Mon-Fri 12:00-13:30 UTC (first 90 min of NY session)
+    """
+    now  = datetime.now(timezone.utc)
+    dow  = now.isoweekday()   # 1=Mon … 7=Sun
+    h    = now.hour
+    m    = now.minute
+
+    if dow == 1 and h < 5:
+        return "weekly"
+    if 1 <= dow <= 5:
+        if h == 7 or (h == 8 and m < 30):
+            return "london"
+        if h == 0 or (h == 1 and m < 30):
+            return "tokyo"
+        if h == 12 or (h == 13 and m < 30):
+            return "newyork"
+    return None
 
 
 def _fetch_live_prices(pairs: list) -> dict:
@@ -629,6 +703,15 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                  live_prices: dict | None = None,
                  agreement: dict | None = None,
                  weight: float = 1.0) -> int:
+    # Gap strategy: only run during defined session windows (weekly/london/newyork/tokyo).
+    # Outside those windows, any overnight move ≥ 0.10% would generate false signals
+    # with none of the structural fill edge that makes gap fading profitable.
+    gap_session: str | None = _detect_gap_session() if strat_name == "gap" else None
+    if strat_name == "gap" and gap_session is None:
+        logger.info(f"  [gap] Entries skipped — not in a gap session window "
+                    f"({datetime.now(timezone.utc).strftime('%A %H:%M UTC')})")
+        return 0
+
     base_slots = SLOTS_PER_STRATEGY[strat_name]
     max_slots  = max(1, int(base_slots * strategy_learner.slot_scale(weight)))
     prefix     = f"{strat_name}:"
@@ -638,7 +721,20 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         return 0
 
     open_syms = {k.split(":", 1)[1] for k in positions if k.startswith(prefix)}
-    if getattr(strat_mod, "NEEDS_LIVE_PRICES", False):
+
+    if strat_name == "gap" and gap_session != "weekly":
+        # Session gap (London / NY / Tokyo): use H1 bars for the session pair set
+        cfg = strat_gap.SESSION_GAPS[gap_session]
+        h1_data: dict = {}
+        for sym in cfg["pairs"]:
+            pi = get_pair(sym)
+            if pi:
+                h1_data[sym] = _fetch_history_h1(pi["uic"])
+        signals = strat_mod.generate_session_signals(
+            gap_session, h1_data, open_symbols=open_syms, live_prices=live_prices or {}
+        )
+        logger.info(f"  [gap:{gap_session}] {len(h1_data)} pairs scanned → {len(signals)} signal(s)")
+    elif getattr(strat_mod, "NEEDS_LIVE_PRICES", False):
         signals = strat_mod.generate_signals(market_data, open_symbols=open_syms,
                                              live_prices=live_prices or {})
     else:
@@ -672,7 +768,8 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             break   # heat cap reached — stop all entries for this strategy
         pair_info = get_pair(sym)
         uic       = pair_info["uic"]
-        qty       = strat_mod.size_position(equity, sig["atr"], pair_info["min_units"])
+        rp_kw     = {"risk_pct": sig["risk_pct_override"]} if "risk_pct_override" in sig else {}
+        qty       = strat_mod.size_position(equity, sig["atr"], pair_info["min_units"], **rp_kw)
 
         tag    = "LONG" if direction == "Buy" else "SHORT"
         detail = (f"rsi={sig['rsi']:.1f}" if "rsi" in sig
@@ -705,20 +802,23 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
 
         pos_key = f"{strat_name}:{sym}"
         pos_record = {
-            "uic":           uic,
-            "direction":     direction,
-            "entry_price":   sig["close"],
-            "stop_price":    sig["stop_price"],
-            "quantity":      qty,
-            "entry_date":    today_str,
-            "atr_at_entry":  sig["atr"],
-            "stop_order_id": stop_oid,
-            "tp_order_id":   tp_oid if not dry_run else None,
+            "uic":            uic,
+            "direction":      direction,
+            "entry_price":    sig["close"],
+            "stop_price":     sig["stop_price"],
+            "quantity":       qty,
+            "entry_date":     today_str,
+            "entry_datetime": datetime.now().isoformat(),  # hour-based time stop for session gaps
+            "atr_at_entry":   sig["atr"],
+            "stop_order_id":  stop_oid,
+            "tp_order_id":    tp_oid if not dry_run else None,
         }
         if "gap_target" in sig:
             pos_record["gap_target"]   = sig["gap_target"]
             pos_record["friday_close"] = sig.get("friday_close", sig["gap_target"])
             pos_record["gap_pct"]      = sig.get("gap_pct", 0.0)
+        if "gap_type" in sig:
+            pos_record["gap_type"] = sig["gap_type"]   # "weekly"/"london"/"newyork"/"tokyo"
         positions[pos_key] = pos_record
         _update_exposure(exposure, sym, direction)
         oid = entry_oid if not dry_run else None
