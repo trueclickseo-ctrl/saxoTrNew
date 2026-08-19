@@ -1,7 +1,7 @@
 # Futures Trading — Strategy Playbook
 
 **Module**: `futures/runner.py`  
-**Markets**: ES, NQ, GC, CL, ZB  (5 CME futures via Saxo SIM)  
+**Markets**: 13 across 5 asset classes and 3 currencies (see [Market Overview](#market-overview))  
 **7 strategies × 5 slots = 35 max open positions**  
 **Risk per trade**: 1% of `risk_equity_eur` (config), ATR-based sizing  
 **Scheduled**: daily at 06:15 PKT (01:15 UTC) via `run_futures_daily.bat`  
@@ -21,6 +21,9 @@
 | 6 | No reconciliation between local state and actual broker positions | Medium | Open |
 | 7 | Documented parameters did not match code (`ATR_STOP_MULT` 5.0 vs 1.5) | Medium | Fixed here |
 | 8 | Sharpe documented as 1.62; measured 0.750 | Medium | Fixed here |
+| 9 | Universe grew 5 → 13 markets; 8 of them never backtested, 3 currencies | **High** | Open |
+| 10 | Equity in EUR, ATR/`contract_size` in instrument currency, no FX conversion | Medium | Open |
+| 11 | Source files contain mojibake (`â€"`) in comments/docstrings | Low | Open |
 
 ### Finding 1 — dry runs destroyed state (critical)
 
@@ -72,6 +75,41 @@ MACD, Squeeze, MA Cross and Trend MA have no backtest anywhere in the repo.** Th
 "Expected results" figures quoted in their sections below are assertions, not
 measurements — treat them as hypotheses.
 
+### Finding 9 — universe grew 5 → 13 markets (open)
+
+The docs described 5 markets (ES, NQ, GC, CL, ZB). `futures/universe.py` defines
+**13**, and all 13 have cached UICs, so all are live. Added: YM, DAX, HK50, SI, NG,
+ZC, ZW, ZS.
+
+This compounds Finding 4. The validation gap is not just "6 of 7 strategies
+unbacktested" — it is that **8 of 13 markets have no backtest data either**, so
+most strategy/market combinations in production have never been measured. The
+2026-08-19 dry run generated live signals on ZC and DAX, neither of which appears
+anywhere in `backtest_futures.py`.
+
+It also introduced two currencies the sizing code does not handle (Finding 10) and
+new correlation exposure — the grain complex `{ZC, ZW, ZS}` and `{GC, SI}` are
+handled by `CORRELATED_PAIRS`, but that list must be maintained by hand as markets
+are added.
+
+**Before expanding further:** extend the backtest to cover every traded market, or
+restrict `load_universe()` to the validated set.
+
+### Finding 10 — no FX conversion in sizing (open)
+
+`_account()` returns equity in the account currency (**EUR**), while `sig["atr"]`
+and `contract_size` are denominated in the *instrument's* currency.
+`futures/runner.py` imports no FX module and performs no conversion, so:
+
+| Instruments | Currency | Sizing error |
+|-------------|----------|--------------|
+| DAX | EUR | none — matches account |
+| ES, NQ, YM, GC, SI, CL, NG, ZB, ZC, ZW, ZS | USD | ~1.08× oversized |
+| HK50 | HKD | ~9× oversized |
+
+HK50 is the one that matters. Fixing this means converting the risk budget into
+the instrument currency before dividing by `risk_per_contract`.
+
 ### Verified as correct
 
 Not everything was broken. Confirmed sound by inspection:
@@ -93,15 +131,40 @@ Not everything was broken. Confirmed sound by inspection:
 
 ## Market Overview
 
-| Symbol | Name                  | Type         | Direction     |
-|--------|-----------------------|--------------|---------------|
-| ES     | S&P 500 E-mini        | Equity Index | Long only     |
-| NQ     | Nasdaq 100 E-mini     | Equity Index | Long only     |
-| GC     | Gold                  | Commodity    | Bidirectional |
-| CL     | Crude Oil             | Commodity    | Long only     |
-| ZB     | 30-Year T-Bond        | Fixed Income | Bidirectional |
+All 13 are defined in `futures/universe.py` and all 13 have cached UICs — the
+module trades the full set, not a subset.
 
-**Regime filter (ES/NQ)**: Equity index longs blocked when ES < SMA(200) — avoids buying in confirmed bear markets.
+| Symbol | Name | Saxo asset type | Ccy | `contract_size` | Direction |
+|--------|------|-----------------|-----|-----------------|-----------|
+| ES | S&P 500 Index CFD | CfdOnIndex | USD | 1 | Long only |
+| NQ | NASDAQ-100 Index CFD | CfdOnIndex | USD | 1 | Long only |
+| YM | Dow Jones 30 CFD | CfdOnIndex | USD | 1 | Long only |
+| DAX | Germany 40 CFD | CfdOnIndex | **EUR** | 1 | Long only |
+| HK50 | Hang Seng 50 CFD | CfdOnIndex | **HKD** | 1 | Long only |
+| GC | Gold Spot (XAU/USD) | FxSpot | USD | 1 | Bidirectional |
+| SI | Silver Spot (XAG/USD) | FxSpot | USD | 1 | Bidirectional |
+| CL | WTI Crude Oil | ContractFutures | USD | 1,000 | Long only |
+| NG | Natural Gas | ContractFutures | USD | 10,000 | Long only |
+| ZB | 30-Year T-Bond | ContractFutures | USD | 1,000 | Bidirectional |
+| ZC | Corn | ContractFutures | USD | 50 | Bidirectional |
+| ZW | Wheat | ContractFutures | USD | 50 | Bidirectional |
+| ZS | Soybeans | ContractFutures | USD | 50 | Bidirectional |
+
+**Regime filter**: longs on **all five equity indices** (ES, NQ, YM, DAX, HK50) are
+blocked when ES < SMA(200) — `EQUITY_FUTURES` in each strategy module, not just
+ES/NQ as previously documented.
+
+**Correlation groups** (`runner.py`) — never the same direction in more than one
+per group: `{ES, NQ, YM}`, `{GC, SI}`, `{CL, NG}`, `{ZC, ZW, ZS}`.
+
+> **Three currencies, no FX conversion.** DAX settles in EUR (the account
+> currency, so correct) but HK50 settles in **HKD** — roughly a 9× sizing error,
+> and USD instruments are off by ~1.08×. See [Position Sizing](#position-sizing).
+
+> **8 of these 13 markets have never been backtested.** `backtest_futures.py`
+> covers only ES, NQ, GC, CL and ZN-via-TLT. YM, DAX, HK50, SI, NG, ZC, ZW and ZS
+> are traded live on strategies validated (where validated at all) against a
+> different, smaller market set. See [Finding 9](#finding-9--universe-grew-5--13-markets-open).
 
 ---
 
@@ -122,7 +185,7 @@ Not everything was broken. Confirmed sound by inspection:
 ## Strategy 1 — Donchian Channel Breakout
 
 **Type**: Trend following / breakout  
-**Markets**: All 5 (long only for ES/NQ/CL, bidirectional for GC/ZB)
+**Markets**: All 13 (long only for equity indices + CL/NG; bidirectional for GC/SI/ZB/ZC/ZW/ZS)
 
 ### Concept
 Price breaking above the highest high of the past 30 days signals a genuine breakout from established resistance. Momentum traders flood in, creating the trend. The opposite for shorts.
@@ -170,7 +233,7 @@ Passes the enable thresholds (Sharpe ≥ 0.70, WR ≥ 35%, MaxDD < 30%, N ≥ 30
 ## Strategy 2 — RSI(5) Pullback
 
 **Type**: Mean reversion / pullback within trend  
-**Markets**: All 5
+**Markets**: All 13
 
 ### Concept
 In a bull trend (price > 50d SMA), short-term RSI oversold readings (RSI < 30) signal a temporary dip, not a trend reversal. Buy the dip, sell the rip.
@@ -197,7 +260,7 @@ TIME_STOP_DAYS = 10
 RISK_PCT       = 0.01
 ```
 
-### Expected results
+### Expected results — ⚠️ UNVALIDATED (no backtest exists)
 ~25-35 signals/yr | WR ~58-64% | Avg hold ~6 days
 
 ---
@@ -205,7 +268,7 @@ RISK_PCT       = 0.01
 ## Strategy 3 — EMA(5/20) Crossover
 
 **Type**: Trend following / momentum  
-**Markets**: All 5
+**Markets**: All 13
 
 ### Concept
 When the fast EMA(5) crosses above slow EMA(20) with ADX confirming a trend (ADX ≥ 20), it signals fresh momentum. Complementary to Donchian — catches medium-term trend shifts rather than breakouts.
@@ -231,7 +294,7 @@ SIGNAL_LOOKBACK = 3     # bars; code value (docs previously said 2)
 RISK_PCT        = 0.01
 ```
 
-### Expected results
+### Expected results — ⚠️ UNVALIDATED (no backtest exists)
 ~30-40 signals/yr | WR ~50-56% | Avg hold ~9 days
 
 ---
@@ -239,7 +302,7 @@ RISK_PCT        = 0.01
 ## Strategy 4 — MACD(12,26,9) Momentum Crossover
 
 **Type**: Momentum / crossover  
-**Markets**: All 5
+**Markets**: All 13
 
 ### Concept
 MACD measures the difference between EMA(12) and EMA(26). When the MACD line crosses above its signal line with the histogram turning positive AND MACD > 0 (above zero line), short-term momentum is accelerating in the trend direction. The zero-line filter removes counter-trend entries.
@@ -267,7 +330,7 @@ TIME_STOP_DAYS = 20
 RISK_PCT       = 0.01
 ```
 
-### Expected results
+### Expected results — ⚠️ UNVALIDATED (no backtest exists)
 ~12-18 signals/yr | WR ~52-58% | Avg hold ~14 days  
 Edge: catches momentum inflection points earlier than price crossovers
 
@@ -276,7 +339,7 @@ Edge: catches momentum inflection points earlier than price crossovers
 ## Strategy 5 — Bollinger Band Squeeze Breakout
 
 **Type**: Volatility breakout  
-**Markets**: All 5 (GC/ZB bidirectional)
+**Markets**: All 13 (GC/SI/ZB/ZC/ZW/ZS bidirectional)
 
 ### Concept
 Markets alternate between compression (low volatility) and expansion (high volatility). A "squeeze" occurs when Bollinger Bands (BB, 20d, 2σ) contract *inside* Keltner Channels (KC, 20d EMA ± 1.5×ATR). When BB eventually expands back outside KC, a directional breakout is imminent — volatility is releasing.
@@ -305,7 +368,7 @@ TIME_STOP_DAYS = 15
 RISK_PCT       = 0.01
 ```
 
-### Expected results
+### Expected results — ⚠️ UNVALIDATED (no backtest exists)
 ~10-15 signals/yr | WR ~60-65% | Avg hold ~8 days  
 Edge: enters at the start of a volatility expansion — tight stop, large potential move relative to risk
 
@@ -314,7 +377,7 @@ Edge: enters at the start of a volatility expansion — tight stop, large potent
 ## Strategy 6 — SMA(50/200) Golden/Death Cross
 
 **Type**: Long-term trend confirmation  
-**Markets**: All 5 (GC/ZB bidirectional)
+**Markets**: All 13 (GC/SI/ZB/ZC/ZW/ZS bidirectional)
 
 ### Concept
 When the 50d SMA crosses above the 200d SMA ("Golden Cross"), it confirms a long-term trend shift from bear to bull. The signal is rare (2-4 per market per year) but extremely high quality — by the time the cross occurs, the trend is well-established and committed.
@@ -343,7 +406,7 @@ RISK_PCT       = 0.01
 SIGNAL_LOOKBACK = 3
 ```
 
-### Expected results
+### Expected results — ⚠️ UNVALIDATED (no backtest exists)
 ~4-8 signals/yr | WR ~65-70% | Avg hold ~25 days  
 Edge: highest signal quality of all 6 strategies — classic large winners (oil 2022, gold 2023, bonds 2020)
 
@@ -353,7 +416,7 @@ Edge: highest signal quality of all 6 strategies — classic large winners (oil 
 
 **File**: `futures/strategy_trend_ma.py`  
 **Type**: Medium-term trend following with volatility filter  
-**Markets**: All 5 (long only for ES/NQ/CL, bidirectional for GC/ZB)
+**Markets**: All 13 (long only for equity indices + CL/NG; bidirectional for GC/SI/ZB/ZC/ZW/ZS)
 
 ### Concept
 
@@ -408,7 +471,7 @@ VOL_BLOCK_PCT  = 0.80   # block when vol > 80th percentile
 DAILY_LOSS_LIMIT_PCT = -3.0  # in runner.py
 ```
 
-### Expected Results
+### Expected Results — ⚠️ UNVALIDATED (no backtest exists)
 
 ~15–25 signals/yr | WR ~50–55% | Avg hold ~28 days  
 Win rate is moderate — trend-following edge comes from large winners, not high WR.  
@@ -453,7 +516,7 @@ that is the point. A strategy that fails is worth more removed than left running
 1. Fix the audit's open findings (4, 5, 6) — especially broker/state reconciliation
 2. Backtest all six unvalidated strategies on the same footing as Donchian
 3. Retire whichever fail Sharpe ≥ 0.70 / WR ≥ 35% / MaxDD < 30% / N ≥ 30
-4. Re-measure the survivors *together* — 7 strategies on 5 markets overlap heavily,
+4. Re-measure the survivors *together* — 7 strategies on 13 markets overlap heavily,
    and portfolio Sharpe is not the average of individual Sharpes
 5. Only then consider an 8th
 
@@ -485,11 +548,9 @@ sizes (Finding 2). `MAX_RISK_OVERSHOOT` stops the `max(1, …)` floor from takin
 position that risks far more than 1% when the correct size is under one contract
 (Finding 3).
 
-> **Known gap:** equity is in **EUR** (the account currency) while `ATR` and
-> `contract_size` are in the *instrument's* currency — USD for ES/NQ/GC/CL/ZB, EUR
-> for DAX, HKD for HK50. `futures/runner.py` performs **no FX conversion**, so
-> non-EUR instruments are mis-sized by their exchange rate (~1.08× for USD,
-> ~9× for HKD). Small next to Findings 2–3, but real and still open.
+> **Known gap:** equity is in EUR while `ATR`/`contract_size` are in the
+> instrument's currency, with no conversion — see
+> [Finding 10](#finding-10--no-fx-conversion-in-sizing-open).
 
 ---
 
