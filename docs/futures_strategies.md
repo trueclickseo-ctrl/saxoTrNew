@@ -9,6 +9,78 @@
 
 ---
 
+## What Changed Operationally (read this before the next run)
+
+**No strategy logic was modified.** All 7 strategies are still enabled, all 13
+markets still configured, still 5 slots each, and no signal or exit rule was
+touched. What changed is *capital and safety*, and the effect on live behaviour
+is large.
+
+| Change | Effect on running |
+|--------|-------------------|
+| Equity cap `risk_equity_eur = 27,800` | Positions ~34× smaller |
+| `MAX_RISK_OVERSHOOT` guard | Signals whose 1 contract over-risks are **skipped** |
+| Dry runs no longer write state | Dry runs are now safe to run any time |
+| Reconcile check in `run_daily()` | One extra API call; logs warnings only |
+| `macd:CL` adopted into state | Now under exit management (previously unmanaged) |
+
+### ⚠️ The consequence: only 2 of 13 markets are currently tradeable
+
+At 27,800 EUR the 1% per-trade budget is **278 EUR**. Measured against real Saxo
+instrument data (not ETF proxies), using Donchian's 1.5×ATR — the *loosest* stop
+in the module, the other six use 2.0× and are stricter:
+
+| Market | `contract_size` | ATR | Risk / 1 contract | × budget | Status |
+|--------|----------------:|----:|------------------:|---------:|--------|
+| ES | 1 | 78.34 | 118 | 0.4× | ✅ tradeable |
+| GC | 1 | 100.26 | 150 | 0.5× | ✅ tradeable |
+| DAX | 1 | 285.18 | 428 | 1.5× | ❌ skipped |
+| HK50 | 1 | 397.28 | 596 | 2.1× | ❌ skipped |
+| ZC | 50 | 10.18 | 764 | 2.7× | ❌ skipped |
+| YM | 1 | 530.33 | 795 | 2.9× | ❌ skipped |
+| NQ | 1 | 551.11 | 827 | 3.0× | ❌ skipped |
+| ZS | 50 | 18.71 | 1,403 | 5.0× | ❌ skipped |
+| NG | 10,000 | 0.09 | 1,408 | 5.1× | ❌ skipped |
+| ZB | 1,000 | 1.00 | 1,506 | 5.4× | ❌ skipped |
+| ZW | 50 | 21.56 | 1,617 | 5.8× | ❌ skipped |
+| CL | 1,000 | 3.75 | 5,623 | 20.2× | ❌ skipped |
+| SI | 1 | — | — | — | chart fetch fails (see below) |
+
+**So the module will trade far less than it used to — and that is the correct
+behaviour, not a regression.** It previously generated trades across all markets
+only because it sized off 957,732 EUR of SIM demo credit, i.e. at roughly 34×
+the intended risk. The apparent activity was an artifact of the bug. One CL
+contract genuinely risks 5,623 EUR; on 27,800 EUR of capital that is **20% of
+the account on a single trade**, not 1%.
+
+### This is a capital decision, not a bug
+
+The arithmetic is simply that **300,000 SEK cannot run this module as designed.**
+Four options, in the order I would consider them:
+
+1. **Accept the smaller universe.** Trade ES and GC only. Honest, safe, and both
+   are in the core-5 set that backtests best. Least capital required.
+2. **Raise `RISK_PCT` above 1%.** At 2% the budget doubles to 556 EUR, bringing
+   DAX, HK50, YM, NQ and ZC into range. This raises real risk per trade —
+   deliberately, with eyes open, rather than accidentally as before.
+3. **Raise `risk_equity_eur`** if futures should command more than the whole
+   stated account — only valid if the account really is larger than 300,000 SEK.
+4. **Drop the large-`contract_size` markets** (CL, NG, ZB, and the grains). They
+   need 66,000–453,000 EUR to size correctly at 1%, and CL/ZB were exactly the
+   ones the broker was rejecting.
+
+Options 1 and 4 point the same way, and agree with
+[Finding 12](#-finding-12--the-universe-expansion-destroyed-the-edge-2026-08-20):
+the core 5 markets backtest better than all 13 anyway. **My recommendation is 1
+plus 4** — trade ES and GC now, and revisit NQ/ZB when either capital or
+`RISK_PCT` supports them.
+
+> **Separate small bug:** `SI` (Silver, UIC 8178, FxSpot) fails its chart fetch
+> with `400 Bad Request`, so it produces no data and can never signal. It is
+> configured and counted in the universe but is effectively dead. Not yet fixed.
+
+---
+
 ## Audit — 2026-08-19
 
 | # | Finding | Severity | Status |
@@ -25,6 +97,8 @@
 | 10 | Equity in EUR, ATR/`contract_size` in instrument currency, no FX conversion | Medium | Open |
 | 11 | Source files contain mojibake (`â€"`) in comments/docstrings | Low | Open |
 | 12 | **Expanding 5 → 13 markets turns every strategy negative** | **Critical** | Open — needs your call |
+| 13 | At correct sizing only 2 of 13 markets are tradeable — capital is too small | **High** | Open — needs your call |
+| 14 | `SI` chart fetch returns 400; the market is configured but can never signal | Low | Open |
 
 > **Findings 4 and 6 are now closed.** All 7 strategies are backtested
 > (`backtest_futures_all.py`) and state reconciles against the broker
