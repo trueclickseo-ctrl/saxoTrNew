@@ -51,7 +51,14 @@
     ],
     "forex": {
       "enabled": true,
-      "risk_equity_eur": 27800
+      "risk_equity_eur": 27800,
+      "_lbo_comment": [
+        "London Breakout is documented as a separate day-trading book with its own",
+        "15,000 SEK capital, but the runner was passing it the FULL account equity,",
+        "so it risked 1.5% of everything instead of 1.5% of 15,000 SEK.",
+        "1390 EUR = 15,000 SEK at ~10.8 SEK/EUR."
+      ],
+      "lbo_capital_eur": 1390
     }
 
   }

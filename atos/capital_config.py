@@ -141,6 +141,18 @@ def forex_risk_equity_eur() -> float:
         return 27_800.0
 
 
+def forex_lbo_capital_eur() -> float:
+    """Dedicated day-trading capital (EUR) for the London Breakout book.
+
+    LBO is a separate book from the swing strategies; without this it was sized
+    off the whole account rather than its documented 15,000 SEK.
+    """
+    try:
+        return float(_load()["strategies"]["forex"]["lbo_capital_eur"])
+    except Exception:
+        return 1_390.0
+
+
 def reversion_stop_pct() -> float:
     return float(_load()["strategies"]["us_reversion"].get("stop_pct", 0.04))
 

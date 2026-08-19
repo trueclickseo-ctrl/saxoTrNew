@@ -23,10 +23,14 @@ EXIT:
   B. Stop loss    : opposite side of range (hard stop)
   C. Time stop    : close position by END_HOUR UTC (no overnight holds)
 
-SIZING (calibrated for 15,000 SEK / ~$1,400 initial capital):
-  Risk per trade = RISK_PCT (1.5%) of account equity
-  Units = risk_amount / (stop_distance_in_price × pip_value_per_unit)
-  Capped at MAX_UNITS to prevent over-leverage on very tight ranges.
+SIZING (dedicated day-trading book — config: forex.lbo_capital_eur, 15,000 SEK):
+  Risk per trade = RISK_PCT (1.5%) of the LBO book, NOT of the whole account.
+  Units = (book_equity_in_quote_ccy × RISK_PCT) / stop_distance
+  The runner passes equity_by_pair already converted into each pair's QUOTE
+  currency, because stop_distance is quoted there — sizing off an unconverted
+  figure gave JPY-quoted pairs ~150x fewer units for the same nominal risk.
+  Capped at MAX_UNITS; signals whose correct size is below MIN_UNITS are SKIPPED
+  rather than floored up (flooring silently over-risks the trade).
 
 PAIRS:
   EURUSD, GBPUSD, USDJPY, EURGBP, GBPJPY, AUDUSD, USDCAD
@@ -142,7 +146,8 @@ def generate_signals(h1_data: dict[str, pd.DataFrame],
                      pair_meta: dict,
                      open_symbols: set,
                      session: str = "auto",
-                     account_equity: float = 15_000.0) -> list[dict]:
+                     account_equity: float = 15_000.0,
+                     equity_by_pair: dict[str, float] | None = None) -> list[dict]:
     """
     Generate breakout signals for the current session.
 
@@ -236,12 +241,33 @@ def generate_signals(h1_data: dict[str, pd.DataFrame],
         if stop_distance <= 0:
             continue
 
-        # Convert equity from SEK to pair base currency (assume USD account on SIM)
-        equity_usd   = account_equity / 10.7   # approximate USDSEK
-        risk_usd     = equity_usd * RISK_PCT
-        pip_val      = pip_size                  # value per pip per 1 unit in quote currency
-        units        = int(risk_usd / stop_distance)
-        units        = max(MIN_UNITS, min(MAX_UNITS, units))
+        # Position sizing.
+        #
+        # stop_distance is in the pair's QUOTE currency, so the risk budget has to
+        # be expressed in that same currency or the division is a unit error --
+        # USDJPY/GBPJPY (quoted in JPY) would otherwise get ~150x fewer units than
+        # the USD-quoted pairs for the same nominal risk. The runner supplies
+        # equity_by_pair already converted; account_equity is the fallback.
+        #
+        # This previously did `account_equity / 10.7` with a hardcoded "approximate
+        # USDSEK" rate, on an account that is denominated in EUR.
+        eq_for_pair = None
+        if equity_by_pair:
+            eq_for_pair = equity_by_pair.get(sym)
+        if eq_for_pair is None:
+            logger.warning(f"  [{sym}] no quote-currency equity supplied — "
+                           f"skipping rather than sizing without conversion")
+            continue
+
+        risk_quote = eq_for_pair * RISK_PCT
+        units      = int(risk_quote / stop_distance)
+        if units < MIN_UNITS:
+            # Flooring to MIN_UNITS here would silently over-risk the trade, which
+            # is what the old max(MIN_UNITS, ...) did. Skip instead.
+            logger.info(f"  [{sym}] risk-correct size {units} < {MIN_UNITS} min — "
+                        f"skip (would over-risk at the minimum lot)")
+            continue
+        units = min(MAX_UNITS, units)
 
         score = rng_pips / MAX_RANGE_PIPS   # normalized: tighter ranges score higher
 

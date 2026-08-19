@@ -904,8 +904,24 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 continue
             h1_lbo[sym]  = _fetch_history_h1(pi["uic"])
             pair_meta[sym] = {"pip_size": pi.get("pip_size", 0.0001)}
+        # LBO is a separate day-trading book with its own capital, not a slice of
+        # the swing account. Passing `equity` here made it risk 1.5% of everything.
+        try:
+            import atos.capital_config as _CAP
+            lbo_equity = _CAP.forex_lbo_capital_eur()
+        except Exception:
+            lbo_equity = 1_390.0
+        # stop_distance is in each pair's quote currency, so convert per pair.
+        lbo_eq_by_pair = {}
+        for sym in h1_lbo:
+            eq_q = _equity_in_quote(lbo_equity, sym)
+            if eq_q is not None:
+                lbo_eq_by_pair[sym] = eq_q
+        logger.info(f"  [london_breakout] book capital {lbo_equity:,.0f} EUR "
+                    f"(1.5% = {lbo_equity*strat_lbo.RISK_PCT:,.0f} EUR/trade)")
         signals = strat_lbo.generate_signals(
-            h1_lbo, pair_meta, open_syms, account_equity=equity
+            h1_lbo, pair_meta, open_syms,
+            account_equity=lbo_equity, equity_by_pair=lbo_eq_by_pair,
         )
         logger.info(f"  [london_breakout] {len(h1_lbo)} pairs scanned → {len(signals)} signal(s)")
     elif strat_name == "gap" and gap_session != "weekly":
