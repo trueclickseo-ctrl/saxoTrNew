@@ -1,10 +1,7 @@
 """
 forex/runner.py
 ---------------
-Multi-strategy daily execution runner for FX pairs. Executes via IBKR paper
-(ibkr_client.py/ibkr_order.py) -- see _ibkr_uic() below for how each pair's
-IBKR conId is resolved (forex/universe.py's PAIRS still carries Saxo Uics,
-kept for backward-compat/logging only, not used for trading).
+Multi-strategy daily execution runner for FX pairs.
 
 Strategies:
   ema         — EMA(5/30) + ADX(14) crossover  (trend-following)
@@ -19,13 +16,13 @@ Strategies:
   london_breakout — Asian/London range breakout at London open + NY open (~58-63% WR)
 
 Universe:
-  34 pairs — 7 G7 majors + 27 crosses (IBKR conIds resolved live; verify Scandi/EM with --info)
+  34 pairs — 7 G7 majors + 27 crosses (UICs confirmed Saxo SIM; Scandi/EM verify with --info)
   Asian session  (14): JPY crosses, AUD/NZD pairs — run at 06:20 PKT
   London session (20): EUR/GBP/USD crosses + Scandi/CAD — run at 18:00 PKT
 
 Usage:
     python forex/runner.py                          # all 4 strategies, all 27 pairs, dry-run
-    python forex/runner.py --live                   # all 4, real IBKR paper orders
+    python forex/runner.py --live                   # all 4, real Saxo SIM orders
     python forex/runner.py --session asian --live    # Asian session (14 pairs, 06:20 PKT)
     python forex/runner.py --session london --live   # London session (13 pairs, 18:00 PKT)
     python forex/runner.py --exits-only --live       # stop-check only, all pairs (14:00 PKT)
@@ -45,6 +42,7 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import datetime, date, timezone
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -52,11 +50,10 @@ _ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, _ROOT)
 sys.path.insert(0, _HERE)
 
+import requests
+import saxo_order
 import pandas as pd
-import ibkr_client
-import ibkr_order
-import ibkr_history
-import ibkr_price_service
+import saxo_auth
 
 from forex.universe import PAIRS, ASSET_TYPE, get_pair
 import forex.strategy             as strat_ema
@@ -136,6 +133,7 @@ SESSION_PAIRS = {
 MAX_CURRENCY_EXPOSURE = 3
 
 # ── Constants ─────────────────────────────────────────────────────────────────
+BASE_URL    = "https://gateway.saxobank.com/sim/openapi"
 DATA_DIR    = os.path.join(_ROOT, "data")
 STATE_FILE  = os.path.join(DATA_DIR, "forex_state.json")
 ORDERS_FILE = os.path.join(DATA_DIR, "forex_orders.json")
@@ -154,63 +152,73 @@ BREAKEVEN_THRESHOLD_ATR = 1.0
 BREAKEVEN_GAP_FILL_PCT  = 0.50
 
 
-# ── IBKR conId resolution ───────────────────────────────────────────────────
-# PAIRS (forex/universe.py) carries Saxo Uics (pair["uic"]) -- kept as-is for
-# backward compat/logging, but every broker call site in this file resolves
-# the IBKR conId via this instead. Resolved once per symbol per process.
+# ── Saxo HTTP helpers ─────────────────────────────────────────────────────────
 
-_IBKR_UIC_CACHE: dict[str, int | None] = {}
+def _hdrs() -> dict:
+    return {"Authorization": f"Bearer {saxo_auth.get_valid_access_token()}"}
 
 
-def _ibkr_uic(symbol: str) -> int | None:
-    if symbol in _IBKR_UIC_CACHE:
-        return _IBKR_UIC_CACHE[symbol]
-    try:
-        matches = ibkr_client.find_instrument(symbol, asset_type=ASSET_TYPE)
-        conid = matches[0]["Uic"] if matches else None
-    except Exception as exc:
-        logger.warning(f"IBKR lookup failed for {symbol}: {exc}")
-        conid = None
-    if conid is None:
-        logger.warning(f"{symbol}: not resolvable on IBKR (IDEALPRO) — "
-                        f"skipping this pair for any broker call")
-    _IBKR_UIC_CACHE[symbol] = conid
-    return conid
+def _get(path: str, params: dict | None = None) -> dict:
+    for attempt in range(1, 4):
+        try:
+            r = requests.get(f"{BASE_URL}{path}", headers=_hdrs(),
+                             params=params, timeout=15)
+            r.raise_for_status()
+            return r.json()
+        except (requests.exceptions.SSLError,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout) as exc:
+            if attempt < 3:
+                time.sleep(5 * attempt)
+                continue
+            raise exc
 
 
-# ── Connection / Account ─────────────────────────────────────────────────────
+def _post(path: str, body: dict) -> dict:
+    r = requests.post(f"{BASE_URL}{path}", headers=_hdrs(), json=body, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+
+def _patch(path: str, body: dict) -> dict:
+    r = requests.patch(f"{BASE_URL}{path}", headers=_hdrs(), json=body, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+
+# ── Token / Account ───────────────────────────────────────────────────────────
 
 def _verify_token(scheduled_time: str = "") -> bool:
     """
-    Confirm IB Gateway is reachable. Returns True if so.
-    On failure, sends a "broker unreachable" alert email and returns False so
-    the caller can exit cleanly without placing any orders. Named _verify_token
-    for call-site compat with the Saxo version this replaces; IBKR has no
-    token to verify, just a socket connection to an already-logged-in Gateway.
+    Test the Saxo token. Returns True if valid.
+    On failure, sends a token-expired email and returns False so the caller
+    can exit cleanly without placing any orders.
     """
     try:
-        ibkr_client.test_connection()
+        _get("/port/v1/accounts/me")
         return True
     except Exception:
-        logger.error("IB Gateway unreachable — sending alert email")
-        fx_notify.send_broker_unreachable(scheduled_time)
+        logger.error("Saxo token appears expired or invalid — sending alert email")
+        fx_notify.send_token_expired(scheduled_time)
         return False
 
 
 _QUOTE_RATE_CACHE: dict[str, float] = {}
 
 
-def _sek_per_unit(ccy: str) -> float | None:
-    """SEK value of one unit of `ccy`, via the shared fx module."""
-    if ccy == "SEK":
+def _eur_per_unit(ccy: str) -> float | None:
+    """EUR value of one unit of `ccy`, via the shared fx module (SEK-based)."""
+    if ccy == "EUR":
         return 1.0
     if ccy in _QUOTE_RATE_CACHE:
         return _QUOTE_RATE_CACHE[ccy]
     try:
         import fx as _fx
-        rate = float(_fx.get_rate_to_sek(ccy))
-        if rate <= 0:
+        sek_per_ccy = float(_fx.get_rate_to_sek(ccy))
+        sek_per_eur = float(_fx.get_eur_sek_rate())
+        if sek_per_ccy <= 0 or sek_per_eur <= 0:
             return None
+        rate = sek_per_ccy / sek_per_eur
     except Exception as exc:
         logger.warning(f"FX rate lookup failed for {ccy}: {exc}")
         return None
@@ -218,35 +226,34 @@ def _sek_per_unit(ccy: str) -> float | None:
     return rate
 
 
-def _equity_in_quote(equity_sek: float, symbol: str) -> float | None:
-    """Restate SEK equity in a pair's quote currency, for position sizing.
+def _equity_in_quote(equity_eur: float, symbol: str) -> float | None:
+    """Restate EUR equity in a pair's quote currency, for position sizing.
 
     ATR (and therefore stop distance) is quoted in the pair's quote currency.
-    Dividing a SEK risk budget by a JPY distance is a unit error, so the
+    Dividing an EUR risk budget by a JPY distance is a unit error, so the
     budget is converted first.
     """
     quote = symbol[3:6] if len(symbol) >= 6 else ""
     if not quote:
         return None
-    rate = _sek_per_unit(quote)
+    rate = _eur_per_unit(quote)
     if not rate or rate <= 0:
         return None
-    return equity_sek / rate
+    return equity_eur / rate
 
 
 def _risk_equity(raw_equity: float) -> float:
     """Cap the sizing base at configured real capital.
 
-    The broker figure is IBKR's full paper equity (~1,000,000 SEK of demo
-    credit), not the user's intended risk capital. Sizing off it directly
-    would make positions far larger than intended -- same failure mode
-    found in the Saxo version (positions ~33x the intended 300,000 SEK).
-    FX trades in fine unit increments, so this scales positions down
-    cleanly rather than making pairs untradeable.
+    The broker figure is SIM demo credit (~945,000 EUR), not the user's money.
+    Sizing off it made positions ~33x the intended 300,000 SEK. FX trades in
+    fine unit increments, so this scales positions down cleanly rather than
+    making pairs untradeable (contrast futures, where lumpy contract sizes mean
+    the cap blocks whole markets).
     """
     try:
         import atos.capital_config as _CAP
-        cap = _CAP.forex_risk_equity_sek()
+        cap = _CAP.forex_risk_equity_eur()
     except Exception as exc:
         logger.warning(f"Could not read forex risk equity cap: {exc}")
         return raw_equity
@@ -258,55 +265,113 @@ def _risk_equity(raw_equity: float) -> float:
 def _account() -> tuple[float, str]:
     equity, key = 0.0, ""
     try:
-        bal    = ibkr_client.get_balances()
-        equity = float(bal.get("TotalValue") or 0)
+        bal    = _get("/port/v1/balances/me")
+        equity = float(bal.get("TotalValue") or bal.get("NetEquityForMargin")
+                       or bal.get("CashBalance") or 0)
         raw    = equity
         equity = _risk_equity(equity)
         if equity < raw:
-            logger.info(f"  Equity {raw:,.0f} {bal.get('Currency','SEK')} (broker) -> sizing off "
-                        f"{equity:,.0f} (capped at configured capital)")
+            logger.info(f"  Equity {raw:,.0f} EUR (broker) -> sizing off "
+                        f"{equity:,.0f} EUR (capped at configured capital)")
     except Exception as exc:
         logger.warning(f"Could not read equity: {exc}")
     try:
-        key = ibkr_client.get_account_key()
+        info = _get("/port/v1/accounts/me")
+        data = info.get("Data", info)
+        acct = data[0] if isinstance(data, list) else data
+        key  = (acct.get("AccountKey", "") if isinstance(acct, dict) else "") or ""
     except Exception as exc:
-        logger.warning(f"Could not read IBKR account id: {exc}")
+        logger.warning(f"Could not read AccountKey: {exc}")
     return equity, key
 
 
 # ── Price data ────────────────────────────────────────────────────────────────
 
 def _fetch_history(uic: int, count: int = CHART_BARS) -> pd.DataFrame | None:
-    """Fetch daily OHLC for an FX instrument (IBKR conId). Mid = MIDPOINT
-    whatToShow, IBKR's own bid/ask-midpoint bar type -- same "mid of the
-    market" semantics as Saxo's (Ask+Bid)/2 this replaces.
+    """Fetch daily OHLC for an FxSpot instrument. Mid = (Ask+Bid)/2.
 
     Each strategy enforces its own MIN_BARS; we just need at least a few rows
-    here to confirm the instrument responded with real data. Fetches a fixed
-    2-year window (comfortably covers CHART_BARS=340 daily bars even with
-    weekends/holidays) and trims to the requested count.
+    here to confirm the instrument responded with real data.
     """
-    df = ibkr_history.get_bars(uic, bar_size="1 day", duration="2 Y", what_to_show="MIDPOINT")
-    if df is None or len(df) < 5:
-        logger.debug(f"conId {uic}: only {0 if df is None else len(df)} bars returned")
+    try:
+        resp = _get("/chart/v3/charts", {
+            "Uic": uic, "AssetType": ASSET_TYPE,
+            "Horizon": 1440, "Count": count + 5,
+        })
+        rows = []
+        for bar in resp.get("Data", []):
+            if not isinstance(bar, dict):
+                continue
+            if "CloseAsk" in bar and "CloseBid" in bar:
+                ask_c = float(bar["CloseAsk"]); bid_c = float(bar["CloseBid"])
+                o = (float(bar.get("OpenAsk",  ask_c)) + float(bar.get("OpenBid",  bid_c))) / 2
+                h = (float(bar.get("HighAsk",  ask_c)) + float(bar.get("HighBid",  bid_c))) / 2
+                l = (float(bar.get("LowAsk",   ask_c)) + float(bar.get("LowBid",   bid_c))) / 2
+                c = (ask_c + bid_c) / 2
+            elif "Close" in bar:
+                o = float(bar.get("Open",  bar["Close"]))
+                h = float(bar.get("High",  bar["Close"]))
+                l = float(bar.get("Low",   bar["Close"]))
+                c = float(bar["Close"])
+            else:
+                continue
+            if c > 0:
+                rows.append({"Open": o, "High": h, "Low": l, "Close": c})
+        if len(rows) >= 5:
+            return pd.DataFrame(rows)
+        logger.debug(f"UIC {uic}: only {len(rows)} bars returned")
         return None
-    return df[["Open", "High", "Low", "Close"]].tail(count + 5).reset_index(drop=True)
+    except Exception as exc:
+        logger.warning(f"Chart fetch failed for UIC {uic}: {exc}")
+        return None
 
 
 def _fetch_history_h1(uic: int, count: int = 48) -> pd.DataFrame | None:
-    """Fetch H1 OHLC bars (IBKR conId) with UTC hour label.
+    """Fetch H1 OHLC bars (Horizon=60 minutes) with UTC hour label.
 
     Returns DataFrame with columns Open/High/Low/Close/HourUTC.
     Used by the session gap strategy to find the reference bar before each session.
-    Fetches a fixed 6-day window (comfortably covers count=48+2 hourly bars
-    even across a weekend) and trims to the requested count.
     """
-    df = ibkr_history.get_bars(uic, bar_size="1 hour", duration="6 D", what_to_show="MIDPOINT")
-    if df is None or len(df) < 4:
+    try:
+        resp = _get("/chart/v3/charts", {
+            "Uic": uic, "AssetType": ASSET_TYPE,
+            "Horizon": 60, "Count": count + 2,
+        })
+        rows = []
+        for bar in resp.get("Data", []):
+            if not isinstance(bar, dict):
+                continue
+            # Extract timestamp for HourUTC label
+            ts_raw = bar.get("Time") or bar.get("OpenTime") or ""
+            hour_utc = -1
+            if ts_raw:
+                try:
+                    dt = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+                    hour_utc = dt.astimezone(timezone.utc).hour
+                except Exception:
+                    pass
+
+            if "CloseAsk" in bar and "CloseBid" in bar:
+                ask_c = float(bar["CloseAsk"]); bid_c = float(bar["CloseBid"])
+                o = (float(bar.get("OpenAsk",  ask_c)) + float(bar.get("OpenBid",  bid_c))) / 2
+                h = (float(bar.get("HighAsk",  ask_c)) + float(bar.get("HighBid",  bid_c))) / 2
+                l = (float(bar.get("LowAsk",   ask_c)) + float(bar.get("LowBid",   bid_c))) / 2
+                c = (ask_c + bid_c) / 2
+            elif "Close" in bar:
+                o = float(bar.get("Open",  bar["Close"]))
+                h = float(bar.get("High",  bar["Close"]))
+                l = float(bar.get("Low",   bar["Close"]))
+                c = float(bar["Close"])
+            else:
+                continue
+            if c > 0:
+                rows.append({"Open": o, "High": h, "Low": l, "Close": c, "HourUTC": hour_utc})
+        if len(rows) >= 4:
+            return pd.DataFrame(rows)
         return None
-    df = df.tail(count + 2).reset_index(drop=True)
-    df["HourUTC"] = df["Date"].dt.hour
-    return df[["Open", "High", "Low", "Close", "HourUTC"]]
+    except Exception as exc:
+        logger.warning(f"H1 chart fetch failed for UIC {uic}: {exc}")
+        return None
 
 
 def _detect_gap_session() -> str | None:
@@ -386,21 +451,37 @@ def _momentum_rank(market_data: dict, top_n: int) -> set:
 
 
 def _fetch_live_prices(pairs: list) -> dict:
-    """Fetch current mid prices for a list of pairs (used by gap strategy)."""
-    instruments = []
+    """Fetch current bid/ask mid prices for a list of pairs (used by gap strategy)."""
+    prices = {}
     for pair in pairs:
-        ibkr_uic = _ibkr_uic(pair["symbol"])
-        if ibkr_uic is not None:
-            instruments.append({"symbol": pair["symbol"], "uic": ibkr_uic})
-    prices, _status = ibkr_price_service.fetch_prices(instruments)
+        try:
+            resp = _get("/trade/v1/infoprices", {
+                "Uic": pair["uic"], "AssetType": ASSET_TYPE, "FieldGroups": "Quote"
+            })
+            q   = resp.get("Quote", {})
+            bid = float(q.get("Bid", 0))
+            ask = float(q.get("Ask", 0))
+            if bid > 0 and ask > 0:
+                prices[pair["symbol"]] = (bid + ask) / 2
+        except Exception as exc:
+            logger.debug(f"Live price fetch failed for {pair['symbol']}: {exc}")
     return prices
 
 
 def _live_price(uic: int, account_key: str) -> float | None:
-    """uic here is an IBKR conId (see _ibkr_uic()); account_key is accepted
-    for call-site compat but unused, same as ibkr_order's account_key."""
-    prices, _status = ibkr_price_service.fetch_prices([{"symbol": "_", "uic": uic}])
-    return prices.get("_")
+    try:
+        params = {"Uic": uic, "AssetType": ASSET_TYPE, "FieldGroups": "Quote"}
+        if account_key:
+            params["AccountKey"] = account_key
+        resp = _get("/trade/v1/infoprices", params)
+        q    = resp.get("Quote", {})
+        mid  = q.get("Mid")
+        if mid is None and q.get("Ask") and q.get("Bid"):
+            mid = (float(q["Ask"]) + float(q["Bid"])) / 2
+        return float(mid) if mid else None
+    except Exception as exc:
+        logger.warning(f"Live price failed for UIC {uic}: {exc}")
+        return None
 
 
 # ── State ─────────────────────────────────────────────────────────────────────
@@ -628,16 +709,15 @@ def _entries_blocked_by_loss_limit(equity: float) -> bool:
 # ── Breakeven stop helpers ────────────────────────────────────────────────────
 
 def _amend_stop_order(order_id: str, new_price: float, sym: str, akey: str) -> bool:
-    """Amend an existing IBKR stop order to a new price in place. akey
-    accepted for call-site compat; unused (see ibkr_order.amend_stop)."""
+    """Amend an existing Saxo GTC stop order to a new price via PATCH."""
     dp = 3 if sym.upper().endswith("JPY") else 5
     rounded = round(new_price, dp)
     try:
-        amended = ibkr_order.amend_stop(order_id, rounded, symbol=sym, asset_type=ASSET_TYPE)
-        if not amended:
-            logger.warning(f"  [BREAKEVEN] Stop order {order_id} not found among open "
-                           f"orders — heal will re-place on next run")
-            return False
+        _patch(f"/trade/v2/orders/{order_id}", {
+            "AccountKey":    akey,
+            "OrderPrice":    rounded,
+            "OrderDuration": {"DurationType": "GoodTillCancel"},
+        })
         logger.info(f"  [BREAKEVEN] Stop order {order_id} amended → {rounded:.{dp}f}  ✓")
         return True
     except Exception as exc:
@@ -741,10 +821,8 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
         if not exit_flag:
             continue
 
-        uic = _ibkr_uic(sym)
-        if uic is None:
-            logger.warning(f"  [{strat_name}] {sym}: unresolvable on IBKR — cannot check exit")
-            continue
+        pair_info  = get_pair(sym)
+        uic        = pair_info["uic"]
         qty        = pos.get("quantity", 1_000)
         direction  = pos.get("direction", "Buy")
         is_long    = direction == "Buy"
@@ -753,20 +831,16 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
         entry      = float(pos.get("entry_price", 0))
         pnl_pct    = ((live_px - entry) / entry * 100) if is_long else ((entry - live_px) / entry * 100)
 
+        order = {"AccountKey": akey, "Uic": uic, "AssetType": ASSET_TYPE,
+                 "Amount": qty, "BuySell": close_side, "OrderType": "Market",
+                 "OrderDuration": {"DurationType": "DayOrder"}, "ManualOrder": False}
+
         tag = "L" if is_long else "S"
         if dry_run:
             logger.info(f"  [DRY] {close_side:<4} {qty:,}x {sym}[{tag}] "
                         f"({strat_name}) — {reason}  P&L {pnl_pct:+.2f}%")
         else:
-            # This is a runner-driven exit (time stop, trailing stop, etc.), not
-            # a broker-side stop/TP fill -- the bracket's resting stop/TP legs
-            # don't know the position they protected is about to be gone, and
-            # would sit as orphaned orders that could open an unintended reverse
-            # position if later triggered. Cancel them before closing.
-            for oid in (pos.get("stop_order_id"), pos.get("tp_order_id")):
-                if oid and oid not in ("synced", None, ""):
-                    ibkr_client.cancel_order(oid)
-            resp = ibkr_client.place_market_order(uic, ASSET_TYPE, close_side, qty)
+            resp = _post("/trade/v2/orders", order)
             logger.info(f"  {close_side} {resp.get('OrderId','?')}: {qty:,}x {sym}[{tag}] "
                         f"({strat_name}) — {reason}  P&L {pnl_pct:+.2f}%")
 
@@ -828,26 +902,23 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             sym = pi["symbol"]
             if sym not in lbo_pairs:
                 continue
-            ibkr_uic = _ibkr_uic(sym)
-            if ibkr_uic is None:
-                continue
-            h1_lbo[sym]  = _fetch_history_h1(ibkr_uic)
+            h1_lbo[sym]  = _fetch_history_h1(pi["uic"])
             pair_meta[sym] = {"pip_size": pi.get("pip_size", 0.0001)}
         # LBO is a separate day-trading book with its own capital, not a slice of
         # the swing account. Passing `equity` here made it risk 1.5% of everything.
         try:
             import atos.capital_config as _CAP
-            lbo_equity = _CAP.forex_lbo_capital_sek()
+            lbo_equity = _CAP.forex_lbo_capital_eur()
         except Exception:
-            lbo_equity = 15_000.0
+            lbo_equity = 1_390.0
         # stop_distance is in each pair's quote currency, so convert per pair.
         lbo_eq_by_pair = {}
         for sym in h1_lbo:
             eq_q = _equity_in_quote(lbo_equity, sym)
             if eq_q is not None:
                 lbo_eq_by_pair[sym] = eq_q
-        logger.info(f"  [london_breakout] book capital {lbo_equity:,.0f} SEK "
-                    f"(1.5% = {lbo_equity*strat_lbo.RISK_PCT:,.0f} SEK/trade)")
+        logger.info(f"  [london_breakout] book capital {lbo_equity:,.0f} EUR "
+                    f"(1.5% = {lbo_equity*strat_lbo.RISK_PCT:,.0f} EUR/trade)")
         signals = strat_lbo.generate_signals(
             h1_lbo, pair_meta, open_syms,
             account_equity=lbo_equity, equity_by_pair=lbo_eq_by_pair,
@@ -862,8 +933,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             logger.info(f"  [gap:{gap_session}] cooldown: skipping {sorted(gap_exhausted)}")
         h1_data: dict = {}
         for pi in PAIRS:
-            ibkr_uic = _ibkr_uic(pi["symbol"])
-            h1_data[pi["symbol"]] = _fetch_history_h1(ibkr_uic) if ibkr_uic is not None else None
+            h1_data[pi["symbol"]] = _fetch_history_h1(pi["uic"])
         signals = strat_mod.generate_session_signals(
             gap_session, h1_data, open_symbols=open_syms, live_prices=live_prices or {},
             exhausted_symbols=gap_exhausted,
@@ -907,16 +977,13 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         if strat_name not in DAY_TRADE_STRATEGIES and not _heat_allows_entry(positions, equity):
             break   # heat cap reached — stop all entries for this strategy
         pair_info = get_pair(sym)
-        uic       = _ibkr_uic(sym)
-        if uic is None:
-            logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] — not resolvable on IBKR")
-            continue
+        uic       = pair_info["uic"]
         rp_kw     = {"risk_pct": sig["risk_pct_override"]} if "risk_pct_override" in sig else {}
         if "units" in sig:
             qty = sig["units"]   # london_breakout pre-computes sizing from SEK capital
         else:
             # size_position() computes units = (equity * RISK_PCT) / (mult * ATR).
-            # ATR is in the pair's QUOTE currency but equity is in SEK, so without
+            # ATR is in the pair's QUOTE currency but equity is in EUR, so without
             # converting, realised risk scales with the numeric size of the quote
             # currency: JPY pairs risked ~0.1% while USD/CHF pairs risked 20-38%,
             # a 447x spread across positions that are all nominally "1%".
@@ -943,28 +1010,18 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                         f"stop={sig['stop_price']:.5f}  {detail}{agree_tag}")
         else:
             tp = sig.get("tp_price") or sig.get("gap_target")   # london_breakout + gap both provide TP
-            try:
-                entry_oid, stop_oid, tp_oid = ibkr_order.place_with_stop(
-                    account_key       = akey,
-                    uic               = uic,
-                    asset_type        = ASSET_TYPE,
-                    amount            = qty,
-                    buy_sell          = direction,
-                    stop_price        = sig["stop_price"],
-                    label             = f"{strat_name}:{sym}",
-                    take_profit_price = tp,
-                    symbol            = sym,
-                )
-            except Exception as exc:
-                # place_with_stop() raises if the entry itself was rejected
-                # (bad symbol, insufficient funds, an account's own FX
-                # trading restrictions, etc.) rather than silently returning
-                # order ids for an order that never actually filled -- skip
-                # this signal rather than recording a position that doesn't
-                # exist at the broker, and keep going so one bad signal
-                # doesn't abort the rest of this strategy's entries.
-                logger.warning(f"  [{strat_name}] {direction} {sym} entry REJECTED: {exc}")
-                continue
+            entry_oid, stop_oid, tp_oid = saxo_order.place_with_stop(
+                post_fn           = _post,
+                account_key       = akey,
+                uic               = uic,
+                asset_type        = ASSET_TYPE,
+                amount            = qty,
+                buy_sell          = direction,
+                stop_price        = sig["stop_price"],
+                label             = f"{strat_name}:{sym}",
+                take_profit_price = tp,
+                symbol            = sym,
+            )
             tp_info = f"  tp_order={tp_oid}" if tp_oid else ""
             logger.info(f"  {direction} {entry_oid}: {qty:,}x {sym}[{tag}] "
                         f"({strat_name})  @ {sig['close']:.5f}  stop={sig['stop_price']:.5f}"
@@ -1020,22 +1077,27 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
 
 def _fetch_open_orders(akey: str) -> set | None:
     """
-    Return set of (conId, buy_sell, order_type) for all open orders.
+    Return set of (uic, buy_sell, order_type) for all open GTC orders.
     Returns None if the query fails (heal will be skipped to avoid duplicates).
-    akey accepted for call-site compat; unused (ibkr_client scopes to
-    whichever account IB Gateway is logged into).
     """
     try:
-        return ibkr_client.get_open_orders()
+        resp   = _get("/port/v1/orders/me", {"AssetType": ASSET_TYPE})
+        orders = resp.get("Data", [])
+        result = set()
+        for o in orders:
+            dur = o.get("Duration", {}).get("DurationType", "")
+            if dur == "GoodTillCancel":
+                result.add((o.get("Uic"), o.get("BuySell"), o.get("OrderType")))
+        return result
     except Exception as exc:
-        logger.warning(f"[heal] Could not fetch open orders from IBKR: {exc} — skipping heal")
+        logger.warning(f"[heal] Could not fetch open orders from Saxo: {exc} — skipping heal")
         return None
 
 
 def _heal_missing_stops(positions: dict, akey: str) -> int:
     """
-    Place a standalone stop order for positions missing a stop_order_id.
-    Queries IBKR first to avoid creating duplicate stops.
+    Place GTC stop orders for positions missing a stop_order_id.
+    Queries Saxo first to avoid creating duplicate stops.
     Returns number of stops successfully placed.
     """
     missing = [(k, v) for k, v in positions.items()
@@ -1049,26 +1111,37 @@ def _heal_missing_stops(positions: dict, akey: str) -> int:
 
     healed = 0
     for key, pos in missing:
-        sym = key.split(":", 1)[1] if ":" in key else key
-        uic = _ibkr_uic(sym)
-        if uic is None:
-            logger.warning(f"  [heal_stops] {key}: not resolvable on IBKR — skipping")
-            continue
+        sym        = key.split(":", 1)[1] if ":" in key else key
+        uic        = pos["uic"]
         direction  = pos.get("direction", "Buy")
         qty        = pos["quantity"]
         stop_price = pos["stop_price"]
         close_side = "Sell" if direction == "Buy" else "Buy"
+        dp         = 3 if sym.upper().endswith("JPY") else 5
+        rounded    = round(stop_price, dp)
 
-        if (uic, close_side.upper(), "STP") in open_orders or \
-           (uic, close_side.upper(), "STP LMT") in open_orders:
-            # Stop already exists in IBKR — just record it
+        if (uic, close_side, "Stop") in open_orders or \
+           (uic, close_side, "StopLimit") in open_orders:
+            # Stop already exists in Saxo — just record it
             pos["stop_order_id"] = "synced"
-            logger.debug(f"  [heal_stops] {key}  stop already in IBKR (synced)")
+            logger.debug(f"  [heal_stops] {key}  stop already in Saxo (synced)")
             continue
 
-        logger.info(f"[heal_stops] {key} missing stop — placing {close_side} Stop@{stop_price}...")
+        logger.info(f"[heal_stops] {key} missing stop — placing {close_side} Stop@{rounded}...")
+        stop_body = {
+            "AccountKey":    akey,
+            "Uic":           uic,
+            "AssetType":     ASSET_TYPE,
+            "Amount":        qty,
+            "BuySell":       close_side,
+            "OrderType":     "Stop",
+            "OrderPrice":    rounded,
+            "OrderDuration": {"DurationType": "GoodTillCancel"},
+            "ManualOrder":   False,
+        }
         try:
-            stop_oid = ibkr_order.place_stop(uic, ASSET_TYPE, qty, close_side, stop_price, symbol=sym)
+            resp     = _post("/trade/v2/orders", stop_body)
+            stop_oid = str(resp.get("OrderId", "?"))
             pos["stop_order_id"] = stop_oid
             logger.info(f"  [heal_stops] {key}  stop_id={stop_oid}  ✓")
             healed += 1
@@ -1079,8 +1152,8 @@ def _heal_missing_stops(positions: dict, akey: str) -> int:
 
 def _heal_missing_tp(positions: dict, akey: str) -> int:
     """
-    Place a standalone Limit TP order for gap positions that have a
-    gap_target but no tp_order_id. Queries IBKR first to avoid duplicates.
+    Place GTC Limit TP orders for gap positions that have a gap_target but no tp_order_id.
+    Queries Saxo first to avoid duplicates.
     Returns number of TP orders successfully placed.
     """
     missing = [(k, v) for k, v in positions.items()
@@ -1096,24 +1169,35 @@ def _heal_missing_tp(positions: dict, akey: str) -> int:
 
     healed = 0
     for key, pos in missing:
-        sym = key.split(":", 1)[1] if ":" in key else key
-        uic = _ibkr_uic(sym)
-        if uic is None:
-            logger.warning(f"  [heal_tp] {key}: not resolvable on IBKR — skipping")
-            continue
+        sym        = key.split(":", 1)[1] if ":" in key else key
+        uic        = pos["uic"]
         direction  = pos.get("direction", "Buy")
         qty        = pos["quantity"]
         tp_price   = pos["gap_target"]
         close_side = "Sell" if direction == "Buy" else "Buy"
+        dp         = 3 if sym.upper().endswith("JPY") else 5
+        rounded_tp = round(tp_price, dp)
 
-        if (uic, close_side.upper(), "LMT") in open_orders:
+        if (uic, close_side, "Limit") in open_orders:
             pos["tp_order_id"] = "synced"
-            logger.debug(f"  [heal_tp] {key}  TP already in IBKR (synced)")
+            logger.debug(f"  [heal_tp] {key}  TP already in Saxo (synced)")
             continue
 
-        logger.info(f"[heal_tp] {key} missing TP — placing {close_side} Limit@{tp_price}...")
+        logger.info(f"[heal_tp] {key} missing TP — placing {close_side} Limit@{rounded_tp}...")
+        tp_body = {
+            "AccountKey":    akey,
+            "Uic":           uic,
+            "AssetType":     ASSET_TYPE,
+            "Amount":        qty,
+            "BuySell":       close_side,
+            "OrderType":     "Limit",
+            "OrderPrice":    rounded_tp,
+            "OrderDuration": {"DurationType": "GoodTillCancel"},
+            "ManualOrder":   False,
+        }
         try:
-            tp_oid = ibkr_order.place_limit(uic, ASSET_TYPE, qty, close_side, tp_price, symbol=sym)
+            resp   = _post("/trade/v2/orders", tp_body)
+            tp_oid = str(resp.get("OrderId", "?"))
             pos["tp_order_id"] = tp_oid
             logger.info(f"  [heal_tp] {key}  tp_id={tp_oid}  ✓")
             healed += 1
@@ -1135,7 +1219,7 @@ def run_exits_only(dry_run: bool = True,
     active_pairs   = [p for p in PAIRS
                       if session_filter is None or p["symbol"] in session_filter]
 
-    mode = "DRY-RUN" if dry_run else "LIVE (IBKR paper)"
+    mode = "DRY-RUN" if dry_run else "LIVE (Saxo SIM)"
     logger.info("=" * 60)
     logger.info(f"  FX Runner [EXITS-ONLY] — {mode}  session={session}  "
                 f"{datetime.now().strftime('%Y-%m-%d %H:%M')}")
@@ -1159,8 +1243,7 @@ def run_exits_only(dry_run: bool = True,
 
     market_data: dict[str, pd.DataFrame | None] = {}
     for pair in active_pairs:
-        ibkr_uic = _ibkr_uic(pair["symbol"])
-        market_data[pair["symbol"]] = _fetch_history(ibkr_uic) if ibkr_uic is not None else None
+        market_data[pair["symbol"]] = _fetch_history(pair["uic"])
 
     total_exits = 0
     for strat_name in active_strategies:
@@ -1209,7 +1292,7 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
                       if session_filter is None or p["symbol"] in session_filter]
 
     strat_label = "+".join(active_strategies)
-    mode        = "DRY-RUN" if dry_run else "LIVE (IBKR paper)"
+    mode        = "DRY-RUN" if dry_run else "LIVE (Saxo SIM)"
     run_time    = datetime.now().strftime("%H:%M")
     logger.info("=" * 60)
     logger.info(f"  FX Runner [{strat_label}] — {mode}  session={session}  "
@@ -1255,8 +1338,7 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
     # ── Fetch price history once for active session pairs ─────────────────────
     market_data: dict[str, pd.DataFrame | None] = {}
     for pair in active_pairs:
-        ibkr_uic = _ibkr_uic(pair["symbol"])
-        market_data[pair["symbol"]] = _fetch_history(ibkr_uic) if ibkr_uic is not None else None
+        market_data[pair["symbol"]] = _fetch_history(pair["uic"])
 
     # ── Momentum pre-filter: restrict NEW entries to top trending pairs ────────
     # Exits always run on the full market_data (we never suppress stop-checks).
@@ -1392,7 +1474,7 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="FX multi-strategy runner")
     ap.add_argument("--live",        action="store_true",
-                    help="Place real orders on IBKR paper (default: dry-run)")
+                    help="Place real orders in Saxo SIM (default: dry-run)")
     ap.add_argument("--exits-only",  action="store_true",
                     help="Check stops only — no new entries (intraday stop check)")
     ap.add_argument("--strategy", default="all",
@@ -1404,27 +1486,25 @@ if __name__ == "__main__":
     ap.add_argument("--scan",     action="store_true",
                     help="Show 4-panel market snapshot")
     ap.add_argument("--info",     action="store_true",
-                    help="Verify conIds via live IBKR quotes")
+                    help="Verify UICs via live Saxo quotes")
     ap.add_argument("--session",  default="all",
                     choices=["all", "asian", "london"],
                     help="Restrict to session pairs: asian (06:20 PKT) | london (18:00 PKT) | all")
     args = ap.parse_args()
 
     if args.info:
-        print(f"\n{'Pair':<10} {'conId':>9}  {'Bid':>10} {'Ask':>10}  Description")
+        print(f"\n{'Pair':<10} {'UIC':>6}  {'Bid':>10} {'Ask':>10}  Description")
         print("  " + "-" * 58)
         for pair in PAIRS:
-            uic = _ibkr_uic(pair["symbol"])
-            if uic is None:
-                print(f"  {pair['symbol']:<10} {'?':>9}  NOT RESOLVABLE ON IBKR")
-                continue
+            uic = pair["uic"]
             try:
-                prices, _status = ibkr_price_service.fetch_prices([{"symbol": pair["symbol"], "uic": uic}])
-                px = prices.get(pair["symbol"], "?")
-                print(f"  {pair['symbol']:<10} {uic:>9}  "
-                      f"{'':>10} {px:>10}  {pair['description']}")
+                resp = _get("/trade/v1/infoprices",
+                            {"Uic": uic, "AssetType": ASSET_TYPE, "FieldGroups": "Quote"})
+                q   = resp.get("Quote", {})
+                print(f"  {pair['symbol']:<10} {uic:>6}  "
+                      f"{q.get('Bid','?'):>10} {q.get('Ask','?'):>10}  {pair['description']}")
             except Exception as exc:
-                print(f"  {pair['symbol']:<10} {uic:>9}  ERROR: {exc}")
+                print(f"  {pair['symbol']:<10} {uic:>6}  ERROR: {exc}")
         sys.exit(0)
 
     if args.status:
@@ -1455,8 +1535,7 @@ if __name__ == "__main__":
     if args.scan:
         market_data = {}
         for pair in PAIRS:
-            ibkr_uic = _ibkr_uic(pair["symbol"])
-            market_data[pair["symbol"]] = _fetch_history(ibkr_uic) if ibkr_uic is not None else None
+            market_data[pair["symbol"]] = _fetch_history(pair["uic"])
         scan_live_prices = _fetch_live_prices(PAIRS)
 
         # Panel 1 — EMA crossover

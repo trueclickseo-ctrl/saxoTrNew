@@ -1,13 +1,25 @@
 # IBKR Migration Guide
 
-## Current status (2026-08-21)
+## FINAL OUTCOME (2026-08-21)
+
+**Shares on IBKR. Everything else stays on Saxo.**
 
 | Runner | Broker | Notes |
 |---|---|---|
-| `atos_runner.py` (US stocks) | **IBKR paper** | Straightforward -- used the clean `saxo_client.py` abstraction throughout |
-| `saxo_etf_strategy/` | **IBKR paper** for execution, Saxo for discovery | Universe/signal generation stays on Saxo (no IBKR equivalent to "list every ETF"); orders/balances/positions/exits moved to IBKR |
-| `forex/runner.py` | **IBKR paper** | Full rewrite -- see below, not a simple import swap |
-| `futures/runner.py` | **Saxo (untouched)** | Deliberately not migrated -- IBKR has no continuous/non-expiring product like Saxo's CfdOnIndex, only real futures with contract-month rollover; that needs new roll logic this codebase doesn't have yet. Revisit once you've decided how to handle expiries. |
+| `atos_runner.py` (stocks) | **IBKR** ✅ | Migrated. Ordinary shares verified tradeable (AAPL/MSFT/SAP order-accepted). ISK-eligible → no K4. This is the migration's actual win. |
+| `saxo_etf_strategy/` | **Saxo** (reverted) | US-domiciled ETFs (SPY/XLV/XLF/XLE) are **blocked on IBKR by EU PRIIPs/KID rules**. UCITS ETFs work, but re-specifying the sector-rotation universe in UCITS terms is a strategy redesign, not a symbol swap. See IBKR_STATUS.md §3. |
+| `forex/runner.py` | **Saxo** (reverted) | Spot FX cross-pairs **blocked by IBKR Ireland regulation** (confirmed by IBKR support in writing). Forex CFDs would work but cost more at these trade sizes, add financing drag, and can't sit in an ISK anyway. See IBKR_STATUS.md §2/§2b. |
+| `futures/runner.py` | **Saxo** (never migrated) | IBKR has no continuous/non-expiring product like Saxo's CfdOnIndex, only expiring futures needing contract-roll logic this codebase doesn't have. |
+
+The IBKR forex/ETF migrations were written, tested against the live paper
+Gateway, then **deliberately reverted** once broker-side restrictions made
+them unusable. The code is preserved in git history if the situation
+changes:
+- forex → IBKR: commit `93d84bd` (plus `50a0068`, `fe5d5ed` for order fixes)
+- ETF → IBKR: commits `d16bbfc`, `1f8fc18`
+
+The `ibkr_*.py` modules stay in the tree — `atos_runner.py` depends on
+them, and they're the foundation for any future IBKR work.
 
 Five new files, mirroring your existing Saxo modules 1:1 by role, plus
 `ibkr_history.py` (new capability, see forex notes below). Nothing on the
