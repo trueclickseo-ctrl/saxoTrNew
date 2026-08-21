@@ -697,29 +697,46 @@ def test_bb_notifier_has_lbo_functions():
 
 
 def test_bb_notifier_lbo_opened_doesnt_crash_without_config():
-    """send_lbo_trade_opened silently skips when email config is missing."""
+    """send_lbo_trade_opened must not crash -- and must never actually hit
+    smtplib, regardless of whether config/email.json happens to exist in
+    whatever environment this runs in. The original version of this test
+    called the real function unconditionally: in any environment with real
+    email credentials configured (true for this repo, all session), it sent
+    a REAL email with these exact hardcoded example values every single
+    time the test ran -- confirmed live 2026-08-22 when repeated runs of
+    this suite while debugging LBO sent several real "EURUSD @ 1.1050"/
+    "GBPUSD +0.66%" notifications to the user's inbox, none of which were
+    real trades. Patching smtplib.SMTP makes this test actually test what
+    its name claims, independent of the environment it runs in.
+    """
     import forex.notifier as n
-    try:
-        n.send_lbo_trade_opened(
-            symbol="EURUSD", direction="Buy", entry=1.1050,
-            stop=1.1010, tp=1.1130, units=5000,
-            session="London", range_pips=40.0
-        )
-    except Exception as e:
-        return f"send_lbo_trade_opened raised: {e}"
+    with patch("smtplib.SMTP"):
+        try:
+            n.send_lbo_trade_opened(
+                symbol="EURUSD", direction="Buy", entry=1.1050,
+                stop=1.1010, tp=1.1130, units=5000,
+                session="London", range_pips=40.0
+            )
+        except Exception as e:
+            return f"send_lbo_trade_opened raised: {e}"
 
 
 def test_bb_notifier_lbo_closed_doesnt_crash_without_config():
-    """send_lbo_trade_closed silently skips when email config is missing."""
+    """send_lbo_trade_closed -- see test_bb_notifier_lbo_opened's docstring
+    for why this must never touch real smtplib. These exact values
+    (entry=1.3550, exit=1.3640, pnl_pct=0.66, units=4000 -> $36) are the
+    values that showed up as repeated real "GBPUSD WIN +0.66% (+36 USD)"
+    emails before this fix."""
     import forex.notifier as n
-    try:
-        n.send_lbo_trade_closed(
-            symbol="GBPUSD", direction="Buy", entry=1.3550,
-            exit_px=1.3640, pnl_pct=0.66, units=4000,
-            reason="take_profit (1.36400)", session="London"
-        )
-    except Exception as e:
-        return f"send_lbo_trade_closed raised: {e}"
+    with patch("smtplib.SMTP"):
+        try:
+            n.send_lbo_trade_closed(
+                symbol="GBPUSD", direction="Buy", entry=1.3550,
+                exit_px=1.3640, pnl_pct=0.66, units=4000,
+                reason="take_profit (1.36400)", session="London"
+            )
+        except Exception as e:
+            return f"send_lbo_trade_closed raised: {e}"
 
 
 # ════════════════════════════════════════════════════════════════════════════
