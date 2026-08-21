@@ -48,7 +48,7 @@ from datetime import datetime, timezone
 MIN_GAP_PCT    = 0.10   # minimum gap size as % of price (filters spread noise)
 MAX_GAP_PCT    = 2.00   # maximum gap size — extreme gaps fill less reliably
 ATR_STOP_MULT  = 1.5    # stop = 1.5 × gap_size
-RISK_PCT       = 0.01   # 1% equity risk per trade
+RISK_PCT       = 0.005  # 0.5% equity risk per trade (was 1%, cut 2026-08-22 to free shared margin for more pairs)
 TIME_STOP_DAYS = 7      # calendar days (≈ 5 trading days Mon-Fri)
 LOT_ROUND      = 1_000  # Saxo micro-lot minimum
 MIN_BARS       = 5      # need at least a few bars to confirm reference close

@@ -68,7 +68,7 @@ ADX_PERIOD       = 14
 ADX_MIN          = 25    # minimum ADX to confirm trend exists
 ATR_PERIOD       = 14
 ATR_STOP_MULT    = 1.5   # stop = entry ± ATR_STOP_MULT × ATR
-RISK_PCT         = 0.01  # 1% equity risk per trade
+RISK_PCT         = 0.005  # 0.5% equity risk per trade (was 1%, cut 2026-08-22 to free shared margin for more pairs)
 TIME_STOP_DAYS   = 25    # calendar days before forced exit
 LOT_ROUND        = 1_000 # Saxo micro-lot minimum
 PULLBACK_LOOKBACK = 3    # bars to look back for EMA(20) touch
