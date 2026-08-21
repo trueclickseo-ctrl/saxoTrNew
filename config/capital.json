@@ -52,13 +52,22 @@
     "forex": {
       "enabled": true,
       "risk_equity_eur": 27800,
+      "_sek_comment": [
+        "risk_equity_sek / lbo_capital_sek are the SAME real caps as the _eur",
+        "fields above, expressed natively for the IBKR-executed runner (its",
+        "paper account is SEK-denominated, unlike Saxo's EUR account) -- not a",
+        "separate, independently-tunable budget. Keep both pairs in sync if",
+        "you change one."
+      ],
+      "risk_equity_sek": 300000,
       "_lbo_comment": [
         "London Breakout is documented as a separate day-trading book with its own",
         "15,000 SEK capital, but the runner was passing it the FULL account equity,",
         "so it risked 1.5% of everything instead of 1.5% of 15,000 SEK.",
         "1390 EUR = 15,000 SEK at ~10.8 SEK/EUR."
       ],
-      "lbo_capital_eur": 1390
+      "lbo_capital_eur": 1390,
+      "lbo_capital_sek": 15000
     }
 
   }

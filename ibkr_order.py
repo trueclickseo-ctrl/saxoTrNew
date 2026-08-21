@@ -182,3 +182,70 @@ def place_with_stop(
     except Exception as exc:
         logger.warning("[bracket] %s bracket order failed: %s", label, exc)
         raise
+
+
+# ── Standalone stop/limit orders (healing -- attach a missing stop/TP to an
+# already-filled entry, outside the atomic bracket above) ──────────────────
+
+def place_stop(uic: int, asset_type: str, amount: int, buy_sell: str,
+                stop_price: float, symbol: str = "") -> str:
+    """Place a standalone GTC-equivalent stop order (no linked entry/TP) --
+    used by healing logic (e.g. forex/runner.py's _heal_missing_stops()) to
+    attach a stop to a position whose entry already filled without one.
+    Returns the new order's id."""
+    ib = ibkr_client._client()
+    contract = ibkr_client._resolve_by_conid(uic)
+    close = buy_sell.upper()
+    tif = _DURATION_TIF.get(asset_type, "GTC")
+    rstop = _round_price(stop_price, asset_type, symbol)
+
+    if _uses_stop_limit(asset_type):
+        slp = _stop_limit_price(rstop, close, asset_type, symbol)
+        order = StopLimitOrder(close, amount, stopPrice=rstop, lmtPrice=slp)
+    else:
+        order = StopOrder(close, amount, stopPrice=rstop)
+    order.tif = tif
+    trade = ib.placeOrder(contract, order)
+    return str(trade.order.orderId)
+
+
+def place_limit(uic: int, asset_type: str, amount: int, buy_sell: str,
+                 price: float, symbol: str = "") -> str:
+    """Place a standalone GTC-equivalent limit order (e.g. a missing
+    take-profit). Returns the new order's id."""
+    ib = ibkr_client._client()
+    contract = ibkr_client._resolve_by_conid(uic)
+    tif = _DURATION_TIF.get(asset_type, "GTC")
+    rprice = _round_price(price, asset_type, symbol)
+    order = LimitOrder(buy_sell.upper(), amount, rprice)
+    order.tif = tif
+    trade = ib.placeOrder(contract, order)
+    return str(trade.order.orderId)
+
+
+def amend_stop(order_id: str, new_stop_price: float, symbol: str = "",
+                asset_type: str = "FxSpot") -> bool:
+    """Amend an existing open stop order's trigger price in place (IBKR
+    resubmits under the same orderId to modify rather than a REST PATCH,
+    which is what saxo_order-based callers used) -- the direct equivalent of
+    Saxo's PATCH /trade/v2/orders/{id} used for breakeven-stop moves.
+
+    Returns False if the order isn't found among currently open orders
+    (already filled/cancelled, or -- same limitation as
+    ibkr_client.get_open_orders() -- placed in a different session)."""
+    ib = ibkr_client._client()
+    target = None
+    for t in ib.openTrades():
+        if str(t.order.orderId) == str(order_id):
+            target = t
+            break
+    if target is None:
+        return False
+
+    rstop = _round_price(new_stop_price, asset_type, symbol)
+    target.order.auxPrice = rstop
+    if target.order.orderType == "STP LMT":
+        close = target.order.action
+        target.order.lmtPrice = _stop_limit_price(rstop, close, asset_type, symbol)
+    ib.placeOrder(target.contract, target.order)
+    return True

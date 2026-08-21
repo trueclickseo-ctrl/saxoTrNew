@@ -1,9 +1,19 @@
 # IBKR Migration Guide
 
-Five new files, mirroring your existing Saxo modules 1:1 by role. Nothing
-existing was touched — `saxo_client.py`, `saxo_order.py`, `price_service.py`,
-and every runner are exactly as they were (until you choose to wire a
-runner to the IBKR files instead — see "Per-runner notes" below).
+## Current status (2026-08-21)
+
+| Runner | Broker | Notes |
+|---|---|---|
+| `atos_runner.py` (US stocks) | **IBKR paper** | Straightforward -- used the clean `saxo_client.py` abstraction throughout |
+| `saxo_etf_strategy/` | **IBKR paper** for execution, Saxo for discovery | Universe/signal generation stays on Saxo (no IBKR equivalent to "list every ETF"); orders/balances/positions/exits moved to IBKR |
+| `forex/runner.py` | **IBKR paper** | Full rewrite -- see below, not a simple import swap |
+| `futures/runner.py` | **Saxo (untouched)** | Deliberately not migrated -- IBKR has no continuous/non-expiring product like Saxo's CfdOnIndex, only real futures with contract-month rollover; that needs new roll logic this codebase doesn't have yet. Revisit once you've decided how to handle expiries. |
+
+Five new files, mirroring your existing Saxo modules 1:1 by role, plus
+`ibkr_history.py` (new capability, see forex notes below). Nothing on the
+Saxo side was touched — `saxo_client.py`, `saxo_order.py`,
+`price_service.py`, `futures/runner.py`, and every dashboard are exactly
+as they were.
 
 **Verified working 2026-08-21** against the running paper Gateway
 (port 4002, account `DUR952126`, base currency SEK, ~1,000,000 SEK paper
@@ -96,6 +106,17 @@ Subscriptions** — not something fixable from this code. Do this before
 relying on `ibkr_price_service.py` for anything that sizes a stop off a
 live price.
 
+**Second account-side gap found while testing forex order placement:** a
+live bracket order (`ibkr_order.place_with_stop`, 20,000-unit EURUSD buy)
+was rejected with *"FX trade would expose account to currency leverage"*.
+The bracket mechanics themselves worked correctly — entry/stop/TP legs all
+transmitted as a linked group, `amend_stop()` found and repriced the
+resting stop, `cancel_order()` cancelled both legs cleanly — but the entry
+itself needs the account to either hold actual quote-currency cash or have
+FX margin/leverage trading enabled, neither of which this paper account has
+by default. Check **Trading Permissions** in Account Management before
+expecting `forex/runner.py --live` to actually fill anything.
+
 ## The one identifier change every call site needs
 
 Saxo's `Uic` (an integer you look up once via `find_instrument()` and then
@@ -109,7 +130,11 @@ same `conId` back — so at each call site, the change is:
 import saxo_client            →   import ibkr_client as saxo_client
 ```
 
-...**not** a rewrite, for any code that only calls the functions below.
+...**not** a rewrite, for any code that only calls the functions below and
+already used `saxo_client.py`/`saxo_order.py` as an abstraction layer
+(true for `atos_runner.py`). It was **not** true for `forex/runner.py`,
+which hand-rolled its own Saxo REST client — see "Per-runner notes" below
+for what that one actually needed.
 
 ## Building the IBKR instrument maps
 
@@ -154,38 +179,90 @@ this from.
 
 ## Per-runner notes
 
-**`atos_runner.py` (US stocks)**
-Calls `saxo_client.get_balances()`, `place_market_order(uic, asset_type,
-buy_sell, amount)`, `place_order(uic=..., side=..., qty=..., asset_type=...)`
-— all present in `ibkr_client.py` with identical signatures. `asset_type`
-stays `"Stock"` throughout; IBKR resolves it to `STK`/SMART/USD.
+**`atos_runner.py` (US stocks) — done**
+`import ibkr_client as saxo_client` at the top; every call site
+(`get_balances()`, `place_market_order(uic, asset_type, buy_sell, amount)`,
+`place_order(uic=..., side=..., qty=..., asset_type=...)`) already matched
+`ibkr_client.py`'s signatures unchanged. Two real fixes made in the
+process: `ibkr_client.get_balances()` gained a `"CashBalance"` alias key
+(every real balance consumer in this codebase reads that exact key, some
+via bare `balances["CashBalance"]` — would have raised `KeyError`
+otherwise), and `instrument_map.py` gained a `broker="ibkr"` parameter so
+`load_instrument_map()` can load `instrument_map_ibkr.csv` instead of the
+Saxo Uic map.
 
-**`forex/` runners**
-FX pairs like `"EURUSD"` are auto-detected (any 6-letter A–Z string →
-`Forex` contract) — no explicit asset_type wrangling needed beyond what
-you already pass (`"FxSpot"`). `saxo_order.place_with_stop()` →
-`ibkr_order.place_with_stop()` keeps the same JPY-3dp and stop-price
-rounding rules, ported as-is. **This one call site is not a pure import
-swap**: `forex/runner.py`, `futures/runner.py`, and
-`saxo_etf_strategy/core/etf_executor.py` all call
-`saxo_order.place_with_stop(post_fn=_post, ...)` — `ibkr_order`'s version
-has no `post_fn` parameter (there's no JSON body to inject; it talks to
-`ibkr_client`'s connection directly), so that one keyword argument needs
-to be dropped at each of those three call sites.
+**`saxo_etf_strategy/` — done**
+`etf_executor.py` now calls `ibkr_client`/`ibkr_order`/`ibkr_price_service`
+for account cash, order placement (native stop/TP bracket), position sync,
+and exit-price checks. `etf_universe.py`/`etf_strategy.py` (signal
+generation, paging Saxo's ETF catalog) are untouched — there's no IBKR
+equivalent to page, so every `ETFSignal` still carries a Saxo Uic that the
+executor never trades on. Instead it resolves `signal.symbol` against IBKR
+directly via `find_instrument()` at order time (cached per run), so it
+works without ever running `resolve_etf_universe_ibkr.py`. Position state
+is now keyed by IBKR conId, not Saxo Uic — the 3 real open Saxo SIM
+positions in `etf_positions.json` (XLV/XLF/XLE, opened 2026-08-17) got
+backed up to `etf_positions_saxo_backup_2026-08-21.json` and state reset
+to empty, since the old key scheme can't carry them forward. **Those 3
+Saxo positions are no longer managed by this bot** — close them manually
+on Saxo if you want them off the books.
 
-**`futures/` runners**
-`asset_type="ContractFutures"` (CL, NG, ZB, ZC, ZW, ZS) → IBKR `FUT` on
-NYMEX/CBOT directly. `ES/NQ/YM/DAX/HK50/GC/SI` are Saxo's continuous
-index-CFDs and spot-like metals — `lookup_instruments_ibkr.py` resolves
-these too, as real CME/CBOT/EUREX/HKFE/COMEX futures on the same ticker
-(not skipped), but every row needs a manual contract-month check since
-`find_instrument()` doesn't pin an expiry — and roll risk/sizing genuinely
-differs from Saxo's continuous wrappers, so don't treat "resolved" as
-"ready to trade" for these without checking the CSV's `needs_review` notes.
+**`forex/runner.py` — done, but a real rewrite, not an import swap**
+This one hand-rolled its own Saxo REST client (`_get`/`_post`/`_patch`
+against `/port/v1/...`, `/chart/v3/charts`, `/trade/v2/orders` directly)
+across ~50 call sites, rather than using `saxo_client.py`/`saxo_order.py`.
+Notable pieces:
+- **New capability: `ibkr_history.py`** — `forex/runner.py` pulls every
+  strategy's daily *and* hourly OHLC bars directly from Saxo's own chart
+  endpoint (not yfinance, unlike the stock/ETF modules), so there was
+  nothing to reuse. Wraps `ib.reqHistoricalData()`, returns the same
+  Open/High/Low/Close(/HourUTC) shape the Saxo fetchers did.
+- **conId resolution**: `forex/universe.py`'s `PAIRS` hardcodes Saxo Uics
+  in each of 34 pair dicts. Rather than editing that list, `runner.py`
+  gained a local `_ibkr_uic(symbol)` resolver (cached per process) used at
+  every broker call site instead of `pair["uic"]`.
+- **Equity currency**: the Saxo account was EUR-denominated (config had
+  `risk_equity_eur`/`lbo_capital_eur` caps, ~27,800 EUR / ~1,390 EUR = the
+  real 300,000 SEK / 15,000 SEK caps at ~10.8 SEK/EUR). IBKR's paper
+  account is SEK-denominated, so `atos/capital_config.py` gained native
+  `forex_risk_equity_sek()`/`forex_lbo_capital_sek()` reading new
+  `risk_equity_sek: 300000` / `lbo_capital_sek: 15000` fields in
+  `config/capital.json` — the *same* real caps, not a separate budget, now
+  expressed without an EUR round-trip. (This incidentally fixed a latent
+  unit mismatch: `strategy_london_breakout.py`'s `account_equity` fallback
+  already defaulted to `15_000.0` assuming SEK, but the live caller was
+  passing the EUR figure.)
+- **Bracket orders, healing, breakeven**: `saxo_order.place_with_stop()` →
+  `ibkr_order.place_with_stop()` (no `post_fn` — there's no JSON body to
+  inject, it talks to `ibkr_client`'s connection directly). The
+  heal-missing-stop/TP logic and breakeven stop-amend needed two new
+  primitives IBKR didn't have an equivalent for yet: `ibkr_order.place_stop()`
+  / `place_limit()` (standalone, non-bracket orders) and
+  `ibkr_order.amend_stop()` (resubmit under the same orderId to reprice —
+  IBKR's equivalent of Saxo's `PATCH /trade/v2/orders/{id}`), plus
+  `ibkr_client.get_open_orders()` and `ibkr_client.cancel_order()`.
+- **New safety fix, both forex and ETF**: when a *runner-driven* exit
+  closes a position (a time/trailing stop, not the broker-side bracket
+  firing), the bracket's resting stop/TP legs don't automatically know the
+  position they protected is gone — unlike Saxo's OCO/IfDoneSlave linkage,
+  IBKR only auto-cancels a bracket's own legs against *each other*, not
+  against an out-of-band close. Left alone, a stale resting stop/TP could
+  fill later and open an unintended reverse position. Both `_run_exits()`
+  (forex) and `_exit_position()` (ETF) now call `ibkr_client.cancel_order()`
+  on both legs before closing.
+- **Verified**: `_ibkr_uic()` resolves live (EURUSD, and the compound-form
+  fix also covers Scandi/EM crosses); `ibkr_order.place_with_stop()` +
+  `amend_stop()` + `cancel_order()` all confirmed working end-to-end
+  against the paper Gateway (bracket legs transmitted as a linked group,
+  stop reprice worked, both legs cancelled cleanly). The test entry order
+  itself was rejected by IBKR — see "Second account-side gap" above; that's
+  an account permission, not a code issue.
+- Existing `data/forex_state.json` positions (if you have any on your live
+  copy) carry Saxo Uics under the old key scheme, same as the ETF file did
+  — back that up and reset it before going live here, for the same reason.
 
-**`saxo_etf_strategy/`**
-Same as `atos_runner.py` but `asset_type="Etf"` → IBKR `STK` (IBKR treats
-ETFs as plain stock contracts, no separate type).
+**`futures/runner.py` — not migrated (by design)**
+See "Current status" table above.
 
 ## What doesn't have a clean IBKR equivalent yet
 

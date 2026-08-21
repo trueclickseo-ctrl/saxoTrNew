@@ -153,6 +153,30 @@ def forex_lbo_capital_eur() -> float:
         return 1_390.0
 
 
+def forex_risk_equity_sek() -> float:
+    """Equity base (SEK) that forex sizing risks RISK_PCT of per trade, for
+    the IBKR-executed runner. The IBKR paper account is SEK-denominated
+    (unlike Saxo's EUR account), so this is the *native* figure --
+    forex_risk_equity_eur() (27800 EUR = 300,000 SEK at ~10.8 SEK/EUR) is
+    the same real cap, just expressed for the EUR account. Reads
+    risk_equity_sek if present, else derives it back from the EUR figure
+    so a config without the new key still gives a sane value.
+    """
+    try:
+        return float(_load()["strategies"]["forex"]["risk_equity_sek"])
+    except Exception:
+        return forex_risk_equity_eur() * 10.8
+
+
+def forex_lbo_capital_sek() -> float:
+    """Dedicated day-trading capital (SEK) for the London Breakout book,
+    for the IBKR-executed runner. See forex_risk_equity_sek()."""
+    try:
+        return float(_load()["strategies"]["forex"]["lbo_capital_sek"])
+    except Exception:
+        return forex_lbo_capital_eur() * 10.8
+
+
 def reversion_stop_pct() -> float:
     return float(_load()["strategies"]["us_reversion"].get("stop_pct", 0.04))
 

@@ -99,14 +99,14 @@ def _wrap(title: str, body_html: str) -> str:
 <style>{_STYLE}</style></head><body><div class="wrap">
   <div class="header">
     <div class="logo">FX AUTOPILOT</div>
-    <div class="sub">9 Strategies · 34 Pairs · Saxo SIM &nbsp;·&nbsp; {now}</div>
+    <div class="sub">9 Strategies · 34 Pairs · IBKR paper &nbsp;·&nbsp; {now}</div>
   </div>
   <div class="body">
     <h2>{title}</h2>
     {body_html}
     <hr>
     <div class="footer">FX Autopilot &nbsp;·&nbsp; Auto-generated &nbsp;·&nbsp;
-      Only the token needs manual refresh</div>
+      IB Gateway must stay running and logged in</div>
   </div>
 </div></body></html>"""
 
@@ -153,6 +153,51 @@ def send_token_expired(scheduled_time: str = "") -> None:
 
     subject = f"FX Autopilot ⚠ TOKEN EXPIRED — run {run_time} SKIPPED [{today}]"
     _send(subject, _wrap("Saxo Token Expired — Refresh Required", body))
+
+
+def send_broker_unreachable(scheduled_time: str = "") -> None:
+    """
+    Send email when IBKR (IB Gateway) couldn't be reached and the run was
+    skipped. IBKR's failure mode differs from Saxo's send_token_expired()
+    above -- there's no token to refresh, just a socket connection to an
+    already-logged-in Gateway process that needs to be running.
+    """
+    now      = datetime.now()
+    run_time = scheduled_time or now.strftime("%H:%M")
+    today    = now.strftime("%Y-%m-%d")
+
+    body = f"""
+    <span class="badge warn">⚠ IBKR UNREACHABLE</span>
+    <p style="color:#d29922; margin-top:14px">
+      The scheduled run at <strong>{run_time} PKT</strong> was <strong>SKIPPED</strong>
+      because IB Gateway couldn't be reached. No orders were placed or checked.
+    </p>
+    <div class="metric-row" style="margin-top:14px">
+      <div class="metric">
+        <div class="lbl">Skipped Run</div>
+        <div class="val" style="font-size:14px">{run_time} PKT</div>
+      </div>
+      <div class="metric">
+        <div class="lbl">Date</div>
+        <div class="val" style="font-size:14px">{today}</div>
+      </div>
+    </div>
+    <h3>Action Required</h3>
+    <ol style="color:#8b949e; line-height:1.8; margin:0 0 0 16px; font-size:13px">
+      <li>Make sure IB Gateway is running and logged into the paper account</li>
+      <li>Check Configuration → Settings → API → Enable Socket Clients is on</li>
+      <li>Confirm IBKR_HOST/IBKR_PORT match the Gateway's actual socket port</li>
+    </ol>
+    <p class="muted" style="margin-top:12px">
+      Unlike Saxo, there's no token to refresh — Gateway just needs to be
+      up and logged in.<br>
+      Open positions are protected by IBKR's native stop/TP bracket orders
+      (active as long as IBKR's servers are, independent of this machine).
+    </p>
+    """
+
+    subject = f"FX Autopilot ⚠ IBKR UNREACHABLE — run {run_time} SKIPPED [{today}]"
+    _send(subject, _wrap("IB Gateway Unreachable", body))
 
 
 def send_run_summary(
