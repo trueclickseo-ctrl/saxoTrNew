@@ -1247,3 +1247,26 @@ def get_pair(symbol: str) -> dict:
 
 def get_all() -> list:
     return list(PAIRS)
+
+
+def price_decimals(symbol: str) -> int:
+    """The instrument's own price decimal precision, derived from its
+    pip_size (which was itself pulled live from Saxo's Format.Decimals when
+    this universe was built — see the module docstring). Inverse of
+    pip_size = 10 ** -(decimals - 1).
+
+    Added 2026-08-21 — saxo_order.py used to guess FxSpot decimal places
+    generically (5dp, or 3dp for JPY crosses only), which is wrong for any
+    other pair that isn't 5dp: found via a live PriceNotInTickSizeIncrements
+    rejection on AUDTRY's stop order (pip_size 0.001 = 4dp, not 5dp). Any
+    TRY- or CNH-quoted pair hits the same wrong-precision bug. Pass this
+    to saxo_order.place_with_stop(price_decimals=...) instead of letting it
+    guess from the symbol string.
+    """
+    pip = _BY_SYMBOL[symbol]["pip_size"]
+    d = 0
+    v = pip
+    while v < 0.999999 and d < 10:
+        v *= 10
+        d += 1
+    return d + 1

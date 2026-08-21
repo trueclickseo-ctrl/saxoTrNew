@@ -56,7 +56,7 @@ import saxo_order
 import pandas as pd
 import saxo_auth
 
-from forex.universe import PAIRS, ASSET_TYPE, get_pair
+from forex.universe import PAIRS, ASSET_TYPE, get_pair, price_decimals as get_price_decimals
 import forex.strategy             as strat_ema
 import forex.strategy_rsi         as strat_rsi
 import forex.strategy_donchian    as strat_donchian
@@ -235,7 +235,15 @@ def _post(path: str, body: dict) -> dict:
             logger.warning(f"429 rate-limited on POST {path} — waiting {wait:.0f}s")
             time.sleep(wait)
             continue
-        r.raise_for_status()
+        try:
+            r.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            # raise_for_status()'s default message is just status+URL — it
+            # drops Saxo's actual error body (ErrorCode/Message explaining
+            # WHY, e.g. "too small," "market closed," "invalid precision").
+            # Without this, a rejected order is undiagnosable after the fact.
+            raise requests.exceptions.HTTPError(
+                f"{e} — Saxo response body: {r.text}", response=r) from e
         return r.json()
 
 
@@ -1319,7 +1327,18 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 label             = f"{strat_name}:{sym}",
                 take_profit_price = tp,
                 symbol            = sym,
+                price_decimals    = get_price_decimals(sym),
             )
+            if entry_oid is None:
+                # Order rejected by Saxo — nothing was opened. Must not fall
+                # through to the pos_record block below (that would record a
+                # phantom position that doesn't exist at the broker). Skip
+                # this signal and keep going — one rejection must not stop
+                # the rest of this strategy's signals or any strategy queued
+                # after it (see saxo_order._place_entry_then_stop docstring).
+                logger.warning(f"  [{strat_name}] SKIP {sym}[{direction}] "
+                                f"— entry order rejected, no position opened")
+                continue
             tp_info = f"  tp_order={tp_oid}" if tp_oid else ""
             logger.info(f"  {direction} {entry_oid}: {qty:,}x {sym}[{tag}] "
                         f"({strat_name})  @ {sig['close']:.5f}  stop={sig['stop_price']:.5f}"
