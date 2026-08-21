@@ -33,8 +33,15 @@ SIZING (dedicated day-trading book — config: forex.lbo_capital_eur, 15,000 SEK
   rather than floored up (flooring silently over-risks the trade).
 
 PAIRS:
-  EURUSD, GBPUSD, USDJPY, EURGBP, GBPJPY, AUDUSD, USDCAD
-  (Most liquid pairs with clear London/NY session directional moves)
+  28 liquid majors + crosses (all of forex/universe.py except the 6 illiquid
+  Scandi/exotic pairs — EURNOK, EURSEK, USDNOK, USDSEK, USDDKK, USDMXN — whose
+  wide spreads and thin session ranges don't suit a tight breakout/2:1 RR).
+  Expanded 2026-08-20 from the original 7 (EURUSD, GBPUSD, USDJPY, EURGBP,
+  GBPJPY, AUDUSD, USDCAD) after a live run found 0 signals on the narrow set —
+  more pairs means more chances of a genuine Asian-range break each session.
+  SLOTS raised 10 -> 28 on 2026-08-21 (one slot per pair) so a multi-pair
+  breakout day is never capped below what the pair list can actually offer —
+  see SLOTS_PER_STRATEGY in runner.py for the resulting max-exposure math.
 
 EXPECTED PERFORMANCE (backtested 2020-2024 on majors):
   Win rate   : ~58-63%
@@ -81,10 +88,17 @@ TP_RATIO        = 2.0    # take profit = TP_RATIO × range size
 MAX_UNITS       = 50_000 # hard cap on units per trade
 MIN_UNITS       = 1_000  # Saxo minimum
 
-# Pairs this strategy trades — subset of the full 34-pair universe
+# Pairs this strategy trades — full 34-pair universe minus the 6 illiquid
+# Scandi/exotic crosses (EURNOK, EURSEK, USDNOK, USDSEK, USDDKK, USDMXN),
+# which have spreads too wide for a tight session-range breakout.
 PAIRS = {
-    "EURUSD", "GBPUSD", "USDJPY", "EURGBP",
-    "GBPJPY", "AUDUSD", "USDCAD",
+    "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "NZDUSD", "USDCHF",
+    "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "CADJPY",
+    "EURAUD", "EURNZD", "EURCAD", "EURCHF",
+    "GBPAUD", "GBPCAD", "GBPCHF", "GBPNZD",
+    "AUDCAD", "AUDCHF", "AUDNZD",
+    "NZDJPY", "NZDCAD", "NZDCHF",
+    "CHFJPY", "CADCHF",
 }
 
 # This strategy only uses H1 bars

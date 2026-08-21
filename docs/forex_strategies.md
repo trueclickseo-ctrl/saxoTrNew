@@ -1,11 +1,67 @@
 # Forex Strategy Playbook
 
 **Module**: `forex/`  
-**Universe**: 34 FX pairs — 7 G7 majors + 27 crosses (incl. Scandinavian & EM)  
+**Universe**: 117 FX pairs — 34 majors/crosses/Scandi (live trading candidates) + 83
+EM/exotic crosses added 2026-08-21 for **SIM-only** broad testing (see Audit below).
+LBO trades a separate, smaller 28-pair universe — majors/crosses only, EM/exotic
+pairs deliberately excluded (wider spreads don't suit a tight 2:1 RR day-trade).  
 **Strategies**: 11 active (9 rule-based swing + 1 deep learning swing + 1 day-trading breakout)  
-**Max slots**: 4+4+4+4+34+34+20+20+20+20 = **164 swing** + **7 day-trading** (independent book)  
+**Max slots**: swing strategies scan and can hold a position in every pair in the
+active universe (no artificial cap below universe size) + **28 day-trading** (LBO,
+independent book, one slot per LBO pair)  
 **Swing risk per trade**: 1% of account equity  
 **Day-trading capital**: 15,000 SEK dedicated, 1.5% risk per trade  
+
+---
+
+## Audit — 2026-08-21
+
+Second full pass, triggered by a live watchdog alert investigation that expanded
+into a broader pre-go-live audit. All items below are fixed unless marked Open.
+
+| # | Finding | Severity | Status |
+|---|---------|----------|--------|
+| 1 | `run_hidden.vbs` never propagated the child process's real exit code — `LastTaskResult` was a false positive even when the wrapped command failed or never ran | **Critical** | Fixed |
+| 2 | LBO's double-wrap launch chain (`vbs → bat → vbs#2 → python`) passed a "program + arguments" string through the same quote-stripping logic a second time — only works for a bare file path, so the inner python call silently never ran on any of the 3 LBO tasks | **Critical** | Fixed |
+| 3 | 13 of 20 ATOS scheduled tasks (incl. Forex Daily Run, Intraday Scan, LBO ×3) had `DisallowStartIfOnBatteries: True` — silently skipped with zero log trace any time the machine ran on battery | **Critical** | Fixed |
+| 4 | `ATOS Forex Gap Fill` fired at Sun 22:00 **PKT** (17:00 UTC) — 5 hours before the weekly gap window actually opens (22:00 **UTC**) | **High** | Fixed |
+| 5 | `ATOS Forex Intraday Scan` was a one-time trigger with a 16h repetition window, not a real daily-recurring trigger — worked for exactly one day then went permanently dormant | **High** | Fixed |
+| 6 | Momentum pre-filter (ranks pairs by *directional trend strength*) was applied to `rsi`/`bb`/`zscore` — all three are mean-reversion strategies, so the filter suppressed exactly the low-momentum/choppy setups they're designed to catch | **High** | Fixed |
+| 7 | Realized P&L stored raw, unconverted quote-currency amounts labeled uniformly `currency='USD'` — a JPY pair's P&L number is its true EUR value inflated ~150×, summed directly into NOK/CHF/CAD pairs' numbers as if all one currency | **Critical** | Fixed |
+| 8 | 4 of 34 universe UICs (USDNOK, USDSEK, USDDKK, USDMXN) were never-verified sequential-numbering guesses — all 4 pointed at the wrong Saxo instrument (USDNOK's UIC was actually USDCZK; USDMXN's guess was off by over 1000) | **Critical** | Fixed |
+| 9 | Stocks (`atos_runner.py`) placed bare market orders with no stop-loss/take-profit attached — `stop_price` was hardcoded to `0` in the US Blend DB record. Unlike forex/futures/ETF (which already used `saxo_order.place_with_stop()`), a position sat fully unprotected at the broker until the next scheduled cycle noticed | **Critical** | Fixed |
+| 10 | `_post`/`_patch` had no 429 (rate-limit) backoff and no `x-request-id` header, so an identical retry within Saxo's 15s dedup window would be silently rejected as a duplicate (409) | Medium | Fixed |
+| 11 | Live trading requires a **separate Saxo app registration** — SIM and LIVE app keys/secrets are not shared, and LIVE requires the full OAuth Authorization Code Grant (`saxo_auth.py` is currently hardcoded to `sim.logonvalidation.net`). Not a code bug — a manual step only the account owner can do via Saxo's developer portal, worth starting well before a target go-live date | **Critical** | Open (manual, not code) |
+
+**Root-cause pattern across #1–#5**: every scheduled-task bug this pass was a
+Windows Task Scheduler / launch-chain problem, not a strategy-logic problem — the
+underlying signal code was already correct once it actually got to run.
+
+**Root-cause pattern across #7–#8**: neither the P&L ledger nor 4 of the UICs had
+ever been verified against Saxo's own live data — both were fixed by querying
+Saxo's API directly (`/port/v1/positions/me` → `ProfitLossOnTradeInBaseCurrency`,
+`/ref/v1/instruments` → real UICs) instead of trusting internally-computed or
+guessed values. Applied as a standing practice: any account-currency conversion or
+UIC now gets checked against a live Saxo call before being trusted.
+
+**Universe expansion (2026-08-21)**: grew from 34 to 117 pairs — every FxSpot pair
+Saxo offers among the 8 majors + 13 EM/exotic currencies (TRY, ZAR, MXN, PLN, HUF,
+CZK, RON, THB, ILS, AED, CNH, HKD, SGD), minus inverse duplicates (e.g. CADUSD,
+already covered by USDCAD) and precious metals (XAU/XAG/XPT — a different asset
+class, already covered by the futures module's Gold market). All 83 new pairs'
+UIC/pip_size/min_units were pulled live from `/ref/v1/instruments/details`, not
+guessed — pip_size = `10 ** -(decimals - 1)` from Saxo's own `Format.Decimals`.
+**SIM-only for now** — the plan is to define a narrower, deliberately-chosen
+universe before going live, then expand it later based on what SIM testing shows.
+
+**Live trading cost note**: spread-checked a sample of the new pairs directly
+against Saxo's live SIM quotes rather than trusting generic web spread tables.
+Majors run ~0.01–0.02% spread (EURUSD 0.017%, USDJPY 0.013%). Most new EM/exotic
+pairs run ~0.02–0.09% (USDZAR 0.034%, EURPLN 0.058%, USDHUF 0.090% — 2–5× wider,
+not the "20+ pips" web estimates suggested) — some (USDTRY 0.002%, USDCNH 0.022%)
+were actually as tight as or tighter than majors. Real numbers move; day-trading
+strategies (LBO) are most spread-sensitive, which is exactly why LBO stays on the
+narrower 28-pair majors-only universe regardless of what SIM testing shows here.
 
 ---
 
@@ -766,10 +822,20 @@ All pairs scanned; only those showing a 0.10%–2.00% gap receive entries.
 | EURCHF | 14 | ✓ confirmed | GBPAUD | 22 | ✓ confirmed |
 | GBPCAD | 23 | ✓ confirmed | GBPCHF | 24 | ✓ confirmed |
 | GBPNZD | 28 | ✓ confirmed | | | |
-| CADCHF | 7  | inferred (verify) | EURNOK | 19 | inferred (verify) |
-| EURSEK | 20 | inferred (verify) | USDNOK | 40 | inferred (verify) |
-| USDSEK | 41 | inferred (verify) | USDDKK | 43 | inferred (verify) |
-| USDMXN | 44 | inferred (verify) | | | |
+| CADCHF | 7  | inferred (verify) | EURNOK | 19 | ✓ confirmed 2026-08-21 |
+| EURSEK | 20 | ✓ confirmed 2026-08-21 | USDNOK | 43 | ✓ **corrected** 2026-08-21 (was 40 — that's USDCZK) |
+| USDSEK | 44 | ✓ **corrected** 2026-08-21 (was 41) | USDDKK | 41 | ✓ **corrected** 2026-08-21 (was 43) |
+| USDMXN | 1348 | ✓ **corrected** 2026-08-21 (was 44 — off by >1300) | | | |
+
+> **2026-08-21**: 4 of these 6 "inferred" UICs (USDNOK, USDSEK, USDDKK, USDMXN)
+> turned out wrong when actually checked against Saxo's `/ref/v1/instruments` —
+> they were never verified, just guessed from sequential numbering. Corrected in
+> `forex/universe.py` and above. Lesson: never trust an "inferred, verify with
+> --info" UIC in production without actually running that verification.
+>
+> The universe also expanded to 117 pairs total (2026-08-21, SIM-only) — see the
+> Audit section at the top of this doc. This table covers only the original 34;
+> `forex/universe.py` is the source of truth for the full list.
 
 > **Verify new UICs**: run `python forex/runner.py --info`
 

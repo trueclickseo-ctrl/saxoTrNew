@@ -55,6 +55,14 @@ End If
 ' and the detached child is then torn down with no output ever written
 ' (confirmed live: 2026-08-19 18:00 and 2026-08-20 06:20 forex runs both
 ' silently no-opped this way while showing LastTaskResult=0).
-objShell.Run cmd, 0, True
+'
+' MUST propagate the exit code: without this, wscript.exe always exits 0
+' itself regardless of what objShell.Run returned, so Task Scheduler's
+' LastTaskResult is a false positive even when the inner command failed or
+' never ran (confirmed: LBO London Open showed LastTaskResult=0 the same day
+' NumberOfMissedRuns incremented and no fresh log line was written).
+Dim rc
+rc = objShell.Run(cmd, 0, True)
 
 Set objShell = Nothing
+WScript.Quit rc

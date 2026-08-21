@@ -43,6 +43,7 @@ import logging
 import os
 import sys
 import time
+import uuid
 from datetime import datetime, date, timezone
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -98,15 +99,20 @@ SLOTS_PER_STRATEGY = {
     # ema/donchian/bb/supertrend/zscore/ml/cnn_lstm previously capped at 4-20
     # slots — a legacy holdover from a smaller pair universe with no risk
     # rationale documented anywhere (unlike london_breakout below). All of
-    # them scan the same full 34-pair universe as rsi/pullback/gap, so capped
-    # below 34 they'd needlessly miss signals on pairs beyond their slot
-    # count. Raised to 34 (2026-08-20) so every swing strategy can take a
-    # position in every pair it actually signals on.
-    "ema": 34, "rsi": 34, "donchian": 34, "bb": 34,
-    "pullback": 34, "gap": 34,
-    "supertrend": 34, "zscore": 34, "ml": 34, "cnn_lstm": 34,
-    "london_breakout": 10,  # universe expanded to 28 pairs 2026-08-20; cap concurrent
-                             # day-trade risk at 10 slots (10 × 1.5% = 15% of the LBO book)
+    # them scan the same full universe as rsi/pullback/gap, so capped below
+    # the universe size they'd needlessly miss signals on pairs beyond their
+    # slot count. Raised to 34 (2026-08-20), then to 117 (2026-08-21) when the
+    # universe was expanded to the full major+EM/exotic set for SIM testing —
+    # so every swing strategy can take a position in every pair it signals on.
+    "ema": 117, "rsi": 117, "donchian": 117, "bb": 117,
+    "pullback": 117, "gap": 117,
+    "supertrend": 117, "zscore": 117, "ml": 117, "cnn_lstm": 117,
+    "london_breakout": 28,  # universe expanded to 28 pairs 2026-08-20. Slots raised
+                             # 10 -> 28 (2026-08-21, one slot per pair) so a multi-pair
+                             # breakout day is never capped below what the pair list can
+                             # offer. Max concurrent exposure: 28 x 1.5% = 42% of the LBO
+                             # book if every slot fills (was 15% at 10 slots) — a real
+                             # risk increase, done at the user's explicit request.
 }
 
 # Day-trade strategies run independently of the swing book's heat budget.
@@ -162,8 +168,24 @@ BREAKEVEN_GAP_FILL_PCT  = 0.50
 
 # ── Saxo HTTP helpers ─────────────────────────────────────────────────────────
 
-def _hdrs() -> dict:
-    return {"Authorization": f"Bearer {saxo_auth.get_valid_access_token()}"}
+def _hdrs(idempotent_id: str | None = None) -> dict:
+    h = {"Authorization": f"Bearer {saxo_auth.get_valid_access_token()}"}
+    if idempotent_id:
+        # Saxo rejects an identical POST/PATCH to an order endpoint within a
+        # 15s rolling window as a duplicate (409 Conflict) unless each attempt
+        # carries its own x-request-id — without this, a legitimate fast
+        # retry (or two different strategies closing near-identical orders
+        # back-to-back) can get silently blocked as "duplicate."
+        h["x-request-id"] = idempotent_id
+    return h
+
+
+def _sleep_for_rate_limit(resp) -> float:
+    reset = resp.headers.get("X-RateLimit-Orders-Reset") or resp.headers.get("X-RateLimit-Reset")
+    try:
+        return max(1.0, float(reset))
+    except (TypeError, ValueError):
+        return 2.0
 
 
 def _get(path: str, params: dict | None = None) -> dict:
@@ -171,6 +193,11 @@ def _get(path: str, params: dict | None = None) -> dict:
         try:
             r = requests.get(f"{BASE_URL}{path}", headers=_hdrs(),
                              params=params, timeout=15)
+            if r.status_code == 429 and attempt < 3:
+                wait = _sleep_for_rate_limit(r)
+                logger.warning(f"429 rate-limited on GET {path} — waiting {wait:.0f}s")
+                time.sleep(wait)
+                continue
             r.raise_for_status()
             return r.json()
         except (requests.exceptions.SSLError,
@@ -183,15 +210,29 @@ def _get(path: str, params: dict | None = None) -> dict:
 
 
 def _post(path: str, body: dict) -> dict:
-    r = requests.post(f"{BASE_URL}{path}", headers=_hdrs(), json=body, timeout=15)
-    r.raise_for_status()
-    return r.json()
+    req_id = str(uuid.uuid4())
+    for attempt in range(1, 4):
+        r = requests.post(f"{BASE_URL}{path}", headers=_hdrs(req_id), json=body, timeout=15)
+        if r.status_code == 429 and attempt < 3:
+            wait = _sleep_for_rate_limit(r)
+            logger.warning(f"429 rate-limited on POST {path} — waiting {wait:.0f}s")
+            time.sleep(wait)
+            continue
+        r.raise_for_status()
+        return r.json()
 
 
 def _patch(path: str, body: dict) -> dict:
-    r = requests.patch(f"{BASE_URL}{path}", headers=_hdrs(), json=body, timeout=15)
-    r.raise_for_status()
-    return r.json()
+    req_id = str(uuid.uuid4())
+    for attempt in range(1, 4):
+        r = requests.patch(f"{BASE_URL}{path}", headers=_hdrs(req_id), json=body, timeout=15)
+        if r.status_code == 429 and attempt < 3:
+            wait = _sleep_for_rate_limit(r)
+            logger.warning(f"429 rate-limited on PATCH {path} — waiting {wait:.0f}s")
+            time.sleep(wait)
+            continue
+        r.raise_for_status()
+        return r.json()
 
 
 def _delete(path: str, params: dict | None = None) -> None:
@@ -479,6 +520,45 @@ def _fetch_live_prices(pairs: list) -> dict:
         except Exception as exc:
             logger.debug(f"Live price fetch failed for {pair['symbol']}: {exc}")
     return prices
+
+
+def _position_pnl_base_ccy(uic: int, qty: float, direction: str,
+                           entry_price: float) -> float | None:
+    """Authoritative realized P&L in the account's own base currency (EUR),
+    straight from Saxo's own live conversion — not our own rate estimate.
+
+    Saxo's /port/v1/positions/me returns PositionView.ProfitLossOnTrade in the
+    pair's quote currency AND ProfitLossOnTradeInBaseCurrency, already
+    converted using Saxo's own real-time dealt rate (ConversionRateCurrent).
+    That's what actually happens to the account balance, so it's the right
+    source of truth for the P&L ledger — not a manually-applied external rate.
+    Multiple strategies can hold positions on the same UIC simultaneously, so
+    match on quantity + entry price (not just UIC) to find the right row.
+    """
+    try:
+        resp = _get("/port/v1/positions/me")
+    except Exception as exc:
+        logger.warning(f"Position P&L lookup failed for UIC {uic}: {exc}")
+        return None
+    want_amount = qty if direction in ("Buy", "BUY") else -qty
+    best, best_diff = None, None
+    for p in resp.get("Data", []):
+        pb = p.get("PositionBase", {})
+        if pb.get("Uic") != uic or pb.get("AssetType") != "FxSpot":
+            continue
+        amount = pb.get("Amount", 0)
+        if abs(amount) != abs(want_amount):
+            continue
+        if (amount > 0) != (want_amount > 0):
+            continue
+        diff = abs((pb.get("OpenPrice") or 0) - entry_price)
+        if best_diff is None or diff < best_diff:
+            best, best_diff = p, diff
+    if best is None:
+        return None
+    pv = best.get("PositionView", {})
+    val = pv.get("ProfitLossOnTradeInBaseCurrency")
+    return float(val) if val is not None else None
 
 
 def _live_price(uic: int, account_key: str) -> float | None:
@@ -967,6 +1047,13 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
         entry      = float(pos.get("entry_price", 0))
         pnl_pct    = ((live_px - entry) / entry * 100) if is_long else ((entry - live_px) / entry * 100)
 
+        # Snapshot Saxo's own base-currency P&L for this position right before
+        # closing it — this is the broker's real dealt conversion (what
+        # actually happens to the account balance), captured while the
+        # position still exists to look up. Falls back to our own rate
+        # estimate below if this lookup fails (network hiccup, no match).
+        saxo_pnl_eur = None if dry_run else _position_pnl_base_ccy(uic, qty, direction, entry)
+
         order = {"AccountKey": akey, "Uic": uic, "AssetType": ASSET_TYPE,
                  "Amount": qty, "BuySell": close_side, "OrderType": "Market",
                  "OrderDuration": {"DurationType": "DayOrder"}, "ManualOrder": False}
@@ -984,21 +1071,29 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
                     "uic": uic, "quantity": qty, "exit_price": live_px,
                     "reason": reason, "pnl_pct": round(pnl_pct, 3), "dry_run": dry_run})
         if not dry_run:
-            pnl_tracker.log_close("forex", sym, live_px, reason, strategy=strat_name)
+            # Convert this pair's raw quote-currency P&L into the account's
+            # actual base currency (EUR) before it's stored — otherwise a JPY
+            # pair's raw number (e.g. -7,612) gets summed into the ledger
+            # alongside a USD/CHF pair's raw number as if they were the same
+            # currency, when the JPY figure is really only ~-50 EUR.
+            quote_ccy = sym[3:6] if len(sym) >= 6 else ""
+            fx_rate   = _eur_per_unit(quote_ccy) or 1.0
+            pnl_tracker.log_close("forex", sym, live_px, reason, strategy=strat_name,
+                                  fx_rate_to_base=fx_rate,
+                                  gross_pnl_base_override=saxo_pnl_eur)
             if strat_name == "gap":
                 _mark_gap_exhausted(sym)
             # Label the signal-log outcome for ML training data
             raw_pnl = ((live_px - pos["entry_price"]) * qty if is_long
                        else (pos["entry_price"] - live_px) * qty)
             signal_filter.label_outcome(key, won=raw_pnl > 0)
-            if strat_name == "london_breakout":
-                fx_notify.send_lbo_trade_closed(
-                    symbol=sym, direction=direction,
-                    entry=float(pos.get("entry_price", live_px)),
-                    exit_px=live_px, pnl_pct=pnl_pct, units=qty,
-                    reason=reason,
-                    session=pos.get("lbo_session", ""),
-                )
+            fx_notify.send_trade_closed(
+                strategy=strat_name, symbol=sym, direction=direction,
+                entry=float(pos.get("entry_price", live_px)),
+                exit_px=live_px, pnl_pct=pnl_pct, units=qty,
+                reason=reason,
+                session=pos.get("lbo_session", "") if strat_name == "london_breakout" else "",
+            )
         del positions[key]
         exits += 1
     return exits
@@ -1030,7 +1125,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
     open_syms = {k.split(":", 1)[1] for k in positions if k.startswith(prefix)}
 
     if strat_name == "london_breakout":
-        # London/NY Breakout: fetch H1 bars for the 7 liquid pairs only.
+        # London/NY Breakout: fetch H1 bars for the 28 configured pairs only.
         lbo_pairs  = strat_lbo.PAIRS
         h1_lbo: dict = {}
         pair_meta: dict = {}
@@ -1196,7 +1291,8 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                     "stop_price": sig["stop_price"], "dry_run": dry_run})
         if not dry_run:
             pnl_tracker.log_open("forex", strat_name, sym, direction, qty,
-                                 sig["close"], sig["stop_price"], order_id=oid)
+                                 sig["close"], sig["stop_price"], order_id=oid,
+                                 currency="EUR")
             signal_filter.log_signal(pos_key, features)   # builds ML training data
             if strat_name == "london_breakout":
                 fx_notify.send_lbo_trade_opened(
@@ -1528,9 +1624,18 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
         run_entries = (not entries_blocked
                        or (strat_name in DAY_TRADE_STRATEGIES and not loss_limit_hit))
         if run_entries:
-            # Gap strategy bypasses the momentum filter — it needs all pairs for
-            # gap-percentage detection. All others only look at top-momentum pairs.
-            _edata = market_data if strat_name in ("gap", "london_breakout") else entry_market_data
+            # Gap and LBO bypass the momentum filter — they need all pairs for
+            # gap-percentage / session-breakout detection, unrelated to trend.
+            # rsi/bb/zscore are MEAN-REVERSION strategies (dip-buy, fade,
+            # z-score reversion) — the filter ranks by DIRECTIONAL trend
+            # strength (price move / ATR), which is backwards for them: their
+            # edge is catching reversals/chop, so restricting them to only the
+            # most-trending pairs suppresses exactly the setups they're
+            # designed to find. Only trend-following strategies (ema,
+            # donchian, pullback, supertrend, ml, cnn_lstm) should be
+            # momentum-filtered.
+            _NO_MOMENTUM_FILTER = ("gap", "london_breakout", "rsi", "bb", "zscore")
+            _edata = market_data if strat_name in _NO_MOMENTUM_FILTER else entry_market_data
             entries = _run_entries(strat_name, strat_mod, positions,
                                    _edata, equity, akey, dry_run, today_str,
                                    live_prices=live_prices, agreement=agreement,

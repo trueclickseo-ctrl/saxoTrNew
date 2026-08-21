@@ -14,8 +14,16 @@ Two independent checks per task:
      the check that actually catches "reported success but did nothing" —
      LastTaskResult alone would NOT have caught the run_hidden.vbs bug.
 
-Claude-native tasks (LBO) have no Windows Task Scheduler entry, so only the
-log-freshness check applies, against a hardcoded expected-fire schedule.
+LBO tasks now have real Windows Task Scheduler entries (created 2026-08-21)
+and are checked the same way as everything else in WINDOWS_TASKS below.
+CLAUDE_TASKS is kept for any future task that genuinely has no Windows
+Scheduler entry — currently empty.
+
+Every alert includes the exact PowerShell command to fire the task manually
+right now, since a missed run (e.g. the 2026-08-21 DisallowStartIfOnBatteries
+incident, where 13 of 20 tasks silently refused to start on battery power)
+means that day's window is gone until the next scheduled occurrence unless
+someone runs it by hand.
 
 Usage:
     python scheduler_watchdog.py            # run one check pass
@@ -71,16 +79,16 @@ WINDOWS_TASKS = {
     "Stocks Daily Run":       ("ATOS Daily Run",              "engine_TODAY.log",      15),  # special-cased below
     "Intraday Monitor":       ("ATOS Intraday Monitor",       "intraday_monitor.log",  15),
     "PnL Sync":               ("ATOS PnL Sync",               "pnl_sync.log",          10),
+    "LBO London Open":        ("ATOS LBO London Open",        "lbo_london.log",        20),
+    "LBO NY Open":             ("ATOS LBO NY Open",            "lbo_ny.log",            20),
+    "LBO Force Close":        ("ATOS LBO Force Close",        "lbo_close.log",         20),
 }
 
 # ── Registry: Claude-native scheduled tasks (no Windows entry) ──────────────
 # name -> (log_file, [(weekday_set, hour_utc, minute_utc)], grace_minutes)
 # weekday_set: 1=Mon .. 7=Sun, per Python's isoweekday(). None = every day.
-CLAUDE_TASKS = {
-    "LBO London Open":  ("lbo_london.log", [({1,2,3,4,5}, 7, 7)],   20),
-    "LBO NY Open":      ("lbo_ny.log",     [({1,2,3,4,5}, 13, 9)],  20),
-    "LBO Force Close":  ("lbo_close.log",  [(None, 20, 9)],         20),
-}
+# Currently empty — every task has a real Windows Task Scheduler entry now.
+CLAUDE_TASKS = {}
 
 
 def _load_state() -> dict:
@@ -152,8 +160,12 @@ def _log_mtime(log_file: str) -> datetime | None:
     return datetime.fromtimestamp(os.path.getmtime(path))
 
 
+def _remediation(task_name: str) -> str:
+    return f"Run manually: Start-ScheduledTask -TaskName \"{task_name}\""
+
+
 def _check_windows_task(name: str, task_name: str, log_file: str, grace_min: int) -> str | None:
-    """Return a failure description, or None if healthy."""
+    """Return a failure description (with a manual-fire remediation command), or None if healthy."""
     if log_file == "engine_TODAY.log":
         today = datetime.now().strftime("%Y-%m-%d")
         log_file = f"engine_{today}.log"
@@ -179,17 +191,30 @@ def _check_windows_task(name: str, task_name: str, log_file: str, grace_min: int
         return None  # last run too long ago to be "this check's" concern
 
     if result not in (0, TASK_NEVER_RUN):
-        return f"'{task_name}' last run at {last_run:%Y-%m-%d %H:%M} returned error code {result}"
+        # A non-zero/unrecognized result code can be transient — Task Scheduler
+        # sometimes reports an in-progress/finalizing code (e.g. 267009) if
+        # queried in the few seconds right after a run starts, before it has
+        # settled to a final 0. Trust the log over the code: if the log is
+        # fresh (proves the run genuinely completed), don't false-alarm on a
+        # code that was just caught mid-transition. Only escalate if the log
+        # is ALSO stale/missing — that combination is a real failure.
+        mtime = _log_mtime(log_file)
+        if mtime and mtime >= last_run - timedelta(minutes=2):
+            return None
+        return (f"'{task_name}' last run at {last_run:%Y-%m-%d %H:%M} returned error code {result} "
+                f"and {log_file} isn't fresh either. {_remediation(task_name)}")
 
     mtime = _log_mtime(log_file)
     if mtime is None:
         if now - last_run > timedelta(minutes=grace_min):
-            return f"'{task_name}' ran at {last_run:%Y-%m-%d %H:%M} (reported success) but {log_file} does not exist — likely silent no-op"
+            return (f"'{task_name}' ran at {last_run:%Y-%m-%d %H:%M} (reported success) but {log_file} "
+                    f"does not exist — likely silent no-op. {_remediation(task_name)}")
         return None
 
     if mtime < last_run - timedelta(minutes=2) and now - last_run > timedelta(minutes=grace_min):
         return (f"'{task_name}' ran at {last_run:%Y-%m-%d %H:%M} (reported success) but "
-                f"{log_file} was last written {mtime:%Y-%m-%d %H:%M} — stale, likely silent no-op")
+                f"{log_file} was last written {mtime:%Y-%m-%d %H:%M} — stale, likely silent no-op. "
+                f"{_remediation(task_name)}")
 
     return None
 

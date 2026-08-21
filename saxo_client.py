@@ -143,6 +143,23 @@ def find_instrument(symbol: str, asset_type: str = "Stock") -> list[dict]:
     return resp.json().get("Data", [])
 
 
+def post(path: str, body: dict) -> dict:
+    """Generic POST for saxo_order.place_with_stop()'s post_fn parameter —
+    lets stocks attach a native Saxo stop-loss/take-profit bracket the same
+    way forex/futures/ETF already do, instead of a bare market order.
+    Deliberately not wrapped in _request_with_retry — same reasoning as
+    place_market_order: retrying an order POST after a timeout risks a
+    duplicate fill if the first request actually reached Saxo.
+    """
+    resp = requests.post(f"{SIM_BASE_URL}{path}", headers=_headers(), json=body, timeout=30)
+    try:
+        resp.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        body_text = resp.text.strip()
+        raise requests.exceptions.HTTPError(f"{e} | Saxo response body: {body_text}", response=resp) from e
+    return resp.json()
+
+
 def place_market_order(uic: int, asset_type: str, buy_sell: str, amount: int) -> dict:
     """
     Places a MARKET order on the SIM account. buy_sell must be 'Buy' or 'Sell'.

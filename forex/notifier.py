@@ -471,7 +471,23 @@ def send_lbo_trade_opened(
     _send(subject, _wrap(f"Day Trade Opened — {symbol} {tag}", body))
 
 
-def send_lbo_trade_closed(
+STRATEGY_LABELS = {
+    "ema":             "EMA Trend",
+    "rsi":             "RSI Pullback",
+    "donchian":        "Donchian Break",
+    "bb":              "BB Reversion",
+    "pullback":        "EMA Pullback",
+    "gap":             "Gap Fill",
+    "supertrend":      "SuperTrend",
+    "zscore":          "Z-Score Rev",
+    "ml":              "ML Signals",
+    "cnn_lstm":        "CNN-LSTM",
+    "london_breakout": "London Breakout",
+}
+
+
+def send_trade_closed(
+    strategy:  str,
     symbol:    str,
     direction: str,
     entry:     float,
@@ -481,17 +497,32 @@ def send_lbo_trade_closed(
     reason:    str,
     session:   str = "",
 ) -> None:
-    """Immediate alert when a London Breakout trade is closed."""
-    now    = datetime.now()
-    time_  = now.strftime("%H:%M")
-    today  = now.strftime("%Y-%m-%d")
-    won    = pnl_pct > 0
-    cls    = "buy" if won else "sell"
-    result = "WIN ✓" if won else "LOSS ✗"
-    col    = "#3fb950" if won else "#f85149"
-    sign   = "+" if pnl_pct >= 0 else ""
-    pnl_sek = round(abs(exit_px - entry) * units * 10.7 * (1 if won else -1), 0)
-    pnl_sgn = "+" if pnl_sek >= 0 else ""
+    """Immediate win/loss alert when ANY forex strategy closes a position.
+
+    Was LBO-only (send_lbo_trade_closed) — the other 9 strategies' exits only
+    ever showed up in the batched run-summary email, which has no P&L column,
+    so a closed trade's win/loss was invisible unless you read the raw log.
+    Generalized 2026-08-21 so every strategy's exit gets the same immediate,
+    color-coded win/loss email LBO always had.
+    """
+    label   = STRATEGY_LABELS.get(strategy, strategy)
+    now     = datetime.now()
+    time_   = now.strftime("%H:%M")
+    today   = now.strftime("%Y-%m-%d")
+    won     = pnl_pct > 0
+    cls     = "buy" if won else "sell"
+    result  = "WIN ✓" if won else "LOSS ✗"
+    col     = "#3fb950" if won else "#f85149"
+    sign    = "+" if pnl_pct >= 0 else ""
+    # P&L in the pair's own quote currency (last 3 chars, standard FX convention:
+    # EURUSD -> USD, USDJPY -> JPY, GBPCHF -> CHF) — NOT a fixed SEK rate, which
+    # only ever made sense for LBO's mostly-EUR-quoted book and would silently
+    # show a wrong number once every strategy/pair calls this.
+    quote_ccy = symbol[-3:] if len(symbol) >= 6 else ""
+    pnl_native = round((exit_px - entry) * units if direction == "Buy"
+                       else (entry - exit_px) * units, 0)
+    pnl_sgn = "+" if pnl_native >= 0 else ""
+    session_line = f" · {session} session" if session else ""
 
     body = f"""
     <span class="badge {cls}">{result}</span>
@@ -505,8 +536,8 @@ def send_lbo_trade_closed(
         <div class="val" style="color:{col}">{sign}{pnl_pct:.2f}%</div>
       </div>
       <div class="metric">
-        <div class="lbl">P&L (SEK)</div>
-        <div class="val" style="color:{col}">{pnl_sgn}{pnl_sek:,.0f}</div>
+        <div class="lbl">P&L ({quote_ccy})</div>
+        <div class="val" style="color:{col}">{pnl_sgn}{pnl_native:,.0f}</div>
       </div>
       <div class="metric">
         <div class="lbl">Units</div>
@@ -525,8 +556,14 @@ def send_lbo_trade_closed(
       </tr></tbody>
     </table>
     <p class="muted" style="margin-top:12px">
-      London Breakout · {time_} PKT · {today}
+      {label}{session_line} · {time_} PKT · {today}
     </p>
     """
-    subject = f"LBO {'✅' if won else '❌'} {symbol} {result} {sign}{pnl_pct:.2f}% ({pnl_sgn}{pnl_sek:,.0f} SEK) [{time_} PKT]"
-    _send(subject, _wrap(f"Day Trade Closed — {symbol} {result}", body))
+    subject = (f"{label} {'✅' if won else '❌'} {symbol} {result} {sign}{pnl_pct:.2f}% "
+               f"({pnl_sgn}{pnl_native:,.0f} {quote_ccy}) [{time_} PKT]")
+    _send(subject, _wrap(f"{label} Closed — {symbol} {result}", body))
+
+
+def send_lbo_trade_closed(**kwargs) -> None:
+    """Backward-compatible alias — send_trade_closed() replaced this 2026-08-21."""
+    send_trade_closed(strategy="london_breakout", **kwargs)

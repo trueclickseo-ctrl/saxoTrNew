@@ -86,6 +86,7 @@ from atos.intraday_reversion import intraday_scan, us_market_is_open, next_scan_
 
 # ── Existing infrastructure (unchanged) ───────────────────────────
 import saxo_client
+import saxo_order
 import fx
 
 DEPLOY_CONFIG = os.path.join(BASE_DIR, "config", "deploy.json")
@@ -806,7 +807,16 @@ def run_cycle():
                 else:
                     uic = imap[ticker]["uic"]
                     asset_type = ASSET_TYPE_MAP.get(mkt, "Stock")
-                    saxo_client.place_market_order(uic, asset_type, "Buy", shares)
+                    # Attach the stop-loss atomically with the entry (native
+                    # Saxo GTC order, enforced 24/7 even if this machine or
+                    # the next scheduled run is down) instead of a bare
+                    # market order relying on software-side checks later.
+                    saxo_order.place_with_stop(
+                        post_fn=saxo_client.post,
+                        account_key=saxo_client.get_account_key(),
+                        uic=uic, asset_type=asset_type, amount=shares,
+                        buy_sell="Buy", stop_price=stop_p, label=f"{mkt}:{ticker}",
+                    )
                     order_ok = True
             except Exception as e:
                 skip_reason = f"order error: {e}"
@@ -1161,6 +1171,10 @@ def _save_us_state(state: dict):
         pass
 
 
+US_BLEND_STOP_PCT = 0.08   # 8% stop-loss, matching the ETF module's convention
+US_BLEND_TP_PCT   = 0.20   # 20% take-profit, matching the ETF module's convention
+
+
 def _place_us(side: str, ticker: str, shares: int, imap: dict,
               todays_actions: list, price: float, cur_trade: dict = None) -> bool:
     """Place ONE US market order and update DB + local cash on success."""
@@ -1168,7 +1182,23 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
     if shares < 1 or ticker not in imap:
         return False
     try:
-        saxo_client.place_market_order(imap[ticker]["uic"], "Stock", side, shares)
+        if side == "Buy":
+            # Attach stop-loss/take-profit atomically with the entry — this
+            # strategy previously placed a bare market order with no broker-
+            # side protection at all (stop_price was hardcoded to 0), relying
+            # entirely on the next scheduled cycle to notice and exit. A
+            # native Saxo GTC bracket is enforced 24/7 even if a run is missed.
+            stop_p = round(price * (1 - US_BLEND_STOP_PCT), 2)
+            tp_p   = round(price * (1 + US_BLEND_TP_PCT), 2)
+            saxo_order.place_with_stop(
+                post_fn=saxo_client.post,
+                account_key=saxo_client.get_account_key(),
+                uic=imap[ticker]["uic"], asset_type="Stock", amount=shares,
+                buy_sell="Buy", stop_price=stop_p, take_profit_price=tp_p,
+                label=f"US Blend:{ticker}",
+            )
+        else:
+            saxo_client.place_market_order(imap[ticker]["uic"], "Stock", side, shares)
     except Exception as e:
         print(f"  [US momentum] {side} {shares} {ticker} FAILED: {e}")
         return False
@@ -1182,7 +1212,8 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
             "entry_price": price, "shares": shares, "commission_sek": comm,
             "entry_score": 0, "d1_trend": 0, "d2_momentum": 0, "d3_breakout": 0,
             "d4_mean_revert": 0, "d5_volume": 0, "d6_smart_money": 0,
-            "d7_mom_quality": 0, "d8_regime": 0, "stop_price": 0,
+            "d7_mom_quality": 0, "d8_regime": 0,
+            "stop_price": round(price * (1 - US_BLEND_STOP_PCT), 2),
             "trailing_stop_high": price, "regime_at_entry": "momentum",
         })
         record_fill(-(shares * price_sek + comm))
@@ -1236,6 +1267,35 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
         print(f"  [US momentum] instrument_map load failed: {e}"); return
 
     us_open = {t["ticker"]: t for t in open_trades if t.get("market_group") == "US Equities"}
+
+    # ── Reconcile DB open positions against the real Saxo account ─────────────
+    # A DB row can go stale (e.g. a sell attempted against a position that had
+    # already been closed by an earlier same-day run) and linger with no exit_date
+    # even though Saxo no longer holds it. Trading against a stale row makes the
+    # next sell fail with "NotOwned" and then opens a fresh duplicate position for
+    # the same ticker instead of just holding it. Reconcile first so us_open only
+    # contains what's actually held.
+    if not dry_run and us_open:
+        try:
+            broker_positions = saxo_client.get_positions()
+            held_uics = set()
+            for p in broker_positions.get("Data", []):
+                base = p.get("PositionBase", {})
+                uic = base.get("Uic")
+                amount = base.get("Amount", 0)
+                if uic is not None and amount:
+                    held_uics.add(uic)
+            for tk in list(us_open.keys()):
+                info = imap.get(tk)
+                uic = info.get("uic") if info else None
+                if uic is None or uic not in held_uics:
+                    tr = us_open.pop(tk)
+                    print(f"  {tag} RECONCILE: {tk} (trade id {tr['id']}) is open in the DB "
+                          f"but not held at Saxo — closing as stale, no P&L (manual review advised)")
+                    db.close_trade(tr["id"], tr.get("entry_price", 0), "reconciled_not_owned", 0.0, 0.0)
+        except Exception as e:
+            print(f"  {tag} RECONCILE skipped — could not fetch Saxo positions: {e}")
+
     tgt = USM.compute_targets(feat_data, US_TICKERS)   # US names only — not the whole universe
     tag = "[US momentum DRY-RUN]" if dry_run else "[US momentum]"
     print(f"  {tag} risk_off={tgt['risk_off']} | {tgt.get('reason')} | targets={tgt['targets']}")
@@ -1350,14 +1410,7 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
     # budget so total spend can never exceed the sleeve (and never touches the rest).
     mom_names = tgt.get("momentum") or []
     lv_names  = tgt.get("lowvol") or []
-    print(f"  {tag} REBALANCE (blend) — {len(mom_names)} momentum {mom_names} + "
-          f"{len(lv_names)} low-vol {lv_names} | budget {sleeve_equity:,.0f} SEK "
-          f"(started {USM.US_SLEEVE_SEK:,.0f}, compounds with P&L)")
-    _sell_all_us()
-    deployed_sek = 0.0
     # Blend priority: momentum names (offense) first, then low-vol (defense), deduped.
-    # Dynamic greedy sizing: each name gets remaining_budget / names_still_to_place, so
-    # budget skipped on an unaffordable name flows forward and the sleeve stays invested.
     # Exclude tickers with imminent ex-dividend or earnings from new buys.
     # We check only the rebalance candidates (not the full 61-stock universe).
     corp_skip = corp_avoid(mom_names + lv_names)
@@ -1370,46 +1423,83 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
             continue
         if tk not in priority and tk in feat_data and tk in imap and _price(tk) > 0:
             priority.append(tk)
-    remaining_sek = sleeve_equity
-    for i, tk in enumerate(priority):
-        names_left = len(priority) - i
-        slot_usd = (remaining_sek / names_left) / fx_usd
-        px = _price(tk)
-        shares = int(slot_usd / px)
-        if shares >= 1:
-            ok = _do("Buy", tk, shares, px)
-            if ok:  # only count cost if order actually filled
-                cost = shares * px * fx_usd
-                remaining_sek -= cost
-                deployed_sek  += cost
-        else:
-            print(f"  {tag} {tk}: ${slot_usd:.0f}/slot < 1 share (${px:.0f}) — skip")
-    print(f"  {tag} deployed ~{deployed_sek:,.0f} of {sleeve_equity:,.0f} SEK; "
-          f"{sleeve_equity - deployed_sek:,.0f} SEK stays as cash (rest of account untouched)")
-    if not dry_run:
-        # Only stamp last_rebalance if at least one buy order landed.
-        # If the market is closed (holiday) Saxo rejects all orders and deployed_sek=0,
-        # so we do NOT advance the timestamp — the engine retries next trading day.
-        if deployed_sek > 0:
+
+    # Delta rebalance, NOT liquidate-and-rebuy: a ticker that stays in the target
+    # list across two rebalances should just be left alone. plan_rebalance() only
+    # sells names that dropped out of the target (or moved >10% off target) and
+    # only buys/trims what's actually changed — avoids paying commission/spread
+    # to sell and immediately rebuy the same position.
+    current_shares = {tk: int(tr.get("shares", 0) or 0) for tk, tr in us_open.items()}
+    prices_usd = {tk: _price(tk) for tk in set(priority) | set(current_shares)}
+    actions = USM.plan_rebalance(current_shares, priority, 1.0, prices_usd, sleeve_equity, fx_usd)
+
+    if not actions:
+        print(f"  {tag} REBALANCE (blend) — {len(mom_names)} momentum {mom_names} + "
+              f"{len(lv_names)} low-vol {lv_names} — holdings already match target, no trades needed "
+              f"| sleeve ~{sleeve_equity:,.0f} SEK")
+        no_action_tickers = set(priority)
+        if not dry_run:
             state["last_rebalance"] = date.today().isoformat()
-        elif priority:
-            print(f"  {tag} WARNING: 0 orders filled — market may be closed. "
-                  f"Rebalance will retry tomorrow (last_rebalance unchanged).")
-        state["sleeve_cash"] = sleeve_equity - deployed_sek
-        _save_us_state(state)
+            state["sleeve_cash"] = sleeve_equity - us_value
+            _save_us_state(state)
+    else:
+        print(f"  {tag} REBALANCE (blend) — {len(mom_names)} momentum {mom_names} + "
+              f"{len(lv_names)} low-vol {lv_names} | budget {sleeve_equity:,.0f} SEK "
+              f"(started {USM.US_SLEEVE_SEK:,.0f}, compounds with P&L)")
+        sells = [a for a in actions if a["side"] == "Sell"]
+        buys  = [a for a in actions if a["side"] == "Buy"]
+        deployed_sek = 0.0
+        freed_sek    = 0.0
+        filled_any   = False
+        for a in sells:
+            tk = a["ticker"]
+            tr = us_open.get(tk)
+            px = _price(tk, tr.get("entry_price", 0) if tr else 0)
+            if _do("Sell", tk, a["shares"], px, cur_trade=tr):
+                freed_sek  += a["shares"] * px * fx_usd
+                filled_any  = True
+        for a in buys:
+            tk = a["ticker"]
+            px = _price(tk)
+            if px <= 0:
+                continue
+            if _do("Buy", tk, a["shares"], px):
+                deployed_sek += a["shares"] * px * fx_usd
+                filled_any    = True
+        print(f"  {tag} rebalanced ({len(sells)} sell / {len(buys)} buy) — "
+              f"freed ~{freed_sek:,.0f} SEK, deployed ~{deployed_sek:,.0f} SEK "
+              f"of {sleeve_equity:,.0f} SEK sleeve; unchanged positions left in place")
+        no_action_tickers = {tk for tk in priority if tk not in {a["ticker"] for a in actions}}
+        if not dry_run:
+            # Only stamp last_rebalance once at least one order actually landed.
+            # If the market is closed (holiday) Saxo rejects every order and
+            # filled_any stays False — retry next trading day.
+            if filled_any:
+                state["last_rebalance"] = date.today().isoformat()
+            else:
+                print(f"  {tag} WARNING: 0 orders filled — market may be closed. "
+                      f"Rebalance will retry tomorrow (last_rebalance unchanged).")
+            state["sleeve_cash"] = (sleeve_equity - us_value) + freed_sek - deployed_sek
+            _save_us_state(state)
 
     # ── Log rebalance signals ───────────────────────────────────────────────
     if not dry_run:
         _mom_scan_ts = datetime.now().isoformat()
         for tk in priority:
             _placed = tk in {a["ticker"] for a in todays_actions if a.get("action") == "BUY"}
+            if _placed:
+                _block_reason = None
+            elif tk in no_action_tickers:
+                _block_reason = "already_at_target"
+            else:
+                _block_reason = "order_failed"
             try:
                 db.insert_signal({
                     "signal_date": date.today().isoformat(), "scan_ts": _mom_scan_ts,
                     "strategy": "US Blend", "market_group": "US Equities",
                     "ticker": tk, "final_score": 0,
                     "action": "BUY", "executed": 1 if _placed else 0,
-                    "block_reason": None if _placed else "order_failed",
+                    "block_reason": _block_reason,
                     "d1_trend": 0, "d2_momentum": 0, "d3_breakout": 0,
                     "d4_mean_revert": 0, "d5_volume": 0,
                     "d6_smart_money": 0, "d7_mom_quality": 0, "d8_regime": 0,

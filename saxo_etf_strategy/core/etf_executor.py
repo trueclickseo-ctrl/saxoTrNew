@@ -15,6 +15,7 @@ Key fixes vs. the original scaffold:
 
 import logging
 import sys, os
+from datetime import date
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 import pnl_tracker
 import trade_logger
@@ -165,6 +166,7 @@ class ETFExecutor:
             "symbol":        signal.symbol,
             "quantity":      quantity,
             "entry_price":   price,
+            "entry_date":    date.today().isoformat(),   # dashboard "Days" column reads this
             "stop_price":    stop_price,    # persisted so review_exits() uses entry stop, not current config
             "tp_price":      tp_price,
             "entry_score":   signal.score,

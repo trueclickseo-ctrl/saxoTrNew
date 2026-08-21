@@ -19,6 +19,30 @@ import price_service
 
 REFRESH_SECONDS = 60
 
+# ── Quote-currency -> EUR conversion (account base currency) ──────────────
+# A pair's raw (now_px - entry) * qty P&L is in the PAIR's quote currency —
+# JPY, CHF, NOK, CAD, AUD, GBP, etc. — not automatically EUR/USD. Summing
+# those raw numbers across pairs and labeling the total one currency silently
+# mixes currencies (a JPY pair's raw P&L is ~150x its true EUR value). See
+# pnl_tracker.log_close's fx_rate_to_base param, fixed the same way 2026-08-21.
+_EUR_RATE_CACHE: dict = {}
+
+
+def _eur_per_unit(ccy: str) -> float:
+    if ccy == "EUR":
+        return 1.0
+    if ccy in _EUR_RATE_CACHE:
+        return _EUR_RATE_CACHE[ccy]
+    try:
+        import fx as _fx
+        sek_per_ccy = float(_fx.get_rate_to_sek(ccy))
+        sek_per_eur = float(_fx.get_eur_sek_rate())
+        rate = sek_per_ccy / sek_per_eur if sek_per_ccy > 0 and sek_per_eur > 0 else 1.0
+    except Exception:
+        rate = 1.0
+    _EUR_RATE_CACHE[ccy] = rate
+    return rate
+
 # ── Windows console clear ─────────────────────────────────────────
 def _clear_console():
     """Clear the Windows console via the Console API (works in all terminal hosts)."""
@@ -76,6 +100,8 @@ STRAT_COL = {
     "supertrend": "\033[38;5;208m",   # orange
     "zscore":     "\033[38;5;147m",   # lavender
     "ml":         "\033[38;5;119m",   # lime
+    "london_breakout": "\033[38;5;214m",   # amber — day trading book
+    "cnn_lstm":   "\033[38;5;135m",   # purple
 }
 
 
@@ -130,17 +156,11 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     positions = _read_positions()
     token     = price_service.load_token()
 
-    # Fetch live prices for all FX pairs via Saxo API
-    # This covers both the positions table and the live rates strip
-    all_instruments = list(price_service.FX_INSTRUMENTS)  # all 12 pairs (7 majors + 5 crosses)
-
-    # Also add any position UIC overrides (in case a symbol's UIC differs from FX_INSTRUMENTS)
-    pos_uics = {p["symbol"]: {"symbol": p["symbol"], "uic": p["uic"], "asset_type": p["asset_type"]}
-                for p in positions if p.get("uic")}
-    # Merge: prefer position UIC if available
-    merged = {i["symbol"]: i for i in all_instruments}
-    merged.update(pos_uics)
-    instruments = list(merged.values())
+    # Fetch live prices only for pairs we actually hold — the standalone
+    # full-universe rates strip was removed, so there's no need to price
+    # every FX_INSTRUMENTS pair on every refresh.
+    instruments = [{"symbol": p["symbol"], "uic": p["uic"], "asset_type": p["asset_type"]}
+                   for p in positions if p.get("uic")]
 
     live, price_src = price_service.fetch_prices(instruments, token=token)
 
@@ -153,7 +173,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append(f"  {BD}{CY}╔{'═'*W_TOTAL}╗{W}")
     src_tag = "SAXO LIVE" if price_src == "saxo" else "n/a (token expired)"
     L.append(f"  {BD}{CY}║{'  FOREX QUANT DASHBOARD':^{W_TOTAL}}║{W}")
-    L.append(f"  {BD}{CY}║{f'  9 Strategies  |  34 FX Pairs  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
+    L.append(f"  {BD}{CY}║{f'  11 Strategies  |  34 FX Pairs  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
     L.append(f"  {BD}{CY}╚{'═'*W_TOTAL}╝{W}")
     L.append("")
 
@@ -170,9 +190,12 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
              f"{WH}{BD}■ Gap Fill{W}  ~80% WR   "
              f"{OR}{BD}■ SuperTrend{W}  trend   "
              f"{LV}{BD}■ Z-Score{W}  mean-rev   "
-             f"{LM}{BD}■ ML{W}  ML signals")
-    L.append(f"  {DM}Scheduler: 06:20/14:00/18:00 PKT Mon-Fri  |  22:00 PKT Sun (gap)  |  "
-             f"9 strategies  |  34 pairs: 7 majors + 27 crosses  |  Max slots vary per strategy{W}")
+             f"{LM}{BD}■ ML{W}  ML signals   "
+             f"\033[38;5;135m{BD}■ CNN-LSTM{W}  deep learning   "
+             f"\033[38;5;214m{BD}■ LBO{W}  day trade")
+    L.append(f"  {DM}Scheduler: every 30min 06:00-22:00 PKT (scan)  |  14:00 PKT (exit check)  |  "
+             f"22:00 PKT Sun + weekly gap windows (gap fill)  |  "
+             f"34 pairs: 7 majors + 27 crosses  |  Max slots 34 (28 for day-trade LBO){W}")
     L.append(HR)
     L.append("")
 
@@ -186,7 +209,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         f"  {DM}"
         f"{'Strategy':<10}  {'Pair':<7}  {'Side':<6}  "
         f"{'Qty':>12}  {'Entry':>10}  {'Now':>10}  "
-        f"{'Stop':>10}  {'P&L (USD)':>12}  {'%':>9}  "
+        f"{'Stop':>10}  {'P&L (EUR)':>12}  {'%':>9}  "
         f"{'ATR':>8}  {'Days':>5}  {'Stop Risk':>12}{W}"
     )
     L.append(COL_HDR)
@@ -200,7 +223,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     if positions:
         # Group by strategy for cleaner display
         strat_order = ["ema", "rsi", "donchian", "bb", "pullback", "gap",
-                       "supertrend", "zscore", "ml"]
+                       "supertrend", "zscore", "ml", "cnn_lstm", "london_breakout"]
         grouped: dict = {}
         for p in positions:
             grouped.setdefault(p["strategy"], []).append(p)
@@ -231,13 +254,15 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
                 side_tag = f"{GR}{BD}LONG {W}" if is_long else f"{RD}{BD}SHORT{W}"
 
                 if now_px and ep > 0:
+                    quote_ccy = sym[3:6] if len(sym) >= 6 else ""
+                    eur_rate  = _eur_per_unit(quote_ccy)
                     raw_pnl  = (now_px - ep) if is_long else (ep - now_px)
-                    pnl_usd  = raw_pnl * qty
+                    pnl_eur  = raw_pnl * qty * eur_rate
                     pnl_pct  = raw_pnl / ep * 100
-                    total_pnl  += pnl_usd
-                    total_cost += ep * qty
-                    pc   = GR if pnl_usd >= 0 else RD
-                    pnl_s = f"{pc}{pnl_usd:>+,.0f}{W}"
+                    total_pnl  += pnl_eur
+                    total_cost += ep * qty * eur_rate
+                    pc   = GR if pnl_eur >= 0 else RD
+                    pnl_s = f"{pc}{pnl_eur:>+,.0f}{W}"
                     pct_s = f"{pc}{pnl_pct:>+.4f}%{W}"
                     now_s = f"{now_px:.5f}"
                 else:
@@ -281,9 +306,9 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         tpct = (total_pnl / total_cost * 100) if total_cost > 0 else 0
         L.append(
             f"  {BD}TOTAL{W}  "
-            f"{DM}{open_count} positions  |  Cost: ${total_cost:>,.0f}  |  "
+            f"{DM}{open_count} positions  |  Cost: €{total_cost:>,.0f}  |  "
             f"Unrealized P&L: {W}"
-            f"{tc}{BD}{total_pnl:>+,.0f} USD  ({tpct:>+.4f}%){W}"
+            f"{tc}{BD}{total_pnl:>+,.0f} EUR  ({tpct:>+.4f}%){W}"
         )
 
         # Near-stop warning with details
@@ -310,58 +335,81 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         "supertrend": ("SuperTrend",       "ST(10,3)+EMA(200)",     "~65% WR",      "20"),
         "zscore":     ("Z-Score Rev",      "20-day z-score fade",   "~63% WR",      "20"),
         "ml":         ("ML Signals",       "Logistic reg (7 feat)", "~60% WR",      "20"),
+        "cnn_lstm":   ("CNN-LSTM",         "Deep learning (34 pr)", "36.9% val acc — barely trades", "20"),
+        "london_breakout": ("LBO Day Trade", "London/NY range break", "~58-63% WR", "28"),
     }
+
+    # Realized P&L per strategy (closed trades) drives the headline number and
+    # color — this is each strategy's actual locked-in track record. The loop
+    # used to only sum unrealized P&L of currently-open positions, so a
+    # strategy sitting on a real net loss (e.g. pullback: -5,116 realized,
+    # containing the -5,544 worst trade) still rendered green/positive purely
+    # because its open positions happened to be up right now — paper gains
+    # that could reverse tomorrow, masking a genuine losing track record.
+    # Unrealized is shown separately alongside it, not blended into the total.
+    try:
+        import pnl_tracker
+        stats_by_strat = {r["strategy"]: r for r in pnl_tracker.get_strategy_summary("forex")}
+    except Exception:
+        stats_by_strat = {}
 
     for strat, (label, desc, metric, max_slots) in strat_labels.items():
         sc    = STRAT_COL.get(strat, DM)
         count = sum(1 for p in positions if p["strategy"] == strat)
-        pnl_s = 0.0
+        unrealized = 0.0
         for p in positions:
             if p["strategy"] != strat:
                 continue
             sym     = p["symbol"]
             now_px  = live.get(sym)
             if now_px and p["entry"] > 0:
+                quote_ccy = sym[3:6] if len(sym) >= 6 else ""
                 raw = (now_px - p["entry"]) if p["direction"] == "Buy" else (p["entry"] - now_px)
-                pnl_s += raw * p["qty"]
-        pnl_col = GR if pnl_s >= 0 else RD
+                unrealized += raw * p["qty"] * _eur_per_unit(quote_ccy)
+        stats    = stats_by_strat.get(strat, {})
+        realized = stats.get("total_pnl", 0.0)
+        n_closed = stats.get("trades", 0)
+        wins     = stats.get("wins", 0)
+        losses   = stats.get("losses", 0)
+        pnl_col  = GR if realized >= 0 else RD
+        u_col    = GR if unrealized >= 0 else RD
         L.append(
             f"  {sc}{BD}{label:<18}{W}  {DM}{desc:<24}{W}  {metric:<14}  "
             f"max {max_slots:<4}  {count}/{max_slots} active  "
-            f"P&L: {pnl_col}{BD}{pnl_s:>+,.0f} USD{W}"
+            f"{DM}{n_closed} closed ({wins}W/{losses}L){W}  "
+            f"P&L: {pnl_col}{BD}{realized:>+,.0f} EUR{W}  "
+            f"{DM}(open: {u_col}{unrealized:>+,.0f}{DM} unrealized){W}"
         )
 
     L.append("")
     L.append(HR)
 
-    # ── Pairs heat map ────────────────────────────────────────────
-    src_label = "Saxo SIM live" if price_src == "saxo" else "n/a — refresh token"
-    L.append("")
-    L.append(f"  {BD}LIVE RATES{W}  {DM}({src_label}){W}")
-    L.append("")
-    # Four rows: majors, JPY crosses, EUR/GBP crosses, AUD/NZD/CHF crosses
-    RATE_ROWS = [
-        ["EURUSD","GBPUSD","USDJPY","AUDUSD","USDCAD","NZDUSD","USDCHF"],
-        ["EURJPY","GBPJPY","AUDJPY","CADJPY","NZDJPY","CHFJPY"],
-        ["EURGBP","EURAUD","EURNZD","EURCAD","EURCHF",
-         "GBPAUD","GBPCAD","GBPCHF","GBPNZD"],
-        ["AUDCAD","AUDCHF","AUDNZD","NZDCAD","NZDCHF"],
-    ]
-
-    def _rate_row(syms):
-        row = "  "
-        for sym in syms:
-            px = live.get(sym)
-            row += (f"{BD}{sym}{W}  {DM}{px:.5f}{W}    " if px
-                    else f"{DM}{sym}  —{W}    ")
-        return row
-
-    for i, row_syms in enumerate(RATE_ROWS):
-        L.append(_rate_row(row_syms))
-        if i < len(RATE_ROWS) - 1:
-            L.append("")
-    L.append("")
-    L.append(HR)
+    # ── Universe tier breakdown: core (live-candidate) vs exotic (SIM-only) ──
+    # The 83 EM/exotic pairs added 2026-08-21 are SIM-only test candidates —
+    # this is how their track record gets reviewed before deciding whether to
+    # fold any into the live universe (which stays the original 34 for now).
+    try:
+        from forex.universe import get_tier
+        pair_stats = pnl_tracker.get_pair_summary("forex")
+        tier_totals = {"core": {"pnl": 0.0, "n": 0, "wins": 0},
+                       "exotic": {"pnl": 0.0, "n": 0, "wins": 0}}
+        for r in pair_stats:
+            t = get_tier(r["symbol"])
+            tier_totals[t]["pnl"]  += r["total_pnl"]
+            tier_totals[t]["n"]    += r["trades"]
+            tier_totals[t]["wins"] += r["wins"]
+        L.append("")
+        L.append(f"  {BD}UNIVERSE TIER BREAKDOWN{W}  {DM}(live-candidate vs SIM-only test pairs){W}")
+        L.append("")
+        for tier, label in (("core", "Core (34 — live candidate)"), ("exotic", "Exotic (83 — SIM test only)")):
+            tt = tier_totals[tier]
+            wr = (tt["wins"] / tt["n"] * 100) if tt["n"] else 0.0
+            tc = GR if tt["pnl"] >= 0 else RD
+            L.append(f"  {BD}{label:<28}{W}  {tt['n']:>3} closed  |  WR {wr:>5.1f}%  |  "
+                     f"P&L: {tc}{BD}{tt['pnl']:>+,.0f} EUR{W}")
+        L.append(HR)
+    except Exception:
+        pass
 
     # ── Recent scheduler log ──────────────────────────────────────
     log_lines = _last_log_lines(10)
@@ -397,11 +445,11 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         L.append(f"  {BD}FOREX P&L LEDGER{W}  {DM}(pnl_ledger.db — run pnl_dashboard.py for full view){W}")
         L.append(PNL_HR)
         L.append(
-            f"  {BD}Realized P&L:{W}  {pc}{BD}{pnl_r:>+,.2f} USD{W}     "
+            f"  {BD}Realized P&L:{W}  {pc}{BD}{pnl_r:>+,.2f} EUR{W}     "
             f"{DM}Closed: {s.get('closed_trades',0)}  |  "
             f"Win rate: {s.get('win_rate',0):.1f}%  |  "
-            f"Best: +{s.get('best_trade',0):.2f}  |  "
-            f"Worst: {s.get('worst_trade',0):+.2f}  |  "
+            f"Best: +{s.get('best_trade',0):.2f} EUR  |  "
+            f"Worst: {s.get('worst_trade',0):+.2f} EUR  |  "
             f"Profit factor: {s.get('profit_factor') or '—'}{W}"
         )
         L.append(PNL_HR)

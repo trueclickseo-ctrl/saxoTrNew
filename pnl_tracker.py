@@ -119,10 +119,29 @@ def log_open(module: str, strategy: str, symbol: str, direction: str,
 def log_close(module: str, symbol: str, exit_price: float,
               exit_reason: str = "", strategy: str = None,
               timestamp: str = None, order_id: str = None,
-              commission: float = 0.0, asset_type: str = "") -> float | None:
+              commission: float = 0.0, asset_type: str = "",
+              fx_rate_to_base: float = 1.0,
+              gross_pnl_base_override: float | None = None) -> float | None:
     """Close the most-recent open trade for module+symbol.
 
-    Returns net realized P&L (after entry + exit commission) or None if not found.
+    fx_rate_to_base: multiplier converting the raw (entry/exit price currency)
+    P&L into the ledger's base currency before storing. Defaults to 1.0 (no
+    conversion) for modules already denominated in the base currency. Forex
+    trades quote in the PAIR's quote currency (e.g. JPY, NOK, CHF) — pass the
+    quote-currency -> base-currency rate here or every pair's raw P&L gets
+    summed together as if they were all the same currency (they were not: a
+    JPY pair's raw P&L number is ~150x its true base-currency value).
+
+    gross_pnl_base_override: use this exact base-currency gross P&L instead of
+    computing raw*qty*fx_rate_to_base — pass Saxo's own
+    PositionView.ProfitLossOnTradeInBaseCurrency here when available. That's
+    the broker's own real dealt conversion, which is what actually happens to
+    the account balance — more authoritative than any rate we look up
+    ourselves. fx_rate_to_base is the fallback when this isn't available
+    (e.g. the position lookup failed).
+
+    Returns net realized P&L (after entry + exit commission), in base
+    currency, or None if not found.
     """
     ts = timestamp or datetime.now().isoformat()
     q    = "SELECT * FROM trades WHERE module=? AND symbol=? AND status='open'"
@@ -139,8 +158,11 @@ def log_close(module: str, symbol: str, exit_price: float,
         ep        = row["entry_price"]
         qty       = row["quantity"]
         direction = row["direction"]
-        raw       = (exit_price - ep) if direction in ("Buy", "BUY") else (ep - exit_price)
-        gross_pnl = raw * qty
+        if gross_pnl_base_override is not None:
+            gross_pnl = gross_pnl_base_override
+        else:
+            raw       = (exit_price - ep) if direction in ("Buy", "BUY") else (ep - exit_price)
+            gross_pnl = raw * qty * fx_rate_to_base
         if commission == 0.0:
             commission = calc_commission(module, qty, exit_price, asset_type)
         entry_comm = row["commission"] or 0.0
@@ -478,6 +500,50 @@ def get_strategy_summary(module: str = "forex") -> list[dict]:
     return result
 
 
+def get_pair_summary(module: str = "forex") -> list[dict]:
+    """
+    Per-symbol (currency pair / ticker) P&L breakdown within a module.
+    Returns list of dicts sorted by total_pnl descending.
+    Only includes symbols with at least one closed trade.
+    """
+    with _conn() as c:
+        rows = c.execute("""
+            SELECT symbol,
+                   COUNT(*)                                                     AS n,
+                   SUM(realized_pnl)                                            AS total_pnl,
+                   SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END)           AS wins,
+                   SUM(CASE WHEN realized_pnl < 0 THEN 1 ELSE 0 END)           AS losses,
+                   SUM(CASE WHEN realized_pnl > 0 THEN realized_pnl ELSE 0 END) AS gross_profit,
+                   SUM(CASE WHEN realized_pnl < 0 THEN realized_pnl ELSE 0 END) AS gross_loss,
+                   MAX(realized_pnl)                                            AS best,
+                   MIN(realized_pnl)                                            AS worst,
+                   COUNT(CASE WHEN status='open' THEN 1 END)                   AS open_count
+              FROM trades
+             WHERE module=? AND status='closed'
+             GROUP BY symbol
+             ORDER BY total_pnl DESC
+        """, (module,)).fetchall()
+
+    result = []
+    for r in rows:
+        n  = r["n"] or 0
+        gp = r["gross_profit"] or 0.0
+        gl = abs(r["gross_loss"] or 0.0)
+        result.append({
+            "symbol":        r["symbol"] or "—",
+            "trades":        n,
+            "wins":          r["wins"]   or 0,
+            "losses":        r["losses"] or 0,
+            "open":          r["open_count"] or 0,
+            "win_rate":      round((r["wins"] or 0) / n * 100, 1) if n else 0.0,
+            "total_pnl":     round(r["total_pnl"] or 0.0, 2),
+            "profit_factor": round(gp / gl, 2) if gl > 0 else None,
+            "best":          round(r["best"]  or 0.0, 2),
+            "worst":         round(r["worst"] or 0.0, 2),
+        })
+    return result
+
+
 def get_summary(module: str = None) -> dict:
     """
     Return P&L summary. If module given, returns stats for that module only.
@@ -617,6 +683,7 @@ if __name__ == "__main__":
     ap.add_argument("--module",    choices=list(MODULES), help="Filter to one module")
     ap.add_argument("--open",      action="store_true", help="Show open positions")
     ap.add_argument("--closed",    action="store_true", help="Show last 20 closed trades")
+    ap.add_argument("--pairs",     action="store_true", help="Show per-symbol P&L breakdown")
     args = ap.parse_args()
 
     if args.sync:
@@ -644,5 +711,19 @@ if __name__ == "__main__":
                   f"{r['direction']:<5} P&L: {sign}{r['realized_pnl'] or 0:>10.2f} {cur}  "
                   f"[{r['exit_reason'] or '—'}]  {(r['timestamp_close'] or '')[:10]}")
 
-    if not any([args.sync, args.statement, args.open, args.closed]):
+    if args.pairs:
+        for mod in ([args.module] if args.module else list(MODULES)):
+            rows = get_pair_summary(mod)
+            if not rows:
+                continue
+            print(f"\n{mod.upper()} — P&L by pair ({len(rows)} pairs):")
+            for r in rows:
+                sign = "+" if r["total_pnl"] >= 0 else ""
+                pf   = r["profit_factor"] if r["profit_factor"] is not None else "—"
+                print(f"  {r['symbol']:<8} trades={r['trades']:>3}  "
+                      f"W/L={r['wins']}/{r['losses']}  win_rate={r['win_rate']:>5.1f}%  "
+                      f"PF={pf}  best={r['best']:+.2f}  worst={r['worst']:+.2f}  "
+                      f"total: {sign}{r['total_pnl']:>10.2f}")
+
+    if not any([args.sync, args.statement, args.open, args.closed, args.pairs]):
         ap.print_help()
