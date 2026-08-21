@@ -138,6 +138,15 @@ def plan_rebalance(current_shares: dict, targets: list, scale: float,
     runner is executed more than once with identical targets.
     """
     REBAL_THRESHOLD = 0.10   # skip adjustment if position is within 10% of target
+    # Cap per-name share count — added 2026-08-22 at user's request, after
+    # some positions (e.g. AES, U) grew past 100-300+ shares on cheaper
+    # tickers, tying up disproportionate margin/collateral for their dollar
+    # size (a low-priced stock needs far more SHARES to hit the same dollar
+    # budget as a high-priced one). Capping keeps per-name capital committed
+    # small and leaves more margin free to test the forex module across more
+    # pairs, which is the current priority — not a strategy change, a sizing
+    # ceiling on top of the existing dollar-budget calc below.
+    MAX_SHARES_PER_NAME = 50
 
     actions = []
     # Exit anything no longer in the target set (full close, no threshold).
@@ -151,7 +160,7 @@ def plan_rebalance(current_shares: dict, targets: list, scale: float,
         price = prices_usd.get(t, 0)
         if not price or price <= 0:
             continue
-        tgt = int(per_usd / price)
+        tgt = min(int(per_usd / price), MAX_SHARES_PER_NAME)
         cur = int(current_shares.get(t, 0))
         delta = tgt - cur
         # Skip trivial size drift — only trade when the position is meaningfully off.

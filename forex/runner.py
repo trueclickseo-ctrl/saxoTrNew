@@ -917,7 +917,7 @@ def _amend_stop_order(order_id: str, new_price: float, sym: str, akey: str, uic:
     prior amend attempt 404'd with just AccountKey+OrderPrice+OrderDuration,
     even against order ids verified live via GET /port/v1/orders/me).
     """
-    dp = 3 if sym.upper().endswith("JPY") else 5
+    dp = get_price_decimals(sym)
     rounded = round(new_price, dp)
     try:
         _patch(f"/trade/v2/orders/{order_id}", {
@@ -969,7 +969,7 @@ def _replace_stop_order(pos: dict, sym: str, akey: str, new_price: float) -> str
 
     direction  = pos.get("direction", "Buy")
     close_side = "Sell" if direction == "Buy" else "Buy"
-    dp         = 3 if sym.upper().endswith("JPY") else 5
+    dp         = get_price_decimals(sym)
     rounded    = round(new_price, dp)
     try:
         resp    = _post("/trade/v2/orders", {
@@ -1436,8 +1436,11 @@ def _heal_missing_stops(positions: dict, akey: str) -> int:
         qty        = pos["quantity"]
         stop_price = pos["stop_price"]
         close_side = "Sell" if direction == "Buy" else "Buy"
-        dp         = 3 if sym.upper().endswith("JPY") else 5
-        rounded    = round(stop_price, dp)
+        # Same rounding rule as saxo_order.place_with_stop's price_decimals —
+        # this healing path had its own independent JPY-only/5dp guess,
+        # which is exactly the bug that let AUDTRY/CNH-pair stops fail with
+        # PriceNotInTickSizeIncrements in the first place (2026-08-21).
+        rounded    = round(stop_price, get_price_decimals(sym))
 
         if (uic, close_side, "Stop") in open_orders or \
            (uic, close_side, "StopLimit") in open_orders:
@@ -1494,8 +1497,7 @@ def _heal_missing_tp(positions: dict, akey: str) -> int:
         qty        = pos["quantity"]
         tp_price   = pos["gap_target"]
         close_side = "Sell" if direction == "Buy" else "Buy"
-        dp         = 3 if sym.upper().endswith("JPY") else 5
-        rounded_tp = round(tp_price, dp)
+        rounded_tp = round(tp_price, get_price_decimals(sym))
 
         if (uic, close_side, "Limit") in open_orders:
             pos["tp_order_id"] = "synced"

@@ -304,15 +304,45 @@ def sync_etf_from_json() -> int:
                 pnl   = (xp - ep) * qty if ep and xp else None
                 reason= o.get("reason", "")
                 with _conn() as c:
-                    # Close the open trade
-                    c.execute("""
-                        UPDATE trades SET exit_price=?, realized_pnl=?,
-                            exit_reason=?, status='closed', timestamp_close=?
+                    # SQLite's UPDATE does not support ORDER BY/LIMIT (that
+                    # requires a non-default compile flag Python's sqlite3
+                    # doesn't have) -- the old query here was a silent no-op
+                    # syntax error that only surfaced the first time a real
+                    # ETF sell ever ran through this path. Find the target
+                    # row's id first, then UPDATE WHERE id=<that row>.
+                    row = c.execute("""
+                        SELECT id, quantity FROM trades
                          WHERE module='etf' AND symbol=? AND status='open'
                          ORDER BY id DESC LIMIT 1
-                    """, (xp, pnl, reason, ts, sym))
-                    # Insert a closed record if no open row existed
-                    if c.rowcount == 0 and ep:
+                    """, (sym,)).fetchone()
+                    if row is None:
+                        if ep:
+                            c.execute("""
+                                INSERT INTO trades
+                                    (module, strategy, symbol, direction, quantity,
+                                     entry_price, exit_price, realized_pnl, currency,
+                                     exit_reason, status, timestamp_open, timestamp_close, source_ref)
+                                VALUES ('etf','ETF Rotation',?,'Buy',?,?,?,?,
+                                        'USD',?,'closed',?,?,?)
+                            """, (sym, qty, ep, xp, pnl, reason,
+                                  entry_map.get(sym, {}).get("timestamp", ""), ts, ref))
+                    elif qty >= row["quantity"]:
+                        # Selling the full remaining quantity -- close the row.
+                        c.execute("""
+                            UPDATE trades SET exit_price=?, realized_pnl=?,
+                                exit_reason=?, status='closed', timestamp_close=?
+                             WHERE id=?
+                        """, (xp, pnl, reason, ts, row["id"]))
+                    else:
+                        # Partial sell: this used to unconditionally mark the
+                        # WHOLE position closed off a partial-quantity P&L,
+                        # silently dropping the remaining shares from the
+                        # ledger entirely. Reduce the open row's quantity
+                        # instead, and record the sold portion as its own
+                        # closed row -- same pattern as pnl_tracker's forex
+                        # partial-close handling.
+                        c.execute("UPDATE trades SET quantity=? WHERE id=?",
+                                 (row["quantity"] - qty, row["id"]))
                         c.execute("""
                             INSERT INTO trades
                                 (module, strategy, symbol, direction, quantity,

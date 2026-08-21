@@ -115,7 +115,15 @@ class ETFExecutor:
             return
 
         price    = signal.last_price or signal.fast_ma  # last close is the best proxy
-        quantity = int(budget_ccy // price) if price else 0
+        # Capped at 50 shares/name — added 2026-08-22 at user's request. A
+        # flat dollar budget alone sized cheap ETFs (XLF, XLE at $50-60) into
+        # 400-500+ share positions, tying up disproportionate margin for
+        # their dollar size versus a pricier ETF at the same budget. Matches
+        # the same cap just added to US Blend's plan_rebalance() — keeps
+        # per-name capital committed small so more margin stays free for
+        # testing the forex module broadly, the current priority.
+        MAX_SHARES_PER_NAME = 50
+        quantity = min(int(budget_ccy // price), MAX_SHARES_PER_NAME) if price else 0
         if quantity <= 0:
             logger.info(f"Skipping {signal.symbol}: budget {budget_ccy:.0f} too small "
                         f"for 1 share at ~{price:.2f}")
