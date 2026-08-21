@@ -255,6 +255,13 @@ def generate(module: str, out_dir: str = CHARTS_DIR) -> str | None:
     # QUANTITY — units of the pair's own base currency, labeled per bar —
     # which is honest and directly comparable to within the real value ratio
     # between major currencies (~2x), not a fabricated 100x+ distortion.
+    # Capped to the top N by size — the forex universe expanded to 117
+    # pairs (2026-08-21), and once more than ~20-25 of them have trade
+    # data, one shared-height horizontal-bar panel stops being legible
+    # (labels overlap into an unreadable block, confirmed live 2026-08-22).
+    # The biggest positions are also the most risk-relevant ones to see at
+    # a glance, so "top N by size" is the right cut, not an arbitrary one.
+    TOP_N_SIZE_PANEL = 25
     if module == "forex":
         with pnl_tracker._conn() as c:
             size_rows = c.execute("""
@@ -264,7 +271,8 @@ def generate(module: str, out_dir: str = CHARTS_DIR) -> str | None:
                  WHERE module=? AND quantity IS NOT NULL
                  GROUP BY symbol
                  ORDER BY avg_units DESC
-            """, (module,)).fetchall()
+                 LIMIT ?
+            """, (module, TOP_N_SIZE_PANEL)).fetchall()
     else:
         with pnl_tracker._conn() as c:
             size_rows = c.execute("""
@@ -274,7 +282,8 @@ def generate(module: str, out_dir: str = CHARTS_DIR) -> str | None:
                  WHERE module=? AND quantity IS NOT NULL AND entry_price IS NOT NULL
                  GROUP BY symbol
                  ORDER BY avg_units DESC
-            """, (module,)).fetchall()
+                 LIMIT ?
+            """, (module, TOP_N_SIZE_PANEL)).fetchall()
 
     if size_rows:
         s_labels, s_avg, s_max = [], [], []
@@ -289,16 +298,18 @@ def generate(module: str, out_dir: str = CHARTS_DIR) -> str | None:
         ax4.barh(y_pos4, s_avg, color="#58a6ff", label="Average")
         ax4.barh(y_pos4, s_max, color="#58a6ff", alpha=0.25, label="Max")
         ax4.set_yticks(y_pos4)
-        ax4.set_yticklabels(s_labels, color="#c9d1d9", fontsize=8)
+        ax4.set_yticklabels(s_labels, color="#c9d1d9", fontsize=9)
         ax4.invert_yaxis()   # largest at top
         if module == "forex":
-            ax4.set_title("Average Position Size by Pair — Units of the Pair's OWN Base "
-                          "Currency (bars NOT directly comparable across pairs)",
+            ax4.set_title(f"Average Position Size by Pair (top {TOP_N_SIZE_PANEL} by size) — "
+                          f"Units of the Pair's OWN Base Currency (bars NOT directly "
+                          f"comparable across pairs)",
                           color="#e6edf3", fontsize=12.5, pad=12)
             ax4.set_xlabel("Units traded (base currency of that pair — see label)", color="#c9d1d9")
         else:
-            ax4.set_title(f"Average Trade Size (Notional = Qty × Entry Price) by Symbol — "
-                          f"{cur_label}, all trades incl. open", color="#e6edf3", fontsize=13, pad=12)
+            ax4.set_title(f"Average Trade Size (Notional = Qty × Entry Price) by Symbol "
+                          f"(top {TOP_N_SIZE_PANEL} by size) — {cur_label}, all trades incl. open",
+                          color="#e6edf3", fontsize=13, pad=12)
             ax4.set_xlabel(f"Notional value ({cur_label})", color="#c9d1d9")
         ax4.legend(loc="lower right", facecolor="#161b22", edgecolor="#30363d",
                   labelcolor="#c9d1d9", fontsize=8)
