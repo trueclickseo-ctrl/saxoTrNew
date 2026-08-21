@@ -30,6 +30,19 @@ Covers:
                          closed-trades fetch is unbounded, not capped at
                          1000, avoiding a silent windowing bug as trade
                          history grows
+  9. atos_runner.py     — US Reversion (US_REVERSION_ENABLED since
+                         2026-08-08, backtested OOS Sharpe 2.39 / WR 70%)
+                         had never placed a single real trade: all 3 order-
+                         placement call sites used nonexistent functions
+                         (saxo_client.place_order, db.record_trade, a
+                         never-defined _get_uic helper) that raised
+                         immediately on the strategy's first live
+                         candidate (ROST, 2026-08-21). Fixed to the real
+                         saxo_order.place_with_stop/db.insert_trade API,
+                         with atomic stop-loss added to the path that
+                         previously had none; also fixed a `numpy` import
+                         missing at module scope that silently killed
+                         diagnostic signal logging on every scan.
 
 Run:
     python test_2026_08_22_session_fixes.py
@@ -591,6 +604,89 @@ def test_learner_uses_unbounded_fetch_not_capped_at_1000():
 
 _run("strategy_learner: magnitude factor is currency-correct for JPY pairs", test_learner_magnitude_not_currency_mixed_for_jpy)
 _run("strategy_learner: closed-trades fetch is unbounded, not capped at 1000", test_learner_uses_unbounded_fetch_not_capped_at_1000)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+section("9. atos_runner.py — US Reversion order placement was calling "
+        "nonexistent functions on all 3 call sites")
+# ═══════════════════════════════════════════════════════════════════════
+
+def _code_only(src):
+    """Strip full-line comments so a string search hits real calls, not
+    the explanatory comments this fix left behind naming the old bugs."""
+    return "\n".join(
+        line for line in src.splitlines()
+        if not line.strip().startswith("#")
+    )
+
+
+def test_no_nonexistent_place_order_calls_remain():
+    import inspect
+    import atos_runner
+    src = _code_only(inspect.getsource(atos_runner))
+    assert "saxo_client.place_order(" not in src, (
+        "saxo_client has no place_order() method (real function is "
+        "place_market_order, or place_with_stop for atomic stop-loss) -- "
+        "any call site using this name will raise AttributeError on the "
+        "first real order, exactly as it did live for ROST on 2026-08-21"
+    )
+
+
+def test_no_nonexistent_db_record_trade_calls_remain():
+    import inspect
+    import atos_runner
+    src = _code_only(inspect.getsource(atos_runner))
+    assert "db.record_trade(" not in src, (
+        "atos.database has no record_trade() -- the only record_trade in "
+        "the codebase is strategy_monitor's, a different class with a "
+        "totally different signature (strategy_name, pnl, was_profitable). "
+        "The real function for recording a new position is db.insert_trade()"
+    )
+
+
+def test_no_undefined_get_uic_helper_calls_remain():
+    import inspect
+    import atos_runner
+    src = _code_only(inspect.getsource(atos_runner))
+    assert "_get_uic(" not in src, (
+        "_get_uic() was called but never defined anywhere in atos_runner.py "
+        "-- would raise NameError immediately. UICs must come from "
+        "load_instrument_map()"
+    )
+
+
+def test_intraday_reversion_buy_path_has_stop_loss():
+    import inspect
+    import atos_runner
+    src = inspect.getsource(atos_runner.run_intraday_cycle)
+    assert "place_with_stop" in src, (
+        "run_intraday_cycle's buy path must attach an atomic broker-side "
+        "stop-loss via saxo_order.place_with_stop, matching the daily "
+        "run_us_reversion path -- an unprotected intraday entry can run "
+        "with zero downside protection until the next scan"
+    )
+    assert "entry_oid is None" in src, (
+        "a rejected entry order must not fall through to db.insert_trade() "
+        "-- that would record a DB row for a position that was never "
+        "actually opened"
+    )
+
+
+def test_numpy_import_present_for_rsi_sma20_helper():
+    import atos_runner
+    assert hasattr(atos_runner, "np"), (
+        "np.nan is used inside run_us_reversion's _rsi_sma20() helper but "
+        "numpy was never imported at module scope -- this silently killed "
+        "signal-table logging for every scanned ticker with a NameError "
+        "caught by a broad except block"
+    )
+
+
+_run("atos_runner: no nonexistent saxo_client.place_order() calls remain", test_no_nonexistent_place_order_calls_remain)
+_run("atos_runner: no nonexistent db.record_trade() calls remain", test_no_nonexistent_db_record_trade_calls_remain)
+_run("atos_runner: no undefined _get_uic() helper calls remain", test_no_undefined_get_uic_helper_calls_remain)
+_run("atos_runner: intraday reversion buy path has atomic stop-loss + rejection guard", test_intraday_reversion_buy_path_has_stop_loss)
+_run("atos_runner: numpy imported at module scope for RSI helper", test_numpy_import_present_for_rsi_sma20_helper)
 
 
 # ═══════════════════════════════════════════════════════════════════════

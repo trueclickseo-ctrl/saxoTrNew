@@ -28,6 +28,7 @@ import sys
 import json
 import ftplib
 import subprocess
+import numpy as np
 from datetime import datetime, date
 
 
@@ -1570,7 +1571,7 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
             uic = imap.get(ticker, {}).get("uic")
             if uic and sh > 0:
                 try:
-                    saxo_client.place_order(uic=uic, side="Sell", qty=sh, asset_type="Stock")
+                    saxo_client.place_market_order(uic, "Stock", "Sell", sh)
                     comm_exit = commission_sek(sh, sh * cur_price * fx_usd)
                     pnl_sek = (cur_price - trade.get("entry_price", 0)) * sh * fx_usd - comm_exit
                     db.close_trade(trade["id"], exit_price=cur_price,
@@ -1675,7 +1676,25 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
               f"vol={cand['vol_ratio']}x | {shares} shares @ ${price:.2f} "
               f"(~{cost_sek:,.0f} SEK) [US Reversion sleeve]")
         try:
-            saxo_client.place_order(uic=uic, side="Buy", qty=shares, asset_type="Stock")
+            # This used to call the nonexistent saxo_client.place_order() --
+            # confirmed live 2026-08-21: the strategy's first-ever real
+            # candidate (ROST) failed with "module 'saxo_client' has no
+            # attribute 'place_order'". Fixed to the real function, and
+            # attached an atomic broker-side stop-loss the same way US Blend
+            # was fixed earlier this session -- this path previously
+            # hardcoded stop_price=0 in the DB record, meaning even a
+            # successful order would have sat with no protection at all.
+            stop_p = round(price * (1 - USR.STOP_PCT), 2)
+            entry_oid, stop_oid, _ = saxo_order.place_with_stop(
+                post_fn=saxo_client.post,
+                account_key=saxo_client.get_account_key(),
+                uic=uic, asset_type="Stock", amount=shares,
+                buy_sell="Buy", stop_price=stop_p,
+                label=f"US Reversion:{ticker}",
+            )
+            if entry_oid is None:
+                print(f"  {tag} buy {ticker} REJECTED — no position opened, no DB row recorded")
+                continue
             comm = commission_sek(shares, cost_sek)
             db.insert_trade({
                 "strategy": "US Reversion", "market_group": "US Equities",
@@ -1687,7 +1706,7 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
                 "d4_mean_revert": cand["rsi"],
                 "d5_volume": cand["vol_ratio"],
                 "d6_smart_money": 0, "d7_mom_quality": 0, "d8_regime": 0,
-                "stop_price": 0, "trailing_stop_high": price, "regime_at_entry": "reversion",
+                "stop_price": stop_p, "trailing_stop_high": price, "regime_at_entry": "reversion",
             })
             ordered_tickers.add(ticker)
             _append_trade_log(
@@ -1884,11 +1903,28 @@ def run_intraday_cycle():
     already_held   = {t.get("ticker") for t in rev_open_now}
     placed         = 0
 
+    # This loop previously called three nonexistent things: a module-level
+    # _get_uic() helper (never defined anywhere in this file), saxo_client's
+    # nonexistent place_order(), and db.record_trade() (the only record_trade
+    # in the codebase is atos/strategy_monitor.py's, a different class with a
+    # totally different signature). It would have raised NameError on the
+    # very first candidate, every single scan, since this function was
+    # written -- fixed to reuse the same instrument-map lookup, order
+    # placement (with atomic stop-loss), and db.insert_trade() schema
+    # already fixed in run_us_reversion() (the daily path) this session.
+    from atos import us_reversion as USR
+    imap = load_instrument_map()
+    today = date.today()
+
     for cand in candidates[:slots_free]:
         ticker = cand["ticker"]
         if ticker in already_held:
             continue
         price_usd = cand["price"]
+        uic = imap.get(ticker, {}).get("uic")
+        if not uic:
+            print(f"  {ticker}: no UIC in instrument_map — skip")
+            continue
         shares    = int(slot_sek / (price_usd * fx_usd))
         if shares < 1:
             print(f"  {ticker}: slot {slot_sek:,.0f} SEK too small for 1 share at ${price_usd:.2f}. Skip.")
@@ -1900,37 +1936,53 @@ def run_intraday_cycle():
               f"gap={cand['gap_pct']}%  intraday]")
 
         try:
-            uic = _get_uic(ticker, "US Equities")
-            if uic:
-                saxo_client.place_order(uic=uic, buy_sell="Buy", quantity=shares)
-                db.record_trade(
-                    strategy="US Reversion",
-                    market_group="US Equities",
-                    ticker=ticker,
-                    direction="BUY",
-                    entry_price=price_usd,
-                    shares=float(shares),
-                    commission_sek=commission_sek(value_sek),
-                )
-                _append_trade_log(
-                    strategy="US Reversion",
-                    action="BUY",
-                    ticker=ticker,
-                    shares=shares,
-                    price_usd=price_usd,
-                    value_sek=value_sek,
-                    pnl_sek=None,
-                    reason=f"intraday dip {cand['dip_pct']}%",
-                )
-                todays_actions.append({
-                    "action": "BUY", "ticker": ticker,
-                    "strategy": "US Reversion",
-                    "reason": f"intraday dip {cand['dip_pct']}%",
-                })
-                placed += 1
-                already_held.add(ticker)
-            else:
-                print(f"  {ticker}: no UIC found — skipping order")
+            stop_p = round(price_usd * (1 - USR.STOP_PCT), 2)
+            entry_oid, stop_oid, _ = saxo_order.place_with_stop(
+                post_fn=saxo_client.post,
+                account_key=saxo_client.get_account_key(),
+                uic=uic, asset_type="Stock", amount=shares,
+                buy_sell="Buy", stop_price=stop_p,
+                label=f"US Reversion:{ticker}",
+            )
+            if entry_oid is None:
+                print(f"  {ticker}: order REJECTED — no position opened, no DB row recorded")
+                continue
+            comm = commission_sek(shares, value_sek)
+            db.insert_trade({
+                "strategy": "US Reversion", "market_group": "US Equities",
+                "ticker": ticker, "direction": "BUY",
+                "entry_date": today.isoformat(), "entry_price": price_usd,
+                "shares": shares, "commission_sek": comm,
+                "entry_score": cand["score"], "d1_trend": 0, "d2_momentum": 0,
+                "d3_breakout": 0,
+                "d4_mean_revert": cand["rsi"],
+                "d5_volume": cand["vol_ratio"],
+                "d6_smart_money": 0, "d7_mom_quality": 0, "d8_regime": 0,
+                "stop_price": stop_p, "trailing_stop_high": price_usd, "regime_at_entry": "reversion",
+            })
+            _append_trade_log(
+                strategy="US Reversion",
+                action="BUY",
+                ticker=ticker,
+                shares=shares,
+                price_usd=price_usd,
+                value_sek=value_sek,
+                pnl_sek=None,
+                reason=f"intraday dip {cand['dip_pct']}%",
+            )
+            todays_actions.append({
+                "action": "BUY", "ticker": ticker,
+                "strategy": "US Reversion",
+                "reason": f"intraday dip {cand['dip_pct']}%",
+            })
+            notifier.notify_trade_executed(
+                side="BUY", ticker=ticker, shares=shares, price_usd=price_usd,
+                value_sek=value_sek, strategy="US Reversion",
+                account_balance_sek=get_total_equity(db.get_open_trades()),
+                reason=f"RSI {cand['rsi']:.1f} | Dip {cand['dip_pct']}% | Vol {cand['vol_ratio']}x | intraday",
+            )
+            placed += 1
+            already_held.add(ticker)
         except Exception as e:
             print(f"  {ticker}: order failed: {e}")
 
