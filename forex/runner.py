@@ -785,6 +785,35 @@ def _currency_ok(sym: str, direction: str, exposure: dict) -> bool:
             abs(new_quote) <= MAX_CURRENCY_EXPOSURE)
 
 
+def _opposing_strategy_holds(sym: str, direction: str, positions: dict) -> str | None:
+    """Return the strategy name already holding the OPPOSITE direction on
+    this exact symbol, or None if there's no conflict.
+
+    Each strategy's own generate_signals() call only ever sees ITS OWN open
+    positions (open_symbols is built with a per-strategy key prefix, see
+    the `prefix = f"{strat_name}:"` line above _run_entries) -- it has zero
+    visibility into what any of the other 9 strategies are doing on the
+    same pair. Found live 2026-08-22 (user spotted it on the dashboard):
+    NZDUSD held Long via donchian+pullback AND Short via bb+ml
+    simultaneously; same pattern on USDTHB and USDCZK. That combination has
+    no upside, ever -- it pays spread/commission on both legs while the net
+    directional exposure is smaller than either position alone, for zero
+    diversification benefit (unlike spreading risk across DIFFERENT pairs).
+    Same-DIRECTION stacking across strategies is deliberately left alone --
+    multiple strategies independently agreeing isn't inherently wrong, and
+    capping it would be a real risk-budget design decision, not a bug fix.
+    """
+    for key, pos in positions.items():
+        if ":" not in key:
+            continue
+        other_strat, other_sym = key.split(":", 1)
+        if other_sym != sym:
+            continue
+        if pos.get("direction", "Buy") != direction:
+            return other_strat
+    return None
+
+
 def _update_exposure(exposure: dict, sym: str, direction: str) -> None:
     """Update exposure dict in-place after a new position is opened."""
     base  = sym[:3]
@@ -1273,6 +1302,12 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         if not _currency_ok(sym, direction, exposure):
             logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] "
                         f"— currency exposure limit (max {MAX_CURRENCY_EXPOSURE})")
+            continue
+        opposing = _opposing_strategy_holds(sym, direction, positions)
+        if opposing is not None:
+            logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] "
+                        f"— {opposing} already holds the opposite direction on {sym}, "
+                        f"no upside to taking both sides")
             continue
         pair_info = get_pair(sym)
         uic       = pair_info["uic"]

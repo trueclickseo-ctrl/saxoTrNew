@@ -16,6 +16,9 @@ Covers:
                          "closes the whole position" bug
   5. strategy_london_breakout.py — _session_range() reads the HourUTC
                          column, not a meaningless RangeIndex
+  6. forex/runner.py    — _opposing_strategy_holds() blocks a new entry
+                         that would take the OPPOSITE side of a pair
+                         another strategy already holds
 
 Run:
     python test_2026_08_22_session_fixes.py
@@ -371,6 +374,57 @@ def test_gap_strategy_still_uses_hourutc_directly():
 _run("lbo: _session_range() reads HourUTC column on runner-shaped data", test_session_range_reads_hourutc_column_not_index)
 _run("lbo: generate_signals() fires on runner-shaped breakout data (was 0 forever)", test_generate_signals_fires_on_runner_shaped_data)
 _run("lbo: strategy_gap.py's HourUTC pattern (the reference this now matches)", test_gap_strategy_still_uses_hourutc_directly)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+section("6. forex/runner.py — blocks opposite-direction stacking on one pair")
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_opposing_direction_blocked():
+    """User found this live on the dashboard 2026-08-22: NZDUSD held Long
+    via donchian+pullback AND Short via bb+ml at the same time -- pure
+    waste, paying spread/commission on both legs for a smaller net
+    position than either leg alone, no diversification benefit."""
+    import forex.runner as runner
+    positions = {"donchian:NZDUSD": {"direction": "Buy"}}
+    opposing = runner._opposing_strategy_holds("NZDUSD", "Sell", positions)
+    assert opposing == "donchian", f"expected 'donchian' to be flagged, got {opposing}"
+
+
+def test_same_direction_not_blocked():
+    """Same-direction stacking is deliberately allowed -- multiple
+    strategies independently agreeing isn't a conflict."""
+    import forex.runner as runner
+    positions = {"donchian:NZDUSD": {"direction": "Buy"}}
+    opposing = runner._opposing_strategy_holds("NZDUSD", "Buy", positions)
+    assert opposing is None, f"same-direction entry should not be blocked, got {opposing}"
+
+
+def test_no_existing_position_not_blocked():
+    import forex.runner as runner
+    positions = {"donchian:NZDUSD": {"direction": "Buy"}}
+    opposing = runner._opposing_strategy_holds("EURUSD", "Sell", positions)
+    assert opposing is None, f"a pair with no existing position must never be blocked, got {opposing}"
+
+
+def test_multiple_opposing_strategies_flags_one():
+    """USDCZK/USDTHB-shaped case: several strategies on both sides of the
+    same pair -- just needs to correctly flag SOME conflicting strategy,
+    not enumerate all of them."""
+    import forex.runner as runner
+    positions = {
+        "ema:USDTHB": {"direction": "Sell"},
+        "rsi:USDTHB": {"direction": "Buy"},
+        "pullback:USDTHB": {"direction": "Sell"},
+    }
+    opposing = runner._opposing_strategy_holds("USDTHB", "Buy", positions)
+    assert opposing in ("ema", "pullback"), f"expected a Sell-holding strategy flagged, got {opposing}"
+
+
+_run("runner: opposite-direction entry on an already-held pair is blocked", test_opposing_direction_blocked)
+_run("runner: same-direction entry on an already-held pair is NOT blocked", test_same_direction_not_blocked)
+_run("runner: a pair with no existing position is never blocked", test_no_existing_position_not_blocked)
+_run("runner: multi-strategy opposite-direction conflict correctly flagged", test_multiple_opposing_strategies_flags_one)
 
 
 # ═══════════════════════════════════════════════════════════════════════
