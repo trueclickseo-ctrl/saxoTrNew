@@ -58,9 +58,13 @@ MODULE_TITLES = {
 }
 
 # Rotating color palette — enough distinct colors for any module's strategy
-# count without needing a hand-maintained per-strategy table.
-_PALETTE = ["#3fb950", "#58a6ff", "#f0883e", "#a371f7", "#d29922", "#79c0ff",
-            "#ff7b72", "#39d353", "#e3b341", "#f778ba", "#56d4dd", "#8b949e"]
+# count without needing a hand-maintained per-strategy table. Ordered so the
+# first 8 (the common case) hit 8 different hue families before any repeat
+# gets close to a prior one — the old palette put gap (#f0883e, orange) and
+# rsi (#d29922, amber/gold) next to each other in practice and they read as
+# the same color at line width, confirmed by the user 2026-08-22.
+_PALETTE = ["#3fb950", "#58a6ff", "#f85149", "#a371f7", "#39c5cf", "#ffa657",
+            "#f778ba", "#e3b341", "#7ee787", "#79c0ff", "#d2a8ff", "#8b949e"]
 
 
 def _fetch_closed_trades(module: str) -> list:
@@ -156,6 +160,7 @@ def generate(module: str, out_dir: str = CHARTS_DIR) -> str | None:
     colors = {s: _PALETTE[i % len(_PALETTE)] for i, s in enumerate(strategies)}
 
     today_dt = datetime.combine(today, datetime.min.time())
+    line_ends = []   # (strat, last_date, last_cum) — for end-of-line labels below
     for strat in strategies:
         days = sorted(daily_by_strat[strat].keys())
         if not days:
@@ -176,12 +181,42 @@ def generate(module: str, out_dir: str = CHARTS_DIR) -> str | None:
         n_open = open_counts.get(strat, 0)
         label = f"{strat} ({n_open} open, not in this line)" if n_open else strat
         ax1.plot(dates, cum, marker="o", markersize=4, label=label, color=colors[strat], linewidth=1.8)
+        line_ends.append((strat, dates[-1], cum[-1]))
 
     ax1.set_title(f"{title} — Cumulative REALIZED P&L per Strategy (through {today.isoformat()})",
                   color="#e6edf3", fontsize=13, pad=12)
     ax1.set_ylabel("Cumulative P&L (realized only)", color="#c9d1d9")
     ax1.axhline(0, color="#484f58", linewidth=0.8)
     ax1.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
+
+    # Name each line directly at its end point, not just in the legend box —
+    # much faster to read which line is which without cross-referencing a
+    # separate key, especially once several lines cluster in the same P&L
+    # range. Nudge apart any labels that would otherwise overlap vertically
+    # (common when two strategies end near the same cumulative P&L).
+    if line_ends:
+        ax1.margins(x=0.12)   # reserve room on the right for the end-of-line labels below
+        y_lo, y_hi = ax1.get_ylim()
+        y_range = (y_hi - y_lo) or 1.0
+        min_gap = y_range * 0.045
+        line_ends.sort(key=lambda t: t[2])   # ascending by final P&L
+        placed_y = []
+        for strat, last_date, last_cum in line_ends:
+            y = last_cum
+            if placed_y and y - placed_y[-1] < min_gap:
+                y = placed_y[-1] + min_gap
+            placed_y.append(y)
+            if y != last_cum:
+                # Label had to be nudged — draw a thin leader line from the
+                # real data point to the adjusted label position so it's
+                # still clear which line the name belongs to.
+                ax1.plot([last_date, last_date], [last_cum, y],
+                        color=colors[strat], linewidth=0.6, alpha=0.5, zorder=1)
+            ax1.annotate(strat, xy=(last_date, y), xytext=(6, 0),
+                        textcoords="offset points", va="center", ha="left",
+                        color=colors[strat], fontsize=8.5, fontweight="bold",
+                        annotation_clip=False)
+
     ax1.legend(loc="upper left", facecolor="#161b22", edgecolor="#30363d",
               labelcolor="#c9d1d9", fontsize=8, ncol=2)
     ax1.text(0.5, -0.11, "A flat line means no NEW closed trades — it does not mean no open-position "
