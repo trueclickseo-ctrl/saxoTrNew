@@ -197,24 +197,32 @@ def place_with_stop(
             # as orphaned SELL/BUY orders that could fill later and open an
             # unintended position from nothing.
             #
-            # A brief settle wait + cancelling by live orderId (rather than
-            # the local leg objects directly) matters here: cancelling
+            # A settle wait + cancelling by live orderId (rather than the
+            # local leg objects directly) matters here: cancelling
             # immediately after the rejection is detected missed one of the
             # two legs in testing (2026-08-21) -- ib_async's local state for
             # a just-submitted child order isn't guaranteed to have caught up
-            # yet, so a cancel sent against it can silently no-op.
-            ib.sleep(1.0)
+            # yet, so a cancel sent against it can silently no-op. A single
+            # 1s wait wasn't reliably enough (retested same day, still
+            # missed a leg) -- retry across a few rounds instead of trusting
+            # one attempt.
             child_ids = {stop_leg.orderId, tp_leg.orderId if tp_leg is not None else None} - {None}
-            still_open = [t for t in ib.openTrades() if t.order.orderId in child_ids]
-            for t in still_open:
-                try:
-                    ib.cancelOrder(t.order)
-                except Exception as cancel_exc:
-                    logger.warning(
-                        "[bracket] %s could not cancel orphaned leg orderId=%s: %s -- "
-                        "check this manually, it may still be live",
-                        label, t.order.orderId, cancel_exc,
-                    )
+            for attempt in range(4):
+                ib.sleep(1.0)
+                still_open = [t for t in ib.openTrades() if t.order.orderId in child_ids]
+                if not still_open:
+                    break
+                for t in still_open:
+                    try:
+                        ib.cancelOrder(t.order)
+                    except Exception:
+                        pass
+            else:
+                logger.warning(
+                    "[bracket] %s could not confirm both orphaned legs cancelled after "
+                    "%d attempts -- check open orders for conId manually",
+                    label, attempt + 1,
+                )
             reasons = [e.message for e in entry_trade.log if e.message]
             raise RuntimeError(
                 f"Entry order rejected (status={entry_trade.orderStatus.status}): "
