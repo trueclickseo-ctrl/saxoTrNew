@@ -63,26 +63,35 @@ TASK_NEVER_RUN = 267011
 REALERT_AFTER_HOURS = 4
 
 # ── Registry: Windows Task Scheduler-backed tasks ────────────────────────────
-# name              -> (task_name_in_windows, log_file, grace_minutes)
+# name              -> (task_name_in_windows, log_file, grace_minutes, max_first_run_wait_hours)
 # grace_minutes: how long after LastRunTime the log is allowed to lag before
 # we call it stale (covers a slow run that's still legitimately finishing).
+# max_first_run_wait_hours: for a task that has NEVER run yet (LastRunTime is
+# the "has not run" sentinel), how long is it allowed to wait before its
+# NextRunTime looking further out than this is itself treated as a failure.
+# Without this, a task misconfigured to fire far less often than intended
+# (e.g. weekly when it should be daily — exactly what happened to PnL Sync,
+# 2026-08-21) is indistinguishable from "legitimately new, hasn't had its
+# first chance yet" and the watchdog stays silent on it forever. 30h covers
+# daily tasks with buffer; 78h covers weekday-only tasks over a weekend gap;
+# 174h covers the two genuinely-weekly tasks (7 days + buffer).
 WINDOWS_TASKS = {
-    "Forex Daily Run":        ("ATOS Forex Daily Run",        "forex_scheduler.log",   20),
-    "Forex Exit Check":       ("ATOS Forex Exit Check",       "forex_scheduler.log",   20),
-    "Forex London Run":       ("ATOS Forex London Run",       "forex_scheduler.log",   20),
-    "Forex Gap London":       ("ATOS Forex Gap London",       "forex_scheduler.log",   20),
-    "Forex Gap NewYork":      ("ATOS Forex Gap NewYork",      "forex_scheduler.log",   20),
-    "Forex Gap Monday Early": ("ATOS Forex Gap Monday Early", "forex_scheduler.log",   20),
-    "Forex Gap Fill":         ("ATOS Forex Gap Fill",         "forex_scheduler.log",   20),
-    "Futures Daily Run":      ("ATOS Futures Daily Run",      "futures_scheduler.log", 30),
-    "ETF Daily Run":          ("ATOS ETF Daily Run",          "etf_scheduler.log",     20),
-    "Stocks Daily Run":       ("ATOS Daily Run",              "engine_TODAY.log",      15),  # special-cased below
-    "Intraday Monitor":       ("ATOS Intraday Monitor",       "intraday_monitor.log",  15),
-    "PnL Sync":               ("ATOS PnL Sync",               "pnl_sync.log",          10),
-    "LBO London Open":        ("ATOS LBO London Open",        "lbo_london.log",        20),
-    "LBO NY Open":             ("ATOS LBO NY Open",            "lbo_ny.log",            20),
-    "LBO Force Close":        ("ATOS LBO Force Close",        "lbo_close.log",         20),
-    "Daily Chart":            ("ATOS Daily Chart",            "daily_chart_scheduler.log", 15),
+    "Forex Daily Run":        ("ATOS Forex Daily Run",        "forex_scheduler.log",   20, 30),
+    "Forex Exit Check":       ("ATOS Forex Exit Check",       "forex_scheduler.log",   20, 30),
+    "Forex London Run":       ("ATOS Forex London Run",       "forex_scheduler.log",   20, 30),
+    "Forex Gap London":       ("ATOS Forex Gap London",       "forex_scheduler.log",   20, 78),
+    "Forex Gap NewYork":      ("ATOS Forex Gap NewYork",      "forex_scheduler.log",   20, 78),
+    "Forex Gap Monday Early": ("ATOS Forex Gap Monday Early", "forex_scheduler.log",   20, 174),
+    "Forex Gap Fill":         ("ATOS Forex Gap Fill",         "forex_scheduler.log",   20, 174),
+    "Futures Daily Run":      ("ATOS Futures Daily Run",      "futures_scheduler.log", 30, 30),
+    "ETF Daily Run":          ("ATOS ETF Daily Run",          "etf_scheduler.log",     20, 30),
+    "Stocks Daily Run":       ("ATOS Daily Run",              "engine_TODAY.log",      15, 30),  # special-cased below
+    "Intraday Monitor":       ("ATOS Intraday Monitor",       "intraday_monitor.log",  15, 30),
+    "PnL Sync":               ("ATOS PnL Sync",               "pnl_sync.log",          10, 30),
+    "LBO London Open":        ("ATOS LBO London Open",        "lbo_london.log",        20, 78),
+    "LBO NY Open":             ("ATOS LBO NY Open",            "lbo_ny.log",            20, 78),
+    "LBO Force Close":        ("ATOS LBO Force Close",        "lbo_close.log",         20, 30),
+    "Daily Chart":            ("ATOS Daily Chart",            "daily_chart_scheduler.log", 15, 30),
 }
 
 # ── Registry: Claude-native scheduled tasks (no Windows entry) ──────────────
@@ -110,14 +119,27 @@ def _save_state(state: dict) -> None:
     os.replace(tmp, STATE_FILE)
 
 
+def _parse_ps_date(raw) -> datetime | None:
+    if not raw or not isinstance(raw, str):
+        return None
+    if raw.startswith("/Date("):
+        ms = int(raw[6:raw.index(")")])
+        return datetime.fromtimestamp(ms / 1000)
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:
+        return None
+
+
 def _query_task_info(task_name: str) -> dict | None:
-    """Return {'LastRunTime': datetime|None, 'LastTaskResult': int, 'Enabled': bool} or None if not found."""
+    """Return {'LastRunTime': datetime|None, 'NextRunTime': datetime|None,
+    'LastTaskResult': int, 'Enabled': bool} or None if not found."""
     ps_cmd = (
         f"$t = Get-ScheduledTask -TaskName '{task_name}' -ErrorAction SilentlyContinue; "
         f"if (-not $t) {{ Write-Output 'NOTFOUND'; exit }} "
         f"$i = Get-ScheduledTaskInfo -TaskName '{task_name}'; "
-        f"[PSCustomObject]@{{LastRunTime=$i.LastRunTime; LastTaskResult=$i.LastTaskResult; "
-        f"State=$t.State.ToString()}} | ConvertTo-Json -Compress"
+        f"[PSCustomObject]@{{LastRunTime=$i.LastRunTime; NextRunTime=$i.NextRunTime; "
+        f"LastTaskResult=$i.LastTaskResult; State=$t.State.ToString()}} | ConvertTo-Json -Compress"
     )
     try:
         out = subprocess.run(
@@ -134,21 +156,9 @@ def _query_task_info(task_name: str) -> dict | None:
     except Exception:
         return {"error": f"could not parse task info: {out[:200]}"}
 
-    last_run = None
-    if data.get("LastRunTime"):
-        # PowerShell ConvertTo-Json emits .NET dates as "/Date(ms)/ " or ISO — handle both
-        raw = data["LastRunTime"]
-        if isinstance(raw, str) and raw.startswith("/Date("):
-            ms = int(raw[6:raw.index(")")])
-            last_run = datetime.fromtimestamp(ms / 1000)
-        elif isinstance(raw, str):
-            try:
-                last_run = datetime.fromisoformat(raw.replace("Z", "+00:00")).replace(tzinfo=None)
-            except Exception:
-                last_run = None
-
     return {
-        "last_run": last_run,
+        "last_run": _parse_ps_date(data.get("LastRunTime")),
+        "next_run": _parse_ps_date(data.get("NextRunTime")),
         "last_result": data.get("LastTaskResult"),
         "state": data.get("State", "?"),
     }
@@ -165,7 +175,8 @@ def _remediation(task_name: str) -> str:
     return f"Run manually: Start-ScheduledTask -TaskName \"{task_name}\""
 
 
-def _check_windows_task(name: str, task_name: str, log_file: str, grace_min: int) -> str | None:
+def _check_windows_task(name: str, task_name: str, log_file: str, grace_min: int,
+                        max_first_run_wait_hours: int = 30) -> str | None:
     """Return a failure description (with a manual-fire remediation command), or None if healthy."""
     if log_file == "engine_TODAY.log":
         today = datetime.now().strftime("%Y-%m-%d")
@@ -178,15 +189,26 @@ def _check_windows_task(name: str, task_name: str, log_file: str, grace_min: int
         return f"could not query '{task_name}': {info['error']}"
 
     last_run = info["last_run"]
+    next_run = info.get("next_run")
     result   = info["last_result"]
 
     if info["state"] == "Disabled":
         return None  # deliberately disabled — not a failure
 
-    if last_run is None:
-        return None  # never scheduled to run yet, nothing to check
-
     now = datetime.now()
+
+    if last_run is None:
+        # Never run yet — legitimate for a brand-new task, but if its own
+        # NextRunTime is further out than this task is supposed to tolerate,
+        # the trigger itself is very likely misconfigured (e.g. weekly when
+        # it should be daily) rather than genuinely "hasn't had its first
+        # chance yet." That combination silently hid the PnL Sync bug.
+        if next_run and next_run - now > timedelta(hours=max_first_run_wait_hours):
+            return (f"'{task_name}' has never run and its own NextRunTime "
+                    f"({next_run:%Y-%m-%d %H:%M}) is more than {max_first_run_wait_hours}h "
+                    f"away — the trigger is very likely misconfigured (wrong recurrence, e.g. "
+                    f"weekly instead of daily). {_remediation(task_name)}")
+        return None
     # Only judge tasks that fired recently enough that we'd expect fresh output by now.
     if now - last_run > timedelta(hours=24):
         return None  # last run too long ago to be "this check's" concern
@@ -311,8 +333,8 @@ def main() -> None:
     unhealthy      = []   # every currently-failing task, regardless of dedup
     now_iso        = datetime.now().isoformat()
 
-    for name, (task_name, log_file, grace) in WINDOWS_TASKS.items():
-        result = _check_windows_task(name, task_name, log_file, grace)
+    for name, (task_name, log_file, grace, max_wait) in WINDOWS_TASKS.items():
+        result = _check_windows_task(name, task_name, log_file, grace, max_wait)
         if args.verbose:
             print(f"[{'FAIL' if result else 'ok  '}] {name}: {result or 'healthy'}")
         if result:

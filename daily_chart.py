@@ -84,8 +84,8 @@ def generate(module: str, out_dir: str = CHARTS_DIR) -> str | None:
         d     = t["timestamp_close"][:10]
         daily_by_strat[strat][d] += t["realized_pnl"] or 0.0
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(13, 10), facecolor="#0d1117")
-    for ax in (ax1, ax2):
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(13, 15), facecolor="#0d1117")
+    for ax in (ax1, ax2, ax3):
         ax.set_facecolor("#0d1117")
         ax.tick_params(colors="#8b949e")
         for spine in ax.spines.values():
@@ -95,6 +95,7 @@ def generate(module: str, out_dir: str = CHARTS_DIR) -> str | None:
     strategies = sorted(daily_by_strat.keys())
     colors = {s: _PALETTE[i % len(_PALETTE)] for i, s in enumerate(strategies)}
 
+    today_dt = datetime.combine(today, datetime.min.time())
     for strat in strategies:
         days = sorted(daily_by_strat[strat].keys())
         if not days:
@@ -103,6 +104,14 @@ def generate(module: str, out_dir: str = CHARTS_DIR) -> str | None:
         cum, running = [], 0.0
         for d in days:
             running += daily_by_strat[strat][d]
+            cum.append(running)
+        # Extend flat to today if this strategy's last close wasn't today —
+        # otherwise the line just stops mid-chart the moment a strategy goes
+        # quiet, which reads as "data is missing" rather than "still at this
+        # level, nothing has closed since." A real gap in history is a much
+        # bigger deal than a strategy that simply hasn't traded recently.
+        if dates[-1] < today_dt:
+            dates.append(today_dt)
             cum.append(running)
         ax1.plot(dates, cum, marker="o", markersize=4, label=strat, color=colors[strat], linewidth=1.8)
 
@@ -125,6 +134,29 @@ def generate(module: str, out_dir: str = CHARTS_DIR) -> str | None:
     ax2.set_title(f"Today's Realized P&L per Strategy ({today_str})", color="#e6edf3", fontsize=13, pad=12)
     ax2.set_ylabel("P&L", color="#c9d1d9")
     plt.setp(ax2.get_xticklabels(), rotation=30, ha="right", color="#c9d1d9")
+
+    # ── Panel 3: total realized P&L by symbol/pair ("currency wise" for forex,
+    # per-ticker for stocks/ETF, per-market for futures) — every module's
+    # trades table uses the same "symbol" column, so this works uniformly.
+    pair_stats = pnl_tracker.get_pair_summary(module)
+    if pair_stats:
+        pair_stats = sorted(pair_stats, key=lambda r: r["total_pnl"], reverse=True)
+        p_labels = [r["symbol"] for r in pair_stats]
+        p_values = [r["total_pnl"] for r in pair_stats]
+        p_colors = ["#3fb950" if v >= 0 else "#f85149" for v in p_values]
+        y_pos = range(len(p_labels))
+        ax3.barh(list(y_pos), p_values, color=p_colors)
+        ax3.set_yticks(list(y_pos))
+        ax3.set_yticklabels(p_labels, color="#c9d1d9", fontsize=9)
+        ax3.invert_yaxis()   # best at top
+        ax3.axvline(0, color="#484f58", linewidth=0.8)
+        ax3.set_title(f"Total Realized P&L by Symbol (through {today.isoformat()})",
+                      color="#e6edf3", fontsize=13, pad=12)
+        ax3.set_xlabel("Total P&L", color="#c9d1d9")
+    else:
+        ax3.text(0.5, 0.5, "No closed trades yet", ha="center", va="center",
+                 color="#8b949e", fontsize=12, transform=ax3.transAxes)
+        ax3.set_title("Total Realized P&L by Symbol", color="#e6edf3", fontsize=13, pad=12)
 
     fig.tight_layout()
 

@@ -195,7 +195,7 @@ when the next scheduled cycle happens to run.
 | Task | Fires | Command | Notes |
 |---|---|---|---|
 | `ATOS Intraday Monitor` | 18:25 PKT, daily | `python intraday_monitor.py` | Stop-loss / position monitor. |
-| `ATOS PnL Sync` | 23:00 PKT, daily | `run_pnl_sync.bat` → `pnl_tracker.py --sync` | Syncs open/closed trades from all module state files into `data/pnl_ledger.db`. |
+| `ATOS PnL Sync` | 23:00 PKT, daily | `run_pnl_sync.bat` → `pnl_tracker.py --sync` | Syncs open/closed trades from all module state files into `data/pnl_ledger.db`. **Was actually configured as a weekly Sunday-only trigger since creation (2026-08-19) — never fired even once, silently freezing stock P&L data at 2026-08-14. Fixed to real daily 2026-08-21 and backfilled.** |
 | `ATOS Scheduler Watchdog` | every 30 min | `python scheduler_watchdog.py` | See §6. |
 | `ATOS Daily Chart` | 23:15 PKT, daily | `run_daily_chart.bat` → `daily_chart.py` | **Added 2026-08-21.** Generates a 2-panel per-strategy P&L chart (cumulative + today's) for EACH of the 4 modules **separately** — stock/etf/futures/forex each get their own independent chart file, never combined — from `data/pnl_ledger.db`. Fires 15 min after `ATOS PnL Sync` so every module's data is fully synced first. Saves `data/charts/{module}_strategy_YYYY-MM-DD.png` (permanent daily record) and `data/charts/{module}_strategy_latest.png` (always-current), then emails all of today's charts as inline attachments via `config/email.json` (one section per module in the email body). Skips a module gracefully (chart and email) if it has no closed trades yet — ETF/futures did on the day this was added, will start appearing automatically once they have their first closed trade. |
 | ~~`ATOS Dashboard Start`~~ | ~~18:30 PKT~~ | ~~missing path~~ | Disabled 2026-08-20 — same missing-path problem as Daily Scan. Non-financial, lower urgency. |
@@ -225,6 +225,16 @@ code, rather than false-alarming the moment it saw any non-zero code. Every
 alert email now includes the exact `Start-ScheduledTask` command to fire
 the task manually right away, since a missed run's window is otherwise gone
 until the next scheduled occurrence.
+
+**Also fixed 2026-08-21**: a task that has genuinely never run was
+previously treated as "nothing to check" unconditionally — which is exactly
+how the PnL Sync misconfiguration (weekly instead of daily) went
+undetected: "never run yet" looked identical to "legitimately new, hasn't
+had its first chance." Now checks the task's own `NextRunTime` against a
+per-task `max_first_run_wait_hours` (30h for daily tasks, 78h for
+weekday-only, 174h for the two genuinely-weekly ones) — if a never-run
+task's next fire is further out than that, the trigger itself is flagged as
+likely misconfigured.
 
 The Windows Task Scheduler operational event log (`Microsoft-Windows-
 TaskScheduler/Operational`) was disabled by default and is now enabled
