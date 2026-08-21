@@ -123,6 +123,37 @@ formulation (`secType="CFD", symbol="EUR.USD"`) does *not* work — returns
    less affected. Backtested edges would need re-validating against CFD
    cost assumptions before trusting them.
 
+**Tax-wrapper question — settled 2026-08-21: there is no Swedish
+tax-wrapped account that can hold forex.**
+- **ISK**: only instruments admitted to trading on a regulated market or
+  trading platform. Pure currency positions are treated as speculative
+  trading and fall outside the ISK framework; derivatives/CFDs likewise
+  excluded. Currency *exchange to settle a securities trade* is fine and
+  automatic — that's settlement, not an FX position.
+- **KF (kapitalförsäkring)**: more permissive than ISK for some
+  derivatives (warrants, turbo warrants, Mini Futures, certain
+  certificates) but **CFDs and forex are excluded from KF too**. Also
+  moot here: IBKR does not offer KF (it requires a Swedish insurance
+  company as legal owner; IBKR Sweden offers only ISK + general
+  investment accounts).
+
+Consequence: **forex requires a taxable account and K4 reporting at any
+Swedish broker, regardless of instrument or venue.** The ISK/K4
+motivation behind this migration only ever applied to stocks and ETFs —
+which are migrated and working. Tax is therefore *neutral* between Saxo
+and IBKR for forex, leaving execution quality as the only real
+differentiator.
+
+*Possible future angle:* exchange-listed **currency futures** (CME
+6E/6J/6B/6A/6C/6N/6S or Micro M6E etc.) are regulated-market instruments,
+and IBKR now supports futures inside Swedish ISKs — the only route that
+could put FX exposure in a tax wrapper. Not a port of the current
+strategy though: contract sizes are large relative to the books here
+(M6E ≈ 12,500 EUR ≈ 140,000 SEK notional vs the 15,000 SEK LBO book),
+coverage is ~7 USD-crosses rather than 34 pairs, and it needs the same
+contract-roll logic `futures/runner.py` is parked on. Would be a new,
+smaller strategy, not a migration.
+
 **Options, honestly stated:**
 - **Keep forex on Saxo** (recommended default) — spot FX there already
   works and is what the strategies were validated on; migrate only the
