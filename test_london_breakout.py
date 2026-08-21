@@ -75,8 +75,14 @@ def _make_h1_df_with_session(asian_high, asian_low, london_close,
     idx = pd.date_range(end=now_utc, periods=n, freq="h", tz="UTC")
     base = (asian_high + asian_low) / 2
     close = np.full(n, base)
-    high  = np.full(n, base + 0.0005)
-    low   = np.full(n, base - 0.0005)
+    # Spread scales with pip size (5 pips/bar) -- a hardcoded 0.0005 was
+    # calibrated for 4-5dp pairs (pip=0.0001) and produced an ATR far below
+    # the strategy's real 5-pip ATR_CONFIRM minimum for 2dp JPY pairs
+    # (pip=0.01), silently failing that gate rather than testing a
+    # genuine breakout scenario.
+    bar_spread = pip * 5
+    high  = np.full(n, base + bar_spread)
+    low   = np.full(n, base - bar_spread)
     df = pd.DataFrame({"Open": close, "High": high, "Low": low, "Close": close}, index=idx)
 
     # Stamp explicit Asian session hi/lo on hour-0 to hour-6 bars
@@ -86,9 +92,10 @@ def _make_h1_df_with_session(asian_high, asian_low, london_close,
             df.at[ts, "Low"]  = asian_low
 
     # Latest bar gets the breakout close
+    breakout_spread = pip * 2
     df.at[idx[-1], "Close"] = london_close
-    df.at[idx[-1], "High"]  = london_close + 0.0002
-    df.at[idx[-1], "Low"]   = london_close - 0.0002
+    df.at[idx[-1], "High"]  = london_close + breakout_spread
+    df.at[idx[-1], "Low"]   = london_close - breakout_spread
     return df
 
 
@@ -196,8 +203,17 @@ def _signals_in_session(session: str, direction_expected: str,
     df = _make_h1_df_with_session(asian_high, asian_low, breakout_close)
     h1_data   = {"EURUSD": df}
     pair_meta = {"EURUSD": {"pip_size": 0.0001}}
+    # generate_signals() requires equity_by_pair (quote-currency-converted
+    # equity) to size a position at all — without it every signal is
+    # skipped ("no quote-currency equity supplied"), which is exactly what
+    # this test was silently hitting before this fix: it looked like
+    # generate_signals() produced no signals, but it was actually the
+    # sizing step swallowing a real signal. forex/runner.py always supplies
+    # this in production (via _equity_in_quote per pair) — match that here
+    # instead of testing an unrealistic call shape.
     sigs = lbo.generate_signals(h1_data, pair_meta, set(), session=session,
-                                account_equity=account_equity)
+                                account_equity=account_equity,
+                                equity_by_pair={"EURUSD": account_equity})
     return sigs
 
 
@@ -249,7 +265,8 @@ def test_func_ny_bull_breakout():
     h1_data   = {"EURUSD": df}
     pair_meta = {"EURUSD": {"pip_size": 0.0001}}
     sigs = lbo.generate_signals(h1_data, pair_meta, set(), session="ny",
-                                account_equity=15_000.0)
+                                account_equity=15_000.0,
+                                equity_by_pair={"EURUSD": 15_000.0})
     if not sigs:
         return "Expected signal in NY session"
     if sigs[0]["direction"] != "Buy":
@@ -311,8 +328,15 @@ def test_func_jpy_pair_pip_size():
     df = _make_h1_df_with_session(215.50, 215.00, 215.60, pip=0.01)
     h1_data   = {"GBPJPY": df}
     pair_meta = {"GBPJPY": {"pip_size": 0.01}}
+    # eq_for_pair must be in the PAIR's quote currency (JPY here), not a flat
+    # reuse of the SEK/EUR-scale account_equity number — with the real
+    # 0.6-JPY stop distance in this scenario, a GBP/EUR-scale number like
+    # 15_000 produces units far below MIN_UNITS (1,000) and the signal gets
+    # silently skipped, which is what this test was hitting even after the
+    # HourUTC fix. ~15_000 equity converted to JPY at a realistic ~190 rate.
     sigs = lbo.generate_signals(h1_data, pair_meta, set(), session="london",
-                                account_equity=15_000.0)
+                                account_equity=15_000.0,
+                                equity_by_pair={"GBPJPY": 2_850_000.0})
     if not sigs:
         return "Expected BUY signal for GBPJPY breakout"
     if sigs[0]["range_pips"] < 10:
@@ -329,7 +353,8 @@ def test_func_multiple_pairs_sorted_by_score():
     h1_data  = {"EURUSD": df_tight, "GBPUSD": df_wide}
     pair_meta = {"EURUSD": {"pip_size": 0.0001}, "GBPUSD": {"pip_size": 0.0001}}
     sigs = lbo.generate_signals(h1_data, pair_meta, set(), session="london",
-                                account_equity=15_000.0)
+                                account_equity=15_000.0,
+                                equity_by_pair={"EURUSD": 15_000.0, "GBPUSD": 15_000.0})
     if len(sigs) < 2:
         return f"Expected 2 signals, got {len(sigs)}"
     if sigs[0]["score"] < sigs[1]["score"]:
@@ -589,8 +614,8 @@ def test_bb_registered_in_runner():
             return "london_breakout not in runner.STRATEGIES"
         if "london_breakout" not in runner.SLOTS_PER_STRATEGY:
             return "london_breakout not in runner.SLOTS_PER_STRATEGY"
-        if runner.SLOTS_PER_STRATEGY["london_breakout"] != 7:
-            return f"SLOTS should be 7, got {runner.SLOTS_PER_STRATEGY['london_breakout']}"
+        if runner.SLOTS_PER_STRATEGY["london_breakout"] != 28:
+            return f"SLOTS should be 28 (one per pair, raised from 7->10->28 on 2026-08-21), got {runner.SLOTS_PER_STRATEGY['london_breakout']}"
     except Exception as e:
         return f"Runner import failed: {e}"
 
@@ -617,16 +642,23 @@ def test_bb_needs_h1_data_flag():
         return "NEEDS_H1_DATA must be True"
 
 
-def test_bb_pairs_are_7():
-    if len(lbo.PAIRS) != 7:
-        return f"Expected 7 pairs, got {len(lbo.PAIRS)}: {lbo.PAIRS}"
+def test_bb_pairs_are_28():
+    # Raised 7->28 on 2026-08-21: all of the main forex universe except the
+    # 6 illiquid Scandi/exotic crosses (wider spreads don't suit LBO's tight
+    # 2:1 RR day-trade structure) -- see forex_london_breakout memory.
+    if len(lbo.PAIRS) != 28:
+        return f"Expected 28 pairs, got {len(lbo.PAIRS)}: {lbo.PAIRS}"
 
 
 def test_bb_pairs_are_valid_forex():
-    valid = {"EURUSD", "GBPUSD", "USDJPY", "EURGBP",
-             "GBPJPY", "AUDUSD", "USDCAD"}
+    valid = {
+        "AUDCAD", "AUDCHF", "AUDJPY", "AUDNZD", "AUDUSD", "CADCHF", "CADJPY",
+        "CHFJPY", "EURAUD", "EURCAD", "EURCHF", "EURGBP", "EURJPY", "EURNZD",
+        "EURUSD", "GBPAUD", "GBPCAD", "GBPCHF", "GBPJPY", "GBPNZD", "GBPUSD",
+        "NZDCAD", "NZDCHF", "NZDJPY", "NZDUSD", "USDCAD", "USDCHF", "USDJPY",
+    }
     if lbo.PAIRS != valid:
-        return f"Unexpected PAIRS: {lbo.PAIRS}"
+        return f"Unexpected PAIRS: {lbo.PAIRS.symmetric_difference(valid)}"
 
 
 def test_bb_session_close_is_20():
@@ -818,7 +850,7 @@ def _all_tests():
         ("BB: registered in runner.STRATEGIES",                test_bb_registered_in_runner),
         ("BB: in DAY_TRADE_STRATEGIES (heat bypass)",          test_bb_day_trade_strategies_set),
         ("BB: NEEDS_H1_DATA = True",                           test_bb_needs_h1_data_flag),
-        ("BB: PAIRS count is 7",                               test_bb_pairs_are_7),
+        ("BB: PAIRS count is 28",                              test_bb_pairs_are_28),
         ("BB: PAIRS set is correct 7 majors",                  test_bb_pairs_are_valid_forex),
         ("BB: SESSION_CLOSE = 20 (UTC)",                       test_bb_session_close_is_20),
         ("BB: London window 07:00-10:00 UTC",                  test_bb_london_window_correct),
