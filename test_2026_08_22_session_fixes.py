@@ -942,30 +942,31 @@ def test_futures_run_daily_skips_weekend():
     )
 
 
-def test_forex_saturday_gated_but_sunday_not():
+def test_forex_never_weekday_gated():
+    # Reverted 2026-08-22 per explicit user direction: forex must keep
+    # scanning all 7 days, even Sat/Sun, rather than risk ever missing a
+    # signal -- a scan against a genuinely closed market just finds
+    # nothing (harmless); skipping outright is the riskier failure mode
+    # if a weekend-boundary assumption is ever wrong. Unlike stocks/ETF/
+    # futures (unconditionally closed weekends, gated on purpose), forex
+    # must have NO weekday gate anywhere in these two functions.
     import inspect
     import forex.runner as forex_runner
     daily_src = inspect.getsource(forex_runner.run_daily)
     exits_src = inspect.getsource(forex_runner.run_exits_only)
-    assert "weekday() == 5" in daily_src, (
-        "FX run_daily() must skip Saturday -- FX is closed all day "
-        "Saturday regardless of which scheduled trigger calls it"
-    )
-    assert "weekday() == 5" in exits_src, (
-        "FX run_exits_only() must also skip Saturday"
-    )
-    assert "weekday() >= 5" not in daily_src, (
-        "FX must NOT be gated out of Sunday entirely -- the gap-fill "
-        "strategy and Monday-early triggers specifically trade the "
-        "Sunday evening reopen; only Saturday is unconditionally closed"
-    )
+    for label, src in [("run_daily", daily_src), ("run_exits_only", exits_src)]:
+        assert "weekday()" not in src, (
+            f"FX {label}() must not skip any day of the week -- explicit "
+            f"user direction 2026-08-22 is to keep scanning 7 days/week "
+            f"so no trade or signal is ever missed"
+        )
 
 
 _run("atos_runner: run_cycle skips weekends", test_atos_run_cycle_skips_weekend)
 _run("atos_runner: run_open_scan skips weekends", test_atos_open_scan_skips_weekend)
 _run("saxo_etf_strategy: ETFBot.run_once skips weekends", test_etf_run_once_skips_weekend)
 _run("futures: run_daily skips weekends", test_futures_run_daily_skips_weekend)
-_run("forex: Saturday gated on run_daily/run_exits_only, Sunday left alone", test_forex_saturday_gated_but_sunday_not)
+_run("forex: never weekday-gated, scans all 7 days by design", test_forex_never_weekday_gated)
 
 
 # ═══════════════════════════════════════════════════════════════════════

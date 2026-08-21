@@ -1568,10 +1568,7 @@ def run_exits_only(dry_run: bool = True,
                    active_strategies: list | None = None,
                    session: str = "all") -> dict:
     """Check stops and time-stops on all open positions — no new entries."""
-    if date.today().weekday() == 5:  # Saturday -- market closed, prices don't move
-        logger.info("FX exits-only run skipped -- Saturday, market closed")
-        return {"exits": 0, "holding": 0, "skipped": "saturday"}
-
+    # No weekday gate by design -- see run_daily() above for why.
     if active_strategies is None:
         active_strategies = list(STRATEGIES)
 
@@ -1644,15 +1641,13 @@ def run_exits_only(dry_run: bool = True,
 
 def run_daily(dry_run: bool = True, active_strategies: list | None = None,
               session: str = "all") -> dict:
-    # FX is closed all day Saturday (last close Fri ~22:00 UTC, reopens
-    # Sun ~22:00 UTC) -- unlike Sunday, where the gap-fill/Monday-early
-    # triggers have their own legitimate reopening-specific logic
-    # elsewhere, there is no session on Saturday for any trigger that
-    # calls this shared function to legitimately scan.
-    if date.today().weekday() == 5:  # Saturday
-        logger.info("FX daily run skipped -- Saturday, market closed")
-        return {"exits": 0, "entries": 0, "holding": 0, "skipped": "saturday"}
-
+    # No weekday gate here by design: user explicitly wants every scheduled
+    # trigger to keep scanning all 7 days rather than risk missing a signal
+    # (e.g. a broker-side partial Saturday session, a scan running slightly
+    # early/late relative to the exact weekend close/reopen boundary). A
+    # scan that finds a genuinely closed market just finds no fresh data
+    # and no signals -- harmless. Skipping outright is the riskier failure
+    # mode if the boundary assumption is ever wrong.
     if active_strategies is None:
         active_strategies = list(STRATEGIES)
 
