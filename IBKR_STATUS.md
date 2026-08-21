@@ -4,13 +4,24 @@ Living document. Last updated 2026-08-21. For the "why" behind the design
 see [IBKR_ARCHITECTURE.md](IBKR_ARCHITECTURE.md); for migration-by-migration
 history see [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md).
 
-> **Headline (2026-08-21):** stocks, ETFs, market data, historical bars and
-> the whole forex code pipeline all work. **Spot FX cross-pairs are blocked
-> by an IBKR Ireland regulatory restriction — confirmed by IBKR support in
-> writing, not fixable in code or by settings.** Forex CFDs are IBKR's
-> supported alternative and 34/34 pairs are reachable, but CFDs can't be
-> held in a Swedish ISK — which reintroduces the K4 paperwork this
-> migration was meant to avoid. See §2/§2b for the decision.
+> **Headline (2026-08-21).** Two regulatory blocks were found by placing
+> real orders — both invisible to contract resolution:
+> 1. **Spot FX cross-pairs are blocked** (IBKR Ireland retail rule,
+>    confirmed by IBKR support in writing). Forex CFDs are the supported
+>    alternative and all 34 pairs are reachable, but CFDs can't sit in an
+>    ISK or KF — so forex means a taxable account and K4 either way. See
+>    §2/§2b.
+> 2. **US-domiciled ETFs are blocked** (PRIIPs/KID). SPY/XLV rejected;
+>    UCITS ETFs (IWDA) accepted. The ETF strategy's US sector-ETF universe
+>    cannot trade here as written. See §3.
+>
+> **Ordinary shares are unaffected and confirmed tradeable** (§4), so
+> `atos_runner.py` on IBKR stands. Market data, historical bars, order
+> mechanics and the full forex code pipeline all work.
+>
+> **Recurring lesson:** `find_instrument()` resolving a contract proves
+> nothing about whether this account may trade it. Every asset class
+> needs a real order-acceptance test.
 
 Everything below marked "tested live" was actually run against the real
 paper Gateway (account `DUR952126`, port 4002) during this migration, not
@@ -183,6 +194,52 @@ liquidation is intact (999,862 SEK vs 1,000,000 start — the difference is
 spread cost). These are FX-Portfolio tracking entries, not risk exposure,
 and the cleanest way to clear them is a paper-account reset from Client
 Portal if a pristine starting state is wanted.
+
+### 3. US-domiciled ETFs blocked by PRIIPs/KID — **blocks the ETF strategy as written**
+Tested 2026-08-21 by placing real (unfillable, far-from-market limit)
+orders. **SPY and XLV are both rejected:**
+```
+Error 201: No Trading Permission, Customer Ineligible; Ineligibility reasons:
+This product does not have a KID in English or in a language approved for your
+country. Retail clients can trade packaged retail products only if an
+appropriate KID is available.
+```
+This is the EU **PRIIPs** regime: EU retail clients cannot buy packaged
+products (ETFs) lacking a Key Information Document, which US-domiciled
+ETFs do not produce. It applies to IBKR Ireland as an EU entity.
+
+**Same trap as the FX restriction: the contracts resolve fine via
+`find_instrument()` — only the order is refused.** Contract resolution is
+never sufficient evidence that something is tradeable on this account.
+
+**UCITS ETFs are fine.** `IWDA` (iShares Core MSCI World UCITS, Irish-
+domiciled) was accepted — order status `Submitted`, no eligibility
+rejection. So the ETF strategy *can* run on IBKR, but **only against a
+UCITS universe**, not the US sector ETFs it currently uses.
+
+**Impact on `saxo_etf_strategy/`:** its `sector_rotation` strategy is
+built on 11 US sector ETFs (XLV/XLF/XLE/…), and the three positions in
+the pre-migration state file were XLV/XLF/XLE. That universe cannot be
+traded on IBKR by a retail EU client. Options: (a) keep the ETF strategy
+on Saxo, (b) re-specify the universe in UCITS equivalents and re-validate
+(sector-by-sector UCITS coverage is thinner than the US SPDR range, so
+this is a strategy change, not a symbol swap).
+
+Note the ETF module's *universe discovery* already pages Saxo's catalog,
+which is mostly European UCITS — so a UCITS-based universe is reachable;
+it's the specific US-sector rotation logic that doesn't transfer.
+
+### 4. Ordinary shares — confirmed tradeable
+Same order-acceptance test: **AAPL, MSFT (US) and SAP (Xetra) all
+accepted** (`Submitted`/`PreSubmitted`, no eligibility rejection). PRIIPs
+covers packaged products, not ordinary shares, so the stocks universe is
+unaffected. `atos_runner.py`'s migration stands.
+
+Minor issue found in passing: `VOLV-B:STK:SFB:SEK` does **not** resolve —
+IBKR uses a space (`VOLV B`), not a hyphen, for Nordic share classes,
+while `strip_suffix()` in `lookup_instruments_ibkr.py` produces `VOLV-B`
+from Yahoo's `VOLV-B.ST`. Nordic B-share tickers will need that
+translation before `data/instrument_map_ibkr.csv` is complete.
 
 ## Bugs found and fixed during this migration
 
