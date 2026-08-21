@@ -451,6 +451,25 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
             L.append(f"  {BD}{label:<28}{W}  {tt['n']:>3} closed  |  WR {wr:>5.1f}%  |  "
                      f"P&L: {tc}{BD}{tt['pnl']:>+,.0f} EUR{W}")
         L.append(HR)
+
+        # ── Per-pair breakdown — every pair that's had at least one closed
+        # trade, sorted best to worst. Answers "which pairs are actually
+        # profitable" directly instead of needing a DB query each time.
+        L.append("")
+        L.append(f"  {BD}PAIR BREAKDOWN{W}  {DM}(every pair with a closed trade, best to worst){W}")
+        L.append("")
+        for r in pair_stats:
+            tier  = get_tier(r["symbol"])
+            tcol  = GR if r["total_pnl"] >= 0 else RD
+            tier_tag = f"{DM}[{tier}]{W}"
+            pf = f"{r['profit_factor']:.2f}" if r["profit_factor"] is not None else "—"
+            L.append(
+                f"  {BD}{r['symbol']:<8}{W} {tier_tag:<16}  {r['trades']:>2} closed "
+                f"({r['wins']}W/{r['losses']}L, WR {r['win_rate']:>5.1f}%)  "
+                f"PF {pf:>6}  best {r['best']:>+9,.0f}  worst {r['worst']:>+9,.0f}  "
+                f"P&L: {tcol}{BD}{r['total_pnl']:>+9,.0f} EUR{W}"
+            )
+        L.append(HR)
     except Exception:
         pass
 
