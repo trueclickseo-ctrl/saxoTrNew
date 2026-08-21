@@ -31,6 +31,19 @@ FALLBACK_RATES_TO_SEK = {
     "CAD": 7.5,
     "JPY": 0.068,
     "DKK": 1.5,
+    # Added 2026-08-21 — these three aren't just "live fetch failed today,"
+    # yfinance's f"{ccy}SEK=X" ticker returns "possibly delisted, no price
+    # data" for TRY/MXN/CNH specifically (unlike every other currency here,
+    # which fetches live fine). With no fallback, every pair quoted in one of
+    # these (AUDTRY, CADTRY, USDMXN, EURCNH, GBPCNH, ...) was permanently
+    # unsizable — silently dropped from the universe on every single scan,
+    # not a transient outage. Approximate pegs, same caveat as the rest of
+    # this table (drift over time, log loudly when used, don't trust for
+    # real sizing) — verify against a live rate before trading real capital
+    # in these currencies.
+    "TRY": 0.21,   # Turkish lira
+    "MXN": 0.55,   # Mexican peso
+    "CNH": 1.41,   # offshore Chinese yuan (renminbi)
 }
 
 # Cached per process run so a single cycle doesn't refetch the same rate
