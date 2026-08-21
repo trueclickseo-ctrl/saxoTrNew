@@ -158,7 +158,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         src_tag = f"{GR}SAXO LIVE{W}"
     L.append(f"  {BD}{YL}╔{'═' * W_TOTAL}╗{W}")
     L.append(f"  {BD}{YL}║{'  ETF ROTATION DASHBOARD':^{W_TOTAL}}║{W}")
-    L.append(f"  {BD}{YL}║{f'  Sector Momentum · EMA Trend Score · Max 5 Positions  |  {now_ts}':^{W_TOTAL}}║{W}")
+    L.append(f"  {BD}{YL}║{f'  Sector Momentum · 3-Month Return Rank · Max 5 Positions  |  {now_ts}':^{W_TOTAL}}║{W}")
     L.append(f"  {BD}{YL}╚{'═' * W_TOTAL}╝{W}")
     L.append(f"  Prices: {src_tag}")
     L.append("")
@@ -166,7 +166,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     # ── Strategy info ─────────────────────────────────────────────
     L.append(
         f"  {BD}STRATEGY{W}   {YL}{BD}ETF Rotation{W}  "
-        f"{DM}Buys top-scoring US sector ETFs using EMA(20/50/200) trend scoring  |  "
+        f"{DM}Ranks 11 US sector ETFs by 3-month total return, holds top 3  |  "
         f"Stop {STOP_LOSS_PCT*100:.0f}%  |  TP {TAKE_PROFIT_PCT*100:.0f}%  |  Max 5 slots{W}"
     )
     L.append(HR)
