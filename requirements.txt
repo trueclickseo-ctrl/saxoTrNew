@@ -3,6 +3,7 @@ numpy
 yfinance
 requests
 ib_async
+torch          # forex/strategy_cnn_lstm.py -- forex/runner.py imports it unconditionally at module load
 
 # Binance bot dependencies (not needed for the Saxo bot)
 python-binance
