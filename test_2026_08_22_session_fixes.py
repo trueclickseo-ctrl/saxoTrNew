@@ -56,6 +56,19 @@ Covers:
                          showed different trade counts/win rates for the
                          same strategy -- unified onto db.get_all_closed_
                          trades().
+ 11. scheduler_watchdog.py / run_hidden.vbs — a scheduled task's log file
+                         getting touched at the right time (mtime looks
+                         fresh) no longer proves the real command ran:
+                         confirmed live, the futures/ETF scheduler logs
+                         were touched to the second at their scheduled
+                         times for 3 days while containing only a one-
+                         line Windows sharing-violation error from a
+                         locked log redirect. Watchdog now reads log
+                         content, not just mtime; run_hidden.vbs retries
+                         a failed launch, then falls back to a sibling
+                         ".fallback" log path (and finally no log at all)
+                         so a persistently locked log can never again
+                         block the real trading logic from running.
 
 Run:
     python test_2026_08_22_session_fixes.py
@@ -65,6 +78,7 @@ import os
 import sys
 import sqlite3
 import tempfile
+import time
 import traceback
 from unittest.mock import patch
 
@@ -779,6 +793,105 @@ _run("atos_runner: legacy per-market strategies default to disabled", test_legac
 _run("atos_runner: run_cycle skips the legacy scan+exit-loop when disabled", test_run_cycle_skips_legacy_scan_when_disabled)
 _run("atos_runner: terminal scorecard reads the DB, not a separately-drifting CSV", test_scorecard_reads_db_not_csv)
 _run("atos_runner: scorecard excludes unknown-P&L trades instead of zeroing them", test_scorecard_excludes_unknown_pnl_not_zeros_it)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+section("11. scheduler_watchdog.py / run_hidden.vbs — a wrapper that "
+        "touches its log at the right time no longer counts as \"ran\"")
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_watchdog_catches_fresh_but_empty_log():
+    import scheduler_watchdog as wd
+    with tempfile.TemporaryDirectory() as tmp:
+        old_data_dir = wd.DATA_DIR
+        wd.DATA_DIR = tmp
+        try:
+            log_path = os.path.join(tmp, "futures_scheduler.log")
+            with open(log_path, "w", encoding="utf-8") as f:
+                f.write("The process cannot access the file because it is "
+                        "being used by another process.\r\n")
+            result = wd._log_content_failure("futures_scheduler.log")
+        finally:
+            wd.DATA_DIR = old_data_dir
+    assert result is not None, (
+        "a log containing only a Windows sharing-violation error must be "
+        "flagged as a content failure -- this is exactly what happened "
+        "live 2026-08-21/22: run_hidden.vbs's redirect touched the file "
+        "at the correct scheduled time (so mtime freshness looked "
+        "healthy) while the real command underneath never ran"
+    )
+
+
+def test_watchdog_does_not_flag_real_output():
+    import scheduler_watchdog as wd
+    with tempfile.TemporaryDirectory() as tmp:
+        old_data_dir = wd.DATA_DIR
+        wd.DATA_DIR = tmp
+        try:
+            log_path = os.path.join(tmp, "futures_scheduler.log")
+            with open(log_path, "w", encoding="utf-8") as f:
+                f.write("Futures universe: 13 markets from cache\n" * 20)
+                f.write("Reconciling 1 tracked position(s) against the broker...\n")
+                f.write("Reconcile: OK\n")
+            result = wd._log_content_failure("futures_scheduler.log")
+        finally:
+            wd.DATA_DIR = old_data_dir
+    assert result is None, (
+        "a log with normal-looking run output and no failure signature "
+        "must not be flagged, regardless of size"
+    )
+
+
+def test_watchdog_prefers_newer_fallback_log():
+    import scheduler_watchdog as wd
+    with tempfile.TemporaryDirectory() as tmp:
+        old_data_dir = wd.DATA_DIR
+        wd.DATA_DIR = tmp
+        try:
+            primary  = os.path.join(tmp, "futures_scheduler.log")
+            fallback = primary + ".fallback"
+            with open(primary, "w", encoding="utf-8") as f:
+                f.write("The process cannot access the file because it is "
+                        "being used by another process.\r\n")
+            time.sleep(0.05)
+            with open(fallback, "w", encoding="utf-8") as f:
+                f.write("Futures universe: 13 markets from cache\n" * 20)
+                f.write("Reconcile: OK\n")
+            resolved = wd._log_path("futures_scheduler.log")
+        finally:
+            wd.DATA_DIR = old_data_dir
+    assert resolved is not None and resolved.endswith(".fallback"), (
+        "run_hidden.vbs writes to a '<log>.fallback' sibling when the "
+        "primary log path is persistently locked (so the real command "
+        "isn't blocked from running at all) -- the watchdog must read "
+        "whichever of the two has the newer content, or it goes blind "
+        "to real output that landed in the fallback"
+    )
+
+
+def test_run_hidden_vbs_has_retry_and_fallback():
+    vbs_path = os.path.join(BASE_DIR, "run_hidden.vbs")
+    with open(vbs_path, encoding="utf-8") as f:
+        src = f.read()
+    assert "Do While rc <> 0" in src, (
+        "run_hidden.vbs must retry a failed launch a couple of times -- "
+        "a locked log redirect can be transient (AV scan, a monitor "
+        "script's read), and retrying costs nothing on that case"
+    )
+    assert ".fallback" in src, (
+        "after retries are exhausted, run_hidden.vbs must fall back to a "
+        "sibling '.fallback' log path (and finally to no log at all) "
+        "rather than let a persistently locked log file block the real "
+        "command from ever running -- confirmed live: the futures runner "
+        "didn't execute for 3+ days because its log redirect kept failing "
+        "against a file a stuck prior process never released"
+    )
+
+
+_run("watchdog: flags a log that's fresh but only contains a crash/stub", test_watchdog_catches_fresh_but_empty_log)
+_run("watchdog: does not false-alarm on real run output", test_watchdog_does_not_flag_real_output)
+_run("watchdog: prefers the newer of primary/.fallback log", test_watchdog_prefers_newer_fallback_log)
+_run("run_hidden.vbs: has retry-then-fallback so a locked log can't block the real command", test_run_hidden_vbs_has_retry_and_fallback)
 
 
 # ═══════════════════════════════════════════════════════════════════════

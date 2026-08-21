@@ -164,11 +164,73 @@ def _query_task_info(task_name: str) -> dict | None:
     }
 
 
+def _log_path(log_file: str) -> str | None:
+    """Resolve the actual log path for a task, preferring the primary path
+    but falling back to the ".fallback" sibling run_hidden.vbs writes to
+    when the primary is persistently locked and it had to route around it
+    (see run_hidden.vbs) -- whichever exists and is newer wins, so the
+    watchdog doesn't go blind to real output that landed in the fallback."""
+    primary  = os.path.join(DATA_DIR, log_file)
+    fallback = primary + ".fallback"
+    have_primary  = os.path.exists(primary)
+    have_fallback = os.path.exists(fallback)
+    if have_primary and have_fallback:
+        return fallback if os.path.getmtime(fallback) > os.path.getmtime(primary) else primary
+    if have_fallback:
+        return fallback
+    if have_primary:
+        return primary
+    return None
+
+
 def _log_mtime(log_file: str) -> datetime | None:
-    path = os.path.join(DATA_DIR, log_file)
-    if not os.path.exists(path):
+    path = _log_path(log_file)
+    if path is None:
         return None
     return datetime.fromtimestamp(os.path.getmtime(path))
+
+
+# Signatures of a run that "succeeded" by Windows' own accounting (exit 0)
+# and touched its log file at the right time (passes the freshness check
+# below) but never actually did anything -- confirmed live 2026-08-21/22:
+# the futures scheduler's run_hidden.vbs wrapper touches data/futures_
+# scheduler.log via its ">>" redirect at exactly the scheduled time even
+# when the redirect itself fails to open the file (another process still
+# holding it), so the file's mtime looks perfectly healthy while its only
+# content is this one Windows shell error line. mtime freshness alone
+# cannot catch this class of failure -- it needs to look at what actually
+# got written.
+_FAILURE_SIGNATURES = (
+    "cannot access the file",       # Windows sharing violation on the log redirect itself
+    "is not recognized as an internal or external command",
+    "Traceback (most recent call last):",
+    "ModuleNotFoundError",
+    "ImportError",
+)
+# A log with real run output is normally at least a few hundred bytes
+# (banner, per-symbol scan lines, summary). Anything this small combined
+# with a failure signature is almost certainly a stub, not a real run.
+_SUSPICIOUSLY_SMALL_BYTES = 200
+
+
+def _log_content_failure(log_file: str) -> str | None:
+    """Return a description if the log's own content indicates a no-op/crash
+    that mtime freshness alone wouldn't catch, else None."""
+    path = _log_path(log_file)
+    if path is None:
+        return None
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            tail = f.read().decode("utf-8", errors="replace")
+    except Exception:
+        return None  # can't read it (e.g. still locked) -- not this check's job
+    if size < _SUSPICIOUSLY_SMALL_BYTES:
+        for sig in _FAILURE_SIGNATURES:
+            if sig in tail:
+                return (f"{log_file} is only {size} bytes and contains "
+                        f"\"{sig}\" -- looks like a stub/crash, not real run output")
+    return None
 
 
 def _remediation(task_name: str) -> str:
@@ -238,6 +300,17 @@ def _check_windows_task(name: str, task_name: str, log_file: str, grace_min: int
         return (f"'{task_name}' ran at {last_run:%Y-%m-%d %H:%M} (reported success) but "
                 f"{log_file} was last written {mtime:%Y-%m-%d %H:%M} — stale, likely silent no-op. "
                 f"{_remediation(task_name)}")
+
+    # mtime alone says "fresh" here, but a wrapper script can touch the log
+    # file (via its own >> redirect) at exactly the right time even when the
+    # real command inside never ran or crashed immediately -- confirmed
+    # live: the futures log was touched to the second at the scheduled time
+    # every day for 3 days while containing only a one-line Windows sharing-
+    # violation error. Check the content, not just the timestamp.
+    content_issue = _log_content_failure(log_file)
+    if content_issue:
+        return (f"'{task_name}' ran at {last_run:%Y-%m-%d %H:%M} (reported success, log looks "
+                f"fresh) but {content_issue}. {_remediation(task_name)}")
 
     return None
 

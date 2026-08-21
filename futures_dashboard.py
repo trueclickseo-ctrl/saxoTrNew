@@ -160,10 +160,24 @@ def _recent_orders(n: int = 10) -> list:
 
 
 def _last_log_lines(n: int = 8) -> list:
-    if not os.path.exists(FUTURES_LOG_PATH):
+    # run_hidden.vbs falls back to a "<log>.fallback" sibling when the
+    # primary log path is persistently locked (confirmed live 2026-08-22 --
+    # a stuck prior process held futures_scheduler.log open for days).
+    # Prefer whichever of the two actually has the newer content so this
+    # panel doesn't keep showing stale/no data while real output is sitting
+    # in the fallback file instead.
+    primary  = FUTURES_LOG_PATH
+    fallback = FUTURES_LOG_PATH + ".fallback"
+    have_primary  = os.path.exists(primary)
+    have_fallback = os.path.exists(fallback)
+    if have_fallback and (not have_primary or os.path.getmtime(fallback) > os.path.getmtime(primary)):
+        path = fallback
+    elif have_primary:
+        path = primary
+    else:
         return []
     try:
-        with open(FUTURES_LOG_PATH, encoding="utf-8", errors="replace") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             lines = [l.rstrip() for l in f if l.strip()]
         return lines[-n:]
     except Exception:
