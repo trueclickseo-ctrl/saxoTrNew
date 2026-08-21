@@ -178,6 +178,22 @@ def get_account_key() -> str:
     return _account_key_cache
 
 
+def get_open_orders() -> set[tuple]:
+    """
+    Returns {(conId, action, orderType), ...} for every currently open
+    order -- mirrors the "list open GTC orders" shape healing logic uses
+    (e.g. forex/runner.py's _heal_missing_stops()) to check whether a stop/TP
+    already exists before placing a duplicate. action is "BUY"/"SELL",
+    orderType is IBKR's own string ("STP", "STP LMT", "LMT", ...).
+
+    Only sees orders from the currently connected session/account -- same
+    "same-process" limitation ibkr_order.py's docstring already notes for
+    cancel_order().
+    """
+    ib = _client()
+    return {(t.contract.conId, t.order.action, t.order.orderType) for t in ib.openTrades()}
+
+
 def get_positions() -> dict:
     """
     Returns currently open positions, in a simplified (not byte-identical
@@ -295,6 +311,28 @@ def find_instrument(symbol: str, asset_type: str = "Stock") -> list[dict]:
             "AssetType": asset_type,
         })
     return results
+
+
+def cancel_order(order_id: str) -> bool:
+    """
+    Cancel an open order by id. Returns True if a matching open order was
+    found and a cancel was sent, False if no such order is currently open
+    (already filled/cancelled, or -- same limitation noted in ibkr_order.py's
+    module docstring -- placed in a different session/process, since
+    ib_async only tracks orders from the connected session).
+
+    Used when closing a position via a separate market order outside its
+    original stop/TP bracket (e.g. a strategy's own time-based exit): the
+    bracket's stop/TP legs don't know the position they were protecting is
+    gone, and would sit as orphaned orders that could open an unintended
+    reverse position if later triggered -- cancel them explicitly instead.
+    """
+    ib = _client()
+    for t in ib.openTrades():
+        if str(t.order.orderId) == str(order_id):
+            ib.cancelOrder(t.order)
+            return True
+    return False
 
 
 def _resolve_future(ib: "IB", contract: "Contract", asset_type: str) -> list[dict]:

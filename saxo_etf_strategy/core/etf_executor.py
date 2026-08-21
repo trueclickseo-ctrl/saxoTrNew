@@ -321,12 +321,19 @@ class ETFExecutor:
         if self.cfg.dry_run:
             logger.info(f"[DRY RUN] Would SELL {quantity}x {symbol} — {reason} @ ~{live_price:.2f}")
         else:
+            # This is a runner-driven exit (stop/TP check here found a breach),
+            # separate from the bracket placed at entry -- cancel the bracket's
+            # resting legs first so they don't sit as orphaned orders that could
+            # open an unintended reverse position if later triggered.
+            for oid in (pos.get("stop_order_id"), pos.get("tp_order_id")):
+                if oid and oid not in ("synced", None, ""):
+                    ibkr_client.cancel_order(oid)
             resp = ibkr_client.place_market_order(int(key), "Etf", "Sell", quantity)
             logger.info(f"ETF SELL {resp.get('OrderId','?')}: {quantity}x {symbol} — {reason} @ ~{live_price:.2f}")
 
-        self.state.remove_position(uic)
+        self.state.remove_position(key)
         self.state.log_order({
-            "uic": uic, "symbol": symbol,
+            "uic": key, "symbol": symbol,
             "side": "Sell", "quantity": quantity,
             "exit_price": live_price, "reason": reason,
             "dry_run": self.cfg.dry_run,
