@@ -129,12 +129,25 @@ def _session_range(df: pd.DataFrame, start_h: int, end_h: int,
     if df is None or len(df) < 3:
         return None
 
-    # Filter to the reference session hours
+    # Filter to the reference session hours. forex/runner.py's
+    # _fetch_history_h1() returns a plain integer RangeIndex (0,1,2,...) with
+    # the real hour in a separate 'HourUTC' column (see its docstring) — it
+    # does NOT carry a datetime index. This used to try df.index.hour, fall
+    # through to pd.to_datetime(idx, utc=True) since a RangeIndex has no
+    # .hour attribute, and silently reinterpret row-position integers
+    # (0..49) as near-epoch nanosecond timestamps — producing a mask that
+    # matched (at most) 0-1 rows on every single call, every pair, every
+    # session, since this strategy's inception. strategy_gap.py already
+    # gets this right (filters on the HourUTC column directly) — this now
+    # matches that same, correct pattern.
     try:
-        idx = df.index
-        if not hasattr(idx, "hour"):
-            idx = pd.to_datetime(idx, utc=True)
-        mask = (idx.hour >= start_h) & (idx.hour <= end_h)
+        if "HourUTC" in df.columns:
+            mask = (df["HourUTC"] >= start_h) & (df["HourUTC"] <= end_h)
+        else:
+            idx = df.index
+            if not hasattr(idx, "hour"):
+                idx = pd.to_datetime(idx, utc=True)
+            mask = (idx.hour >= start_h) & (idx.hour <= end_h)
         session_df = df[mask]
     except Exception:
         return None
