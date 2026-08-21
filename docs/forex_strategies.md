@@ -790,19 +790,29 @@ If no trained model exists, the strategy silently emits no signals — safe to h
 
 ---
 
-## Universe — 34 Pairs
+## Universe — 34 Core Pairs (+ 83 SIM-only exotic, see Audit above)
 
-### Asian Session — 14 pairs (06:20 PKT)
+**Correction (2026-08-21)**: the "Asian Session — 14 pairs" / "London Session
+— 20 pairs" labels below describe the *names* of the scheduled tasks, not an
+actual pair filter — `run_forex_daily.bat` and `run_forex_london.bat` stopped
+passing `--session asian`/`--session london` on 2026-08-20 (confirmed by
+reading the live `.bat` files directly), so both tasks scan the **full
+universe** (117 pairs as of 2026-08-21) for entries and exits, every time
+they fire. The lists below are kept for reference (they still define
+`SESSION_PAIRS` in code, used only when a `--session` flag is explicitly
+passed manually) but do not reflect what the scheduled tasks actually do.
+
+### "Asian Session" pair grouping (14 pairs) — not currently used to filter live runs
 `USDJPY` `EURJPY` `GBPJPY` `AUDJPY` `CADJPY` `NZDJPY` `CHFJPY`  
 `AUDUSD` `NZDUSD` `AUDCAD` `AUDCHF` `AUDNZD` `NZDCAD` `NZDCHF`
 
-### London Session — 20 pairs (18:00 PKT)
+### "London Session" pair grouping (20 pairs) — not currently used to filter live runs
 `EURUSD` `GBPUSD` `USDCAD` `USDCHF`  
 `EURGBP` `EURAUD` `EURNZD` `EURCAD` `EURCHF`  
 `GBPAUD` `GBPCAD` `GBPCHF` `GBPNZD`  
 `CADCHF` `EURNOK` `EURSEK` `USDNOK` `USDSEK` `USDDKK` `USDMXN`
 
-### Gap Fill — all 34 pairs (22:00 Sunday)
+### Gap Fill — all 117 pairs (Mon 03:00 PKT / Sun 22:00 UTC)
 All pairs scanned; only those showing a 0.10%–2.00% gap receive entries.
 
 ### UICs (Saxo SIM)

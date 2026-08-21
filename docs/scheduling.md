@@ -53,12 +53,12 @@ see §6.
 
 | Task name | Fires | Command | What it actually does |
 |---|---|---|---|
-| `ATOS Forex Daily Run` | 06:20 PKT (01:20 UTC), daily | `run_forex_daily.bat` → `runner.py --live --session asian` | **All strategies except LBO** (see §1c) scan the Asian-session pair set for entries; exits checked on the full universe. |
+| `ATOS Forex Daily Run` | 06:20 PKT (01:20 UTC), daily | `run_forex_daily.bat` → `runner.py --live` | **All strategies except LBO** (see §1c) scan the **full 117-pair universe** for entries and exits — widened from the Asian-session-only 14-pair set on 2026-08-20 (the `.bat` no longer passes `--session`, defaults to `all`). |
 | `ATOS Forex Gap Monday Early` | Mon 03:00 PKT | same `run_forex_daily.bat` | Same "all except LBO" run — timed so `gap` catches the Sun 22:00 UTC weekly-gap window (see §1b). |
 | `ATOS Forex Gap London` | weekdays 12:00 PKT (07:00 UTC) | same `run_forex_daily.bat` | Same "all except LBO" run, timed for `gap`'s london-session window. |
 | `ATOS Forex Gap NewYork` | weekdays 17:00 PKT (12:00 UTC) | same `run_forex_daily.bat` | Same "all except LBO" run, timed for `gap`'s newyork-session window. |
 | `ATOS Forex Gap Fill` | **Mon 03:00 PKT** (= Sun 22:00 UTC) | `run_forex_gap.bat` → `runner.py --strategy gap --live` | The one task that calls `gap` directly. **Retimed 2026-08-21** — was Sun 22:00 PKT (17:00 UTC), 5 hours before the weekly gap window actually opens; now correctly fires right when it does. |
-| `ATOS Forex London Run` | 18:00 PKT (13:00 UTC), daily | `run_forex_london.bat` → `runner.py --live --session london` | "All except LBO" run over the London pair set. |
+| `ATOS Forex London Run` | 18:00 PKT (13:00 UTC), daily | `run_forex_london.bat` → `runner.py --live` | "All except LBO" run over the **full 117-pair universe** — widened from the London-session-only 20-pair set on 2026-08-20 (no `--session` flag, defaults to `all`). |
 | `ATOS Forex Exit Check` | 14:00 PKT (09:00 UTC), daily | `run_forex_exits.bat` → `runner.py --exits-only --live` | Stop/time-stop checks only, **all 11 strategies including LBO** (safe — never opens new positions). |
 | `ATOS Forex Intraday Scan` | every 30 min, 06:00-22:00 PKT, daily | `run_forex_intraday.bat` → `runner.py --live` | **Fixed 2026-08-21** — was a one-time trigger with a 16h repetition window (fired correctly for exactly one day, then permanently dormant). Now a real daily-recurring trigger with the same repetition. |
 
