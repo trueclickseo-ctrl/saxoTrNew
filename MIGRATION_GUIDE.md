@@ -110,16 +110,39 @@ back bid/ask → last → close and waits 2.5s as a safety net for instruments
 without a live top-of-book, but that's no longer needed for FX on this
 account.
 
-**Second account-side gap found while testing forex order placement:** a
-live bracket order (`ibkr_order.place_with_stop`, 20,000-unit EURUSD buy)
-was rejected with *"FX trade would expose account to currency leverage"*.
-The bracket mechanics themselves worked correctly — entry/stop/TP legs all
-transmitted as a linked group, `amend_stop()` found and repriced the
-resting stop, `cancel_order()` cancelled both legs cleanly — but the entry
-itself needs the account to either hold actual quote-currency cash or have
-FX margin/leverage trading enabled, neither of which this paper account has
-by default. Check **Trading Permissions** in Account Management before
-expecting `forex/runner.py --live` to actually fill anything.
+**Second account-side gap, more serious — confirmed structural, not a
+setting (2026-08-21):** a live bracket order (`ibkr_order.place_with_stop`,
+20,000-unit EURUSD buy) was rejected with *"FX trade would expose account
+to currency leverage"*. The bracket mechanics themselves worked correctly
+(entry/stop/TP transmitted as a linked group, `amend_stop()` and
+`cancel_order()` both confirmed working) — only the entry fill is blocked.
+
+Ruled out one at a time: order type (limit and market both rejected),
+order size (100 units rejected same as 20,000), and Trading Permissions
+(Currency/Forex already enabled on the live account, and permissions
+mirror to paper automatically — confirmed via IBKR's own docs, this was
+never the cause). What actually determines it: **whether one leg of the
+pair is the account's base currency (SEK).** Tested across 8 pairs —
+USDSEK, EURSEK, NOKSEK all filled instantly; EURUSD, USDJPY, GBPJPY,
+EURGBP, AUDNZD were all rejected identically, at every size and order type
+tried. This matches a documented restriction on IBKR's EU-regulated
+entities (e.g. Interactive Brokers Central Europe) — a retail-protection
+leverage guard on cross-currency pairs that don't touch base currency, not
+a togglable account setting.
+
+**Practical impact: only 2 of the 34 pairs in `forex/universe.py`
+(USDSEK, EURSEK) are actually tradeable live on this account today.**
+Switching base currency away from SEK doesn't fix this generally — it
+just shifts which subset of pairs touches base currency (e.g. EUR base
+unlocks 8 pairs, not all 34), since the restriction is "must touch base
+currency," not "must be SEK" specifically. The only fix found in research:
+IBKR **Professional Client** status (2 of 3 MiFID II criteria: 10+
+trades/quarter, portfolio >€500k, or 1+ year professional experience)
+removes ESMA retail-protection restrictions including this one.
+**Not yet resolved — needs a support ticket to IBKR to confirm whether
+this can be lifted for this account at all.** Until then, `forex/runner.py
+--live` will only ever fill USDSEK/EURSEK signals; everything else will
+place-and-immediately-reject.
 
 ## The one identifier change every call site needs
 

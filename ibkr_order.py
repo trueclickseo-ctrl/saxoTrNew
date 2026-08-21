@@ -34,6 +34,7 @@ way from a risk-management standpoint.
 from __future__ import annotations
 
 import logging
+import time
 
 import ibkr_client
 
@@ -169,9 +170,57 @@ def place_with_stop(
 
     try:
         trades = [ib.placeOrder(contract, o) for o in legs]
+        entry_trade = trades[0]
         entry_oid = str(parent.orderId)
         stop_oid = str(stop_leg.orderId)
         tp_oid = str(tp_leg.orderId) if tp_leg is not None else None
+
+        # ib.placeOrder() doesn't raise for a broker-side rejection -- that
+        # arrives asynchronously via the error/status callback, so without
+        # this check a rejected entry (bad symbol, insufficient funds, the
+        # account-level FX restrictions some IBKR entities apply to
+        # cross-currency pairs, etc.) would look identical to a successful
+        # one to the caller, and get recorded as an open position that was
+        # never actually opened. Bounded wait, same reasoning as
+        # ibkr_client.place_market_order()'s status wait.
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            ib.sleep(0.25)
+            if entry_trade.orderStatus.status not in ("PendingSubmit", "PreSubmitted", ""):
+                break
+        if entry_trade.orderStatus.status in ("Cancelled", "ApiCancelled", "Inactive"):
+            # A rejected parent doesn't take its children down with it -- IBKR
+            # can activate the stop/TP legs independently even though the
+            # entry they're supposed to protect never opened (confirmed live:
+            # both legs showed up in get_open_orders() after a parent
+            # rejection). Cancel them explicitly before raising, or they sit
+            # as orphaned SELL/BUY orders that could fill later and open an
+            # unintended position from nothing.
+            #
+            # A brief settle wait + cancelling by live orderId (rather than
+            # the local leg objects directly) matters here: cancelling
+            # immediately after the rejection is detected missed one of the
+            # two legs in testing (2026-08-21) -- ib_async's local state for
+            # a just-submitted child order isn't guaranteed to have caught up
+            # yet, so a cancel sent against it can silently no-op.
+            ib.sleep(1.0)
+            child_ids = {stop_leg.orderId, tp_leg.orderId if tp_leg is not None else None} - {None}
+            still_open = [t for t in ib.openTrades() if t.order.orderId in child_ids]
+            for t in still_open:
+                try:
+                    ib.cancelOrder(t.order)
+                except Exception as cancel_exc:
+                    logger.warning(
+                        "[bracket] %s could not cancel orphaned leg orderId=%s: %s -- "
+                        "check this manually, it may still be live",
+                        label, t.order.orderId, cancel_exc,
+                    )
+            reasons = [e.message for e in entry_trade.log if e.message]
+            raise RuntimeError(
+                f"Entry order rejected (status={entry_trade.orderStatus.status}): "
+                f"{'; '.join(reasons) or 'no reason given'}"
+            )
+
         logger.info(
             "[bracket] %s entry=%s %s stop@%s%s stop_id=%s tp_id=%s",
             label, entry_oid, "StopLimit" if use_stop_limit else "Stop", rstop,

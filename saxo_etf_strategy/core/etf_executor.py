@@ -169,16 +169,26 @@ class ETFExecutor:
                         f"stop={stop_price:.2f}  tp={tp_price:.2f}")
             order_id = "DRY_RUN"
         else:
-            order_id, stop_oid, tp_oid = ibkr_order.place_with_stop(
-                account_key       = self._account_key,
-                uic               = ibkr_uic,
-                asset_type        = "Etf",
-                amount            = quantity,
-                buy_sell          = "Buy",
-                stop_price        = stop_price,
-                label             = signal.symbol,
-                take_profit_price = tp_price,
-            )
+            try:
+                order_id, stop_oid, tp_oid = ibkr_order.place_with_stop(
+                    account_key       = self._account_key,
+                    uic               = ibkr_uic,
+                    asset_type        = "Etf",
+                    amount            = quantity,
+                    buy_sell          = "Buy",
+                    stop_price        = stop_price,
+                    label             = signal.symbol,
+                    take_profit_price = tp_price,
+                )
+            except Exception as exc:
+                # place_with_stop() raises if the entry itself was rejected
+                # rather than silently returning order ids for an order that
+                # never filled -- skip this signal (no state recorded below)
+                # rather than tracking a position that doesn't exist at the
+                # broker, and keep going so one bad signal doesn't abort the
+                # rest of process_signals()'s loop.
+                logger.warning(f"ETF BUY {signal.symbol} entry REJECTED: {exc}")
+                return
             tp_info = f"  tp={tp_price:.2f} tp_order={tp_oid}" if tp_oid else ""
             logger.info(f"ETF BUY {order_id}: {quantity}x {signal.symbol} @ ~{price:.2f}  "
                         f"stop={stop_price:.2f}  stop_order={stop_oid}{tp_info}")

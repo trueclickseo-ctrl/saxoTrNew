@@ -943,17 +943,28 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                         f"stop={sig['stop_price']:.5f}  {detail}{agree_tag}")
         else:
             tp = sig.get("tp_price") or sig.get("gap_target")   # london_breakout + gap both provide TP
-            entry_oid, stop_oid, tp_oid = ibkr_order.place_with_stop(
-                account_key       = akey,
-                uic               = uic,
-                asset_type        = ASSET_TYPE,
-                amount            = qty,
-                buy_sell          = direction,
-                stop_price        = sig["stop_price"],
-                label             = f"{strat_name}:{sym}",
-                take_profit_price = tp,
-                symbol            = sym,
-            )
+            try:
+                entry_oid, stop_oid, tp_oid = ibkr_order.place_with_stop(
+                    account_key       = akey,
+                    uic               = uic,
+                    asset_type        = ASSET_TYPE,
+                    amount            = qty,
+                    buy_sell          = direction,
+                    stop_price        = sig["stop_price"],
+                    label             = f"{strat_name}:{sym}",
+                    take_profit_price = tp,
+                    symbol            = sym,
+                )
+            except Exception as exc:
+                # place_with_stop() raises if the entry itself was rejected
+                # (bad symbol, insufficient funds, an account's own FX
+                # trading restrictions, etc.) rather than silently returning
+                # order ids for an order that never actually filled -- skip
+                # this signal rather than recording a position that doesn't
+                # exist at the broker, and keep going so one bad signal
+                # doesn't abort the rest of this strategy's entries.
+                logger.warning(f"  [{strat_name}] {direction} {sym} entry REJECTED: {exc}")
+                continue
             tp_info = f"  tp_order={tp_oid}" if tp_oid else ""
             logger.info(f"  {direction} {entry_oid}: {qty:,}x {sym}[{tag}] "
                         f"({strat_name})  @ {sig['close']:.5f}  stop={sig['stop_price']:.5f}"
