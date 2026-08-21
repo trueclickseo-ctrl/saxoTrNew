@@ -67,9 +67,11 @@ def fetch_prices(instruments: list[dict]) -> tuple[dict[str, float], str]:
 
     if subs:
         # bid/ask/last often arrive within ~1s; `close` (the fallback used
-        # below when bid/ask/last are unavailable) can take ~3-4s on a
-        # fresh subscription -- 2.5s is a compromise, not a guarantee.
-        ib.sleep(2.5)
+        # below when bid/ask/last are unavailable) took ~3-4s on a fresh
+        # subscription in testing (2026-08-21: reliably present at 3s,
+        # absent at 2.5s for a single-symbol AAPL subscription) -- 3.5s
+        # is a safety margin over that, still a compromise not a guarantee.
+        ib.sleep(3.5)
 
     prices: dict[str, float] = {}
     for symbol, contract in subs:
