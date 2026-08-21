@@ -160,8 +160,8 @@ def generate(
         wins   = [t for t in closed if (t.get("pnl_sek") or 0) > 0]
         losses = [t for t in closed if (t.get("pnl_sek") or 0) <= 0]
         win_rate = len(wins) / len(closed) * 100 if closed else 0
-        avg_win  = sum(t["pnl_sek"] for t in wins)   / max(len(wins),   1)
-        avg_loss = abs(sum(t["pnl_sek"] for t in losses)) / max(len(losses), 1)
+        avg_win  = sum((t.get("pnl_sek") or 0) for t in wins)   / max(len(wins),   1)
+        avg_loss = abs(sum((t.get("pnl_sek") or 0) for t in losses)) / max(len(losses), 1)
         profit_factor = avg_win / avg_loss if avg_loss else 0
 
     # ── Per-strategy stats ─────────────────────────────────────────
@@ -176,8 +176,8 @@ def generate(
             n     = len(trades),
             wr    = len(wins) / len(trades) * 100,
             pnl   = sum(pnl_list),
-            avg_win  = sum(t["pnl_sek"] for t in wins)   / max(len(wins), 1),
-            avg_loss = sum(t["pnl_sek"] for t in losses)  / max(len(losses), 1),
+            avg_win  = sum((t.get("pnl_sek") or 0) for t in wins)   / max(len(wins), 1),
+            avg_loss = sum((t.get("pnl_sek") or 0) for t in losses)  / max(len(losses), 1),
             best  = max(pnl_list) if pnl_list else 0,
             worst = min(pnl_list) if pnl_list else 0,
         )
