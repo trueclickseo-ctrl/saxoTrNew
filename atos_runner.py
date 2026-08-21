@@ -12,7 +12,7 @@ What it does each cycle:
   3. Compute all features (EMA, ATR, RSI, MACD, Bollinger, Donchian, ADX)
   4. Run Decision Engine — 5 weighted detectors per ticker
   5. Risk Engine approval for each BUY signal
-  6. Place approved orders on Saxo SIM via existing saxo_client.py
+  6. Place approved orders on IBKR paper via ibkr_client.py
   7. Check exits on all open positions
   8. Run learning pass — update detector weights from closed trades
   9. Log everything to data/atos.db
@@ -84,8 +84,8 @@ import atos.capital_config as CAP
 from atos.corporate_events import get_exit_flags, tickers_to_avoid as corp_avoid
 from atos.intraday_reversion import intraday_scan, us_market_is_open, next_scan_description
 
-# ── Existing infrastructure (unchanged) ───────────────────────────
-import saxo_client
+# ── Broker (IBKR paper via IB Gateway; was saxo_client) ────────────
+import ibkr_client as saxo_client
 import fx
 
 DEPLOY_CONFIG = os.path.join(BASE_DIR, "config", "deploy.json")
@@ -678,7 +678,7 @@ def run_cycle():
             asset_type = ASSET_TYPE_MAP.get(mkt, "Stock")
             # Look up Saxo UIC from existing instrument map where available
             from instrument_map import load_instrument_map
-            imap = load_instrument_map()
+            imap = load_instrument_map(broker="ibkr")
             if ticker in imap:
                 uic = imap[ticker]["uic"]
                 saxo_client.place_market_order(uic, asset_type, "Sell",
@@ -795,7 +795,7 @@ def run_cycle():
             skip_reason = None
             try:
                 from instrument_map import load_instrument_map
-                imap = load_instrument_map()
+                imap = load_instrument_map(broker="ibkr")
                 if ticker not in imap:
                     skip_reason = "not in instrument_map.csv"
                 elif imap[ticker]["currency"] != _currency_for(mkt):
@@ -1231,7 +1231,7 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
     if kill_switch_active():
         print("  [US momentum] STOP_TRADING present — skip"); return
     try:
-        imap = load_instrument_map()
+        imap = load_instrument_map(broker="ibkr")
     except Exception as e:
         print(f"  [US momentum] instrument_map load failed: {e}"); return
 
@@ -1436,7 +1436,7 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
     if kill_switch_active():
         print("  [US reversion] STOP_TRADING present — skip"); return
     try:
-        imap = load_instrument_map()
+        imap = load_instrument_map(broker="ibkr")
     except Exception as e:
         print(f"  [US reversion] instrument_map load failed: {e}"); return
 
@@ -1812,7 +1812,12 @@ def run_intraday_cycle():
         try:
             uic = _get_uic(ticker, "US Equities")
             if uic:
-                saxo_client.place_order(uic=uic, buy_sell="Buy", quantity=shares)
+                # was buy_sell=/quantity= -- neither saxo_client nor ibkr_client
+                # ever had those kwargs; place_order() takes side=/qty=. This
+                # call site was dead code under Saxo (AttributeError: no
+                # place_order on saxo_client at all) -- fixed while migrating
+                # rather than porting the bug forward.
+                saxo_client.place_order(uic=uic, side="Buy", qty=shares)
                 db.record_trade(
                     strategy="US Reversion",
                     market_group="US Equities",

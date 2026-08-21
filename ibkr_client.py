@@ -214,10 +214,22 @@ def get_balances() -> dict:
     """
     Returns account balance data in a simplified shape:
         {"TotalValue": <equity>, "CashAvailableForTrading": <free cash>,
-         "Currency": "USD"}
+         "CashBalance": <free cash>, "Currency": "USD"}
 
     Same "source of truth, not computed locally" principle as
     saxo_client.get_balances() -- pulled straight from accountSummary().
+
+    "CashBalance" duplicates "CashAvailableForTrading" -- Saxo's real
+    /port/v1/balances/me response has both as genuinely different figures
+    (CashBalance ignores margin reservations from open positions,
+    CashAvailableForTrading doesn't), but every call site in this codebase
+    that reads "CashBalance" is using it as "cash I can spend right now",
+    which AvailableFunds is the correct IBKR figure for. Some of those call
+    sites (saxo_live_engine.py, dashboard.py) use plain `balances["CashBalance"]`
+    rather than `.get(...)`, so omitting the key would raise KeyError, not
+    silently return 0 -- keeping both keys is what makes the "just swap the
+    import" migration path actually true instead of a hunt through every
+    balance-reading call site in the codebase.
     """
     ib = _client()
     rows = {r.tag: r for r in ib.accountSummary()}
@@ -232,6 +244,7 @@ def get_balances() -> dict:
     return {
         "TotalValue": float(net_liq.value),
         "CashAvailableForTrading": float(avail.value),
+        "CashBalance": float(avail.value),
         "Currency": net_liq.currency,
     }
 

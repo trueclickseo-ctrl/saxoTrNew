@@ -8,10 +8,11 @@
 
 cd /d "E:\SaxoTrNew\SaxoTrNew"
 
-:: Load the Saxo access token from saxo_token.json
-for /f "tokens=*" %%T in ('python -c "import json; print(json.load(open('saxo_token.json'))['access_token'])"') do (
-    set SAXO_TOKEN=%%T
-)
+:: atos_runner.py now trades via IBKR (ibkr_client.py), not Saxo -- no token
+:: to load here. Make sure IB Gateway is already running and logged into
+:: the paper account before this fires; the socket connect fails loudly
+:: (with a retry) if it isn't. IBKR_HOST/IBKR_PORT/IBKR_CLIENT_ID default to
+:: 127.0.0.1:4002/1 -- set them here if your Gateway uses different values.
 
 :: Start atos_dashboard.py if not already running on :8070
 netstat -ano | findstr ":8070 " | findstr "LISTENING" >nul 2>&1
