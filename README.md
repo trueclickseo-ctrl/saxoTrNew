@@ -42,9 +42,9 @@ The system runs **four concurrent trading modules**:
 1. **US Equities (ATOS)** — Momentum Blend + Mean Reversion on 108 S&P 500 stocks
 2. **ETF Module** — 4-strategy sector rotation / risk-off / mean-reversion on US ETFs
 3. **Futures Module** — 3 strategies (Donchian, RSI Pullback, EMA Crossover) on 5 markets
-4. **Forex Module** — 11 strategies on 34 FX pairs:
-   - 10 swing strategies (EMA+ADX, RSI(2) pullback, Donchian, BB reversion, pullback-to-EMA, weekend gap fill, SuperTrend, Z-score, ML, CNN-LSTM)
-   - 1 day-trading strategy: **London Breakout** — session range break at London/NY open, 7 majors, no overnight holds, 15,000 SEK dedicated book
+4. **Forex Module** — 11 strategies, 117-pair universe (34 core majors/crosses + 83 EM/exotic, SIM-only for now — see docs/forex_strategies.md):
+   - 10 swing strategies (EMA+ADX, RSI(2) pullback, Donchian, BB reversion, pullback-to-EMA, weekend gap fill, SuperTrend, Z-score, ML, CNN-LSTM), 0.5% risk/trade
+   - 1 day-trading strategy: **London Breakout** — session range break at London/NY open, 28 pairs (core majors/crosses only), no overnight holds, 15,000 SEK dedicated book
 
 Features: weekly momentum rebalance, intraday mean-reversion scanner, 1-second
 stop-loss monitor, and **automatic email notifications** on every trade and weekly P&L report.
@@ -72,8 +72,8 @@ Dashboard:    python atos_dashboard.py  ->  http://localhost:8070
 | **US Mean Reversion** | LIVE ON SIM | 50% of live SIM cash | `atos/us_reversion.py` |
 | **ETF Sector Rotation** | DRY RUN (SIM) | 15% of account | `saxo_etf_strategy/` |
 | **Futures (3 strategies)** | LIVE ON SIM | 1% risk/trade (ATR-sized) | `futures/` |
-| **Forex Swing (10 strategies, 34 pairs)** | LIVE ON SIM | 1% risk/trade (ATR-sized) | `forex/` |
-| **Forex London Breakout (day trading)** | LIVE ON SIM | 15,000 SEK dedicated | `forex/strategy_london_breakout.py` |
+| **Forex Swing (10 strategies, 117 pairs)** | LIVE ON SIM | 0.5% risk/trade (ATR-sized) | `forex/` |
+| **Forex London Breakout (day trading, 28 pairs)** | LIVE ON SIM | 15,000 SEK dedicated | `forex/strategy_london_breakout.py` |
 | OMX30 / CPH25 | PAUSED | — | `atos_runner.py` |
 
 ### Universe (2026-08-08)
@@ -92,7 +92,7 @@ Check the dashboard (`python atos_dashboard.py` → http://localhost:8070) for c
 | `atos_runner.py` | Task Scheduler 06:00 PKT | Daily cycle — Blend rebalance + Reversion exits |
 | `saxo_etf_strategy\run_etf_bot.py` | Task Scheduler 06:30 PKT | ETF daily scan — signals + exits |
 | `futures/runner.py --live` | Task Scheduler 06:15 PKT | Futures daily cycle — 3 strategies, all markets |
-| `forex/runner.py --live` | Task Scheduler 06:20 PKT | Forex daily cycle — 34 pairs, 10 swing strategies |
+| `forex/runner.py --live` | Task Scheduler 06:20 PKT | Forex daily cycle — 117 pairs, 10 swing strategies |
 | `run_lbo_london.bat` | Task Scheduler 12:00 PKT Mon–Fri | LBO London open — Asian range break (07:00 UTC) |
 | `run_lbo_ny.bat` | Task Scheduler 18:00 PKT Mon–Fri | LBO NY open — London morning range break (13:00 UTC) |
 | `run_lbo_close.bat` | Task Scheduler 01:00 PKT daily | LBO force-close — exits all day trades (20:00 UTC) |
@@ -155,7 +155,7 @@ git push origin main
 | [`docs/stocks_strategies.md`](docs/stocks_strategies.md) | US Equities — Momentum Blend + Mean Reversion, universe, capital, stops, backtests |
 | [`docs/etf_strategies.md`](docs/etf_strategies.md) | ETF Module — 4 strategies (Sector Rotation, Risk-Off, Mean Reversion, Dual MA) |
 | [`docs/futures_strategies.md`](docs/futures_strategies.md) | Futures — 7 strategies on ES/NQ/GC/CL/ZB, UICs, daily loss limit |
-| [`docs/forex_strategies.md`](docs/forex_strategies.md) | Forex — 11 strategies (10 swing + London Breakout day trading), 34 pairs, UICs |
+| [`docs/forex_strategies.md`](docs/forex_strategies.md) | Forex — 11 strategies (10 swing + London Breakout day trading), 117-pair universe, UICs, audit history, backtesting |
 
 ---
 
@@ -397,7 +397,7 @@ grep -r "etf_strategy" atos/ run_atos.py   # → no matches
 | File | Purpose |
 |---|---|
 | `forex/__init__.py` | Module marker |
-| `forex/universe.py` | 34 FxSpot pairs across Asian, London, and Scandinavian sessions |
+| `forex/universe.py` | 117 FxSpot pairs (34 core majors/crosses + 83 EM/exotic, SIM-only) across Asian, London, and Scandinavian sessions |
 | `forex/runner.py` | Live runner — 11 strategies, bid/ask→mid, ATR sizing, DAY_TRADE_STRATEGIES isolation |
 | `forex/strategy.py` | Strategy 1: EMA(5/30) + ADX(14) ≥ 25 swing trend |
 | `forex/strategy_rsi.py` | Strategy 2: RSI(2) pullback within EMA(200) trend |
@@ -409,7 +409,7 @@ grep -r "etf_strategy" atos/ run_atos.py   # → no matches
 | `forex/strategy_zscore.py` | Strategy 8: Z-score(20) mean-reversion |
 | `forex/strategy_ml.py` | Strategy 9: Logistic regression on 7 technical features |
 | `forex/strategy_cnn_lstm.py` | Strategy 10: CNN-LSTM deep learning (requires `--train` first) |
-| `forex/strategy_london_breakout.py` | **Strategy 11: London Breakout day trading — 7 majors, H1 range break, 15k SEK** |
+| `forex/strategy_london_breakout.py` | **Strategy 11: London Breakout day trading — 28 core pairs, H1 range break, 15k SEK** |
 | `forex/notifier.py` | Email alerts — run summary, token expired, weekly report, LBO trade open/close |
 | `run_lbo_london.bat` | LBO London open launcher (12:00 PKT / 07:00 UTC) |
 | `run_lbo_ny.bat` | LBO NY open launcher (18:00 PKT / 13:00 UTC) |
@@ -429,6 +429,7 @@ grep -r "etf_strategy" atos/ run_atos.py   # → no matches
 | `backtest_us_momentum.py` | US momentum daily-equity backtester |
 | `backtest_futures.py` | Donchian grid search (180 combos, ETF proxies, 5y) |
 | `backtest_forex.py` | EMA+ADX grid search (288 combos, 7 pairs, 5y, mark-to-market) |
+| `backtest_forex_universe.py` | 8 daily-bar strategies × full 117-pair universe, 3y, drives each strategy's real production code (added 2026-08-22 — the other 9 strategies and the 83 EM/exotic pairs had zero backtest coverage before this) |
 
 ### Auth & Infrastructure
 | File | Purpose |
@@ -607,20 +608,29 @@ VERDICT: LIVE ON SIM — observe for 8 weeks before allocating more
 
 ### Forex — 10 Swing Strategies (LIVE ON SIM)
 ```
-Universe:   34 FX pairs across Asian + London sessions
-Capital:    1% of equity risked per trade, ATR-sized
+Universe:   117 FX pairs (34 core + 83 EM/exotic SIM-only, expanded 2026-08-21)
+Capital:    0.5% of equity risked per trade, ATR-sized (cut from 1% 2026-08-22 — margin relief)
 
-Strategy 1 — EMA(5/30) + ADX:    Sharpe=1.619, WR=56%, DD=5%, CAGR=3.9%
+Strategy 1 — EMA(5/30) + ADX:    Sharpe=1.619, WR=56%, DD=5%, CAGR=3.9%  [original 7-pair grid, 5y]
              Grid: 288 combos; 116 passed all thresholds
 Strategy 5 — Pullback-to-EMA:    WR ~70%+, tight stop at EMA support
 Strategy 6 — Weekend Gap Fill:   WR ~80-85%, structural statistical edge
-Signal freq: ~8/pair/year × 34 pairs → ~272/year combined
+Signal freq: ~8/pair/year × 34 pairs → ~272/year combined  [pre-expansion estimate]
 VERDICT: LIVE ON SIM
+
+NOTE (2026-08-22): the numbers above are from backtest_forex.py, which only
+ever covered EMA on the original 7 G7 majors. The other 9 strategies and
+the 83-pair expansion had ZERO historical validation before live signals
+started firing on them. backtest_forex_universe.py closes this gap for 8
+of the 10 strategies (see docs/forex_strategies.md's "Backtesting"
+section for methodology and current results).
 ```
 
 ### Forex — London Breakout Day Trading (LIVE ON SIM)
 ```
-Pairs:      EURUSD, GBPUSD, USDJPY, EURGBP, GBPJPY, AUDUSD, USDCAD (7 majors)
+Pairs:      28 core majors/crosses (widened from the original 7 on 2026-08-20;
+            deliberately excludes the 83-pair EM/exotic expansion — wider
+            spreads don't suit a tight 2:1 RR day-trade)
 Capital:    15,000 SEK dedicated book (independent from swing heat)
 Sessions:   London open (07:00 UTC) + NY open (13:00 UTC)
 Reference:  Asian H1 range (00:00-06:59 UTC) / London morning H1 range (09:00-12:59 UTC)
@@ -628,10 +638,17 @@ R/R:        2:1 (TP = 2× range, SL = range boundary)
 Risk:       1.5% per trade, pre-computed units
 Range filter: 10-120 pips
 Time stop:  20:00 UTC (no overnight holds)
-Expected WR: ~58-63%
+Expected WR: ~58-63% (design target, not yet backtested or live-validated)
 Scheduled:  lbo-london-open (12:00 PKT), lbo-ny-open (18:00 PKT), lbo-force-close (01:00 PKT)
 Test suite: 57/57 tests passing (test_london_breakout.py)
-VERDICT: LIVE ON SIM — first live run 2026-08-20
+VERDICT: LIVE ON SIM — CORRECTION (2026-08-22): despite running on schedule
+since 2026-08-20, LBO had never actually produced a single real signal —
+a data-shape bug in its session-range detection (read the wrong field for
+the H1 bar's hour) meant it silently evaluated ~0 rows on every single
+scan. Fixed 2026-08-22, verified against live data (13 real signals where
+it previously produced 0). The FIRST genuine live test is the next natural
+scheduled trigger, not 2026-08-20 as this line previously implied — check
+docs/forex_strategies.md's "Audit — 2026-08-22" for the full writeup.
 ```
 
 ### Rejected (do not revisit)
@@ -662,17 +679,20 @@ VERDICT: LIVE ON SIM — first live run 2026-08-20
 
 | **Agent #4 (cont)** | **2026-08-17** | **Futures module: 3 strategies (Donchian+RSI(2)+EMA) on ES/NQ/GC/CL/ZB. Multi-strategy runner with `strategy:symbol` position keys. 180-combo Donchian grid (Sharpe=0.754). Forex module: EMA(5/30)+ADX(14) on 7 FxSpot pairs. 288-combo grid (Sharpe=1.619). Mark-to-market backtest equity fix. Vectorized numpy backtester (~50x speedup). Both modules LIVE ON SIM. Updated STRATEGY_NOTES.md and README.md.** |
 | **Agent #4 (cont)** | **2026-08-19** | **London Breakout day trading strategy (Strategy 11): H1 Asian/London-morning range break at London open (07:00 UTC) + NY open (13:00 UTC). 7 majors, 2:1 R/R, no overnight holds, 15k SEK dedicated book. DAY_TRADE_STRATEGIES isolation (bypasses swing heat). Pre-computed position sizing in SEK. Email alerts on every open/close (forex/notifier.py). 3 Task Scheduler jobs (lbo-london-open 12:00 PKT, lbo-ny-open 18:00 PKT, lbo-force-close 01:00 PKT). SuperTrend NaN bug fixed (numpy loop). 57-test suite (test_london_breakout.py) 57/57 passing. Docs updated: README.md, docs/forex_strategies.md.** |
+| **Agent #4 (cont)** | **2026-08-21/22** | **Extended pre-go-live audit, ~24hr pass. Universe 34→117 pairs (83 EM/exotic, SIM-only). Fixed: P&L currency-mixing (raw quote-ccy P&L labeled uniformly 'USD'), 4 wrong UICs, scheduler launch-chain bugs (vbs exit codes, LBO double-wrap, 13 tasks with DisallowStartIfOnBatteries), stop-loss atomicity extended to stocks, ATOS PnL Sync silently weekly-only since creation. Then: crash resilience (one rejected order used to kill the entire scheduled run — fixed in saxo_order.py), wrong tick-size rounding on TRY/CNH pairs (4 duplicated locations), TRY/MXN/CNH fx.py fallback gaps, **London Breakout's real root cause found — never produced a signal since inception (read the wrong H1 data field for session-hour, not a quiet market) — fixed and verified live (13 signals where it produced 0)**, cross-strategy opposite-direction position stacking blocked, ETF partial-sell sync bugs (SQLite UPDATE/ORDER BY, position-wiping), account-wide margin exhaustion (stocks/ETF/forex share one Saxo pool) relieved by selling ~half of every stock/ETF position + cutting swing RISK_PCT 1%→0.5%, stock/ETF sizing capped at 50 shares/name, `atos_live.db` reconciled against live Saxo (4 phantom rows), new `backtest_forex_universe.py` closes the backtest-coverage gap for 8 of 10 swing strategies across the full universe — real finding: ema/donchian/pullback/supertrend show weak-to-negative historical edge even on the CORE pairs already live-trading. 19 new regression tests (test_2026_08_22_session_fixes.py). Docs updated: README.md, STRATEGY_NOTES.md, docs/forex_strategies.md, docs/scheduling.md.** |
 
-**Next agent:** You are Agent #9 (or continuing Agent #4).
-- **LBO first live run**: scheduled tasks fire 2026-08-20 at 12:00 PKT — monitor `data/lbo_london.log` and check email for trade alerts
+**Next agent:** continuing Agent #4.
+- **LBO real first live test**: next natural scheduled trigger, Monday 2026-08-24 12:00 PKT (London Open) — this is genuinely the first time the fixed strategy will run in its real entry window; check `data/lbo_london.log` and email
 - Futures: CL and ZB UICs change monthly — run `python futures/runner.py --discover` to refresh
 - Futures: observe all 3 strategies for 8 weeks before allocating more capital
-- Forex swing: all 34 pairs live — observe for 4 more weeks; pnl_tracker shows per-strategy breakdown with `--scan`
+- Forex swing: 117 pairs live (34 core + 83 exotic, SIM-only) — `zscore`/`rsi`/`bb` have the strongest backtest support across both tiers; `ema`/`donchian`/`pullback`/`supertrend` need a closer look (see docs/forex_strategies.md Backtesting section) before trusting them with more capital
+- Forex: portfolio-heat cap and currency-exposure cap are currently disabled (SIM-testing only) — **must be reinstated with real values before trading live capital**
 - ETF: observe dry-run logs Mon-Fri before flipping `dry_run=False` in `saxo_etf_strategy/config/etf_config.py`
 - ETF: sector_rotation exit-on-rank-drop not yet implemented (only SL/TP exits)
-- Stocks: token expires every ~24h — run `python set_token.py` to refresh
+- Stocks: token expires every ~24h — run `python set_token.py` to refresh (or `python saxo_auth.py` for the shared session)
 - Stocks: BF-B, FITB, ETN missing UICs in instrument_map.csv (low priority)
-- LBO: after 4+ weeks of live data, run backtests on the same 7 pairs to validate the simulated edge against real Saxo fills
+- `ATOS Dashboard Start` scheduled task needs disabling (broken path, flagged 2026-08-22, needs admin rights this session doesn't have): `Disable-ScheduledTask -TaskName "ATOS Dashboard Start"`
+- Going live requires a separate Saxo LIVE app registration (SIM/LIVE app keys aren't shared) — manual, start early, see docs/scheduling.md
 
 ---
 

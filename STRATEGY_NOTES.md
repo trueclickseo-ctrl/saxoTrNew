@@ -829,6 +829,31 @@ python forex/runner.py --status  # open positions
 | `data/forex_orders.json` | Order log (last 500) |
 | `data/forex_grid_results.csv` | Grid search results (288 combos) |
 
+### Update — grown well past the 7-pair/1-strategy snapshot above (2026-08-21/22)
+
+This section above is a historical record of forex's Aug-17 launch state —
+left as-is rather than rewritten. The module has grown substantially since:
+**11 strategies** (10 swing + London Breakout day-trading), **117-pair
+universe** (34 core + 83 EM/exotic, SIM-only). The living reference is
+[docs/forex_strategies.md](docs/forex_strategies.md) (per-strategy detail,
+full audit history) and [docs/scheduling.md](docs/scheduling.md) (every
+scheduled task, verified against live Task Scheduler) — check those
+instead of this log for current state.
+
+Backtest coverage gap closed 2026-08-22: `backtest_forex.py` above only
+ever covered EMA on 7 majors — `backtest_forex_universe.py` (new) extends
+real historical validation to 8 of the 10 swing strategies across the full
+117-pair universe, driven by each strategy's actual production code. See
+docs/forex_strategies.md's "Backtesting" section for methodology and
+results.
+
+Two major bug classes fixed this pass, both live since much earlier than
+discovered: London Breakout's session-range detection had never actually
+worked (read the wrong data shape for its H1 hour window — zero real
+signals since the strategy was added, not a quiet market), and a single
+rejected order used to silently kill an entire scheduled run. Full writeup
+in docs/forex_strategies.md's "Audit — 2026-08-22".
+
 ---
 
 ## ETF Strategies — Added 2026-08-15

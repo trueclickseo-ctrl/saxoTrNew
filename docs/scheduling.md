@@ -2,7 +2,8 @@
 
 **Purpose**: a single ground-truth map of what runs, when, and how — for any
 agent picking up this project cold. Verified directly against Windows Task
-Scheduler on 2026-08-21 (not reconstructed from memory or old docs).
+Scheduler on 2026-08-21, re-verified 2026-08-22 (not reconstructed from
+memory or old docs).
 
 **Everything below runs through Windows Task Scheduler.** An earlier version
 of this doc described a planned "Claude-native" scheduling mechanism for LBO
@@ -44,6 +45,82 @@ see §6.
    This was very likely a real contributor to several "mystery" misses
    found this session. Fixed for all 13 (`DisallowStartIfOnBatteries` and
    `StopIfGoingOnBatteries` both set `False`).
+
+---
+
+## 2026-08-22 fixes and findings
+
+1. **London Breakout has never produced a real signal since inception** —
+   found and fixed. `_session_range()` tried to read the session-hour window
+   off `df.index.hour`; the real H1 data (`_fetch_history_h1()`) carries a
+   plain integer index with the hour in a separate `HourUTC` column instead.
+   The mask matched ~0 rows on every call, every pair, every session,
+   forever — not a "quiet market," a total signal-detection failure.
+   `strategy_gap.py` already used the correct pattern; LBO now matches it.
+   Verified live: 13 real signals produced on the same data that previously
+   produced 0. **First real live test is the next natural trigger** — see
+   §1c below.
+2. **A rejected order used to crash the entire scheduled run.**
+   `saxo_order._place_entry_then_stop()` (the path 9 of 10 forex strategies
+   use) had no exception handling around the entry POST — one `400` killed
+   every strategy queued after it, silently, for that whole cycle. Now
+   logs, skips, continues.
+3. **Wrong tick-size rounding left positions with no stop-loss.** Stop/TP
+   rounding only special-cased JPY crosses (3dp) vs. a flat 5dp default —
+   wrong for any TRY- or CNH-quoted pair (actually 4dp). Caused a real
+   `PriceNotInTickSizeIncrements` rejection on a stop order while the
+   Market entry still went through, leaving the position briefly
+   unprotected. Fixed via `forex.universe.price_decimals()`, derived from
+   each pair's own Saxo-reported precision, in all 4 places that had
+   independently duplicated the wrong guess (entry, stop-heal, TP-heal,
+   breakeven-amend).
+4. **Cross-strategy opposite-direction stacking blocked.** Each strategy's
+   `open_symbols` only ever sees its OWN positions (`prefix =
+   f"{strat_name}:"`) — found live on the dashboard: NZDUSD held Long
+   (donchian, pullback) AND Short (bb, ml) simultaneously, same on USDTHB
+   and USDCZK. That combination has no upside ever (pays spread/commission
+   on both legs for a smaller net position, zero diversification benefit).
+   New entries that would oppose another strategy's existing position on
+   the same pair are now blocked. Same-direction stacking is deliberately
+   left alone — multiple strategies agreeing isn't a conflict.
+5. **Account-wide margin exhaustion.** Confirmed live that stocks/ETF/forex
+   share ONE Saxo margin pool, not siloed. Disabling the forex heat cap (for
+   broader SIM testing) ran usable margin down to 5,546 EUR available
+   (99.22% utilization), which then blocked new entries *and* protective
+   stops on already-open positions. Relieved by selling ~half of every
+   stock/ETF position and cutting forex `RISK_PCT` 1%→0.5% across all 10
+   swing strategies (not LBO, which has its own capital book) — margin
+   available went to 55,774 EUR (92.69% utilization).
+6. **Stock/ETF position sizing capped at 50 shares/name** — a flat dollar
+   budget alone was sizing cheap names (XLF, XLE, AES, U) into 100-500+
+   share positions, tying up disproportionate margin for their dollar
+   value. Applied in both `atos/us_momentum.py`'s `plan_rebalance()` and
+   `saxo_etf_strategy/core/etf_executor.py`'s `_enter_position()`.
+7. **`atos_live.db` didn't match live Saxo** — 4 phantom/stale rows (one
+   entirely fictional CRWD position, excess lots on DELL/FTNT/PANW) traced
+   to the very first 2026-08-14 rebalance, reconciled with an honest
+   unknown/null P&L rather than a guessed number. **New standing rule**:
+   every module's local state must always match live Saxo exactly — see
+   the `state_reconciliation` memory note.
+8. **Historical strategy validation gap identified and being closed.** Only
+   1 of 10 forex strategies (EMA) had ever been backtested, and only on 7
+   G7 majors — the 83-pair EM/exotic expansion and the other 9 strategies
+   had zero historical validation before live signals started firing on
+   them. New `backtest_forex_universe.py` walks all 8 daily-bar strategies
+   forward through 3 years of real data across the full 117-pair universe,
+   using each strategy's actual production `generate_signals`/
+   `should_exit`/`size_position` code (not a reimplementation). `gap` and
+   `london_breakout` are excluded (both need intraday H1 data Yahoo doesn't
+   carry history for). See the "Backtesting" section of
+   [forex_strategies.md](forex_strategies.md) for results.
+9. **`ATOS Dashboard Start` was never actually disabled**, despite this doc
+   claiming since 2026-08-20 that it was (same broken path as `ATOS Daily
+   Scan` — confirmed live, `E:\saxobackup\SaxoTrader\files_kwaseem\` no
+   longer exists at all). It would have failed at its next fire (Monday
+   18:30 PKT). Flagged for the user to disable via an elevated
+   `Disable-ScheduledTask -TaskName "ATOS Dashboard Start"` (this session
+   doesn't have admin rights to do it directly, same limitation as the
+   battery-setting fixes from 2026-08-21).
 
 ---
 
@@ -198,7 +275,7 @@ when the next scheduled cycle happens to run.
 | `ATOS PnL Sync` | 23:00 PKT, daily | `run_pnl_sync.bat` → `pnl_tracker.py --sync` | Syncs open/closed trades from all module state files into `data/pnl_ledger.db`. **Was actually configured as a weekly Sunday-only trigger since creation (2026-08-19) — never fired even once, silently freezing stock P&L data at 2026-08-14. Fixed to real daily 2026-08-21 and backfilled.** |
 | `ATOS Scheduler Watchdog` | every 30 min | `python scheduler_watchdog.py` | See §6. |
 | `ATOS Daily Chart` | 23:15 PKT, daily | `run_daily_chart.bat` → `daily_chart.py` | **Added 2026-08-21.** Generates a 2-panel per-strategy P&L chart (cumulative + today's) for EACH of the 4 modules **separately** — stock/etf/futures/forex each get their own independent chart file, never combined — from `data/pnl_ledger.db`. Fires 15 min after `ATOS PnL Sync` so every module's data is fully synced first. Saves `data/charts/{module}_strategy_YYYY-MM-DD.png` (permanent daily record) and `data/charts/{module}_strategy_latest.png` (always-current), then emails all of today's charts as inline attachments via `config/email.json` (one section per module in the email body). Skips a module gracefully (chart and email) if it has no closed trades yet — ETF/futures did on the day this was added, will start appearing automatically once they have their first closed trade. |
-| ~~`ATOS Dashboard Start`~~ | ~~18:30 PKT~~ | ~~missing path~~ | Disabled 2026-08-20 — same missing-path problem as Daily Scan. Non-financial, lower urgency. |
+| `ATOS Dashboard Start` | 18:30 PKT | ~~missing path~~ | Same missing-path problem as Daily Scan — **but was never actually disabled** despite this doc claiming so since 2026-08-20. Found live 2026-08-22 (still showed `State: Ready`, would fail its next fire). Flagged to the user to disable via elevated PowerShell — this session lacks admin rights. |
 
 ---
 
@@ -257,7 +334,8 @@ account, their own approval process, which can take review time). Start
 this well before a target go-live date. See the "Audit — 2026-08-21"
 section of [forex_strategies.md](forex_strategies.md) for the full writeup.
 
-This document is a snapshot from 2026-08-21. Task Scheduler and the bat
-files are the actual source of truth if anything here looks stale —
+This document is a snapshot from 2026-08-22 (last verified against live
+Task Scheduler state that day). Task Scheduler and the bat files are the
+actual source of truth if anything here looks stale —
 `Get-ScheduledTask | Where TaskName -like "ATOS*"` and `cat run_*.bat` will
 always tell you what's really configured.

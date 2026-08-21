@@ -9,8 +9,47 @@ pairs deliberately excluded (wider spreads don't suit a tight 2:1 RR day-trade).
 **Max slots**: swing strategies scan and can hold a position in every pair in the
 active universe (no artificial cap below universe size) + **28 day-trading** (LBO,
 independent book, one slot per LBO pair)  
-**Swing risk per trade**: 1% of account equity  
+**Swing risk per trade**: 0.5% of account equity (cut from 1% 2026-08-22 —
+see Audit below; margin relief, not a strategy change)  
 **Day-trading capital**: 15,000 SEK dedicated, 1.5% risk per trade  
+**Risk gates — SIM-testing state, NOT the intended live config**: portfolio
+heat cap and currency-exposure cap are both currently disabled (raised to
+effectively unlimited) for full SIM testing across the expanded universe.
+**Both must be reinstated with real values before trading live capital** —
+see Audit 2026-08-22.
+
+---
+
+## Audit — 2026-08-22
+
+Third pass, prompted by the user asking to build out historical backtest
+coverage and spotting a real position-conflict pattern live on the
+dashboard. All items fixed unless marked Open.
+
+| # | Finding | Severity | Status |
+|---|---------|----------|--------|
+| 1 | London Breakout had never produced a real signal since inception — `_session_range()` read the session-hour window off `df.index.hour`; the real H1 data carries the hour in a separate `HourUTC` column instead, so the mask matched ~0 rows on every call, forever | **Critical** | Fixed — 13 real signals produced live post-fix where it previously produced 0 |
+| 2 | A single rejected order used to crash the ENTIRE scheduled run — `saxo_order._place_entry_then_stop()` had no exception handling, so every strategy queued after the failure silently never ran that cycle | **Critical** | Fixed |
+| 3 | Wrong tick-size rounding on TRY/CNH-quoted pairs (4dp, not the 5dp default) caused a live `PriceNotInTickSizeIncrements` rejection on a stop order while the Market entry still went through — position briefly held with no stop-loss | **High** | Fixed, in all 4 duplicated locations |
+| 4 | Cross-strategy opposite-direction stacking — different strategies independently held both Long and Short on the same pair (NZDUSD, USDTHB, USDCZK) simultaneously, since each strategy only ever checks its own open positions | **Medium** | Fixed — new entries opposing another strategy's existing position are now blocked; same-direction stacking deliberately left alone |
+| 5 | `pnl_tracker.sync_etf_from_json()`: SQLite doesn't support `ORDER BY`/`LIMIT` on `UPDATE` — silently failed the first time a real ETF sell was ever synced; a second bug in the same path would have marked a partially-sold position fully closed, dropping the remaining shares from the ledger | **High** | Fixed |
+| 6 | TRY/MXN/CNH had no fallback FX rate, and their live Yahoo lookup structurally 404s (confirmed, not a bad-data-day) — every pair quoted in one of these was silently unsizable, permanently | Medium | Fixed |
+| 7 | Account-wide margin exhaustion — stocks/ETF/forex share one Saxo margin pool; disabling the heat cap ran usable margin to 5,546 EUR available (99.22% utilization), blocking new entries and protective stops alike | Medium | Mitigated — sold ~half of every stock/ETF position, cut swing `RISK_PCT` 1%→0.5%; margin now 55,774 EUR available (92.69%) |
+| 8 | `atos_live.db` held 4 phantom/stale rows not matching live Saxo (one entirely fictional position) | Medium | Reconciled — closed with honest unknown P&L, not a guessed number; new standing rule added (state must always match live Saxo, every module) |
+| 9 | Only 1 of 10 forex strategies (EMA) had ever been backtested, and only on 7 G7 majors — the 83-pair EM/exotic expansion and 9 of 10 strategies had zero historical validation before live signals started firing on them | **High** | Closed — see "Backtesting" section below. Real finding, not just a validation formality: `ema`, `donchian`, `pullback`, `supertrend` show weak/negative historical edge on the CORE universe too, not only the new exotic pairs |
+| 10 | `ATOS Dashboard Start` scheduled task was never actually disabled despite `docs/scheduling.md` claiming so since 2026-08-20 (same broken path as `ATOS Daily Scan`) — would have failed its next fire | Low | Flagged — needs an elevated `Disable-ScheduledTask`, this session has no admin rights |
+| 11 | Repeated real "LBO win" emails with byte-identical values turned out to be a test-suite side effect (`test_london_breakout.py` calling the real notifier unconditionally, not properly mocked) — not a mislabeled real trade, confirmed via exhaustive cross-check against the ledger, state file, dashboard, and Saxo's own account history | Low | Fixed — SMTP now mocked in those tests |
+
+**Root-cause pattern across #1–#3**: none of these were caught by any
+existing test until this session, because every prior test used
+conveniently-shaped synthetic data (a real `DatetimeIndex`, majors-only
+5dp pricing) that never exercised the actual shape production code
+produces (`HourUTC` column + `RangeIndex`, 4dp exotic pairs). 15 new
+regression tests added in `test_2026_08_22_session_fixes.py`, each
+reproducing the runner's real data shape, not a convenient one.
+
+**Backtesting**: see the new "Backtesting" section further down for
+`backtest_forex_universe.py`'s methodology and results.
 
 ---
 
@@ -774,19 +813,138 @@ If no trained model exists, the strategy silently emits no signals — safe to h
 
 ## Strategy Comparison
 
-| # | Strategy | Type | Win Rate | Key Indicators | Stop | Time Stop | Slots | Book |
+**Win rates below are original design targets, not measured results** — see
+the Backtesting section immediately after this table for what's actually
+been historically validated so far (only EMA, on 7 majors, before
+2026-08-22). Slot counts corrected 2026-08-22 — the table below had been
+stale since before the universe expansion.
+
+| # | Strategy | Type | Win Rate (design target) | Key Indicators | Stop | Time Stop | Slots | Book |
 |---|----------|------|----------|---------------|------|-----------|-------|------|
-| 1 | EMA Crossover | Trend | ~55% | EMA(5/30) + ADX(14) | 1.5×ATR | 45d | 4 | Swing |
-| 2 | RSI(2) Pullback | Reversion-in-trend | ~60% | RSI(2) + EMA(200) | 1.5×ATR | 12d | **34** | Swing |
-| 3 | Donchian Break | Momentum | ~50% | 30d High/Low + EMA(200) + ADX | 2.0×ATR | 30d | 4 | Swing |
-| 4 | BB Reversion | Mean-reversion | ~60% | BB(20,2) + RSI(14) | 2.0×ATR | 8d | 4 | Swing |
-| 5 | **Pullback-to-EMA** ★ | Trend continuation | **~70%+** | EMA(20/50) + ADX(14) | 1.5×ATR | 25d | **34** | Swing |
-| 6 | **Weekend Gap Fill** ★★ | Structural mean-rev | **~80–85%** | Gap % + live price | 1.5×gap | 7d | **34** | Swing |
-| 7 | SuperTrend | Trend | ~65% | ST(10,3) + EMA(200) | 2.0×ATR | 40d | 20 | Swing |
-| 8 | Z-Score Rev | Mean-reversion | ~63% | 20d z-score + EMA(200) | 2.5×ATR | 12d | 20 | Swing |
-| 9 | ML Signals | ML / Logistic Reg | ~57–62% | 7 features, per-pair retrain | 2.0×ATR | 20d | 20 | Swing |
-| 10 | **CNN-LSTM** ★★★ | Deep Learning | **~55–65%** | 16 features, global model, attention | 2.5×ATR | 15d | 20 | Swing |
-| **11** | **London Breakout** ★★ | **Day Trading** | **~58–63%** | **H1 Asian/London range + session clock** | **Range boundary** | **20:00 UTC** | **7** | **Day** |
+| 1 | EMA Crossover | Trend | ~55% | EMA(5/30) + ADX(14) | 1.5×ATR | 45d | **117** | Swing |
+| 2 | RSI(2) Pullback | Reversion-in-trend | ~60% | RSI(2) + EMA(200) | 1.5×ATR | 12d | **117** | Swing |
+| 3 | Donchian Break | Momentum | ~50% | 30d High/Low + EMA(200) + ADX | 2.0×ATR | 30d | **117** | Swing |
+| 4 | BB Reversion | Mean-reversion | ~60% | BB(20,2) + RSI(14) | 2.0×ATR | 8d | **117** | Swing |
+| 5 | **Pullback-to-EMA** ★ | Trend continuation | **~70%+** | EMA(20/50) + ADX(14) | 1.5×ATR | 25d | **117** | Swing |
+| 6 | **Weekend Gap Fill** ★★ | Structural mean-rev | **~80–85%** | Gap % + live price | 1.5×gap | 7d | **117** | Swing |
+| 7 | SuperTrend | Trend | ~65% | ST(10,3) + EMA(200) | 2.0×ATR | 40d | **117** | Swing |
+| 8 | Z-Score Rev | Mean-reversion | ~63% | 20d z-score + EMA(200) | 2.5×ATR | 12d | **117** | Swing |
+| 9 | ML Signals | ML / Logistic Reg | ~57–62% | 7 features, per-pair retrain | 2.0×ATR | 20d | **117** | Swing |
+| 10 | **CNN-LSTM** ★★★ | Deep Learning | **~55–65%** | 16 features, global model, attention | 2.5×ATR | 15d | **117** | Swing |
+| **11** | **London Breakout** ★★ | **Day Trading** | **~58–63%** | **H1 Asian/London range + session clock** | **Range boundary** | **20:00 UTC** | **28** | **Day** |
+
+---
+
+## Backtesting
+
+**Coverage before 2026-08-22**: `backtest_forex.py` — a 5-year grid-search
+backtest, but **only for the EMA strategy**, and **only on the 7 original
+G7 majors** (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, NZDUSD, USDCHF). The
+other 9 strategies, and the 83-pair EM/exotic universe expansion, had
+**zero historical validation** before live signals started firing on them
+— a rule-based strategy generates a signal whenever its mathematical
+condition is met (a crossover, an RSI threshold) on ANY price series fed
+to it; that a signal fires is not evidence it has positive expectancy on
+that instrument. ML and CNN-LSTM are a sharper version of the same gap:
+both are trained models, and there's no record of what pairs their
+training data actually covered — running them on a currency the model
+never saw during training is closer to unvalidated extrapolation than
+inference.
+
+**`backtest_forex_universe.py`** (added 2026-08-22) closes this gap for the
+8 daily-bar strategies (ema, rsi, donchian, bb, pullback, supertrend,
+zscore, ml). `gap` and `london_breakout` are excluded — both need intraday
+H1 session data, which Yahoo Finance doesn't reliably carry history for.
+
+- **Drives each strategy's REAL production code** —
+  `generate_signals()`/`should_exit()`/`size_position()` imported directly
+  from `forex/strategy_*.py`, walked forward day-by-day. This is not a
+  reimplementation that could silently diverge from what actually runs
+  live.
+- **Data**: yfinance daily bars, one ticker per currency's USD leg (23
+  currencies, e.g. `EURUSD=X`, `USDTRY=X`). Cross pairs not directly
+  listed on Yahoo with usable history (confirmed empirically: e.g.
+  `AUDTRY=X`/`EURCNH=X` return ~1 bar of data vs 780 for USD-leg tickers)
+  are synthesized via triangulation: `pair_price = usd_value(base) /
+  usd_value(quote)`. Verified against a real live Saxo quote before
+  trusting it: `AUDUSD 0.717 / (1/USDTRY 48.06) = 34.46`, matching the
+  real AUDTRY quote exactly. High/Low for a synthesized pair are
+  approximated by combining each leg's own relative daily range as though
+  roughly independent — adequate for validation-level ATR/Donchian/BB
+  calculations, not a substitute for real historical H/L data. CNH uses
+  `USDCNY=X` as a proxy (no direct `USDCNH` history on Yahoo; onshore and
+  offshore yuan trade very closely).
+- **Usage**:
+  ```bash
+  python backtest_forex_universe.py                  # all 8 strategies, all 117 pairs, 3y
+  python backtest_forex_universe.py --strategy ema donchian
+  python backtest_forex_universe.py --pairs-only-core # skip the 83 exotic pairs
+  ```
+  Results: `data/forex_universe_backtest.csv` (one row per strategy×pair)
+  and `data/forex_universe_backtest_summary.csv` (aggregated per
+  strategy×tier — core vs. exotic — so a strategy's core-universe edge can
+  be compared directly against its exotic-universe edge).
+
+**Results (3-year run, completed 2026-08-22)** — 936 strategy×pair
+combinations with ≥5 trades. Aggregated per strategy×tier:
+
+| Strategy | Tier | Pairs | Avg trades | Avg WR | Avg PF | % pairs PF>1 |
+|---|---|--:|--:|--:|--:|--:|
+| **zscore** | core | 34 | 10.6 | 67.6% | 2.59 | **73.5%** |
+| **zscore** | exotic | 82 | 10.5 | 66.4% | 2.94 | **69.5%** |
+| **rsi** | core | 34 | 25.5 | 66.5% | 1.58 | **73.5%** |
+| **rsi** | exotic | 82 | 24.6 | 67.1% | 2.87 | **73.2%** |
+| **bb** | core | 34 | 18.0 | 52.9% | 1.41 | **67.6%** |
+| **bb** | exotic | 83 | 18.6 | 54.5% | 1.91 | **67.5%** |
+| ml | core | 34 | 10.4 | 44.6% | 1.22 | 50.0% |
+| ml | exotic | 83 | 13.1 | 50.1% | 2.39 | 56.6% |
+| pullback | core | 26 | 9.9 | 22.4% | 0.88 | 42.3% |
+| pullback | exotic | 69 | 11.1 | 28.9% | 1.20 | 37.7% |
+| ema | core | 14 | 6.6 | 27.3% | 0.96 | 35.7% |
+| ema | exotic | 31 | 7.1 | 22.9% | 0.68 | **19.4%** |
+| donchian | core | 20 | 6.8 | 26.7% | 0.74 | 35.0% |
+| donchian | exotic | 64 | 7.3 | 33.4% | 2.21 | 40.6% |
+| supertrend | core | 27 | 7.0 | 23.2% | 0.54 | **18.5%** |
+| supertrend | exotic | 46 | 7.5 | 28.8% | 0.83 | 26.1% |
+
+**Read this as a genuine finding, not just an exotic-universe validation
+check**: `zscore`, `rsi`, and `bb` show real, consistent historical edge on
+BOTH the core and exotic universes (65–75% of pairs individually
+profitable, healthy profit factors, no core→exotic dropoff). But
+`ema`, `donchian`, `pullback`, and especially `supertrend` show weak or
+outright negative average profit factor **on the core universe they've
+already been live-trading on**, not just the new exotic pairs — this isn't
+only an "exotic pairs are unvalidated" gap, it's evidence that 4 of the 10
+currently-live strategies may not have real edge even where they're
+already running. `ema`'s exotic-tier drop to 19.4% of pairs profitable is
+the sharpest core→exotic decline in the whole table. Avg PF can be pulled
+upward by one or two outlier pairs (e.g. donchian-exotic's 2.21 average
+sits oddly next to only 40.6% of pairs actually being profitable) — the
+"% pairs PF>1" column is the more honest single number per strategy.
+
+**Caveats, read before acting on this table**:
+- Exotic-pair (and some core cross-pair, e.g. EURGBP/EURJPY) prices are
+  synthesized via USD-leg triangulation, not independently sourced —
+  approximated High/Low specifically could distort ATR-dependent exits
+  (affects `donchian`, `supertrend`, `pullback`, `ema` more than
+  RSI/BB/z-score, which lean less on ATR-based stops).
+- This tests each strategy's RAW per-pair signal quality in isolation — it
+  does not replicate the live portfolio's slot competition,
+  `signal_filter`'s consensus/ML meta-filter, or the momentum pre-filter
+  applied in production, all of which could move real results in either
+  direction.
+- Per-pair trade counts are thin for some strategies (donchian/ema/
+  supertrend average 6-8 trades per pair over 3 years) — aggregated across
+  many pairs the total sample is reasonable, but any single pair's number
+  should not be over-trusted.
+- `gap` and `london_breakout` are not in this table — both need intraday
+  H1 data this backtest can't source historically.
+
+**Recommendation**: treat `ema`, `donchian`, `pullback`, and `supertrend`
+as needing a closer look (parameter re-tuning or reconsidering whether
+they belong in the live rotation at all) before trusting them with
+materially more capital — `zscore`, `rsi`, and `bb` are the three with
+the most consistent historical support across both universes.
 
 ---
 
