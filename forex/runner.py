@@ -144,7 +144,13 @@ SESSION_PAIRS = {
 # Maximum times any single currency can appear (long OR short) across ALL open
 # positions simultaneously. Prevents correlated drawdowns when one currency
 # moves sharply — e.g. 5 EUR-long positions all losing on one ECB surprise.
-MAX_CURRENCY_EXPOSURE = 3
+# Disabled (set effectively unlimited) 2026-08-21 at user's explicit request —
+# "do not limit it" — to let the SIM account fully test every strategy across
+# the expanded 117-pair universe without this gate suppressing signals. The
+# exposure dict/tracking (_currency_exposure, dashboard's "Currency exposure"
+# panel) is untouched, so real exposure is still visible — just no longer
+# blocking. Reconsider re-enabling a real limit before trading live capital.
+MAX_CURRENCY_EXPOSURE = 999
 
 # Reject a signal if the pair's live spread is wider than this % of price —
 # a proxy for "this pair's home market is currently illiquid" without needing
@@ -826,10 +832,16 @@ def _portfolio_heat_pct(positions: dict, equity: float) -> float:
 
 
 def _heat_allows_entry(positions: dict, equity: float) -> bool:
+    """Disabled 2026-08-21 at user's explicit request — "do not block new
+    entries, I want to test fully all strategies" — while the SIM account is
+    scanning the expanded 117-pair universe. Heat is still computed and
+    logged every run (telemetry, and still shown via `--status`) so real risk
+    is visible; it just no longer gates entries. PORTFOLIO_HEAT_LIMIT and this
+    gate should be reinstated before trading live capital."""
     heat = _portfolio_heat_pct(positions, equity)
     if heat >= PORTFOLIO_HEAT_LIMIT:
-        logger.info(f"  [HEAT] Portfolio heat {heat:.1%} >= {PORTFOLIO_HEAT_LIMIT:.0%} — blocking entries")
-        return False
+        logger.info(f"  [HEAT] Portfolio heat {heat:.1%} >= {PORTFOLIO_HEAT_LIMIT:.0%} "
+                    f"(limit disabled for SIM testing — NOT blocking)")
     return True
 
 
@@ -1820,12 +1832,15 @@ if __name__ == "__main__":
         # Currency exposure summary
         exposure = _currency_exposure(positions)
         if exposure:
-            print(f"\nCurrency exposure (limit: ±{MAX_CURRENCY_EXPOSURE}):")
+            # ASCII only — Windows' default console codepage (cp1252) can't
+            # encode ▲/▼/±, which crashed this whole --status call with an
+            # unhandled UnicodeEncodeError on a plain (non-UTF-8) console.
+            print(f"\nCurrency exposure (limit: +/-{MAX_CURRENCY_EXPOSURE}):")
             for ccy, net in sorted(exposure.items(), key=lambda x: abs(x[1]), reverse=True):
                 if net == 0:
                     continue
-                bar   = ("▲" * abs(net)) if net > 0 else ("▼" * abs(net))
-                warn  = "  ← AT LIMIT" if abs(net) >= MAX_CURRENCY_EXPOSURE else ""
+                bar   = ("+" * abs(net)) if net > 0 else ("-" * abs(net))
+                warn  = "  <- AT LIMIT" if abs(net) >= MAX_CURRENCY_EXPOSURE else ""
                 print(f"  {ccy}  {net:+d}  {bar}{warn}")
         sys.exit(0)
 
