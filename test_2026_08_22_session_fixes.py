@@ -895,6 +895,80 @@ _run("run_hidden.vbs: has retry-then-fallback so a locked log can't block the re
 
 
 # ═══════════════════════════════════════════════════════════════════════
+section("12. Weekend gating — don't scan markets that are definitely closed")
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_atos_run_cycle_skips_weekend():
+    import inspect
+    import atos_runner
+    src = inspect.getsource(atos_runner.run_cycle)
+    assert "weekday() >= 5" in src, (
+        "run_cycle() (US stocks daily scan) must skip Saturday and Sunday "
+        "-- US equities never trade on weekends"
+    )
+
+
+def test_atos_open_scan_skips_weekend():
+    import inspect
+    import atos_runner
+    src = inspect.getsource(atos_runner.run_open_scan)
+    assert "weekday() >= 5" in src, (
+        "run_open_scan() must also skip weekends, independently of "
+        "run_cycle() -- it's a separate entrypoint triggered by "
+        "intraday_monitor.py"
+    )
+
+
+def test_etf_run_once_skips_weekend():
+    import inspect
+    from saxo_etf_strategy.run_etf_bot import ETFBot
+    src = inspect.getsource(ETFBot.run_once)
+    assert "weekday() >= 5" in src, (
+        "ETFBot.run_once() must skip Saturday and Sunday -- US-listed "
+        "ETFs never trade on weekends, and this module had no weekend "
+        "gate at all before this fix"
+    )
+
+
+def test_futures_run_daily_skips_weekend():
+    import inspect
+    import futures.runner as futures_runner
+    src = inspect.getsource(futures_runner.run_daily)
+    assert "weekday() >= 5" in src, (
+        "futures run_daily() must skip both Saturday and Sunday -- its "
+        "single fixed 06:15 PKT daily trigger falls before the Sunday "
+        "evening CME reopen, so the market is closed at that time on "
+        "both weekend days"
+    )
+
+
+def test_forex_saturday_gated_but_sunday_not():
+    import inspect
+    import forex.runner as forex_runner
+    daily_src = inspect.getsource(forex_runner.run_daily)
+    exits_src = inspect.getsource(forex_runner.run_exits_only)
+    assert "weekday() == 5" in daily_src, (
+        "FX run_daily() must skip Saturday -- FX is closed all day "
+        "Saturday regardless of which scheduled trigger calls it"
+    )
+    assert "weekday() == 5" in exits_src, (
+        "FX run_exits_only() must also skip Saturday"
+    )
+    assert "weekday() >= 5" not in daily_src, (
+        "FX must NOT be gated out of Sunday entirely -- the gap-fill "
+        "strategy and Monday-early triggers specifically trade the "
+        "Sunday evening reopen; only Saturday is unconditionally closed"
+    )
+
+
+_run("atos_runner: run_cycle skips weekends", test_atos_run_cycle_skips_weekend)
+_run("atos_runner: run_open_scan skips weekends", test_atos_open_scan_skips_weekend)
+_run("saxo_etf_strategy: ETFBot.run_once skips weekends", test_etf_run_once_skips_weekend)
+_run("futures: run_daily skips weekends", test_futures_run_daily_skips_weekend)
+_run("forex: Saturday gated on run_daily/run_exits_only, Sunday left alone", test_forex_saturday_gated_but_sunday_not)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════
 

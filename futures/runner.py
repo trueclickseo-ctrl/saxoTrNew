@@ -910,6 +910,15 @@ def _run_strategy_entries(strat_name: str, strat_mod, positions: dict,
 def run_daily(dry_run: bool = True,
               active_strategies: list | None = None) -> dict:
     """Execute one daily futures cycle across all (or selected) strategies."""
+    # CME/ICE-style futures (ES/NQ/GC/CL/ZB) are closed all Saturday and
+    # don't reopen until Sunday evening US time (~Monday 04:00 PKT) --
+    # well after this task's fixed 06:15 PKT daily trigger. Both weekend
+    # days are genuinely closed at that trigger time, so skip rather than
+    # scan/place orders against a closed market every Sat/Sun.
+    if date.today().weekday() >= 5:  # 5=Saturday, 6=Sunday
+        logger.info("Futures daily run skipped -- weekend, market closed")
+        return {"skipped": True, "reason": "weekend"}
+
     if active_strategies is None:
         active_strategies = list(STRATEGIES.keys())
 

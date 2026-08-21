@@ -15,6 +15,7 @@ import logging
 import os
 import sys
 import time
+from datetime import date
 
 _ETF_DIR = os.path.dirname(os.path.abspath(__file__))
 # Insert ETF root first so 'core' resolves to saxo_etf_strategy/core/ — not
@@ -74,6 +75,14 @@ class ETFBot:
 
     def run_once(self, force_refresh_universe: bool = False) -> None:
         log = logging.getLogger("etf_bot")
+
+        # US-listed ETFs don't trade on weekends -- skip the whole cycle
+        # rather than burn a universe fetch + strategy scan + exit review
+        # against a closed market every single Saturday/Sunday.
+        if date.today().weekday() >= 5:  # 5=Saturday, 6=Sunday
+            log.info("=== ETF run skipped -- weekend, US market closed ===")
+            return
+
         log.info(f"=== ETF run  strategy={self.cfg.strategy.strategy_name}  "
                  f"dry_run={self.cfg.dry_run} ===")
 

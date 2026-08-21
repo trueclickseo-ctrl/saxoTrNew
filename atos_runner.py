@@ -470,6 +470,11 @@ def run_open_scan(log_fn=None) -> dict:
     """
     _log = log_fn or print
 
+    if date.today().weekday() >= 5:  # 5=Saturday, 6=Sunday
+        _log(f"ATOS Open Scan — {datetime.now():%Y-%m-%d %H:%M:%S} — "
+             f"skipped, weekend (US market closed)")
+        return {"buy_count": 0, "exit_count": 0, "blocked_count": 0, "actions": []}
+
     _log(f"\n{'='*60}")
     _log(f"ATOS Open Scan — {datetime.now():%Y-%m-%d %H:%M:%S}")
     _log("Strategies: US Blend (momentum) + US Reversion (mean-rev)")
@@ -555,6 +560,17 @@ def run_open_scan(log_fn=None) -> dict:
 # ══════════════════════════════════════════════════════════════════
 
 def run_cycle():
+    # US equities don't trade on weekends -- skip the whole cycle (universe
+    # download, per-market scan, US Blend/Reversion, dashboard regen) rather
+    # than burn all that against a market that's definitely closed. Nothing
+    # would change over the weekend anyway (no new price data, no fills
+    # possible), so there's no exit/trailing-stop management being lost.
+    if date.today().weekday() >= 5:  # 5=Saturday, 6=Sunday
+        print(f"ATOS Daily Cycle — {datetime.now():%Y-%m-%d %H:%M:%S} — "
+              f"skipped, weekend (US market closed)")
+        _write_status("idle")
+        return
+
     log_path = _setup_logging()
     _write_status("running")
     print(f"\n{'='*60}\nATOS Daily Cycle — {datetime.now():%Y-%m-%d %H:%M:%S}\n{'='*60}")
