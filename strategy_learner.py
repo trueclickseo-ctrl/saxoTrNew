@@ -133,9 +133,18 @@ def run_learning_pass(module: str) -> dict:
     meta    = _load_meta(module)
     num_processed = meta.get("num_processed", 0)
 
-    # Fetch closed trades oldest-first so the slice picks up genuinely new ones
+    # Fetch closed trades oldest-first so the slice picks up genuinely new
+    # ones. limit=None (not e.g. 1000) is required: get_closed_trades()
+    # returns the N MOST RECENT rows under a limit, not the first N
+    # chronologically -- with a fixed cap, once total closed trades for
+    # this module exceed the cap, the "recent window" silently slides
+    # forward every call while num_processed keeps climbing, desyncing the
+    # cursor from what's actually in the returned slice (some trades
+    # silently skipped, others silently reprocessed). Not yet triggered
+    # (well under 1000 closed trades per module today) but a real bug
+    # waiting to happen as trade history grows.
     all_closed = list(reversed(
-        pnl_tracker.get_closed_trades(module=module, limit=1000)
+        pnl_tracker.get_closed_trades(module=module, limit=None)
     ))
 
     # Only trades where we know P&L and which strategy fired
@@ -176,10 +185,38 @@ def run_learning_pass(module: str) -> dict:
         pnl        = float(trade.get("realized_pnl") or 0)
         profitable = pnl > 0
 
-        # Magnitude factor: big wins/losses shift weights more than small ones
+        # Magnitude factor: big wins/losses shift weights more than small ones.
+        #
+        # entry_val = qty * entry_price must be in the SAME currency as pnl,
+        # or pnl_pct is meaningless. For forex, qty is base-currency units
+        # and entry_price is QUOTE-currency price, so qty*entry_price is a
+        # QUOTE-currency notional -- but realized_pnl is stored in the
+        # ledger's base currency (EUR, via Saxo's own converted P&L). For
+        # any pair NOT quoted in something ~1:1 with EUR (e.g. JPY ~150-220,
+        # TRY ~30-48, HUF ~360-400), this silently divides a small EUR
+        # number by a huge quote-currency notional -- confirmed live: real
+        # JPY-pair trades computed pnl_pct of 0.0003%-0.004% regardless of
+        # the trade's real size, permanently pinning their magnitude factor
+        # to the 0.5x floor. Same currency-mixing bug class fixed elsewhere
+        # this session (P&L ledger, position sizing, heat calc) -- convert
+        # the quote-currency notional into the trade's own ledger currency
+        # before comparing it to pnl.
         qty       = float(trade.get("quantity")    or 1)
         ep        = float(trade.get("entry_price") or 1)
+        sym       = trade.get("symbol", "") or ""
         entry_val = qty * ep
+        if module == "forex" and len(sym) >= 6:
+            ledger_ccy = trade.get("currency") or "EUR"
+            quote_ccy  = sym[-3:]
+            if quote_ccy != ledger_ccy:
+                try:
+                    import fx
+                    rate_quote = fx.get_rate_to_sek(quote_ccy)
+                    rate_ledger = fx.get_rate_to_sek(ledger_ccy)
+                    if rate_quote > 0 and rate_ledger > 0:
+                        entry_val = entry_val * rate_quote / rate_ledger
+                except Exception:
+                    pass  # fall back to the unconverted (imperfect but not worse) value
         pnl_pct   = abs(pnl) / entry_val if entry_val > 0 else 0
         magnitude  = min(pnl_pct, 0.10) / 0.10   # normalise to [0, 1], cap at 10%
         mag_factor = 0.5 + magnitude               # range [0.5×, 1.5×]

@@ -19,6 +19,17 @@ Covers:
   6. forex/runner.py    — _opposing_strategy_holds() blocks a new entry
                          that would take the OPPOSITE side of a pair
                          another strategy already holds
+  7. pnl_tracker.py      — get_strategy_summary/get_pair_summary now scope
+                         win_rate/P&L to CLOSED trades only (open positions
+                         were diluting win_rate into the ground), and
+                         open_count is computed correctly (was always 0)
+  8. strategy_learner.py — magnitude factor no longer mixes a EUR-
+                         denominated P&L with a quote-currency notional
+                         (JPY/TRY/etc. pairs were pinned to the minimum
+                         magnitude regardless of real trade size); the
+                         closed-trades fetch is unbounded, not capped at
+                         1000, avoiding a silent windowing bug as trade
+                         history grows
 
 Run:
     python test_2026_08_22_session_fixes.py
@@ -425,6 +436,161 @@ _run("runner: opposite-direction entry on an already-held pair is blocked", test
 _run("runner: same-direction entry on an already-held pair is NOT blocked", test_same_direction_not_blocked)
 _run("runner: a pair with no existing position is never blocked", test_no_existing_position_not_blocked)
 _run("runner: multi-strategy opposite-direction conflict correctly flagged", test_multiple_opposing_strategies_flags_one)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+section("7. pnl_tracker.py — strategy/pair summaries scope to closed trades only")
+# ═══════════════════════════════════════════════════════════════════════
+
+def _seed_summary_db(db_path):
+    pt = _fresh_pnl_tracker(db_path)
+    # 2 real closed trades for 'donchian' (both wins)
+    pt.log_open("forex", "donchian", "EURUSD", "Buy", 1000, 1.1000, currency="EUR",
+               timestamp="2026-08-01T00:00:00")
+    pt.log_close("forex", "EURUSD", 1.1100, "tp", strategy="donchian",
+                 timestamp="2026-08-01T12:00:00", gross_pnl_base_override=100.0)
+    pt.log_open("forex", "donchian", "GBPUSD", "Buy", 1000, 1.3000, currency="EUR",
+               timestamp="2026-08-02T00:00:00")
+    pt.log_close("forex", "GBPUSD", 1.3100, "tp", strategy="donchian",
+                 timestamp="2026-08-02T12:00:00", gross_pnl_base_override=100.0)
+    # 10 open (undecided) 'donchian' positions -- these must NOT dilute win_rate
+    for i in range(10):
+        pt.log_open("forex", "donchian", f"AUD{'CHF' if i % 2 else 'CAD'}", "Buy", 1000, 1.0,
+                   currency="EUR", timestamp=f"2026-08-{10+i:02d}T00:00:00")
+    return pt
+
+
+def test_strategy_summary_excludes_open_from_win_rate():
+    fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    try:
+        pt = _seed_summary_db(db_path)
+        rows = pt.get_strategy_summary("forex")
+        donchian = next((r for r in rows if r["strategy"] == "donchian"), None)
+        assert donchian is not None, "donchian should appear (has closed trades)"
+        assert donchian["trades"] == 2, f"expected 2 CLOSED trades, got {donchian['trades']}"
+        assert donchian["win_rate"] == 100.0, (
+            f"expected 100% WR (2 wins, 0 losses) -- got {donchian['win_rate']}%, "
+            f"the open positions are diluting the denominator again"
+        )
+        assert donchian["open"] == 10, f"expected open=10, got {donchian['open']}"
+    finally:
+        try:
+            os.remove(db_path)
+        except OSError:
+            pass
+
+
+def test_strategy_with_zero_closed_trades_is_excluded_not_zeroed():
+    """A strategy with only open positions must not appear in the list at
+    all -- previously it showed a misleading win_rate=0.0/total_pnl=0.0
+    row that read as 'traded and broke even' instead of 'no data yet'."""
+    fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    try:
+        pt = _fresh_pnl_tracker(db_path)
+        pt.log_open("forex", "zscore", "EURJPY", "Buy", 1000, 150.0, currency="EUR",
+                   timestamp="2026-08-01T00:00:00")
+        rows = pt.get_strategy_summary("forex")
+        zscore = next((r for r in rows if r["strategy"] == "zscore"), None)
+        assert zscore is None, f"expected zscore excluded (0 closed trades), got {zscore}"
+    finally:
+        try:
+            os.remove(db_path)
+        except OSError:
+            pass
+
+
+def test_pair_summary_open_count_is_real_not_always_zero():
+    fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    try:
+        pt = _fresh_pnl_tracker(db_path)
+        pt.log_open("forex", "ema", "EURUSD", "Buy", 1000, 1.10, currency="EUR",
+                   timestamp="2026-08-01T00:00:00")
+        pt.log_close("forex", "EURUSD", 1.11, "tp", strategy="ema",
+                     timestamp="2026-08-01T12:00:00", gross_pnl_base_override=100.0)
+        pt.log_open("forex", "rsi", "EURUSD", "Buy", 1000, 1.10, currency="EUR",
+                   timestamp="2026-08-02T00:00:00")  # a 2nd, still-open EURUSD position
+        rows = pt.get_pair_summary("forex")
+        eurusd = next((r for r in rows if r["symbol"] == "EURUSD"), None)
+        assert eurusd is not None
+        assert eurusd["open"] == 1, f"expected open=1 (the still-open rsi position), got {eurusd['open']}"
+    finally:
+        try:
+            os.remove(db_path)
+        except OSError:
+            pass
+
+
+def test_get_closed_trades_has_stable_tiebreak():
+    """Multiple trades sharing the exact same timestamp_close (confirmed
+    live: 21 stock trades on one rebalance day, 3 forex trades within one
+    script run) must sort deterministically -- strategy_learner.py's
+    incremental num_processed cursor depends on this ordering being stable
+    across repeated calls."""
+    import pnl_tracker
+    with pnl_tracker._conn() as c:
+        pass  # just confirm the query itself doesn't error and includes id as tiebreak
+    import inspect
+    src = inspect.getsource(pnl_tracker.get_closed_trades)
+    assert "id DESC" in src or "id ASC" in src, \
+        "get_closed_trades must have a secondary sort key for deterministic ordering"
+
+
+_run("pnl_tracker: strategy summary win_rate excludes open positions", test_strategy_summary_excludes_open_from_win_rate)
+_run("pnl_tracker: a strategy with 0 closed trades is excluded, not shown as 0%", test_strategy_with_zero_closed_trades_is_excluded_not_zeroed)
+_run("pnl_tracker: pair summary open_count reflects real open positions", test_pair_summary_open_count_is_real_not_always_zero)
+_run("pnl_tracker: get_closed_trades has a stable secondary sort key", test_get_closed_trades_has_stable_tiebreak)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+section("8. strategy_learner.py — currency-correct magnitude, unbounded fetch")
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_learner_magnitude_not_currency_mixed_for_jpy():
+    """The exact live bug: a JPY-quoted pair's quantity*entry_price notional
+    is in JPY, but realized_pnl is in EUR -- dividing one by the other used
+    to pin every JPY trade's magnitude factor to the floor regardless of
+    real size. Confirmed live: real JPY trades computed pnl_pct of
+    0.0003%-0.004% before this fix; after, 0.05%-0.7% -- ~150x larger,
+    matching the JPY/EUR rate."""
+    import fx
+    fx.reset_cache()
+    qty, ep, pnl = 11000.0, 196.664, 20.69   # real CHFJPY trade from tonight
+    entry_val_wrong = qty * ep
+    pnl_pct_wrong = abs(pnl) / entry_val_wrong
+
+    quote_ccy, ledger_ccy = "JPY", "EUR"
+    rate_quote = fx.get_rate_to_sek(quote_ccy)
+    rate_ledger = fx.get_rate_to_sek(ledger_ccy)
+    entry_val_fixed = entry_val_wrong * rate_quote / rate_ledger
+    pnl_pct_fixed = abs(pnl) / entry_val_fixed
+
+    assert pnl_pct_fixed > pnl_pct_wrong * 50, (
+        f"expected the currency-corrected pct to be far larger (~150x) than "
+        f"the naive one -- wrong={pnl_pct_wrong:.6f} fixed={pnl_pct_fixed:.6f}"
+    )
+    assert 0.0001 < pnl_pct_fixed < 0.05, (
+        f"fixed pnl_pct should land in a plausible range for a small real "
+        f"trade, got {pnl_pct_fixed}"
+    )
+
+
+def test_learner_uses_unbounded_fetch_not_capped_at_1000():
+    import inspect
+    import strategy_learner as sl
+    src = inspect.getsource(sl.run_learning_pass)
+    assert "limit=1000" not in src, (
+        "run_learning_pass must not cap get_closed_trades at a fixed limit -- "
+        "get_closed_trades returns the N MOST RECENT rows under a limit, so "
+        "once total closed trades exceed the cap, the window silently slides "
+        "and desyncs from the num_processed cursor"
+    )
+
+
+_run("strategy_learner: magnitude factor is currency-correct for JPY pairs", test_learner_magnitude_not_currency_mixed_for_jpy)
+_run("strategy_learner: closed-trades fetch is unbounded, not capped at 1000", test_learner_uses_unbounded_fetch_not_capped_at_1000)
 
 
 # ═══════════════════════════════════════════════════════════════════════

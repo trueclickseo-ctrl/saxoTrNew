@@ -525,7 +525,17 @@ def get_closed_trades(module: str = None, limit: int = 100,
     if since:
         q += " AND timestamp_close >= ?"
         args.append(since)
-    q += " ORDER BY timestamp_close DESC"
+    # Secondary sort key (id) makes this deterministic when multiple rows
+    # share the same timestamp_close -- confirmed this actually happens
+    # (stock trades synced with a date-only exit_date collide by the dozen
+    # on a single rebalance day; even real-time forex closes can share a
+    # microsecond-precision timestamp within one script run). Without it,
+    # SQLite's tie-break order for "ORDER BY timestamp_close DESC" alone is
+    # not guaranteed stable across calls -- strategy_learner.py relies on
+    # this ordering being stable/monotonic for its incremental
+    # num_processed cursor, so an unstable tie-break could silently
+    # reprocess or skip trades.
+    q += " ORDER BY timestamp_close DESC, id DESC"
     if limit:
         q += f" LIMIT {int(limit)}"
     with _conn() as c:
@@ -539,6 +549,15 @@ def get_strategy_summary(module: str = "forex") -> list[dict]:
     Only includes strategies with at least one closed trade.
     """
     with _conn() as c:
+        # WHERE must filter to status='closed' -- open positions have
+        # realized_pnl=NULL, which SUM()/CASE-WHEN silently skip for the
+        # P&L/wins/losses columns, but COUNT(*) still counted them into n,
+        # diluting win_rate for any strategy holding open positions
+        # (confirmed live 2026-08-22: donchian showed 14.3% WR from 2
+        # wins/14 total rows, when its real closed-trade WR was 2/2=100% --
+        # 12 of those 14 rows were open, not losses). Strategies with ONLY
+        # open positions (0 closed) used to show a misleading "0% WR /
+        # $0 P&L" instead of correctly having no row at all.
         rows = c.execute("""
             SELECT strategy,
                    COUNT(*)                                                     AS n,
@@ -548,13 +567,21 @@ def get_strategy_summary(module: str = "forex") -> list[dict]:
                    SUM(CASE WHEN realized_pnl > 0 THEN realized_pnl ELSE 0 END) AS gross_profit,
                    SUM(CASE WHEN realized_pnl < 0 THEN realized_pnl ELSE 0 END) AS gross_loss,
                    MAX(realized_pnl)                                            AS best,
-                   MIN(realized_pnl)                                            AS worst,
-                   COUNT(CASE WHEN status='open' THEN 1 END)                   AS open_count
+                   MIN(realized_pnl)                                            AS worst
               FROM trades
-             WHERE module=?
+             WHERE module=? AND status='closed'
              GROUP BY strategy
              ORDER BY total_pnl DESC
         """, (module,)).fetchall()
+        # Open count needs its own query -- computing it from the same
+        # closed-only rowset (the previous approach, shared with the WHERE
+        # above) can only ever return 0, since status='open' rows were
+        # already excluded before the CASE WHEN could match them. Confirmed
+        # this exact zero-every-time bug in get_pair_summary below too.
+        open_counts = {row["strategy"]: row["n"] for row in c.execute("""
+            SELECT strategy, COUNT(*) AS n FROM trades
+             WHERE module=? AND status='open' GROUP BY strategy
+        """, (module,)).fetchall()}
 
     result = []
     for r in rows:
@@ -566,7 +593,7 @@ def get_strategy_summary(module: str = "forex") -> list[dict]:
             "trades":        n,
             "wins":          r["wins"]   or 0,
             "losses":        r["losses"] or 0,
-            "open":          r["open_count"] or 0,
+            "open":          open_counts.get(r["strategy"], 0),
             "win_rate":      round((r["wins"] or 0) / n * 100, 1) if n else 0.0,
             "total_pnl":     round(r["total_pnl"] or 0.0, 2),
             "profit_factor": round(gp / gl, 2) if gl > 0 else None,
@@ -592,13 +619,20 @@ def get_pair_summary(module: str = "forex") -> list[dict]:
                    SUM(CASE WHEN realized_pnl > 0 THEN realized_pnl ELSE 0 END) AS gross_profit,
                    SUM(CASE WHEN realized_pnl < 0 THEN realized_pnl ELSE 0 END) AS gross_loss,
                    MAX(realized_pnl)                                            AS best,
-                   MIN(realized_pnl)                                            AS worst,
-                   COUNT(CASE WHEN status='open' THEN 1 END)                   AS open_count
+                   MIN(realized_pnl)                                            AS worst
               FROM trades
              WHERE module=? AND status='closed'
              GROUP BY symbol
              ORDER BY total_pnl DESC
         """, (module,)).fetchall()
+        # Same fix as get_strategy_summary above: open_count can only ever
+        # be 0 when computed from a rowset the WHERE clause already
+        # filtered to status='closed' -- confirmed live, every pair showed
+        # open=0 regardless of real open positions. Needs its own query.
+        open_counts = {row["symbol"]: row["n"] for row in c.execute("""
+            SELECT symbol, COUNT(*) AS n FROM trades
+             WHERE module=? AND status='open' GROUP BY symbol
+        """, (module,)).fetchall()}
 
     result = []
     for r in rows:
@@ -610,7 +644,7 @@ def get_pair_summary(module: str = "forex") -> list[dict]:
             "trades":        n,
             "wins":          r["wins"]   or 0,
             "losses":        r["losses"] or 0,
-            "open":          r["open_count"] or 0,
+            "open":          open_counts.get(r["symbol"], 0),
             "win_rate":      round((r["wins"] or 0) / n * 100, 1) if n else 0.0,
             "total_pnl":     round(r["total_pnl"] or 0.0, 2),
             "profit_factor": round(gp / gl, 2) if gl > 0 else None,
