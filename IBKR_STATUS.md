@@ -4,6 +4,14 @@ Living document. Last updated 2026-08-21. For the "why" behind the design
 see [IBKR_ARCHITECTURE.md](IBKR_ARCHITECTURE.md); for migration-by-migration
 history see [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md).
 
+> **Headline (2026-08-21):** stocks, ETFs, market data, historical bars and
+> the whole forex code pipeline all work. **Spot FX cross-pairs are blocked
+> by an IBKR Ireland regulatory restriction — confirmed by IBKR support in
+> writing, not fixable in code or by settings.** Forex CFDs are IBKR's
+> supported alternative and 34/34 pairs are reachable, but CFDs can't be
+> held in a Swedish ISK — which reintroduces the K4 paperwork this
+> migration was meant to avoid. See §2/§2b for the decision.
+
 Everything below marked "tested live" was actually run against the real
 paper Gateway (account `DUR952126`, port 4002) during this migration, not
 just code-reviewed. Everything marked "not tested" is implemented but
@@ -38,55 +46,112 @@ Client Portal — needs a full logout/login). Fixed and re-verified: FX,
 stock, and ETF live prices and historical bars all confirmed working
 after enabling sharing + Gateway restart.
 
-### 2. FX cross-currency-pair trading — **NOT RESOLVED, actively blocking**
-**This is the current blocker.** Every FX order rejects with:
+### 2. FX cross-currency-pair trading — **CONFIRMED HARD BLOCK by IBKR**
+Every spot FX order on a pair without a SEK leg rejects with:
 ```
 Error 201: Order rejected - reason: FX trade would expose account to currency leverage.
 ```
-**Confirmed pattern** (tested directly, not inferred): pairs including the
-account's base currency (SEK) fill instantly — USDSEK, EURSEK, NOKSEK all
-tested successfully. Every pair that doesn't touch SEK is rejected
-identically — EURUSD, USDJPY, GBPJPY, EURGBP, AUDNZD all tested, all
-rejected, at every size tried (100 to 20,000 units) and both market and
-limit order types.
 
-**Practical impact: only 2 of the 34 pairs in `forex/universe.py`
-(USDSEK, EURSEK) can actually execute live right now.** The other 32 —
-which is most of the strategy universe — will place-and-immediately-reject
-every time (correctly detected and cleaned up as of the 2026-08-21 fix,
-so no phantom positions or orphaned orders, but no fills either).
+**IBKR Client Services confirmed this in writing (2026-08-21):** it is a
+*hard regulatory restriction* under **IBKR Ireland (IBIE)**. As a retail
+client of that entity, leveraged FX transactions that would create or
+increase a negative balance in either component currency are not
+supported. Only three FX scenarios are permitted:
+1. **FX Conversion** — converting a positive currency balance into base (SEK)
+2. **Debt Reduction** — reducing the net of negative currency balances
+3. **Debt Consolidation** — trading a negative non-base balance into base (SEK)
 
-**Ruled out as the cause:**
-- Order type (limit orders rejected identically to market)
-- Order size (100 units rejected same as 20,000)
-- Trading Permissions (Currency/Forex already enabled on the live account;
-  confirmed via IBKR's own docs that permissions mirror to paper
-  automatically, unlike market data)
-- Stale session (retested immediately after a full Gateway logout/login —
-  same rejection)
+They explicitly stated the "All Global" permission change could not fix
+this ("the restriction is regulatory, not a permissions configuration
+problem"), and that they **cannot confirm Professional Client status
+removes it** for IBIE accounts.
 
-**Attempted fix that didn't resolve it:** submitted a Trading Permissions
-request under Currency/Forex → "locations" → checked "All Global" +
-"Currency Conversion" (previously unchecked), which showed "approved
-successfully." Retested after — same rejection, both immediately and
-after a Gateway restart.
+**Independent testing matched their rule exactly**, before their reply
+arrived. The decisive evidence — same instrument, opposite directions,
+opposite outcomes, while holding a long USD balance:
+| Order | Effect | Result |
+|---|---|---|
+| **BUY** USDJPY | long USD, short **JPY** (none held) | **rejected** |
+| **SELL** USDJPY | short **USD** (45,000 held), long JPY | **filled** |
 
-**Best-informed hypothesis** (from web research, not IBKR confirmation):
-matches a documented restriction on IBKR's EU-regulated entities (e.g.
-Interactive Brokers Central Europe) — an ESMA/MiFID II retail-protection
-leverage guard specifically on cross-currency pairs that don't touch base
-currency. Likely fix: **Professional Client status** (2 of 3 MiFID II
-criteria — 10+ significant trades/quarter, portfolio >€500k, or 1+ year
-professional trading experience), which removes ESMA retail restrictions.
-Not confirmed — needs IBKR support to verify. Draft support-ticket text
-was sent separately.
+So the rule is not "the pair must contain SEK" as first assumed — it is
+**"the order must not create or increase a short balance in a currency
+you don't already hold."** Pairs containing SEK always work because
+shorting the base currency is always permitted. Confirmed across
+USDSEK/EURSEK/NOKSEK (fill) vs EURUSD/USDJPY/GBPJPY/EURGBP/AUDNZD
+(reject), at every size (100–20,000 units) and both order types. EURUSD
+*did* fill once a USD balance was on hand — proving the pair itself was
+never the problem.
 
-**What NOT to conclude from this:** this doesn't mean the code is wrong,
-and it doesn't mean the forex migration failed — the full pipeline (data,
-signals, sizing, risk gates, order construction) all work correctly, right
-up to the point IBKR's own account-level restriction rejects the fill.
-Once that's resolved (or if it can't be), no code changes should be
-needed on this side.
+**Ruled out as causes:** order type, order size, Trading Permissions,
+stale Gateway session, market data.
+
+**Practical impact: spot FX on IBKR cannot support this strategy.** The
+strategies go both long and short across 34 pairs; pre-funding every
+quote currency in both directions isn't workable (it would require
+holding meaningful balances in all 8+ currencies simultaneously, and a
+short entry still needs the base currency held).
+
+### 2b. The Forex CFD alternative — works technically, but see the ISK problem
+IBKR support's recommended route for leveraged cross-pair FX exposure
+under IBIE is **Forex CFDs**, requestable via Client Portal → Settings →
+Trading Permissions.
+
+**Tested — the contracts resolve cleanly.** Using
+`CFD(base, currency=quote)` (i.e. `CFD('EUR', currency='USD')`):
+**33 of 34 pairs in `forex/universe.py` resolve immediately.** The single
+failure, EURAUD, is an *ambiguity* (two CFD contracts match, `tradingClass`
+`EUR.AUD` vs `EUR`), not a missing instrument — fixable by pinning
+`tradingClass`, so effectively **34/34 are reachable**. The alternative
+formulation (`secType="CFD", symbol="EUR.USD"`) does *not* work — returns
+"No security definition found."
+
+**But two serious caveats before taking this route:**
+
+1. **CFDs cannot be held in a Swedish ISK account.** Derivatives —
+   including CFDs — are excluded from ISK by law; ISK is limited to
+   instruments admitted to trading on a regulated market. Trading FX CFDs
+   would require a regular taxable account (*aktie- och fondkonto*/depå),
+   taxed at 30% on gains **with self-reported declarations — i.e. the K4
+   paperwork this whole migration was meant to avoid**, at least for the
+   forex book. (Stocks/ETFs/funds in the ISK are unaffected.)
+2. **CFDs are economically different from the spot FX these strategies
+   were built and backtested on** — wider spreads plus overnight
+   financing charges. That matters most for the swing strategies (ema,
+   rsi, donchian, bb, pullback, supertrend, zscore, ml, cnn_lstm) which
+   hold positions for days; `london_breakout` closes same-day so is far
+   less affected. Backtested edges would need re-validating against CFD
+   cost assumptions before trusting them.
+
+**Options, honestly stated:**
+- **Keep forex on Saxo** (recommended default) — spot FX there already
+  works and is what the strategies were validated on; migrate only the
+  instruments that genuinely benefit from the ISK. Costs nothing but
+  leaves forex on the old broker.
+- **Forex CFDs on IBKR in a non-ISK account** — technically ready
+  (34/34 pairs reachable, needs CFD permission + a code change to build
+  CFD contracts instead of `Forex` ones), but reintroduces K4 for forex
+  and needs strategy re-validation for CFD costs.
+- **Spot FX limited to SEK-leg pairs** — only 2 of 34 pairs; not viable
+  as a strategy.
+- **Professional Client status** — IBKR could not confirm this lifts the
+  restriction, so it's a gamble, not a plan.
+
+**What this does NOT mean:** the forex code migration isn't wrong or
+wasted. The full pipeline — market data, historical bars, all 10
+strategies, sizing, risk gates, bracket-order construction, exits,
+healing — is implemented and verified working against the live Gateway.
+Only the final fill is refused, by broker policy. If the CFD route is
+taken, the change needed is contained: build CFD contracts in
+`_ibkr_uic()`/`find_instrument()` instead of `Forex` contracts.
+
+**Note on the paper account after testing:** the FX tests left two virtual
+FX positions (USD.SEK +45,000, USD.JPY −20,000) that can't be unwound,
+because closing them is itself blocked by the same restriction. Net
+liquidation is intact (999,862 SEK vs 1,000,000 start — the difference is
+spread cost). These are FX-Portfolio tracking entries, not risk exposure,
+and the cleanest way to clear them is a paper-account reset from Client
+Portal if a pristine starting state is wanted.
 
 ## Bugs found and fixed during this migration
 
