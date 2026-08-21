@@ -362,7 +362,22 @@ def sync_futures_from_json() -> int:
 
 
 def sync_forex_from_json() -> int:
-    """Sync open forex positions from forex_state.json."""
+    """Sync open forex positions from forex_state.json.
+
+    forex/runner.py already logs every open directly and in real time via
+    log_open() (source_ref=None) the moment an order is placed. This sync
+    exists as a catch-up net (e.g. after a gap in the runner's own logging),
+    but it used to only dedupe against its OWN previous sync ref
+    ("forex:open:{key}") — never against the real-time-logged row for the
+    same position. Since the sync ref never matches the real-time row's
+    (None) source_ref, EVERY open position sitting in forex_state.json got
+    silently double-inserted every time --sync ran, double-counting exposure/
+    notional in any aggregate. Found 2026-08-21 via duplicate rows for
+    donchian:CNHHKD, ema:EURSGD, ema:GBPUSD, ema:USDJPY, rsi:EURAUD after
+    running --sync to backfill a separate (unrelated) stock data gap. Fixed:
+    skip if ANY open row already exists for this strategy+symbol, not just
+    a prior sync-created one.
+    """
     if not os.path.exists(FX_JSON):
         return 0
     added = 0
@@ -373,6 +388,14 @@ def sync_forex_from_json() -> int:
             if _already_synced(ref):
                 continue
             strat, sym = key.split(":", 1) if ":" in key else ("ema", key)
+            with _conn() as c:
+                existing = c.execute(
+                    "SELECT 1 FROM trades WHERE module='forex' AND strategy=? "
+                    "AND symbol=? AND status='open' LIMIT 1",
+                    (strat, sym),
+                ).fetchone()
+            if existing:
+                continue
             with _conn() as c:
                 c.execute("""
                     INSERT INTO trades
@@ -398,16 +421,39 @@ def sync_forex_from_json() -> int:
             xp    = t.get("exit_price",  0)
             qty   = t.get("quantity",    0)
             direc = t.get("direction",   "Buy")
+            # Same class of bug as the open-position dedup above: forex/runner.py
+            # already logs every close directly and in real time via log_close()
+            # (which uses Saxo's own ProfitLossOnTradeInBaseCurrency — the
+            # authoritative converted P&L). That direct UPDATE never sets
+            # source_ref, so it can never match this ref and this catch-up path
+            # would silently insert a SECOND, duplicate row for the same close —
+            # AND with a wrong P&L, since raw*qty here is in the pair's quote
+            # currency, not the ledger's base currency (the exact currency-
+            # mixing bug fixed elsewhere in this file). Guard against both:
+            # skip if a closed row for this strategy+symbol+entry+qty already
+            # exists, and tag the currency honestly as the pair's quote
+            # currency (not 'USD') since no base-currency conversion happens
+            # on this fallback path.
+            with _conn() as c:
+                existing = c.execute(
+                    "SELECT 1 FROM trades WHERE module='forex' AND strategy=? "
+                    "AND symbol=? AND status='closed' AND entry_price=? AND quantity=? "
+                    "LIMIT 1",
+                    (strat, sym, ep, qty),
+                ).fetchone()
+            if existing:
+                continue
             raw   = (xp - ep) if direc == "Buy" else (ep - xp)
             pnl   = raw * qty
+            quote_ccy = sym[-3:] if len(sym) >= 6 else "USD"
             with _conn() as c:
                 c.execute("""
                     INSERT INTO trades
                         (module, strategy, symbol, direction, quantity,
                          entry_price, exit_price, realized_pnl, currency,
                          exit_reason, status, timestamp_open, timestamp_close, source_ref)
-                    VALUES ('forex',?,?,?,?,?,?,?,'USD',?,'closed',?,?,?)
-                """, (strat, sym, direc, qty, ep, xp, pnl,
+                    VALUES ('forex',?,?,?,?,?,?,?,?,?,'closed',?,?,?)
+                """, (strat, sym, direc, qty, ep, xp, pnl, quote_ccy,
                       t.get("exit_reason", ""),
                       t.get("entry_date", ""), t.get("exit_date", ""), ref))
             added += 1
@@ -645,7 +691,7 @@ def print_statement(module: str = None):
         pnl   = s.get("realized_pnl", 0.0)
         wr    = s.get("win_rate", 0.0)
         pf    = s.get("profit_factor")
-        cur   = "SEK" if mod == "stock" else "USD"
+        cur   = "SEK" if mod == "stock" else "EUR" if mod == "forex" else "USD"
         pc    = GR if pnl >= 0 else RD
         sign  = "+" if pnl >= 0 else ""
 
