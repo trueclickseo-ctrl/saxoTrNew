@@ -3,13 +3,25 @@ Order execution for the ETF strategy.
 
 Uses its own capital allocation (config.risk.*) — entirely separate from the
 shares strategies' capital and risk budget. Set dry_run=True (the default)
-to log intended orders without sending them to Saxo.
+to log intended orders without sending them to the broker.
+
+BROKER: executes via IBKR (ibkr_client.py / ibkr_order.py), not Saxo.
+Signal generation and universe discovery (core/etf_universe.py,
+core/etf_strategy.py) are UNCHANGED and stay on the Saxo `client` passed
+in here — Saxo's instrument catalog is still the only source for "list
+every ETF you offer", IBKR has no equivalent to page. Only *execution*
+(orders, balances, positions, exit-price checks) moved to IBKR. That means
+every ETFSignal arrives with a Saxo Uic (signal.uic) that this executor
+never uses for trading — it resolves signal.symbol against IBKR directly
+via ibkr_client.find_instrument() instead, and all position state below is
+keyed by the resulting IBKR conId, not the Saxo Uic.
 
 Key fixes vs. the original scaffold:
-  - ManualOrder: False added to all orders (required by Saxo since ~2024)
+  - ManualOrder: False added to all orders (required by Saxo since ~2024) --
+    n/a under IBKR, ibkr_client/ibkr_order have no such field
   - AccountKey auto-discovered if not set in config
   - entry_price stored in position state so review_exits() can compute P&L
-  - review_exits() fully implemented: live price via /trade/v1/infoprices,
+  - review_exits() fully implemented: live price via ibkr_price_service,
     acts on stop_loss_pct / take_profit_pct from ETFRiskConfig
 """
 
@@ -18,7 +30,9 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 import pnl_tracker
 import trade_logger
-import saxo_order
+import ibkr_client
+import ibkr_order
+import ibkr_price_service
 from typing import List, Optional
 
 from core.saxo_client import SaxoClient
@@ -31,10 +45,11 @@ logger = logging.getLogger("etf_strategy.executor")
 
 class ETFExecutor:
     def __init__(self, client: SaxoClient, state: ETFStateStore, cfg: ETFConfig):
-        self.client = client
+        self.client = client   # Saxo -- kept for signature compat with ETFBot; unused for execution now
         self.state  = state
         self.cfg    = cfg
         self._account_key = cfg.risk.etf_account_key or self._discover_account_key()
+        self._ibkr_uic_cache: dict[str, Optional[int]] = {}
 
     # ------------------------------------------------------------------
     # Account key discovery
@@ -42,16 +57,36 @@ class ETFExecutor:
 
     def _discover_account_key(self) -> str:
         try:
-            resp = self.client.get("/port/v1/accounts/me")
-            data = resp.get("Data", resp)
-            acct = data[0] if isinstance(data, list) else data
-            key  = acct.get("AccountKey", "") if isinstance(acct, dict) else ""
-            if key:
-                logger.info(f"ETF: auto-discovered AccountKey ...{key[-6:]}")
+            key = ibkr_client.get_account_key()
+            logger.info(f"ETF: IBKR account {key}")
             return key
         except Exception as exc:
-            logger.warning(f"ETF: could not auto-discover AccountKey: {exc}")
+            logger.warning(f"ETF: could not discover IBKR account id: {exc}")
             return ""
+
+    # ------------------------------------------------------------------
+    # Saxo Uic -> IBKR conId resolution
+    # ------------------------------------------------------------------
+
+    def _resolve_ibkr_uic(self, signal: ETFSignal) -> Optional[int]:
+        """ETFSignal.uic is a Saxo Uic (from the Saxo-sourced universe/signal
+        pipeline, unchanged) -- resolve the symbol against IBKR directly
+        rather than depending on a pre-built etf_map_ibkr.csv, so this
+        works without having run resolve_etf_universe_ibkr.py first.
+        Cached per-run since the same symbol may appear across calls."""
+        if signal.symbol in self._ibkr_uic_cache:
+            return self._ibkr_uic_cache[signal.symbol]
+        try:
+            matches = ibkr_client.find_instrument(signal.symbol, asset_type="Etf")
+            conid = matches[0]["Uic"] if matches else None
+        except Exception as exc:
+            logger.warning(f"ETF: IBKR lookup failed for {signal.symbol}: {exc}")
+            conid = None
+        if conid is None:
+            logger.warning(f"ETF: {signal.symbol} (Saxo Uic {signal.uic}) not "
+                            f"resolvable on IBKR -- skipping")
+        self._ibkr_uic_cache[signal.symbol] = conid
+        return conid
 
     # ------------------------------------------------------------------
     # Cash
@@ -59,14 +94,8 @@ class ETFExecutor:
 
     def get_account_cash(self) -> float:
         try:
-            resp = self.client.get("/port/v1/balances/me")
-            # CashAvailableForTrading may be absent on some account types;
-            # fall back to CashBalance (liquid cash) then MarginAvailableForTrading.
-            cash = (resp.get("CashAvailableForTrading")
-                    or resp.get("CashBalance")
-                    or resp.get("MarginAvailableForTrading")
-                    or 0)
-            return float(cash)
+            bal = ibkr_client.get_balances()
+            return float(bal.get("CashAvailableForTrading") or 0)
         except Exception as exc:
             logger.warning(f"Could not fetch ETF account cash: {exc}")
             return 0.0
@@ -99,11 +128,15 @@ class ETFExecutor:
 
         # Iterate ALL signals (not just top-N) so that already-held positions
         # don't waste free slots — stop only when slots_free entries have been made.
+        # Matched by symbol, not uic: state is keyed by IBKR conId (resolved at
+        # entry time), while signal.uic is a Saxo Uic -- symbol is the only
+        # identifier both sides agree on before resolution happens.
+        already_held_symbols = {p.get("symbol") for p in self.state.all_positions().values()}
         slots_filled = 0
         for signal in signals:
             if slots_filled >= slots_free:
                 break
-            if self.state.get_position(signal.uic):
+            if signal.symbol in already_held_symbols:
                 logger.debug(f"Already holding {signal.symbol} — skipping")
                 continue
             self._enter_position(signal, per_position_budget)
@@ -113,23 +146,16 @@ class ETFExecutor:
         if budget_ccy <= 0:
             return
 
+        ibkr_uic = self._resolve_ibkr_uic(signal)
+        if ibkr_uic is None and not self.cfg.dry_run:
+            return   # can't place a live order without a resolved conId
+
         price    = signal.last_price or signal.fast_ma  # last close is the best proxy
         quantity = int(budget_ccy // price) if price else 0
         if quantity <= 0:
             logger.info(f"Skipping {signal.symbol}: budget {budget_ccy:.0f} too small "
                         f"for 1 share at ~{price:.2f}")
             return
-
-        order = {
-            "AccountKey":    self._account_key,
-            "Uic":           signal.uic,
-            "AssetType":     "Etf",
-            "Amount":        quantity,
-            "BuySell":       "Buy",
-            "OrderType":     "Market",
-            "OrderDuration": {"DurationType": "DayOrder"},
-            "ManualOrder":   False,   # required by Saxo — marks algorithmic origin
-        }
 
         stop_price = round(price * (1 - self.cfg.risk.stop_loss_pct), 4)
         tp_price   = round(price * (1 + self.cfg.risk.take_profit_pct), 2)
@@ -138,18 +164,14 @@ class ETFExecutor:
 
         if self.cfg.dry_run:
             logger.info(f"[DRY RUN] Would BUY {quantity}x {signal.symbol} "
-                        f"(UIC {signal.uic}) score={signal.score:.3f} "
+                        f"(IBKR conId {ibkr_uic}) score={signal.score:.3f} "
                         f"~{budget_ccy:.0f} {signal.currency} @ ~{price:.2f}  "
                         f"stop={stop_price:.2f}  tp={tp_price:.2f}")
             order_id = "DRY_RUN"
         else:
-            def _client_post(path, body):
-                return self.client.post(path, json_body=body)
-
-            order_id, stop_oid, tp_oid = saxo_order.place_with_stop(
-                post_fn           = _client_post,
+            order_id, stop_oid, tp_oid = ibkr_order.place_with_stop(
                 account_key       = self._account_key,
-                uic               = signal.uic,
+                uic               = ibkr_uic,
                 asset_type        = "Etf",
                 amount            = quantity,
                 buy_sell          = "Buy",
@@ -161,8 +183,12 @@ class ETFExecutor:
             logger.info(f"ETF BUY {order_id}: {quantity}x {signal.symbol} @ ~{price:.2f}  "
                         f"stop={stop_price:.2f}  stop_order={stop_oid}{tp_info}")
 
-        self.state.upsert_position(signal.uic, {
+        # Keyed by IBKR conId (not signal.uic, which is a Saxo Uic) so
+        # _sync_with_ibkr() can match this against ibkr_client.get_positions().
+        state_key = ibkr_uic if ibkr_uic is not None else f"DRYRUN:{signal.symbol}"
+        self.state.upsert_position(state_key, {
             "symbol":        signal.symbol,
+            "saxo_uic":      signal.uic,   # informational only -- not used for trading
             "quantity":      quantity,
             "entry_price":   price,
             "stop_price":    stop_price,    # persisted so review_exits() uses entry stop, not current config
@@ -173,7 +199,7 @@ class ETFExecutor:
             "tp_order_id":   tp_oid,
         })
         self.state.log_order({
-            "uic": signal.uic, "symbol": signal.symbol,
+            "uic": state_key, "symbol": signal.symbol,
             "side": "Buy", "quantity": quantity,
             "entry_price": price, "order_id": order_id,
             "dry_run": self.cfg.dry_run,
@@ -194,41 +220,38 @@ class ETFExecutor:
                                  asset_type="ETF")
 
     # ------------------------------------------------------------------
-    # Saxo position sync — removes phantom state from GTC-triggered exits
+    # IBKR position sync — removes phantom state from GTC-triggered exits
     # ------------------------------------------------------------------
 
-    def _sync_with_saxo(self) -> int:
+    def _sync_with_ibkr(self) -> int:
         """
-        Cross-check local state against Saxo's actual open ETF positions.
-        Removes any positions from state that Saxo no longer has (closed by GTC
-        stop/TP or manual close since last run). Returns number removed.
+        Cross-check local state against IBKR's actual open positions.
+        Removes any positions from state that IBKR no longer has (closed by
+        the native stop/TP bracket, or manually). Returns number removed.
         Must be called BEFORE review_exits to prevent phantom SELL orders.
+
+        State keys that aren't a plain conId (the "DRYRUN:SYMBOL" keys
+        _enter_position() writes when dry_run placed no real order) are
+        never real IBKR positions and are skipped here.
         """
         if self.cfg.dry_run:
-            return 0   # no Saxo call in dry_run; nothing to sync
+            return 0   # no IBKR positions were ever opened in dry_run; nothing to sync
         try:
-            resp = self.client.get("/port/v1/netpositions/me", params={
-                "AssetType": "Etf",
-                "FieldGroups": "NetPositionBase",
-            })
-            saxo_uics: set[int] = set()
-            for row in resp.get("Data", []):
-                base   = row.get("NetPositionBase", {})
-                uic    = base.get("Uic")
-                amount = float(base.get("Amount", 0) or 0)
-                if uic is not None and abs(amount) > 0:
-                    saxo_uics.add(int(uic))
+            resp = ibkr_client.get_positions()
+            ibkr_conids = {row["Uic"] for row in resp.get("Data", [])}
         except Exception as exc:
-            logger.warning(f"[sync] Could not fetch Saxo ETF positions: {exc} — skipping sync")
+            logger.warning(f"[sync] Could not fetch IBKR positions: {exc} — skipping sync")
             return 0
 
         removed = 0
-        for uic_str in list(self.state.all_positions()):
-            if int(uic_str) not in saxo_uics:
-                sym = self.state.get_position(int(uic_str) if uic_str.isdigit() else 0)
-                label = sym.get("symbol", uic_str) if sym else uic_str
-                logger.info(f"[sync] {label} no longer open in Saxo — removing phantom state")
-                self.state.remove_position(int(uic_str))
+        for key in list(self.state.all_positions()):
+            if not key.isdigit():
+                continue   # DRYRUN:SYMBOL keys -- never a real IBKR position
+            if int(key) not in ibkr_conids:
+                pos = self.state.get_position(key)
+                label = pos.get("symbol", key) if pos else key
+                logger.info(f"[sync] {label} no longer open in IBKR — removing phantom state")
+                self.state.remove_position(key)
                 removed += 1
 
         if removed:
@@ -241,21 +264,22 @@ class ETFExecutor:
 
     def review_exits(self) -> None:
         """
-        1. Sync state with Saxo — remove any positions already closed by GTC orders.
-        2. For remaining live positions, fetch current price and close those that
-           breached stop_loss_pct or take_profit_pct (safety net for GTC failures).
+        1. Sync state with IBKR — remove any positions already closed by the
+           native stop/TP bracket.
+        2. For remaining live positions, fetch current price and close those
+           that breached stop_loss_pct or take_profit_pct (safety net for
+           bracket-order failures).
         Respects dry_run — logs intent but skips actual SELL in dry mode.
         """
         # Remove phantom positions before checking exits — prevents duplicate SELL orders
-        self._sync_with_saxo()
+        self._sync_with_ibkr()
 
         positions = self.state.all_positions()
         if not positions:
             return
 
-        for uic_str, pos in list(positions.items()):
-            uic         = int(uic_str)
-            symbol      = pos.get("symbol", uic_str)
+        for key, pos in list(positions.items()):
+            symbol      = pos.get("symbol", key)
             entry_price = pos.get("entry_price")
             if not entry_price:
                 logger.warning(f"No entry_price recorded for {symbol} — skipping exit check")
@@ -265,7 +289,7 @@ class ETFExecutor:
             sl_price = pos.get("stop_price") or (entry_price * (1 - self.cfg.risk.stop_loss_pct))
             tp_price = pos.get("tp_price")   or (entry_price * (1 + self.cfg.risk.take_profit_pct))
 
-            live = self._get_live_price(uic, symbol)
+            live = self._get_live_price(key, symbol)
             if live is None:
                 continue
 
@@ -274,46 +298,30 @@ class ETFExecutor:
                          f"SL={sl_price:.2f}  TP={tp_price:.2f}")
 
             if live <= sl_price:
-                self._exit_position(uic, pos, live, f"STOP_LOSS ({pnl*100:.1f}%)")
+                self._exit_position(key, pos, live, f"STOP_LOSS ({pnl*100:.1f}%)")
             elif live >= tp_price:
-                self._exit_position(uic, pos, live, f"TAKE_PROFIT (+{pnl*100:.1f}%)")
+                self._exit_position(key, pos, live, f"TAKE_PROFIT (+{pnl*100:.1f}%)")
 
-    def _get_live_price(self, uic: int, symbol: str) -> Optional[float]:
+    def _get_live_price(self, key: str, symbol: str) -> Optional[float]:
+        if not key.isdigit():
+            return None   # DRYRUN:SYMBOL -- no real conId to price
         try:
-            params = {"Uic": uic, "AssetType": "Etf", "FieldGroups": "Quote"}
-            if self._account_key:
-                params["AccountKey"] = self._account_key
-            resp = self.client.get("/trade/v1/infoprices", params=params)
-            q    = resp.get("Quote", {})
-            mid  = q.get("Mid")
-            if mid is None and q.get("Ask") and q.get("Bid"):
-                mid = (float(q["Ask"]) + float(q["Bid"])) / 2
-            if mid is None:
-                mid = q.get("LastTraded")
-            return float(mid) if mid else None
+            prices, _status = ibkr_price_service.fetch_prices(
+                [{"symbol": symbol, "uic": int(key)}]
+            )
+            return prices.get(symbol)
         except Exception as exc:
-            logger.warning(f"Live price fetch failed for {symbol} UIC {uic}: {exc}")
+            logger.warning(f"Live price fetch failed for {symbol} conId {key}: {exc}")
             return None
 
-    def _exit_position(self, uic: int, pos: dict, live_price: float, reason: str) -> None:
+    def _exit_position(self, key: str, pos: dict, live_price: float, reason: str) -> None:
         quantity = pos.get("quantity", 0)
-        symbol   = pos.get("symbol", str(uic))
-
-        order = {
-            "AccountKey":    self._account_key,
-            "Uic":           uic,
-            "AssetType":     "Etf",
-            "Amount":        quantity,
-            "BuySell":       "Sell",
-            "OrderType":     "Market",
-            "OrderDuration": {"DurationType": "DayOrder"},
-            "ManualOrder":   False,
-        }
+        symbol   = pos.get("symbol", key)
 
         if self.cfg.dry_run:
             logger.info(f"[DRY RUN] Would SELL {quantity}x {symbol} — {reason} @ ~{live_price:.2f}")
         else:
-            resp = self.client.post("/trade/v2/orders", json_body=order)
+            resp = ibkr_client.place_market_order(int(key), "Etf", "Sell", quantity)
             logger.info(f"ETF SELL {resp.get('OrderId','?')}: {quantity}x {symbol} — {reason} @ ~{live_price:.2f}")
 
         self.state.remove_position(uic)

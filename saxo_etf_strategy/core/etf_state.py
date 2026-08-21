@@ -35,17 +35,17 @@ class ETFStateStore:
 
     # ---------- positions ----------
 
-    def get_position(self, uic: int) -> Optional[dict]:
+    def get_position(self, uic) -> Optional[dict]:
         return self._state["positions"].get(str(uic))
 
     def all_positions(self) -> Dict[str, dict]:
         return self._state["positions"]
 
-    def upsert_position(self, uic: int, data: dict) -> None:
+    def upsert_position(self, uic, data: dict) -> None:
         self._state["positions"][str(uic)] = data
         self._save()
 
-    def remove_position(self, uic: int) -> None:
+    def remove_position(self, uic) -> None:
         self._state["positions"].pop(str(uic), None)
         self._save()
 
