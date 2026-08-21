@@ -82,6 +82,7 @@ WINDOWS_TASKS = {
     "LBO London Open":        ("ATOS LBO London Open",        "lbo_london.log",        20),
     "LBO NY Open":             ("ATOS LBO NY Open",            "lbo_ny.log",            20),
     "LBO Force Close":        ("ATOS LBO Force Close",        "lbo_close.log",         20),
+    "Daily Chart":            ("ATOS Daily Chart",            "daily_chart_scheduler.log", 15),
 }
 
 # ── Registry: Claude-native scheduled tasks (no Windows entry) ──────────────

@@ -414,6 +414,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         n_closed = stats.get("trades", 0)
         wins     = stats.get("wins", 0)
         losses   = stats.get("losses", 0)
+        best     = stats.get("best", 0.0)
         pnl_col  = GR if realized >= 0 else RD
         u_col    = GR if unrealized >= 0 else RD
         L.append(
@@ -423,6 +424,17 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
             f"P&L: {pnl_col}{BD}{realized:>+,.0f} EUR{W}  "
             f"{DM}(open: {u_col}{unrealized:>+,.0f}{DM} unrealized){W}"
         )
+        # Flag when one trade dominates the total — a "profitable" strategy
+        # total can be almost entirely one outlier win, masking a real losing
+        # trend in every other trade (found 2026-08-21: Gap Fill's +13,759
+        # total was 130% explained by one legacy oversized trade from before
+        # a sizing bug fix — the other 16 trades net -4,082).
+        if realized > 0 and best > 0 and best >= 0.5 * realized:
+            pct = best / realized * 100
+            L.append(
+                f"  {DM}{'':<18}  {YL}⚠ single best trade ({best:>+,.0f} EUR) is {pct:.0f}% of "
+                f"this total — check it isn't propping up an otherwise-losing strategy{W}"
+            )
 
     L.append("")
     L.append(HR)

@@ -66,6 +66,9 @@ STOP_BINANCE
 # Backtest cache pickles (re-downloadable via --reset)
 data/*.pkl
 
+# Daily strategy charts — regenerated every day via daily_chart.py, machine-local
+data/charts/
+
 # CNN-LSTM model artifacts (large, regenerated via --train)
 data/cnn_lstm/model.pt
 data/cnn_lstm/scaler.json
