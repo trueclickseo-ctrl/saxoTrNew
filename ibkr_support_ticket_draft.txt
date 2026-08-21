@@ -1,0 +1,48 @@
+Subject: Paper account rejects all FX orders not involving base currency (SEK) — "FX trade would expose account to currency leverage"
+
+Account: [paper account DUR952126 / linked live account — fill in]
+
+I'm placing FX orders via the TWS API (paper trading, IDEALPRO) and every
+order is rejected unless one leg of the pair is my account's base currency
+(SEK). The exact rejection is:
+
+  Error 201: Order rejected - reason: FX trade would expose account to
+  currency leverage.
+
+Testing done so far, all on the same paper account, same session:
+
+- USDSEK, EURSEK, NOKSEK: all fill instantly at 20,000 units, market order.
+- EURUSD, USDJPY, GBPJPY, EURGBP, AUDNZD: all rejected with the exact
+  error above, at every size tried (100, 1,000, 20,000 units), with both
+  market and limit orders.
+
+This isn't a market data or account-currency-holding issue — the account
+successfully held non-SEK cash (USD, EUR) immediately after the USDSEK/
+EURSEK conversions. It only affects pairs where neither leg is SEK.
+
+I confirmed Currency/Forex trading permission is already enabled (both on
+the live account and mirrored to paper), and today submitted a request
+under Settings → Trading Permissions → Currency/Forex → "Select the
+locations you wish to trade Currency/Forex" — checked "All Global" and
+"Currency Conversion" (previously unchecked), which showed "approved
+successfully." I then fully logged out and back into IB Gateway on the
+paper account to make sure the change wasn't just stuck in an old session.
+The exact same rejection still occurs after that.
+
+Questions:
+1. Is this a hard restriction tied to my account's regulatory entity (e.g.
+   Interactive Brokers Central Europe) for retail clients trading
+   cross-currency pairs that don't touch base currency?
+2. If so, is Professional Client status the only way to remove it, or is
+   there an account-level setting that can enable full cross-pair FX
+   trading?
+3. If it's a settings/permission issue rather than a hard regulatory
+   block, what specifically needs to change, since Trading Permissions
+   already shows Currency/Forex as enabled?
+
+I trade a multi-pair FX strategy and this currently limits me to only the
+2 of ~30 pairs that happen to involve SEK, so I'd appreciate clarity on
+whether this can be resolved and how.
+
+Thanks,
+[your name]
