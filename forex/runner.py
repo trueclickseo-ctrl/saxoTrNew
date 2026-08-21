@@ -95,10 +95,18 @@ STRATEGIES = {
     "london_breakout": strat_lbo,
 }
 SLOTS_PER_STRATEGY = {
-    "ema": 4, "rsi": 34, "donchian": 4, "bb": 4,
+    # ema/donchian/bb/supertrend/zscore/ml/cnn_lstm previously capped at 4-20
+    # slots — a legacy holdover from a smaller pair universe with no risk
+    # rationale documented anywhere (unlike london_breakout below). All of
+    # them scan the same full 34-pair universe as rsi/pullback/gap, so capped
+    # below 34 they'd needlessly miss signals on pairs beyond their slot
+    # count. Raised to 34 (2026-08-20) so every swing strategy can take a
+    # position in every pair it actually signals on.
+    "ema": 34, "rsi": 34, "donchian": 34, "bb": 34,
     "pullback": 34, "gap": 34,
-    "supertrend": 20, "zscore": 20, "ml": 20, "cnn_lstm": 20,
-    "london_breakout": 7,   # max 7 simultaneous (one per pair)
+    "supertrend": 34, "zscore": 34, "ml": 34, "cnn_lstm": 34,
+    "london_breakout": 10,  # universe expanded to 28 pairs 2026-08-20; cap concurrent
+                             # day-trade risk at 10 slots (10 × 1.5% = 15% of the LBO book)
 }
 
 # Day-trade strategies run independently of the swing book's heat budget.
@@ -184,6 +192,11 @@ def _patch(path: str, body: dict) -> dict:
     r = requests.patch(f"{BASE_URL}{path}", headers=_hdrs(), json=body, timeout=15)
     r.raise_for_status()
     return r.json()
+
+
+def _delete(path: str, params: dict | None = None) -> None:
+    r = requests.delete(f"{BASE_URL}{path}", headers=_hdrs(), params=params, timeout=15)
+    r.raise_for_status()
 
 
 # ── Token / Account ───────────────────────────────────────────────────────────
@@ -644,14 +657,42 @@ def _update_exposure(exposure: dict, sym: str, direction: str) -> None:
 # ── Portfolio risk guard helpers ──────────────────────────────────────────────
 
 def _portfolio_heat_pct(positions: dict, equity: float) -> float:
-    """Sum of |entry-stop| × qty across all open positions, as fraction of equity."""
+    """Sum of |entry-stop| × qty across all open positions, converted to EUR,
+    as a fraction of EUR equity.
+
+    Two independent bugs used to inflate this wildly:
+
+    1. No currency conversion: |entry-stop|×qty is in the pair's QUOTE
+       currency, but was summed directly against EUR equity. A JPY-quoted
+       pair (prices ~100-200) or NOK/SEK pair produces a numeric risk value
+       ~100-180x larger than the equivalent EUR amount, so a single JPY
+       position could read as 180%+ "heat" on its own even when correctly
+       risking ~1% of equity. Fixed by converting each position's risk into
+       EUR via _eur_per_unit() before summing — mirrors the same fix already
+       applied to position sizing via _equity_in_quote().
+    2. Positions opened before the capital-cap fix (5bf8a5f) were sized off
+       the ~945k-985k EUR SIM broker balance instead of the ~27,800 EUR
+       configured capital, so their EUR risk is ~35x too large to compare
+       against the new equity base. Only count positions carrying
+       "sized_under_cap" (i.e. opened under the fixed sizing logic) so the
+       gate reflects real risk from here forward instead of stale pre-fix
+       noise.
+    """
     if equity <= 0:
         return 0.0
-    heat = sum(
-        abs(float(pos.get("entry_price", 0)) - float(pos.get("stop_price", 0)))
-        * float(pos.get("quantity", 0))
-        for pos in positions.values()
-    )
+    heat = 0.0
+    for key, pos in positions.items():
+        if not pos.get("sized_under_cap"):
+            continue
+        sym   = key.split(":", 1)[1] if ":" in key else key
+        quote = sym[3:6] if len(sym) >= 6 else "EUR"
+        rate  = _eur_per_unit(quote)
+        if not rate or rate <= 0:
+            logger.debug(f"  [HEAT] No FX rate for {quote} — skipping {key} in heat calc")
+            continue
+        risk_quote = abs(float(pos.get("entry_price", 0)) - float(pos.get("stop_price", 0))) \
+                     * float(pos.get("quantity", 0))
+        heat += risk_quote * rate
     return heat / equity
 
 
@@ -671,6 +712,16 @@ def _update_peak_equity(equity: float) -> None:
                 peak = float(json.load(f).get("peak", 0))
         except Exception:
             pass
+    # A >80% gap between current equity and the recorded peak is implausible
+    # for a risk-controlled swing book (stops are 1.5-2x ATR) and almost
+    # certainly means the peak predates a rescale of the sizing equity base
+    # (e.g. the capital cap added in 5bf8a5f, which sizes off ~27,800 EUR
+    # instead of the ~945,000 EUR broker SIM balance). Reseed rather than
+    # let a stale, wrong-scale peak permanently trip the drawdown breaker.
+    if peak > 0 and equity > 0 and equity < peak * 0.2:
+        logger.warning(f"  [DRAWDOWN] peak {peak:,.0f} looks stale vs current "
+                        f"equity {equity:,.0f} — reseeding peak")
+        peak = 0.0
     if equity > peak:
         with open(PEAK_EQUITY_FILE, "w") as f:
             json.dump({"peak": equity, "updated": datetime.now().isoformat()}, f)
@@ -708,13 +759,23 @@ def _entries_blocked_by_loss_limit(equity: float) -> bool:
 
 # ── Breakeven stop helpers ────────────────────────────────────────────────────
 
-def _amend_stop_order(order_id: str, new_price: float, sym: str, akey: str) -> bool:
-    """Amend an existing Saxo GTC stop order to a new price via PATCH."""
+def _amend_stop_order(order_id: str, new_price: float, sym: str, akey: str, uic: int) -> bool:
+    """Amend an existing Saxo GTC stop order to a new price via PATCH.
+
+    Saxo's PATCH /trade/v2/orders/{OrderId} 404s if the body only carries the
+    changed fields — it also needs OrderId/Uic/AssetType repeated in the body
+    to resolve which order+instrument context to modify (confirmed: every
+    prior amend attempt 404'd with just AccountKey+OrderPrice+OrderDuration,
+    even against order ids verified live via GET /port/v1/orders/me).
+    """
     dp = 3 if sym.upper().endswith("JPY") else 5
     rounded = round(new_price, dp)
     try:
         _patch(f"/trade/v2/orders/{order_id}", {
             "AccountKey":    akey,
+            "OrderId":       str(order_id),
+            "Uic":           uic,
+            "AssetType":     ASSET_TYPE,
             "OrderPrice":    rounded,
             "OrderDuration": {"DurationType": "GoodTillCancel"},
         })
@@ -722,8 +783,64 @@ def _amend_stop_order(order_id: str, new_price: float, sym: str, akey: str) -> b
         return True
     except Exception as exc:
         logger.warning(f"  [BREAKEVEN] Could not amend stop {order_id}: {exc} "
-                       f"— heal will re-place on next run")
+                       f"— will try cancel+replace")
         return False
+
+
+def _cancel_order(order_id: str, akey: str) -> bool:
+    """Cancel a live Saxo order. Returns True on success (incl. if it's
+    already gone — a 404 here means there's nothing left to double-protect
+    against, so treat it as cancelled rather than aborting the replace)."""
+    try:
+        _delete(f"/trade/v2/orders/{order_id}", {"AccountKey": akey})
+        return True
+    except requests.exceptions.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 404:
+            return True
+        logger.warning(f"  [BREAKEVEN] Could not cancel stop {order_id}: {exc}")
+        return False
+    except Exception as exc:
+        logger.warning(f"  [BREAKEVEN] Could not cancel stop {order_id}: {exc}")
+        return False
+
+
+def _replace_stop_order(pos: dict, sym: str, akey: str, new_price: float) -> str | None:
+    """Cancel the position's current stop and place a fresh one at new_price.
+
+    Fallback for when PATCH-amend 404s (Saxo SIM doesn't support in-place
+    amend for these stop orders even with full Uic/AssetType/OrderId in the
+    body — confirmed against multiple live order ids). Returns the new order
+    id, or None if either step failed — caller must treat None as "possibly
+    unprotected, do not mark breakeven_triggered".
+    """
+    old_oid = pos.get("stop_order_id")
+    if old_oid and old_oid not in ("synced", None, ""):
+        if not _cancel_order(old_oid, akey):
+            return None   # couldn't confirm the old stop is gone — don't risk a duplicate
+
+    direction  = pos.get("direction", "Buy")
+    close_side = "Sell" if direction == "Buy" else "Buy"
+    dp         = 3 if sym.upper().endswith("JPY") else 5
+    rounded    = round(new_price, dp)
+    try:
+        resp    = _post("/trade/v2/orders", {
+            "AccountKey":    akey,
+            "Uic":           pos["uic"],
+            "AssetType":     ASSET_TYPE,
+            "Amount":        pos["quantity"],
+            "BuySell":       close_side,
+            "OrderType":     "Stop",
+            "OrderPrice":    rounded,
+            "OrderDuration": {"DurationType": "GoodTillCancel"},
+            "ManualOrder":   False,
+        })
+        new_oid = str(resp.get("OrderId", "?"))
+        logger.info(f"  [BREAKEVEN] Replaced stop {old_oid} → {new_oid} @ {rounded:.{dp}f}  ✓")
+        return new_oid
+    except Exception as exc:
+        logger.warning(f"  [BREAKEVEN] Cancelled stop {old_oid} but re-place FAILED @ "
+                        f"{rounded:.{dp}f}: {exc} — POSITION MAY BE UNPROTECTED, check manually")
+        return None
 
 
 def _apply_breakeven_stop(key: str, pos: dict, df, strat_name: str,
@@ -775,15 +892,34 @@ def _apply_breakeven_stop(key: str, pos: dict, df, strat_name: str,
     tag = "[DRY] " if dry_run else ""
     logger.info(f"  {tag}[BREAKEVEN] {key}: stop {cur_stop:.5f} → {entry_price:.5f} (entry)")
 
-    pos["stop_price"]          = entry_price
-    pos["breakeven_triggered"] = True
+    pos["stop_price"] = entry_price
 
-    if not dry_run:
-        stop_oid = pos.get("stop_order_id")
-        if stop_oid and stop_oid not in ("synced", None, ""):
-            _amend_stop_order(stop_oid, entry_price, sym, akey)
+    if dry_run:
+        pos["breakeven_triggered"] = True
+        return True
 
-    return True
+    stop_oid = pos.get("stop_order_id")
+    if stop_oid and stop_oid not in ("synced", None, "") and \
+       _amend_stop_order(stop_oid, entry_price, sym, akey, pos["uic"]):
+        pos["breakeven_triggered"] = True
+        return True
+
+    # PATCH-amend failed — fall back to cancel + re-place at the new price
+    # (Saxo SIM 404s in-place amends for some stop orders regardless of body).
+    new_oid = _replace_stop_order(pos, sym, akey, entry_price)
+    if new_oid:
+        pos["stop_order_id"]       = new_oid
+        pos["breakeven_triggered"] = True
+        return True
+
+    # Both amend and cancel+replace failed — drop the stale id so
+    # _heal_missing_stops places a fresh GTC stop at the updated stop_price
+    # next run, instead of the position silently believing the broker-side
+    # stop moved when it never did. Don't set breakeven_triggered:
+    # should_trigger recomputes false now that stop_price == entry_price,
+    # so this is a quiet no-op until healed.
+    pos["stop_order_id"] = None
+    return False
 
 
 # ── Per-strategy exit / entry helpers ─────────────────────────────────────────
@@ -1039,6 +1175,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             "atr_at_entry":   sig["atr"],
             "stop_order_id":  stop_oid,
             "tp_order_id":    tp_oid if not dry_run else None,
+            "sized_under_cap": True,
         }
         if "gap_target" in sig:
             pos_record["gap_target"]   = sig["gap_target"]
@@ -1479,7 +1616,7 @@ if __name__ == "__main__":
                     help="Check stops only — no new entries (intraday stop check)")
     ap.add_argument("--strategy", default="all",
                     choices=["all", "ema", "rsi", "donchian", "bb", "pullback", "gap",
-                             "supertrend", "zscore", "ml", "london_breakout"],
+                             "supertrend", "zscore", "ml", "cnn_lstm", "london_breakout"],
                     help="Which strategy to run (default: all)")
     ap.add_argument("--status",   action="store_true",
                     help="Print open positions and exit")
@@ -1673,12 +1810,63 @@ if __name__ == "__main__":
             elif prob <= 0.42:  flag = f"  *** SELL (conf={1-prob:.2f}) ***"
             print(f"  {r['symbol']:<10} {r['close']:>10.5f} {prob:>8.3f}{flag}")
 
+        # Panel 10 — CNN-LSTM deep learning
+        print(f"\n[CNN-LSTM] Multi-scale CNN + BiLSTM + Attention  "
+              f"(36.9% val acc, threshold={strat_cnn_lstm.CONFIDENCE_THRESHOLD} — rarely fires)")
+        rows = strat_cnn_lstm.scan_summary(market_data)
+        print(f"  {'Pair':<10} {'Close':>10} {'P(Sell)':>8} {'P(Hold)':>8} {'P(Buy)':>8} {'ADX':>6}  Signal")
+        print("  " + "-" * 70)
+        for r in rows:
+            if r["status"] == "no_model":
+                print(f"  {r['symbol']:<10}  no trained model"); continue
+            if r["status"] != "ok":
+                print(f"  {r['symbol']:<10}  no data"); continue
+            flag = f"  *** {r['signal']} ***" if r["signal"] != "hold" else ""
+            print(f"  {r['symbol']:<10} {r['close']:>10.5f} {r['p_sell']:>8.3f} "
+                  f"{r['p_hold']:>8.3f} {r['p_buy']:>8.3f} {r['adx']:>6.1f}{flag}")
+
+        # Panel 11 — London/NY Breakout (day trading)
+        print(f"\n[LBO] London/NY Session Breakout — day trading (~58-63% WR)")
+        lbo_h1: dict = {}
+        lbo_meta: dict = {}
+        for pair in PAIRS:
+            if pair["symbol"] not in strat_lbo.PAIRS:
+                continue
+            lbo_h1[pair["symbol"]]   = _fetch_history_h1(pair["uic"])
+            lbo_meta[pair["symbol"]] = {"pip_size": pair.get("pip_size", 0.0001)}
+        rows = strat_lbo.scan_summary(lbo_h1, lbo_meta)
+        print(f"  {'Pair':<10} {'Range':>10} {'Hi':>10} {'Lo':>10} {'Close':>10} "
+              f"{'Pips':>6}  Tradeable  Breakout")
+        print("  " + "-" * 90)
+        for r in rows:
+            if r["status"] != "ok":
+                print(f"  {r['symbol']:<10}  no data"); continue
+            flag = f"  *** {r['breakout']} BREAKOUT ***" if r["breakout"] != "inside" else ""
+            trd  = "yes" if r["tradeable"] else "no"
+            print(f"  {r['symbol']:<10} {r['range_ref']:>10} {r['range_hi']:>10.5f} "
+                  f"{r['range_lo']:>10.5f} {r['close']:>10.5f} {r['range_pip']:>6.1f}  "
+                  f"{trd:^9}{flag}")
+
         sys.exit(0)
 
     active = list(STRATEGIES) if args.strategy == "all" else [args.strategy]
     if args.exits_only:
+        # Exits-only is safe (and useful) to include LBO in "all" — it never
+        # opens new positions here, only checks stops/time-stops, so running
+        # it as an extra safety net alongside LBO's own dedicated force-close
+        # schedule can't cause duplicate entries.
         run_exits_only(dry_run=not args.live, active_strategies=active,
                        session=args.session)
     else:
+        # LBO has its own dedicated capital, slots, and schedule
+        # (lbo-london-open / lbo-ny-open / lbo-force-close). It must NEVER
+        # run as a side effect of the generic "all strategies" Daily/London
+        # scheduled entries — those fire at times (e.g. 18:00 PKT / 13:00 UTC)
+        # that land inside LBO's own auto-detected NY-session entry window,
+        # which would silently duplicate the dedicated lbo-ny-open task's
+        # entries (same signals, same pairs, double the position size).
+        # LBO only runs here if explicitly requested via --strategy.
+        if args.strategy == "all":
+            active = [s for s in active if s != "london_breakout"]
         run_daily(dry_run=not args.live, active_strategies=active,
                   session=args.session)
