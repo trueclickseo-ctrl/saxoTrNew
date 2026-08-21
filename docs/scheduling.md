@@ -88,7 +88,7 @@ were reporting, correctly.
 |---|---|---|---|---|
 | `ATOS LBO London Open` | Windows Task Scheduler | Enabled | 12:00 PKT (07:00 UTC), weekly Mon-Fri via daily trigger | `run_lbo_london.bat` → `runner.py --strategy london_breakout --live` |
 | `ATOS LBO Force Close` | Windows Task Scheduler | Enabled | 01:00 PKT (20:00 UTC), daily | `run_lbo_close.bat` → `runner.py --strategy london_breakout --exits-only --live` |
-| NY open | — | **Not scheduled anywhere** | — | Only `run_lbo_ny.bat` exists on disk; no Task Scheduler entry was found for it during this audit — worth registering if NY-session LBO entries are actually wanted, or removing the orphaned .bat if not. |
+| `ATOS LBO NY Open` | Windows Task Scheduler | Enabled | 18:00 PKT (13:00 UTC), weekly Mon-Fri | `run_lbo_ny.bat` → `runner.py --strategy london_breakout --live` — **created 2026-08-21**, closing the gap noted above. Already covered by `scheduler_watchdog.py`'s `CLAUDE_TASKS["LBO NY Open"]` entry, which checks `lbo_ny.log` freshness against the expected UTC time independent of which mechanism fires it — no watchdog registry change was needed. |
 
 If a genuine Claude-native scheduling migration is wanted later, set it up
 properly via the `schedule` skill *before* disabling the Windows-side
