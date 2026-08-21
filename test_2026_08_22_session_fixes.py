@@ -43,6 +43,19 @@ Covers:
                          previously had none; also fixed a `numpy` import
                          missing at module scope that silently killed
                          diagnostic signal logging on every scan.
+ 10. atos_runner.py     — the "per-market strategy" scan (US Breakout /
+                         OMX Momentum / CPH Mean Reversion), explicitly
+                         marked rejected/no-edge in STRATEGY_NOTES.md, was
+                         still fully wired to real order placement every
+                         cycle and would have raced US Reversion's own
+                         exit logic for the same position. Gated off by
+                         default (LEGACY_PER_MARKET_STRATEGY_ENABLED).
+                         Also: the terminal banner's per-strategy scorecard
+                         read trade_log.csv independently of the DB the
+                         HTML dashboard uses, so the two had drifted and
+                         showed different trade counts/win rates for the
+                         same strategy -- unified onto db.get_all_closed_
+                         trades().
 
 Run:
     python test_2026_08_22_session_fixes.py
@@ -687,6 +700,85 @@ _run("atos_runner: no nonexistent db.record_trade() calls remain", test_no_nonex
 _run("atos_runner: no undefined _get_uic() helper calls remain", test_no_undefined_get_uic_helper_calls_remain)
 _run("atos_runner: intraday reversion buy path has atomic stop-loss + rejection guard", test_intraday_reversion_buy_path_has_stop_loss)
 _run("atos_runner: numpy imported at module scope for RSI helper", test_numpy_import_present_for_rsi_sma20_helper)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+section("10. atos_runner.py — legacy per-market strategies gated off, "
+        "scorecard unified on the DB")
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_legacy_per_market_strategy_disabled_by_default():
+    import atos_runner
+    assert atos_runner.LEGACY_PER_MARKET_STRATEGY_ENABLED is False, (
+        "US Breakout / OMX Momentum / CPH Mean Reversion are explicitly "
+        "marked rejected (no edge) in STRATEGY_NOTES.md but stay wired to "
+        "real order placement whenever this flag is True -- must default "
+        "off so only US Blend and US Reversion (the two validated "
+        "strategies) can trade"
+    )
+
+
+def test_run_cycle_skips_legacy_scan_when_disabled():
+    import inspect
+    import atos_runner
+    src = inspect.getsource(atos_runner.run_cycle)
+    assert "if not LEGACY_PER_MARKET_STRATEGY_ENABLED" in src, (
+        "run_cycle() must short-circuit the per-market/detector-consensus "
+        "scan (decisions = {}) when the legacy flag is off, instead of "
+        "always calling strategy_scan()/scan_universe() and feeding real "
+        "order placement"
+    )
+    assert 'for trade in list(open_trades) if LEGACY_PER_MARKET_STRATEGY_ENABLED else []' in src, (
+        "the generic exit loop must also be skipped when the legacy flag "
+        "is off -- it only ever excluded 'US Blend' by name, so with US "
+        "Reversion holding real positions again it would otherwise apply "
+        "ATR/trailing-stop exits that know nothing about US Reversion's "
+        "own RSI/time/stop exit rules, racing run_us_reversion() later in "
+        "the same cycle"
+    )
+
+
+def test_scorecard_reads_db_not_csv():
+    import inspect
+    import atos_runner
+    src = _code_only(inspect.getsource(atos_runner._strategy_scorecard))
+    # Strip the docstring too -- it deliberately documents the old CSV
+    # behavior it replaced, which would otherwise trip this same check.
+    src = src.split('"""', 2)[-1] if src.count('"""') >= 2 else src
+    assert "trade_log.csv" not in src, (
+        "_strategy_scorecard() (the terminal banner's per-strategy stats) "
+        "must not read trade_log.csv -- that log had drifted from the DB "
+        "(20 Blend trades/35% WR in the CSV vs 30+ in the DB for the same "
+        "period), so the console banner and the HTML dashboard showed "
+        "different numbers for the same strategy"
+    )
+    assert "get_all_closed_trades" in src, (
+        "_strategy_scorecard() must read db.get_all_closed_trades(), the "
+        "same source of truth atos/dashboard_gen.py's _strat_stats() uses"
+    )
+
+
+def test_scorecard_excludes_unknown_pnl_not_zeros_it():
+    import atos_runner
+    from unittest.mock import patch
+    fake_trades = [
+        {"strategy": "US Blend", "pnl_sek": 100.0},
+        {"strategy": "US Blend", "pnl_sek": -50.0},
+        {"strategy": "US Blend", "pnl_sek": None},  # unknown P&L -- must not count as a loss
+    ]
+    with patch.object(atos_runner.db, "get_all_closed_trades", return_value=fake_trades):
+        result = atos_runner._strategy_scorecard()
+    assert result["US Blend"]["n"] == 2, (
+        "a trade with pnl_sek=None (e.g. an old reconciliation cleanup "
+        "row with unknowable P&L) must be excluded from the trade count, "
+        "not silently treated as a $0 loss that drags down win rate"
+    )
+
+
+_run("atos_runner: legacy per-market strategies default to disabled", test_legacy_per_market_strategy_disabled_by_default)
+_run("atos_runner: run_cycle skips the legacy scan+exit-loop when disabled", test_run_cycle_skips_legacy_scan_when_disabled)
+_run("atos_runner: terminal scorecard reads the DB, not a separately-drifting CSV", test_scorecard_reads_db_not_csv)
+_run("atos_runner: scorecard excludes unknown-P&L trades instead of zeroing them", test_scorecard_excludes_unknown_pnl_not_zeros_it)
 
 
 # ═══════════════════════════════════════════════════════════════════════

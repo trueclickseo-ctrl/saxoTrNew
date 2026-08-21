@@ -115,6 +115,21 @@ STRATEGY_MODE = True   # False -> fall back to the detector-consensus scan
 # strategy_scan has nothing to run and the engine trades only proven US momentum.
 US_MOMENTUM_ENABLED = True
 
+# The comment above describes the INTENT, but STRATEGY_MODE=True alone never
+# actually stopped strategy_scan() from running -- it still scores all 385
+# instruments every cycle via US Breakout / OMX Momentum / CPH Mean Reversion
+# (STRATEGY_NOTES.md: "Per-market signal strategies ... -- weak", explicitly
+# rejected, never cleared the live bar) and its BUY/EXIT decisions still feed
+# straight into real order placement in run_cycle()'s sections 6a/6b. Zero
+# real trades from these 3 strategies have ever landed in the DB (pure luck
+# of the signal not firing yet, not because the path was actually gated) --
+# and now that US Reversion has open positions again, 6a's generic ATR/
+# trailing-stop exit loop (which only skips "US Blend") would fight
+# run_us_reversion()'s own RSI/time/stop exit logic for the same trade,
+# earlier in the same cycle. Set True only after a per-market strategy
+# actually clears the validation bar in STRATEGY_NOTES.md.
+LEGACY_PER_MARKET_STRATEGY_ENABLED = False
+
 # ── Option 3: US Mean Reversion ────────────────────────────────────────────
 # DISABLED until backtest_us_reversion.py shows Sharpe >= 0.8 and WinRate >= 50%.
 # Run:  python backtest_us_reversion.py
@@ -297,29 +312,29 @@ def _read_recent_trades(n: int = 5) -> list[dict]:
 
 
 def _strategy_scorecard() -> dict:
-    """Return per-strategy stats from trade_log.csv for terminal display."""
-    import csv as _csv
-    path = os.path.join(BASE_DIR, "data", "trade_log.csv")
+    """Return per-strategy stats for the terminal banner.
+
+    Reads data/atos_live.db directly (db.get_all_closed_trades()) -- the
+    same source of truth atos/dashboard_gen.py's _strat_stats() uses --
+    instead of parsing trade_log.csv separately. The two logs had already
+    drifted apart (the CSV showed 20 Blend trades/35% WR while the DB had
+    30+ for the same period), so this banner and the HTML dashboard could
+    show different numbers for the same strategy. A trade with an unknown
+    P&L (pnl_sek is NULL -- e.g. an old reconciliation cleanup row) is
+    excluded rather than treated as a 0 or a loss.
+    """
     result = {}
-    if not os.path.exists(path):
-        return result
     try:
-        with open(path, newline="", encoding="utf-8") as f:
-            rows = list(_csv.DictReader(f))
+        closed = db.get_all_closed_trades()
     except Exception:
         return result
 
     for strat_key, label in [("Blend", "US Blend"), ("Reversion", "US Reversion")]:
-        sells = [r for r in rows
-                 if strat_key in (r.get("strategy") or "")
-                 and r.get("action") == "SELL"]
-        n = len(sells)
-        pnls = []
-        for r in sells:
-            try:
-                pnls.append(float(r.get("pnl_sek") or 0))
-            except (ValueError, TypeError):
-                pass
+        trades = [t for t in closed
+                  if strat_key in (t.get("strategy") or "")
+                  and t.get("pnl_sek") is not None]
+        n = len(trades)
+        pnls = [t["pnl_sek"] for t in trades]
         wins = [p for p in pnls if p > 0]
         losses = [p for p in pnls if p <= 0]
         total_pnl = sum(pnls)
@@ -608,7 +623,15 @@ def run_cycle():
             print(f"  [WARN] feature calc failed for {ticker}: {e}")
 
     # ── 5. Decision scan (per-market strategies, or detector consensus) ──
-    if STRATEGY_MODE:
+    # Disabled by default -- see LEGACY_PER_MARKET_STRATEGY_ENABLED above.
+    # Neither branch has ever produced a validated live strategy; both stay
+    # wired to real order placement in 6a/6b whenever they're on.
+    if not LEGACY_PER_MARKET_STRATEGY_ENABLED:
+        print("  Per-market/detector-consensus scan disabled (never validated -- "
+              "see LEGACY_PER_MARKET_STRATEGY_ENABLED). Only US Blend + US "
+              "Reversion trade.")
+        decisions = {}
+    elif STRATEGY_MODE:
         print(f"  Running per-market strategies on {len(feat_data)} instruments "
               f"(US=Breakout, OMX30=Momentum, CPH25=MeanReversion)...")
         decisions = strategy_scan(feat_data, open_tickers, weights)
@@ -628,7 +651,14 @@ def run_cycle():
     todays_actions = []
 
     # ── 6a. Exits first ───────────────────────────────────────────
-    for trade in list(open_trades):
+    # Skipped entirely while LEGACY_PER_MARKET_STRATEGY_ENABLED is False:
+    # every open position today belongs to US Blend or US Reversion, and
+    # both already have their own dedicated exit logic (6c/6d below). This
+    # generic ATR/trailing-stop loop only ever skipped "US Blend" by name,
+    # so it would otherwise also fire on US Reversion positions -- using
+    # rules that know nothing about US Reversion's RSI/time/stop exits --
+    # racing run_us_reversion()'s own exit check later in the same cycle.
+    for trade in list(open_trades) if LEGACY_PER_MARKET_STRATEGY_ENABLED else []:
         ticker   = trade["ticker"]
         # US momentum positions are managed exclusively by run_us_momentum (6c).
         # Applying generic stops here would conflict with monthly-rebalance logic.
