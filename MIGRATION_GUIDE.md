@@ -94,17 +94,21 @@ connecting to the paper Gateway rather than reading the code:
    override with `IBKR_MARKET_DATA_TYPE=1` once you have real-time
    entitlements for what you trade.
 
-**Still an open account-side gap, not a code bug:** on the verified paper
-account, FX (`IDEALPRO`) market data errors outright ("Error 10089 …
+**Account-side gap found, then fixed, 2026-08-21:** on the paper account,
+FX (`IDEALPRO`) market data initially errored outright ("Error 10089 …
 requires additional subscription for API"), and even delayed US-stock
-bid/ask stayed unavailable — only `close` (previous close) came through,
-and only after ~3-4s. `fetch_prices()` now falls back bid/ask → last →
-close and waits 2.5s, but a permanently-unavailable bid/ask for an
-instrument means the *account* needs a (free) market data subscription
-added in Client Portal → Settings → **User Settings → Market Data
-Subscriptions** — not something fixable from this code. Do this before
-relying on `ibkr_price_service.py` for anything that sizes a stop off a
-live price.
+bid/ask stayed unavailable — only `close` came through. Root cause: paper
+accounts can't subscribe to market data independently — they only work by
+*sharing* the linked live account's subscriptions, off by default. Fixed
+via Client Portal (logged into the **live** account) → Settings → Account
+Settings → Paper Trading Account → enable market data sharing → pick the
+paper username. Takes a full IB Gateway logout/login on the paper side to
+apply — a save in Client Portal alone doesn't reach an already-connected
+Gateway session. Re-verified working after that: live EURUSD price, daily
+bars, and hourly bars all returned real data. `fetch_prices()` still falls
+back bid/ask → last → close and waits 2.5s as a safety net for instruments
+without a live top-of-book, but that's no longer needed for FX on this
+account.
 
 **Second account-side gap found while testing forex order placement:** a
 live bracket order (`ibkr_order.place_with_stop`, 20,000-unit EURUSD buy)
