@@ -970,6 +970,70 @@ _run("forex: never weekday-gated, scans all 7 days by design", test_forex_never_
 
 
 # ═══════════════════════════════════════════════════════════════════════
+section("13. Dedicated second Forex watchdog + ETF dashboard log path")
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_watchdog_only_forex_filters_correctly():
+    import scheduler_watchdog as wd
+    from argparse import Namespace
+    forex_lbo = {n for n in wd.WINDOWS_TASKS if n.startswith("Forex") or n.startswith("LBO")}
+    others = set(wd.WINDOWS_TASKS) - forex_lbo
+    assert forex_lbo, "expected at least one Forex/LBO task in the registry"
+    assert others, "expected at least one non-Forex task in the registry (to prove filtering excludes something)"
+
+
+def test_watchdog_has_only_forex_flag():
+    import inspect
+    import scheduler_watchdog as wd
+    src = inspect.getsource(wd.main)
+    assert "only_forex" in src, (
+        "main() must support --only-forex, the dedicated second watchdog "
+        "mode for Forex -- deliberate redundancy so a single watchdog "
+        "failure (the same class of silent bug that hit Futures/ETF) "
+        "can't leave the highest-volume module unmonitored"
+    )
+    assert "FOREX_STATE_FILE" in src, (
+        "the --only-forex run must use its own state file, not share "
+        "STATE_FILE with the main watchdog -- otherwise the two aren't "
+        "actually independent"
+    )
+
+
+def test_forex_watchdog_bat_and_task_exist():
+    bat_path = os.path.join(BASE_DIR, "run_forex_watchdog.bat")
+    assert os.path.exists(bat_path), (
+        "run_forex_watchdog.bat must exist -- the launcher for the "
+        "dedicated second Forex watchdog task"
+    )
+    with open(bat_path, encoding="utf-8") as f:
+        src = f.read()
+    assert "--only-forex" in src, (
+        "run_forex_watchdog.bat must invoke scheduler_watchdog.py with "
+        "--only-forex, not the full check"
+    )
+
+
+def test_etf_dashboard_reads_real_log_path():
+    import inspect
+    import etf_dashboard
+    src = inspect.getsource(etf_dashboard)
+    assert "etf_strategy.log" in src, (
+        "etf_dashboard.py must read saxo_etf_strategy/logs/etf_strategy.log "
+        "-- the bot's real configured log path (etf_config.py's "
+        "ETFConfig.log_path default). It previously checked 3 different "
+        "paths, none of which ever existed, so its recent-activity panel "
+        "silently showed empty forever regardless of whether the bot was "
+        "actually running"
+    )
+
+
+_run("watchdog: --only-forex registry actually filters to a subset", test_watchdog_only_forex_filters_correctly)
+_run("watchdog: main() supports --only-forex with its own state file", test_watchdog_has_only_forex_flag)
+_run("run_forex_watchdog.bat exists and calls --only-forex", test_forex_watchdog_bat_and_task_exist)
+_run("etf_dashboard: reads the real etf_strategy.log path", test_etf_dashboard_reads_real_log_path)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════
 

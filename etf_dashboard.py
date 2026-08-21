@@ -12,7 +12,12 @@ from datetime import datetime, date
 
 BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
 ETF_STATE     = os.path.join(BASE_DIR, "saxo_etf_strategy", "data", "etf_positions.json")
-ETF_LOG       = os.path.join(BASE_DIR, "saxo_etf_strategy", "data", "etf_runner.log")
+# The bot's real log (etf_config.py's ETFConfig.log_path default) is
+# saxo_etf_strategy/logs/etf_strategy.log -- this dashboard was checking
+# 3 different wrong paths (none ever existed), so its recent-activity
+# panel silently showed empty forever regardless of whether the bot was
+# actually running. Fixed 2026-08-22.
+ETF_LOG       = os.path.join(BASE_DIR, "saxo_etf_strategy", "logs", "etf_strategy.log")
 
 sys.path.insert(0, BASE_DIR)
 import price_service

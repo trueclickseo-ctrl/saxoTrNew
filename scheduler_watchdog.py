@@ -53,6 +53,11 @@ BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR   = os.path.join(BASE_DIR, "data")
 EMAIL_CFG  = os.path.join(BASE_DIR, "config", "email.json")
 STATE_FILE = os.path.join(DATA_DIR, "watchdog_state.json")
+# Separate state for the dedicated --only-forex watchdog run -- deliberately
+# not shared with STATE_FILE, so the two watchdogs' alert-dedup windows
+# can't collide or depend on each other (the whole point of running a
+# second, independent one for Forex).
+FOREX_STATE_FILE = os.path.join(DATA_DIR, "forex_watchdog_state.json")
 
 # "Has not run yet" placeholder result code — not a real failure.
 TASK_NEVER_RUN = 267011
@@ -101,22 +106,22 @@ WINDOWS_TASKS = {
 CLAUDE_TASKS = {}
 
 
-def _load_state() -> dict:
-    if os.path.exists(STATE_FILE):
+def _load_state(state_file: str = STATE_FILE) -> dict:
+    if os.path.exists(state_file):
         try:
-            with open(STATE_FILE) as f:
+            with open(state_file) as f:
                 return json.load(f)
         except Exception:
             pass
     return {}
 
 
-def _save_state(state: dict) -> None:
+def _save_state(state: dict, state_file: str = STATE_FILE) -> None:
     os.makedirs(DATA_DIR, exist_ok=True)
-    tmp = STATE_FILE + ".tmp"
+    tmp = state_file + ".tmp"
     with open(tmp, "w") as f:
         json.dump(state, f, indent=2)
-    os.replace(tmp, STATE_FILE)
+    os.replace(tmp, state_file)
 
 
 def _parse_ps_date(raw) -> datetime | None:
@@ -355,9 +360,9 @@ def _check_claude_task(name: str, log_file: str, schedule: list, grace_min: int)
     return None
 
 
-def _send_alert(failures: list[str]) -> None:
+def _send_alert(failures: list[str], label: str = "Scheduler Watchdog") -> None:
     if not os.path.exists(EMAIL_CFG):
-        print("[watchdog] no config/email.json — cannot send alert, printing instead:", file=sys.stderr)
+        print(f"[{label}] no config/email.json — cannot send alert, printing instead:", file=sys.stderr)
         for f in failures:
             print(f"  - {f}", file=sys.stderr)
         return
@@ -370,27 +375,27 @@ def _send_alert(failures: list[str]) -> None:
 <body style="font-family:-apple-system,sans-serif;background:#0d1117;color:#e6edf3;padding:20px">
 <div style="max-width:640px;margin:0 auto;background:#161b22;border-radius:10px;
             border-top:3px solid #da3633;padding:20px 24px">
-<h2 style="color:#f85149;margin:0 0 12px">⚠ Scheduler Watchdog Alert</h2>
+<h2 style="color:#f85149;margin:0 0 12px">⚠ {label} Alert</h2>
 <div style="color:#8b949e;font-size:12px;margin-bottom:14px">{now} — {len(failures)} task(s) failed or went silent</div>
 <ul style="padding-left:18px;font-size:13px">{rows}</ul>
 <hr style="border:none;border-top:1px solid #21262d;margin:16px 0">
-<div style="color:#484f58;font-size:11px">ATOS Scheduler Watchdog · runs every 30 min ·
+<div style="color:#484f58;font-size:11px">ATOS {label} · runs every 30 min ·
 check data/*.log and Task Scheduler directly for detail</div>
 </div></body></html>"""
 
     try:
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = f"[ATOS] Scheduler Alert — {len(failures)} task(s) failed"
-        msg["From"]    = f"ATOS Watchdog <{cfg['sender_email']}>"
+        msg["Subject"] = f"[ATOS] {label} — {len(failures)} task(s) failed"
+        msg["From"]    = f"ATOS {label} <{cfg['sender_email']}>"
         msg["To"]      = cfg["recipient_email"]
         msg.attach(MIMEText(html, "html"))
         with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as s:
             s.starttls()
             s.login(cfg["sender_email"], cfg["sender_password"])
             s.sendmail(cfg["sender_email"], cfg["recipient_email"], msg.as_string())
-        print(f"[watchdog] alert email sent for {len(failures)} failure(s)")
+        print(f"[{label}] alert email sent for {len(failures)} failure(s)")
     except Exception as exc:
-        print(f"[watchdog] ALERT EMAIL FAILED to send: {exc}", file=sys.stderr)
+        print(f"[{label}] ALERT EMAIL FAILED to send: {exc}", file=sys.stderr)
         for f in failures:
             print(f"  - {f}", file=sys.stderr)
 
@@ -398,15 +403,30 @@ check data/*.log and Task Scheduler directly for detail</div>
 def main() -> None:
     ap = argparse.ArgumentParser(description="Verify scheduled trading tasks actually ran")
     ap.add_argument("--verbose", action="store_true", help="print status for every task, not just failures")
+    ap.add_argument("--only-forex", action="store_true",
+                     help="check only Forex/LBO tasks -- for the dedicated second Forex "
+                          "watchdog (ATOS Forex Watchdog task), a deliberately redundant, "
+                          "independently-scheduled check so Forex (the highest-volume "
+                          "module) is never left unmonitored by a single watchdog failure "
+                          "alone. Uses its own state file (data/forex_watchdog_state.json) "
+                          "so its alert-dedup can't collide with or depend on the main "
+                          "watchdog's state.")
     args = ap.parse_args()
 
-    state          = _load_state()
+    tasks = WINDOWS_TASKS
+    state_file = STATE_FILE
+    if args.only_forex:
+        tasks = {n: v for n, v in WINDOWS_TASKS.items()
+                  if n.startswith("Forex") or n.startswith("LBO")}
+        state_file = FOREX_STATE_FILE
+
+    state          = _load_state(state_file)
     alerted_at     = state.get("alerted_at", {})
     failures       = []   # new alerts to actually send this run
     unhealthy      = []   # every currently-failing task, regardless of dedup
     now_iso        = datetime.now().isoformat()
 
-    for name, (task_name, log_file, grace, max_wait) in WINDOWS_TASKS.items():
+    for name, (task_name, log_file, grace, max_wait) in tasks.items():
         result = _check_windows_task(name, task_name, log_file, grace, max_wait)
         if args.verbose:
             print(f"[{'FAIL' if result else 'ok  '}] {name}: {result or 'healthy'}")
@@ -420,32 +440,34 @@ def main() -> None:
         else:
             alerted_at.pop(name, None)
 
-    for name, (log_file, schedule, grace) in CLAUDE_TASKS.items():
-        result = _check_claude_task(name, log_file, schedule, grace)
-        if args.verbose:
-            print(f"[{'FAIL' if result else 'ok  '}] {name}: {result or 'healthy'}")
-        if result:
-            unhealthy.append(name)
-            last_alert = alerted_at.get(name)
-            if last_alert and (datetime.now() - datetime.fromisoformat(last_alert)) < timedelta(hours=REALERT_AFTER_HOURS):
-                continue
-            failures.append(result)
-            alerted_at[name] = now_iso
-        else:
-            alerted_at.pop(name, None)
+    if not args.only_forex:
+        for name, (log_file, schedule, grace) in CLAUDE_TASKS.items():
+            result = _check_claude_task(name, log_file, schedule, grace)
+            if args.verbose:
+                print(f"[{'FAIL' if result else 'ok  '}] {name}: {result or 'healthy'}")
+            if result:
+                unhealthy.append(name)
+                last_alert = alerted_at.get(name)
+                if last_alert and (datetime.now() - datetime.fromisoformat(last_alert)) < timedelta(hours=REALERT_AFTER_HOURS):
+                    continue
+                failures.append(result)
+                alerted_at[name] = now_iso
+            else:
+                alerted_at.pop(name, None)
 
     state["alerted_at"]  = alerted_at
     state["last_check"]  = now_iso
-    _save_state(state)
+    _save_state(state, state_file)
 
+    label = "Forex Watchdog" if args.only_forex else "Scheduler Watchdog"
     if failures:
-        _send_alert(failures)
+        _send_alert(failures, label)
     elif unhealthy:
         if args.verbose:
-            print(f"[watchdog] {len(unhealthy)} task(s) still unhealthy but already alerted "
+            print(f"[{label}] {len(unhealthy)} task(s) still unhealthy but already alerted "
                   f"within the last {REALERT_AFTER_HOURS}h, not re-sending: {', '.join(unhealthy)}")
     elif args.verbose:
-        print(f"[watchdog] all {len(WINDOWS_TASKS) + len(CLAUDE_TASKS)} tasks healthy at {now_iso}")
+        print(f"[{label}] all {len(tasks) + (0 if args.only_forex else len(CLAUDE_TASKS))} tasks healthy at {now_iso}")
 
 
 if __name__ == "__main__":
