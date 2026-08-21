@@ -2,6 +2,7 @@ pandas
 numpy
 yfinance
 requests
+ib_async
 
 # Binance bot dependencies (not needed for the Saxo bot)
 python-binance
