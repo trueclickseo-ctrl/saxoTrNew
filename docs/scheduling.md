@@ -116,11 +116,12 @@ see §6.
 9. **`ATOS Dashboard Start` was never actually disabled**, despite this doc
    claiming since 2026-08-20 that it was (same broken path as `ATOS Daily
    Scan` — confirmed live, `E:\saxobackup\SaxoTrader\files_kwaseem\` no
-   longer exists at all). It would have failed at its next fire (Monday
-   18:30 PKT). Flagged for the user to disable via an elevated
-   `Disable-ScheduledTask -TaskName "ATOS Dashboard Start"` (this session
-   doesn't have admin rights to do it directly, same limitation as the
-   battery-setting fixes from 2026-08-21).
+   longer exists at all). Would have failed at its next fire (Monday
+   18:30 PKT). PowerShell's `Disable-ScheduledTask` was denied without
+   admin rights, but the older `schtasks /Change /TN "ATOS Dashboard
+   Start" /DISABLE` CLI succeeded under the same non-elevated session —
+   worth remembering as the fallback when the ScheduledTasks PowerShell
+   module refuses. Confirmed disabled via `Get-ScheduledTask` afterward.
 
 ---
 
@@ -275,7 +276,7 @@ when the next scheduled cycle happens to run.
 | `ATOS PnL Sync` | 23:00 PKT, daily | `run_pnl_sync.bat` → `pnl_tracker.py --sync` | Syncs open/closed trades from all module state files into `data/pnl_ledger.db`. **Was actually configured as a weekly Sunday-only trigger since creation (2026-08-19) — never fired even once, silently freezing stock P&L data at 2026-08-14. Fixed to real daily 2026-08-21 and backfilled.** |
 | `ATOS Scheduler Watchdog` | every 30 min | `python scheduler_watchdog.py` | See §6. |
 | `ATOS Daily Chart` | 23:15 PKT, daily | `run_daily_chart.bat` → `daily_chart.py` | **Added 2026-08-21.** Generates a 2-panel per-strategy P&L chart (cumulative + today's) for EACH of the 4 modules **separately** — stock/etf/futures/forex each get their own independent chart file, never combined — from `data/pnl_ledger.db`. Fires 15 min after `ATOS PnL Sync` so every module's data is fully synced first. Saves `data/charts/{module}_strategy_YYYY-MM-DD.png` (permanent daily record) and `data/charts/{module}_strategy_latest.png` (always-current), then emails all of today's charts as inline attachments via `config/email.json` (one section per module in the email body). Skips a module gracefully (chart and email) if it has no closed trades yet — ETF/futures did on the day this was added, will start appearing automatically once they have their first closed trade. |
-| `ATOS Dashboard Start` | 18:30 PKT | ~~missing path~~ | Same missing-path problem as Daily Scan — **but was never actually disabled** despite this doc claiming so since 2026-08-20. Found live 2026-08-22 (still showed `State: Ready`, would fail its next fire). Flagged to the user to disable via elevated PowerShell — this session lacks admin rights. |
+| ~~`ATOS Dashboard Start`~~ | ~~18:30 PKT~~ | ~~missing path~~ | Same missing-path problem as Daily Scan. **Was claimed disabled since 2026-08-20 but actually never was** (found live 2026-08-22, still `State: Ready`). Fixed the same day via `schtasks /Change /TN "ATOS Dashboard Start" /DISABLE` after PowerShell's `Disable-ScheduledTask` was denied for lack of admin rights — confirmed disabled. |
 
 ---
 

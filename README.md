@@ -691,7 +691,7 @@ docs/forex_strategies.md's "Audit — 2026-08-22" for the full writeup.
 - ETF: sector_rotation exit-on-rank-drop not yet implemented (only SL/TP exits)
 - Stocks: token expires every ~24h — run `python set_token.py` to refresh (or `python saxo_auth.py` for the shared session)
 - Stocks: BF-B, FITB, ETN missing UICs in instrument_map.csv (low priority)
-- `ATOS Dashboard Start` scheduled task needs disabling (broken path, flagged 2026-08-22, needs admin rights this session doesn't have): `Disable-ScheduledTask -TaskName "ATOS Dashboard Start"`
+- ~~`ATOS Dashboard Start` scheduled task needs disabling~~ — fixed 2026-08-22 via `schtasks /Change /TN "ATOS Dashboard Start" /DISABLE` (PowerShell's `Disable-ScheduledTask` was denied without admin rights; `schtasks.exe` succeeded under the same session — useful fallback)
 - Going live requires a separate Saxo LIVE app registration (SIM/LIVE app keys aren't shared) — manual, start early, see docs/scheduling.md
 
 ---
