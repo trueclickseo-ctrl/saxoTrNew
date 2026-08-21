@@ -28,15 +28,33 @@ ElseIf Left(lc, 10) = "python.exe" Then
     cmd = "pythonw.exe" & Mid(cmd, 11)
 End If
 
-' If log path provided, redirect output
+' If log path provided, redirect output.
+'
+' Quoting note: cmd.exe's "/c" quote-stripping only preserves quotes cleanly
+' when the whole argument has EXACTLY ONE quoted segment. With a quoted
+' command path AND a quoted log path (two separate segments), cmd.exe falls
+' back to blindly stripping the first and last quote characters in the
+' string, which mangles the command name (leaves a stray trailing quote) and
+' breaks the redirection — the whole thing silently fails with exit code 1
+' and never runs. Fix: wrap the ENTIRE "cmd >> log 2>&1" expression in one
+' more outer quote pair so there's only one top-level quoted segment.
+' (Empirically verified against real cmd.exe: without the extra wrap this
+' returns rc=1 and no output; with it, rc=0 and correct output.)
+Dim q : q = Chr(34)
 If WScript.Arguments.Count >= 2 Then
     logFile = WScript.Arguments(1)
-    cmd = "cmd.exe /c """ & cmd & """ >> """ & logFile & """ 2>&1"
+    cmd = "cmd.exe /c " & q & q & cmd & q & " >> " & q & logFile & q & " 2>&1" & q
 Else
-    cmd = "cmd.exe /c """ & cmd & """"
+    cmd = "cmd.exe /c " & q & cmd & q
 End If
 
-' Window style 0 = hidden, False = don't wait (fire-and-forget)
-objShell.Run cmd, 0, False
+' Window style 0 = hidden, True = wait for completion.
+' MUST wait: Task Scheduler tracks wscript.exe's own exit, not the child's.
+' A fire-and-forget launch (False) makes wscript.exe return instantly, so
+' Task Scheduler reports success before the real command has even started —
+' and the detached child is then torn down with no output ever written
+' (confirmed live: 2026-08-19 18:00 and 2026-08-20 06:20 forex runs both
+' silently no-opped this way while showing LastTaskResult=0).
+objShell.Run cmd, 0, True
 
 Set objShell = Nothing
