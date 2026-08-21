@@ -146,6 +146,17 @@ SESSION_PAIRS = {
 # moves sharply — e.g. 5 EUR-long positions all losing on one ECB surprise.
 MAX_CURRENCY_EXPOSURE = 3
 
+# Reject a signal if the pair's live spread is wider than this % of price —
+# a proxy for "this pair's home market is currently illiquid" without needing
+# a per-currency trading-hours table (which several EM/exotic currencies don't
+# cleanly fit anyway — e.g. TRY and CNH trade meaningfully outside their
+# "home" session too). Checked live at signal time (see 2026-08-21 spread
+# survey: majors run ~0.01-0.02%, most EM/exotic pairs ~0.02-0.09% under
+# normal conditions) — 0.20% gives headroom above normal EM spreads while
+# still catching a genuine liquidity-crunch widening. Starting value, not
+# empirically tuned yet — watch SIM results and adjust.
+MAX_SPREAD_PCT = 0.20
+
 # ── Constants ─────────────────────────────────────────────────────────────────
 BASE_URL    = "https://gateway.saxobank.com/sim/openapi"
 DATA_DIR    = os.path.join(_ROOT, "data")
@@ -504,6 +515,29 @@ def _momentum_rank(market_data: dict, top_n: int) -> set:
     return selected
 
 
+def _spread_pct(uic: int) -> float | None:
+    """Live bid/ask spread as % of mid price — proxy for current liquidity.
+
+    Checked at signal time, not tied to any fixed trading-hours table, so it
+    reacts to the pair's actual current market condition (a EUR pair during a
+    holiday-thin session gets caught the same as an EM pair outside its home
+    hours) instead of a static per-currency assumption. Returns None if the
+    quote can't be fetched — callers should treat that as "can't verify,
+    proceed" rather than blocking the trade on a data hiccup.
+    """
+    try:
+        resp = _get("/trade/v1/infoprices", {"Uic": uic, "AssetType": ASSET_TYPE, "FieldGroups": "Quote"})
+        q   = resp.get("Quote", {})
+        bid, ask = float(q.get("Bid", 0)), float(q.get("Ask", 0))
+        if bid <= 0 or ask <= 0:
+            return None
+        mid = (bid + ask) / 2
+        return (ask - bid) / mid * 100
+    except Exception as exc:
+        logger.debug(f"Spread check failed for UIC {uic}: {exc}")
+        return None
+
+
 def _fetch_live_prices(pairs: list) -> dict:
     """Fetch current bid/ask mid prices for a list of pairs (used by gap strategy)."""
     prices = {}
@@ -524,14 +558,26 @@ def _fetch_live_prices(pairs: list) -> dict:
 
 def _position_pnl_base_ccy(uic: int, qty: float, direction: str,
                            entry_price: float) -> float | None:
-    """Authoritative realized P&L in the account's own base currency (EUR),
-    straight from Saxo's own live conversion — not our own rate estimate.
+    """Authoritative NET realized P&L in the account's own base currency
+    (EUR), straight from Saxo's own live conversion — not our own rate
+    estimate, and not just the raw price move.
 
-    Saxo's /port/v1/positions/me returns PositionView.ProfitLossOnTrade in the
-    pair's quote currency AND ProfitLossOnTradeInBaseCurrency, already
+    Saxo's /port/v1/positions/me returns PositionView.ProfitLossOnTrade in
+    the pair's quote currency AND ProfitLossOnTradeInBaseCurrency, already
     converted using Saxo's own real-time dealt rate (ConversionRateCurrent).
     That's what actually happens to the account balance, so it's the right
     source of truth for the P&L ledger — not a manually-applied external rate.
+
+    IMPORTANT: ProfitLossOnTradeInBaseCurrency is PURE PRICE MOVEMENT (entry
+    vs current price x quantity) — it does NOT net out spread cost at entry
+    or accrued overnight swap/financing. Those live in a SEPARATE field,
+    TradeCostsTotalInBaseCurrency (confirmed live 2026-08-21: a position
+    showing +4,362.06 EUR gross also carried -65.26 EUR of TradeCostsTotal,
+    not yet subtracted — a position can show green gross and be meaningfully
+    less green, or even red, net of costs, especially after several nights
+    held). Both are added here so the stored realized_pnl is the true net
+    figure, not the gross one.
+
     Multiple strategies can hold positions on the same UIC simultaneously, so
     match on quantity + entry price (not just UIC) to find the right row.
     """
@@ -556,9 +602,12 @@ def _position_pnl_base_ccy(uic: int, qty: float, direction: str,
             best, best_diff = p, diff
     if best is None:
         return None
-    pv = best.get("PositionView", {})
-    val = pv.get("ProfitLossOnTradeInBaseCurrency")
-    return float(val) if val is not None else None
+    pv  = best.get("PositionView", {})
+    pnl = pv.get("ProfitLossOnTradeInBaseCurrency")
+    if pnl is None:
+        return None
+    costs = pv.get("TradeCostsTotalInBaseCurrency") or 0.0
+    return float(pnl) + float(costs)   # costs is already negative-signed
 
 
 def _live_price(uic: int, account_key: str) -> float | None:
@@ -1205,10 +1254,16 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] "
                         f"— currency exposure limit (max {MAX_CURRENCY_EXPOSURE})")
             continue
-        if strat_name not in DAY_TRADE_STRATEGIES and not _heat_allows_entry(positions, equity):
-            break   # heat cap reached — stop all entries for this strategy
         pair_info = get_pair(sym)
         uic       = pair_info["uic"]
+        spread    = _spread_pct(uic)
+        if spread is not None and spread > MAX_SPREAD_PCT:
+            logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] "
+                        f"— spread {spread:.3f}% wider than {MAX_SPREAD_PCT}% "
+                        f"(illiquid right now, not a good time to trade this pair)")
+            continue
+        if strat_name not in DAY_TRADE_STRATEGIES and not _heat_allows_entry(positions, equity):
+            break   # heat cap reached — stop all entries for this strategy
         rp_kw     = {"risk_pct": sig["risk_pct_override"]} if "risk_pct_override" in sig else {}
         if "units" in sig:
             qty = sig["units"]   # london_breakout pre-computes sizing from SEK capital

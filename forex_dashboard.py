@@ -151,6 +151,37 @@ def _pad_ansi(s: str, width: int) -> str:
     return s + " " * max(0, width - visible)
 
 
+def _fetch_position_costs(token: str) -> dict:
+    """{(uic, abs(amount)): TradeCostsTotalInBaseCurrency} for every open FxSpot
+    position — spread cost at entry + accrued overnight swap/financing, NOT
+    included in the raw price-based P&L shown per row below. One request for
+    everything held, not per-position. See forex/runner.py's
+    _position_pnl_base_ccy() for the same fix applied to the realized ledger —
+    confirmed live 2026-08-21 that Saxo tracks this as a genuinely separate
+    field from ProfitLossOnTrade (a position can show green gross P&L and be
+    meaningfully less green, or red, once this is netted in)."""
+    if not token:
+        return {}
+    try:
+        import requests
+        r = requests.get(price_service.SIM_BASE + "port/v1/positions/me",
+                         headers={"Authorization": f"Bearer {token}"}, timeout=10)
+        r.raise_for_status()
+        out = {}
+        for p in r.json().get("Data", []):
+            pb, pv = p.get("PositionBase", {}), p.get("PositionView", {})
+            if pb.get("AssetType") != "FxSpot":
+                continue
+            uic = pb.get("Uic")
+            amt = abs(pb.get("Amount", 0))
+            costs = pv.get("TradeCostsTotalInBaseCurrency")
+            if uic is not None and costs is not None:
+                out[(uic, amt)] = float(costs)
+        return out
+    except Exception:
+        return {}
+
+
 def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     now_ts    = datetime.now().strftime("%Y-%m-%d  %H:%M:%S")
     positions = _read_positions()
@@ -163,6 +194,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
                    for p in positions if p.get("uic")]
 
     live, price_src = price_service.fetch_prices(instruments, token=token)
+    position_costs   = _fetch_position_costs(token)
 
     W_TOTAL = 108
     HR      = f"  {DM}{'─' * W_TOTAL}{W}"
@@ -173,7 +205,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append(f"  {BD}{CY}╔{'═'*W_TOTAL}╗{W}")
     src_tag = "SAXO LIVE" if price_src == "saxo" else "n/a (token expired)"
     L.append(f"  {BD}{CY}║{'  FOREX QUANT DASHBOARD':^{W_TOTAL}}║{W}")
-    L.append(f"  {BD}{CY}║{f'  11 Strategies  |  34 FX Pairs  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
+    L.append(f"  {BD}{CY}║{f'  11 Strategies  |  117 FX Pairs (34 core + 83 exotic)  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
     L.append(f"  {BD}{CY}╚{'═'*W_TOTAL}╝{W}")
     L.append("")
 
@@ -194,8 +226,8 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
              f"\033[38;5;135m{BD}■ CNN-LSTM{W}  deep learning   "
              f"\033[38;5;214m{BD}■ LBO{W}  day trade")
     L.append(f"  {DM}Scheduler: every 30min 06:00-22:00 PKT (scan)  |  14:00 PKT (exit check)  |  "
-             f"22:00 PKT Sun + weekly gap windows (gap fill)  |  "
-             f"34 pairs: 7 majors + 27 crosses  |  Max slots 34 (28 for day-trade LBO){W}")
+             f"Mon 03:00 PKT weekly + session gap windows (gap fill)  |  "
+             f"117 pairs: 34 core + 83 exotic (SIM-only)  |  Max slots 117 (28 for day-trade LBO){W}")
     L.append(HR)
     L.append("")
 
@@ -217,6 +249,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
 
     total_pnl   = 0.0
     total_cost  = 0.0
+    total_costs_eur = 0.0   # spread + accrued swap/financing, NOT included in total_pnl
     near_stop_count = 0
     near_stop_list  = []
 
@@ -261,6 +294,9 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
                     pnl_pct  = raw_pnl / ep * 100
                     total_pnl  += pnl_eur
                     total_cost += ep * qty * eur_rate
+                    pos_cost = position_costs.get((p.get("uic"), round(qty)))
+                    if pos_cost is not None:
+                        total_costs_eur += pos_cost
                     pc   = GR if pnl_eur >= 0 else RD
                     pnl_s = f"{pc}{pnl_eur:>+,.0f}{W}"
                     pct_s = f"{pc}{pnl_pct:>+.4f}%{W}"
@@ -307,8 +343,15 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         L.append(
             f"  {BD}TOTAL{W}  "
             f"{DM}{open_count} positions  |  Cost: €{total_cost:>,.0f}  |  "
-            f"Unrealized P&L: {W}"
+            f"Unrealized P&L (gross): {W}"
             f"{tc}{BD}{total_pnl:>+,.0f} EUR  ({tpct:>+.4f}%){W}"
+        )
+        net_pnl = total_pnl + total_costs_eur   # total_costs_eur is already negative-signed
+        nc = GR if net_pnl >= 0 else RD
+        L.append(
+            f"  {DM}         Spread + accrued swap/financing since entry: "
+            f"{RD}{total_costs_eur:>+,.0f} EUR{DM}  →  "
+            f"Net of costs: {W}{nc}{BD}{net_pnl:>+,.0f} EUR{W}"
         )
 
         # Near-stop warning with details
@@ -326,16 +369,16 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append("")
 
     strat_labels = {
-        "ema":        ("EMA Trend",        "EMA(5/30)+ADX(14)",     "Sharpe 1.62",  "4"),
-        "rsi":        ("RSI Pullback",     "RSI(2)<10 dip-buy",     "mean-rev",     "34"),
-        "donchian":   ("Donchian Break",   "30-day high/low",       "EMA+ADX gate", "4"),
-        "bb":         ("BB Reversion",     "BB(20,2)+RSI(14) fade", "8d stop",      "4"),
-        "pullback":   ("EMA Pullback ★",   "EMA(20) in EMA(50)",    "~70% WR",      "34"),
-        "gap":        ("Gap Fill ★★",      "Weekend gap fade",      "~80-85% WR",   "34"),
-        "supertrend": ("SuperTrend",       "ST(10,3)+EMA(200)",     "~65% WR",      "20"),
-        "zscore":     ("Z-Score Rev",      "20-day z-score fade",   "~63% WR",      "20"),
-        "ml":         ("ML Signals",       "Logistic reg (7 feat)", "~60% WR",      "20"),
-        "cnn_lstm":   ("CNN-LSTM",         "Deep learning (34 pr)", "36.9% val acc — barely trades", "20"),
+        "ema":        ("EMA Trend",        "EMA(5/30)+ADX(14)",     "Sharpe 1.62",  "117"),
+        "rsi":        ("RSI Pullback",     "RSI(2)<10 dip-buy",     "mean-rev",     "117"),
+        "donchian":   ("Donchian Break",   "30-day high/low",       "EMA+ADX gate", "117"),
+        "bb":         ("BB Reversion",     "BB(20,2)+RSI(14) fade", "8d stop",      "117"),
+        "pullback":   ("EMA Pullback ★",   "EMA(20) in EMA(50)",    "~70% WR",      "117"),
+        "gap":        ("Gap Fill ★★",      "Weekend gap fade",      "~80-85% WR",   "117"),
+        "supertrend": ("SuperTrend",       "ST(10,3)+EMA(200)",     "~65% WR",      "117"),
+        "zscore":     ("Z-Score Rev",      "20-day z-score fade",   "~63% WR",      "117"),
+        "ml":         ("ML Signals",       "Logistic reg (7 feat)", "~60% WR",      "117"),
+        "cnn_lstm":   ("CNN-LSTM",         "Deep learning (117 pr)", "36.9% val acc — barely trades", "117"),
         "london_breakout": ("LBO Day Trade", "London/NY range break", "~58-63% WR", "28"),
     }
 
