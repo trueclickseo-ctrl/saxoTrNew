@@ -60,7 +60,6 @@ def _setup_logging():
     return log_path
 
 import pandas as pd
-import yfinance as yf
 
 # ── Path setup (run from any directory) ───────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -88,9 +87,29 @@ from atos.intraday_reversion import intraday_scan, us_market_is_open, next_scan_
 # ── Existing infrastructure (unchanged) ───────────────────────────
 import saxo_client
 import saxo_order
-import fx
+import saxo_fx
+import saxo_history
 
 DEPLOY_CONFIG = os.path.join(BASE_DIR, "config", "deploy.json")
+
+
+def _rate_to_sek(ccy: str) -> float:
+    """SEK value of one unit of `ccy`, from Saxo's own live quotes only.
+
+    Per explicit user direction (2026-08-22): live trading decisions must
+    use Saxo, never Yahoo -- replaces the old Yahoo-based fx module's
+    rate lookup throughout this file's live paths. Preserves that function's
+    contract (returns a float or raises) so none of the many existing
+    call sites below need their own error handling changed. A couple of
+    retries before raising: this queries live majors (USD/EUR/DKK/GBP/
+    CHF/CAD/AUD), which are reliable on Saxo, so a transient miss is the
+    much more likely failure mode than a genuinely unavailable currency.
+    """
+    for attempt in range(2):
+        rate = saxo_fx.rate_to_sek([ccy]).get(ccy)
+        if rate:
+            return rate
+    raise RuntimeError(f"No live Saxo rate for {ccy}/SEK after retries")
 
 # ── Settings ───────────────────────────────────────────────────────
 HISTORY_DAYS   = 300    # days of history to download (need 200 for EMA200)
@@ -224,35 +243,24 @@ ASSET_TYPE_MAP = {      # Saxo asset type per market group
 # ══════════════════════════════════════════════════════════════════
 
 def download_universe(tickers: list[str]) -> dict[str, pd.DataFrame]:
-    """Download HISTORY_DAYS of daily OHLCV from Yahoo Finance."""
-    print(f"  Downloading data for {len(tickers)} tickers...", end=" ", flush=True)
+    """Download HISTORY_DAYS of daily OHLCV from Saxo's own live chart API.
+
+    Was Yahoo (yf.download) -- switched 2026-08-22 per explicit user
+    direction (live trading decisions must use Saxo, not Yahoo) after
+    confirming live that Saxo's SIM chart endpoint DOES serve real
+    historical stock data (a stale comment elsewhere in this codebase,
+    data_loader.py, claimed otherwise -- never re-verified until now, see
+    [[saxo_api_verification]]). Same return shape as before
+    ({ticker: DataFrame[Open,High,Low,Close,Volume]}, >=50 bars only) so
+    every downstream caller (add_all(), US Blend, US Reversion) is
+    unaffected. Yahoo remains correct for data_loader.py's backtesting job.
+    """
+    print(f"  Downloading data for {len(tickers)} tickers (Saxo)...", end=" ", flush=True)
     try:
-        raw = yf.download(
-            tickers,
-            period=f"{HISTORY_DAYS}d",
-            interval="1d",
-            group_by="ticker",
-            auto_adjust=True,
-            threads=True,
-            progress=False,
-        )
+        result = saxo_history.fetch_daily_bars(tickers, count=HISTORY_DAYS)
     except Exception as e:
         print(f"FAILED: {e}")
         return {}
-
-    result = {}
-    if len(tickers) == 1:
-        ticker = tickers[0]
-        if not raw.empty:
-            result[ticker] = raw
-    else:
-        for ticker in tickers:
-            try:
-                df = raw[ticker].dropna(how="all")
-                if not df.empty and len(df) >= 50:
-                    result[ticker] = df
-            except (KeyError, TypeError):
-                pass
 
     print(f"OK ({len(result)} with data)")
     return result
@@ -493,7 +501,7 @@ def run_open_scan(log_fn=None) -> dict:
         balances = saxo_client.get_balances()
         cash_available = balances.get("CashBalance", 0)
         account_currency = balances.get("Currency", "EUR")
-        fx_rate = fx.get_rate_to_sek(account_currency)
+        fx_rate = _rate_to_sek(account_currency)
         cash_sek = cash_available * fx_rate
         _log(f"  Cash: {cash_available:,.2f} {account_currency} = {cash_sek:,.0f} SEK")
     except Exception as e:
@@ -612,7 +620,7 @@ def run_cycle():
         balances         = saxo_client.get_balances()
         cash_available   = balances.get("CashBalance", 0)
         account_currency = balances.get("Currency", "EUR")
-        fx_rate          = fx.get_rate_to_sek(account_currency)
+        fx_rate          = _rate_to_sek(account_currency)
         cash_sek         = cash_available * fx_rate
         print(f"  Saxo SIM: {cash_available:,.2f} {account_currency} "
               f"= {cash_sek:,.0f} SEK available")
@@ -715,7 +723,7 @@ def run_cycle():
             continue
 
         mkt    = trade.get("market_group", "Unknown")
-        rate   = fx.get_rate_to_sek(_currency_for(mkt))
+        rate   = _rate_to_sek(_currency_for(mkt))
         price_sek = last_price * rate
         comm   = commission_sek(trade.get("shares", 0), price_sek)
         pnl_sek = (trade.get("shares", 0) * (price_sek -
@@ -788,7 +796,7 @@ def run_cycle():
             df_full  = feat_data[ticker]
             last_row = df_full.iloc[-1]
             mkt      = market_of(ticker)
-            rate     = fx.get_rate_to_sek(_currency_for(mkt))
+            rate     = _rate_to_sek(_currency_for(mkt))
 
             entry_price = last_row["Close"]
             atr_raw     = last_row.get("atr")
@@ -960,7 +968,7 @@ def run_cycle():
             price = float(feat_data[ticker]["Close"].iloc[-1])
         else:
             price = t.get("entry_price", 0) or 0
-        rate   = fx.get_rate_to_sek(_currency_for(mkt))   # FX-convert to SEK
+        rate   = _rate_to_sek(_currency_for(mkt))   # FX-convert to SEK
         equity_by_mkt[mkt] = equity_by_mkt.get(mkt, 0.0) + shares * price * rate
 
     db.upsert_equity({
@@ -1249,7 +1257,7 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
     except Exception as e:
         print(f"  [US momentum] {side} {shares} {ticker} FAILED: {e}")
         return False
-    rate = fx.get_rate_to_sek("USD")
+    rate = _rate_to_sek("USD")
     price_sek = (price or 0) * rate
     if side == "Buy":
         comm = commission_sek(shares, price_sek)
@@ -1346,7 +1354,7 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
     tgt = USM.compute_targets(feat_data, US_TICKERS)   # US names only — not the whole universe
     tag = "[US momentum DRY-RUN]" if dry_run else "[US momentum]"
     print(f"  {tag} risk_off={tgt['risk_off']} | {tgt.get('reason')} | targets={tgt['targets']}")
-    fx_usd = fx.get_rate_to_sek("USD")
+    fx_usd = _rate_to_sek("USD")
 
     if not dry_run:
         global _blend_signal
@@ -1578,7 +1586,7 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
         print(f"  [US reversion] instrument_map load failed: {e}"); return
 
     tag = "[US reversion]"
-    fx_usd = fx.get_rate_to_sek("USD")
+    fx_usd = _rate_to_sek("USD")
 
     # Current open reversion positions (this strategy only)
     rev_open = {t["ticker"]: t for t in open_trades if t.get("strategy") == "US Reversion"}
@@ -1878,27 +1886,9 @@ def run_intraday_cycle():
 
     # ── 2. Fetch historical data for daily indicators ─────────────────
     print("  Downloading daily history for indicators...")
-    try:
-        import yfinance as yf
-        raw = yf.download(
-            US_TICKERS,
-            period=f"{HISTORY_DAYS}d",
-            interval="1d",
-            group_by="ticker",
-            auto_adjust=True,
-            progress=False,
-            threads=True,
-        )
-        feat_data = {}
-        for ticker in US_TICKERS:
-            try:
-                df = raw[ticker] if len(US_TICKERS) > 1 else raw
-                if df is not None and not df.empty:
-                    feat_data[ticker] = df
-            except Exception:
-                pass
-    except Exception as e:
-        print(f"  Failed to download daily history: {e}")
+    feat_data = download_universe(US_TICKERS)   # Saxo-native, see download_universe()
+    if not feat_data:
+        print("  Failed to download daily history.")
         return
 
     if not feat_data:

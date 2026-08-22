@@ -4,7 +4,7 @@ check_sells.py — show open positions and any sell signals today.
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import yfinance as yf
+from saxo_history import fetch_daily_bars
 from atos import database as db_module
 from atos.us_reversion import should_exit, _rsi
 from atos.us_momentum import REBAL_DAYS
@@ -18,10 +18,9 @@ if not trades:
     sys.exit()
 
 tickers = [t["ticker"] for t in trades]
-raw = yf.download(tickers if len(tickers) > 1 else tickers,
-                  period="3mo", interval="1d",
-                  auto_adjust=True, progress=False,
-                  group_by="ticker" if len(tickers) > 1 else None)
+# Saxo's own live quotes (2026-08-22, explicit user direction: never Yahoo
+# for a live check like this one) -- ~65 trading days ≈ 3 months.
+bars = fetch_daily_bars(tickers, count=65)
 
 print()
 print(f"{'Ticker':<8}  {'Strategy':<14}  {'Entry':>7}  {'Last':>7}  {'P&L%':>6}  {'Days':>4}  Sell Signal?")
@@ -45,10 +44,7 @@ for trade in trades:
 
     # Get last price
     try:
-        if len(tickers) == 1:
-            close_s = raw["Close"].dropna()
-        else:
-            close_s = raw[tk]["Close"].dropna()
+        close_s = bars[tk]["Close"].dropna()
         last = float(close_s.iloc[-1])
         pnl_pct = (last - entry) / entry * 100 if entry > 0 else 0
     except Exception:

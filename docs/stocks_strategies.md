@@ -4,8 +4,20 @@
 **Universe**: 385 S&P 500 / large-cap US stocks  
 **Strategies**: 2 concurrent (Momentum Blend + Mean Reversion)  
 **Capital**: 85% of live SIM account (split 50/50 between strategies)  
-**Scheduled**: 06:00 PKT daily (main) + 5× intraday (19:00–00:30 PKT)  
-**Last updated**: 2026-08-19  
+**Scheduled**: 06:00 PKT daily (main) — `ATOS Daily Run` → `daily_run.py` →
+`atos_runner.run_cycle()`, the only Task Scheduler entry point confirmed
+live 2026-08-22. `run_intraday_cycle()` exists in `atos_runner.py` but no
+scheduled task calls it (`python atos_runner.py intraday` is manual-only) —
+this doc's older "5× intraday" note describes an intent, not current
+Task Scheduler reality; re-verify before relying on it.  
+**Price source**: Saxo's own live quotes only (2026-08-22, explicit user
+direction) — `download_universe()` and every `_rate_to_sek()` call fetch
+from Saxo's `/chart/v3/charts` and FX quotes via `saxo_history.py`/
+`saxo_fx.py`, not Yahoo. A `data_loader.py` comment claiming Saxo's SIM
+has no historical stock data was stale/never re-verified — confirmed live
+it does. Yahoo remains correct for `data_loader.py`/`backtest_*.py`
+(genuinely historical/backtest code) and `k4_export.py` (tax export).  
+**Last updated**: 2026-08-19 (price-source note added 2026-08-22)  
 
 ---
 

@@ -1462,21 +1462,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             'regime': _db.get('regime_at_entry') or '—',
                             'strategy': _db.get('strategy') or '—',
                         })
-                    # Portfolio totals, each position converted to SEK by its currency.
+                    # Portfolio totals, each position converted to SEK by its
+                    # currency -- from Saxo's own live quotes (2026-08-22,
+                    # explicit user direction: never Yahoo for anything live).
                     import sys as _sys
                     _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
                     try:
-                        import fx as _fx
+                        import saxo_fx as _saxo_fx
+                        _ccys = {(_p.get('currency') or 'SEK') for _p in formatted}
+                        _rates = _saxo_fx.rate_to_sek(list(_ccys))
                     except Exception:
-                        _fx = None
+                        _rates = {}
                     t_inv = t_pnl = t_val = 0.0
                     for _p in formatted:
-                        _rate = 1.0
-                        if _fx is not None:
-                            try:
-                                _rate = _fx.get_rate_to_sek(_p.get('currency') or 'SEK')
-                            except Exception:
-                                _rate = 1.0
+                        _rate = _rates.get(_p.get('currency') or 'SEK', 1.0)
                         t_inv += (_p.get('shares') or 0) * (_p.get('entry_price') or 0) * _rate
                         t_pnl += (_p.get('pnl') or 0) * _rate
                         t_val += (_p.get('market_value') or 0) * _rate

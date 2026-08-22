@@ -116,8 +116,13 @@ def _mkt_open():
     return wk < 5 and (9, 30) <= (et.hour, et.minute) < (16, 0)
 
 def _usd_sek() -> float:
+    # Saxo's own live quote (2026-08-22, explicit user direction: never
+    # Yahoo for anything live/on a dashboard). 10.95 is a last-resort
+    # placeholder only if Saxo has no live USDSEK quote at all right now.
     try:
-        import fx; return fx.get_rate_to_sek("USD")
+        import saxo_fx
+        rate = saxo_fx.rate_to_sek(["USD"]).get("USD")
+        return rate if rate else 10.95
     except Exception:
         return 10.95
 

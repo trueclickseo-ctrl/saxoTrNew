@@ -1272,6 +1272,104 @@ _run("price_service: fetch_prices retries instruments that failed the first pass
 
 
 # ═══════════════════════════════════════════════════════════════════════
+section("17. Stocks (ATOS) live paths use Saxo prices only (2026-08-22)")
+# ═══════════════════════════════════════════════════════════════════════
+# User: "similarly I want same for ETF, Stocks, and FUTURES. all live
+# prices from Saxo API and Yahoo only for historical prices and
+# backtesting." ETF and Futures were already fully Saxo-native (no
+# yfinance/fx.py anywhere in futures/*.py or saxo_etf_strategy/**/*.py).
+# Stocks needed real work: atos_runner.py's download_universe() (the
+# ONLY actually-scheduled live entry point, via daily_run.py ->
+# run_cycle(), feeding BOTH US Blend and US Reversion) fetched all 385
+# tickers' daily indicator history via yf.download(); 9 separate
+# fx.get_rate_to_sek() calls throughout run_cycle/_place_us/
+# run_us_momentum/run_us_reversion converted Saxo balances/prices to SEK
+# via Yahoo. A data_loader.py comment claiming "Saxo's SIM environment
+# does NOT provide historical market data for stocks" turned out to be
+# stale/never re-verified -- confirmed live 2026-08-22 that Saxo's own
+# /chart/v3/charts endpoint serves full daily history for stocks
+# (see [[saxo_api_verification]]), just gated by its own 120/min
+# rate-limit bucket (X-RateLimit-ChartMinute-Limit) discovered the hard
+# way (an unthrottled fetch of all 385 tickers failed 185 of them,
+# including obviously-liquid names like AMZN/JPM/WMT, purely from
+# blowing through this limit in ~20s). New saxo_history.py paces
+# requests under this limit; new saxo_fx.py gives Saxo-native SEK
+# conversion (mirrors forex's _eur_per_unit triangulation, targeting SEK
+# instead of EUR). data_loader.py itself, k4_export.py (tax export), and
+# backtest_*.py are left untouched -- genuinely historical/backtest code,
+# exactly what the user's own carve-out covers.
+
+
+def test_atos_runner_has_no_yfinance_import():
+    import inspect
+    import atos_runner
+    src = inspect.getsource(atos_runner)
+    assert "import yfinance" not in src, (
+        "atos_runner.py must not import yfinance anywhere -- its only "
+        "scheduled entry point (run_cycle, via daily_run.py) and the "
+        "formerly-dead-code run_intraday_cycle() must both source "
+        "history from Saxo (saxo_history.fetch_daily_bars), not Yahoo"
+    )
+    assert "import fx" not in src, (
+        "atos_runner.py must not import the Yahoo-based fx module -- "
+        "use _rate_to_sek() (Saxo-native, via saxo_fx) instead"
+    )
+
+
+def test_atos_runner_download_universe_uses_saxo_history():
+    import inspect
+    import atos_runner
+    src = inspect.getsource(atos_runner.download_universe)
+    assert "saxo_history.fetch_daily_bars" in src, (
+        "download_universe() must fetch from saxo_history.fetch_daily_bars, "
+        "not yf.download -- this is the one function that feeds indicator "
+        "history to both US Blend and US Reversion in the live daily cycle"
+    )
+
+
+def test_saxo_history_rate_limiter_paces_under_saxo_limit():
+    # Regression for 2026-08-22: Saxo's /chart/v3/charts endpoint has its
+    # own 120/min rate-limit bucket (X-RateLimit-ChartMinute-Limit),
+    # separate from the general one -- confirmed live: an unthrottled
+    # concurrent fetch of 385 tickers blew through it in ~20s and then
+    # failed 185 tickers with 429s, including obviously-covered large-caps
+    # (AMZN, JPM, WMT...), not a real data-coverage gap.
+    import saxo_history
+    assert saxo_history.CHART_REQUESTS_PER_MINUTE < 120, (
+        "saxo_history's pacing must stay under Saxo's real 120/min chart "
+        "limit, with headroom for another process sharing the same quota"
+    )
+
+
+def test_saxo_fx_instruments_needed_direct_eur_pair():
+    import saxo_fx
+    insts = saxo_fx._instruments_needed({"USD"})
+    symbols = {i["symbol"] for i in insts}
+    assert "EURUSD" in symbols and "EURSEK" in symbols, (
+        f"USD needs EURUSD (direct EUR-cross) + EURSEK (EUR->SEK leg), got {symbols}"
+    )
+
+
+def test_saxo_fx_instruments_needed_usd_triangulation():
+    # DKK has no direct EUR{ccy} pair in forex/universe.py -- must
+    # triangulate via USD{ccy} + EURUSD.
+    import saxo_fx
+    insts = saxo_fx._instruments_needed({"DKK"})
+    symbols = {i["symbol"] for i in insts}
+    assert "USDDKK" in symbols and "EURUSD" in symbols and "EURSEK" in symbols, (
+        f"DKK (no direct EURDKK pair) must triangulate via USDDKK + EURUSD "
+        f"+ EURSEK, got {symbols}"
+    )
+
+
+_run("atos_runner: no yfinance/fx.py imports remain", test_atos_runner_has_no_yfinance_import)
+_run("atos_runner: download_universe() sources from saxo_history", test_atos_runner_download_universe_uses_saxo_history)
+_run("saxo_history: paces requests under Saxo's real 120/min chart limit", test_saxo_history_rate_limiter_paces_under_saxo_limit)
+_run("saxo_fx: direct EUR-cross currency needs EURUSD+EURSEK", test_saxo_fx_instruments_needed_direct_eur_pair)
+_run("saxo_fx: DKK (no direct EUR pair) triangulates via USD+EURUSD", test_saxo_fx_instruments_needed_usd_triangulation)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════
 

@@ -384,9 +384,14 @@ def _exit_info(drow: dict) -> str:
 
 
 def _usd_sek():
+    # Saxo's own live quote (2026-08-22, explicit user direction: never
+    # Yahoo for anything live/on a dashboard). 10.95 is a last-resort
+    # placeholder only if Saxo has no live USDSEK quote at all right now.
     try:
         sys.path.insert(0, BASE_DIR)
-        import fx; return fx.get_rate_to_sek("USD")
+        import saxo_fx
+        rate = saxo_fx.rate_to_sek(["USD"]).get("USD")
+        return rate if rate else 10.95
     except Exception:
         return 10.95
 
