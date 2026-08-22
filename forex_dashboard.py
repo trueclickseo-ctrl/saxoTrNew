@@ -16,6 +16,9 @@ FOREX_LOG_PATH      = os.path.join(BASE_DIR, "data", "forex_scheduler.log")
 
 sys.path.insert(0, BASE_DIR)
 import price_service
+from forex.universe import PAIRS as _UNIVERSE_PAIRS
+
+_UNIVERSE_BY_SYMBOL = {p["symbol"]: p for p in _UNIVERSE_PAIRS}
 
 REFRESH_SECONDS = 60
 
@@ -25,23 +28,72 @@ REFRESH_SECONDS = 60
 # those raw numbers across pairs and labeling the total one currency silently
 # mixes currencies (a JPY pair's raw P&L is ~150x its true EUR value). See
 # pnl_tracker.log_close's fx_rate_to_base param, fixed the same way 2026-08-21.
+#
+# Per explicit user direction (2026-08-22): the dashboard must always use
+# Saxo prices, not Yahoo -- Yahoo is for historical/backtest data only.
+# _fx_conversion_instruments() below adds the EUR{ccy}/USD{ccy} pairs this
+# dashboard needs to the SAME batched price_service.fetch_prices() call
+# already made for the held positions, so conversion rates come from the
+# same live Saxo quotes as everything else on screen, no extra round trip.
 _EUR_RATE_CACHE: dict = {}
 
 
-def _eur_per_unit(ccy: str) -> float:
+def _fx_conversion_instruments(quote_ccys) -> list[dict]:
+    """Saxo instruments needed to convert each of `quote_ccys` to EUR:
+    EUR{ccy} directly if we trade it (every universe currency except
+    AED/DKK), else USD{ccy} + EURUSD for triangulation."""
+    needed, seen, need_eurusd = [], set(), False
+    for ccy in quote_ccys:
+        if ccy in ("EUR", "") or ccy in seen:
+            continue
+        p = _UNIVERSE_BY_SYMBOL.get(f"EUR{ccy}")
+        if p:
+            seen.add(f"EUR{ccy}")
+            needed.append({"symbol": f"EUR{ccy}", "uic": p["uic"], "asset_type": "FxSpot"})
+            continue
+        p = _UNIVERSE_BY_SYMBOL.get(f"USD{ccy}")
+        if p:
+            need_eurusd = True
+            seen.add(f"USD{ccy}")
+            needed.append({"symbol": f"USD{ccy}", "uic": p["uic"], "asset_type": "FxSpot"})
+    if need_eurusd and "EURUSD" not in seen:
+        p = _UNIVERSE_BY_SYMBOL.get("EURUSD")
+        if p:
+            needed.append({"symbol": "EURUSD", "uic": p["uic"], "asset_type": "FxSpot"})
+    return needed
+
+
+def _eur_per_unit(ccy: str, live_prices: dict | None = None) -> float | None:
+    """EUR value of one unit of `ccy`, from Saxo's live quotes only.
+
+    Returns None if Saxo doesn't have a live quote for the needed pair(s)
+    right now -- callers must treat that as "unknown," the same as a
+    missing position price, NOT fall back to a non-Saxo source. Per
+    explicit user direction (2026-08-22): Yahoo is for historical/backtest
+    data only, never for a live SIM order or anything shown on this
+    dashboard. price_service.fetch_prices() already retries misses once
+    (see its own docstring) before this is even called, so a None here
+    means Saxo genuinely had nothing for this cycle.
+    """
     if ccy == "EUR":
         return 1.0
     if ccy in _EUR_RATE_CACHE:
         return _EUR_RATE_CACHE[ccy]
-    try:
-        import fx as _fx
-        sek_per_ccy = float(_fx.get_rate_to_sek(ccy))
-        sek_per_eur = float(_fx.get_eur_sek_rate())
-        rate = sek_per_ccy / sek_per_eur if sek_per_ccy > 0 and sek_per_eur > 0 else 1.0
-    except Exception:
-        rate = 1.0
-    _EUR_RATE_CACHE[ccy] = rate
-    return rate
+
+    rate = None
+    live_prices = live_prices or {}
+    direct = live_prices.get(f"EUR{ccy}")
+    if direct:
+        rate = 1.0 / direct
+    else:
+        usd_leg = live_prices.get(f"USD{ccy}")
+        eur_usd = live_prices.get("EURUSD")
+        if usd_leg and eur_usd:
+            rate = 1.0 / (usd_leg * eur_usd)
+
+    if rate is not None:
+        _EUR_RATE_CACHE[ccy] = rate   # only cache a real hit -- a miss may
+    return rate                       # resolve on the very next 60s refresh
 
 # ── Windows console clear ─────────────────────────────────────────
 def _clear_console():
@@ -189,9 +241,14 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
 
     # Fetch live prices only for pairs we actually hold — the standalone
     # full-universe rates strip was removed, so there's no need to price
-    # every FX_INSTRUMENTS pair on every refresh.
+    # every FX_INSTRUMENTS pair on every refresh. Also pull in whatever
+    # EUR{ccy}/USD{ccy} pairs are needed to convert each held pair's quote
+    # currency to EUR (see _eur_per_unit) -- one batched call, same live
+    # Saxo source as the position prices themselves.
     instruments = [{"symbol": p["symbol"], "uic": p["uic"], "asset_type": p["asset_type"]}
                    for p in positions if p.get("uic")]
+    quote_ccys  = {p["symbol"][3:6] for p in positions if len(p.get("symbol", "")) >= 6}
+    instruments += _fx_conversion_instruments(quote_ccys)
 
     live, price_src = price_service.fetch_prices(instruments, token=token)
     position_costs   = _fetch_position_costs(token)
@@ -286,9 +343,9 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
 
                 side_tag = f"{GR}{BD}LONG {W}" if is_long else f"{RD}{BD}SHORT{W}"
 
-                if now_px and ep > 0:
-                    quote_ccy = sym[3:6] if len(sym) >= 6 else ""
-                    eur_rate  = _eur_per_unit(quote_ccy)
+                quote_ccy = sym[3:6] if len(sym) >= 6 else ""
+                eur_rate  = _eur_per_unit(quote_ccy, live) if now_px and ep > 0 else None
+                if now_px and ep > 0 and eur_rate is not None:
                     raw_pnl  = (now_px - ep) if is_long else (ep - now_px)
                     pnl_eur  = raw_pnl * qty * eur_rate
                     pnl_pct  = raw_pnl / ep * 100
@@ -407,8 +464,10 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
             now_px  = live.get(sym)
             if now_px and p["entry"] > 0:
                 quote_ccy = sym[3:6] if len(sym) >= 6 else ""
-                raw = (now_px - p["entry"]) if p["direction"] == "Buy" else (p["entry"] - now_px)
-                unrealized += raw * p["qty"] * _eur_per_unit(quote_ccy)
+                eur_rate  = _eur_per_unit(quote_ccy, live)
+                if eur_rate is not None:
+                    raw = (now_px - p["entry"]) if p["direction"] == "Buy" else (p["entry"] - now_px)
+                    unrealized += raw * p["qty"] * eur_rate
         stats    = stats_by_strat.get(strat, {})
         realized = stats.get("total_pnl", 0.0)
         n_closed = stats.get("trades", 0)

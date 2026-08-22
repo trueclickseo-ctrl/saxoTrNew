@@ -21,7 +21,13 @@ take-profit rule.
 heat cap and currency-exposure cap are both currently disabled (raised to
 effectively unlimited) for full SIM testing across the expanded universe.
 **Both must be reinstated with real values before trading live capital** —
-see Audit 2026-08-22.
+see Audit 2026-08-22.  
+**Price source**: live SIM orders, position sizing, and `forex_dashboard.py`
+use **Saxo's own live quotes only** (2026-08-22, explicit user direction) —
+`forex/runner.py`'s and `forex_dashboard.py`'s `_eur_per_unit()` triangulate
+EUR conversion rates via a Saxo-traded EUR{ccy}/USD{ccy} pair, with no
+Yahoo fallback. Yahoo (`fx.py`, `yfinance`) is used only for historical
+data — `backtest_forex_universe.py` and similar.
 
 ---
 

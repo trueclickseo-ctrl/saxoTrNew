@@ -1217,6 +1217,61 @@ _run("fx: every forex universe quote currency has a FALLBACK_RATES_TO_SEK entry"
 
 
 # ═══════════════════════════════════════════════════════════════════════
+section("16. Forex live paths use Saxo prices only, never Yahoo (2026-08-22)")
+# ═══════════════════════════════════════════════════════════════════════
+# User: "I ask you always use Saxo prices on the live Sim orders and on
+# the Dashboard. Yahoo prices is only for historical prices and
+# backtesting." forex/runner.py's and forex_dashboard.py's _eur_per_unit()
+# both used to fall back to fx.py (Yahoo-based) whenever Saxo's live quote
+# was momentarily unavailable -- removed entirely; both now return None on
+# a Saxo miss and callers treat that as "unknown" rather than substituting
+# a Yahoo-sourced number. price_service.fetch_prices() gained a retry pass
+# for misses (confirmed live: 35 of 94 concurrent Saxo requests failed in
+# one dashboard refresh, recovered on retry) so this rarely needs to fire
+# at all. fx.py itself is untouched -- still the right tool for
+# backtest_forex_universe.py's historical data.
+
+
+def test_runner_eur_per_unit_has_no_yahoo_fallback():
+    import inspect
+    import forex.runner as runner
+    src = inspect.getsource(runner._eur_per_unit)
+    assert "import fx" not in src, (
+        "forex/runner.py's _eur_per_unit() must not import fx.py (Yahoo) -- "
+        "live position sizing/P&L conversion must be Saxo-only per explicit "
+        "user direction 2026-08-22"
+    )
+
+
+def test_dashboard_eur_per_unit_has_no_yahoo_fallback():
+    import inspect
+    import forex_dashboard
+    src = inspect.getsource(forex_dashboard._eur_per_unit)
+    assert "import fx" not in src, (
+        "forex_dashboard.py's _eur_per_unit() must not import fx.py (Yahoo) "
+        "-- the dashboard must show Saxo-sourced numbers only per explicit "
+        "user direction 2026-08-22"
+    )
+
+
+def test_price_service_retries_failed_instruments():
+    import inspect
+    import price_service
+    src = inspect.getsource(price_service.fetch_prices)
+    assert "misses" in src, (
+        "price_service.fetch_prices() must retry instruments that failed "
+        "on the first pass -- confirmed live that a meaningful fraction of "
+        "a large concurrent batch fails transiently, and there's no longer "
+        "a Yahoo fallback for forex's conversion rates to fall back on"
+    )
+
+
+_run("runner: _eur_per_unit has no Yahoo/fx.py fallback (Saxo-only)", test_runner_eur_per_unit_has_no_yahoo_fallback)
+_run("forex_dashboard: _eur_per_unit has no Yahoo/fx.py fallback (Saxo-only)", test_dashboard_eur_per_unit_has_no_yahoo_fallback)
+_run("price_service: fetch_prices retries instruments that failed the first pass", test_price_service_retries_failed_instruments)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════
 

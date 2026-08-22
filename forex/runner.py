@@ -313,23 +313,58 @@ def _verify_token(scheduled_time: str = "") -> bool:
 
 
 _QUOTE_RATE_CACHE: dict[str, float] = {}
+_PAIRS_BY_SYMBOL = {p["symbol"]: p for p in PAIRS}
 
 
-def _eur_per_unit(ccy: str) -> float | None:
-    """EUR value of one unit of `ccy`, via the shared fx module (SEK-based)."""
+def _live_price_retry(uic: int, akey: str, attempts: int = 2) -> float | None:
+    """_live_price with a couple of retries -- a single infoprices call
+    fails often enough under load (confirmed live 2026-08-22: 35 of 94
+    concurrent Saxo price requests failed in one forex_dashboard.py
+    refresh, a different random subset each time) that one miss shouldn't
+    be treated as "Saxo has nothing," now that there's no other source to
+    fall back to for this."""
+    for _ in range(attempts):
+        px = _live_price(uic, akey)
+        if px:
+            return px
+    return None
+
+
+def _eur_per_unit(ccy: str, akey: str | None = None) -> float | None:
+    """EUR value of one unit of `ccy`, from Saxo's OWN live quotes only.
+
+    Per explicit user direction (2026-08-22): live SIM orders and the
+    dashboard must always use Saxo prices -- Yahoo is for historical/
+    backtest data only, never for anything that sizes or converts a live
+    trade. Triangulates via a pair already in our own universe: EUR{ccy}
+    directly if we trade it (every currency here has one except AED/DKK),
+    else USD{ccy} + EURUSD. Returns None if Saxo has no live quote right
+    now -- callers must treat that as "unknown" (skip sizing/skip this
+    pair's contribution), not silently substitute a non-Saxo number.
+    """
     if ccy == "EUR":
         return 1.0
     if ccy in _QUOTE_RATE_CACHE:
         return _QUOTE_RATE_CACHE[ccy]
-    try:
-        import fx as _fx
-        sek_per_ccy = float(_fx.get_rate_to_sek(ccy))
-        sek_per_eur = float(_fx.get_eur_sek_rate())
-        if sek_per_ccy <= 0 or sek_per_eur <= 0:
-            return None
-        rate = sek_per_ccy / sek_per_eur
-    except Exception as exc:
-        logger.warning(f"FX rate lookup failed for {ccy}: {exc}")
+
+    rate = None
+    akey = akey or ""
+    direct = _PAIRS_BY_SYMBOL.get(f"EUR{ccy}")
+    if direct is not None:
+        px = _live_price_retry(direct["uic"], akey)
+        if px and px > 0:
+            rate = 1.0 / px
+    else:
+        usd_leg = _PAIRS_BY_SYMBOL.get(f"USD{ccy}")
+        eur_usd = _PAIRS_BY_SYMBOL.get("EURUSD")
+        if usd_leg is not None and eur_usd is not None:
+            px_usd_ccy = _live_price_retry(usd_leg["uic"], akey)
+            px_eur_usd = _live_price_retry(eur_usd["uic"], akey)
+            if px_usd_ccy and px_usd_ccy > 0 and px_eur_usd and px_eur_usd > 0:
+                rate = 1.0 / (px_usd_ccy * px_eur_usd)
+
+    if rate is None:
+        logger.warning(f"Saxo has no live quote for {ccy} right now -- treating as unknown")
         return None
     _QUOTE_RATE_CACHE[ccy] = rate
     return rate
@@ -1218,7 +1253,19 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
             # alongside a USD/CHF pair's raw number as if they were the same
             # currency, when the JPY figure is really only ~-50 EUR.
             quote_ccy = sym[3:6] if len(sym) >= 6 else ""
-            fx_rate   = _eur_per_unit(quote_ccy) or 1.0
+            fx_rate   = _eur_per_unit(quote_ccy, akey)
+            if fx_rate is None:
+                # Only used if saxo_pnl_eur (Saxo's own authoritative
+                # positions/me conversion, the primary source below) is
+                # ALSO unavailable -- a double failure. 1.0 is a known-bad
+                # placeholder, not a real rate; logged loudly rather than
+                # silently trusted, since there's no Yahoo fallback to
+                # reach for anymore (Saxo-only per 2026-08-22 direction).
+                logger.warning(f"  [PNL] No Saxo rate for {quote_ccy} AND no Saxo "
+                                f"position P&L for {sym} -- realized P&L for this "
+                                f"close will use an unconverted 1.0 placeholder, "
+                                f"verify data/pnl_ledger.db for {sym} manually")
+                fx_rate = 1.0
             pnl_tracker.log_close("forex", sym, live_px, reason, strategy=strat_name,
                                   fx_rate_to_base=fx_rate,
                                   gross_pnl_base_override=saxo_pnl_eur)

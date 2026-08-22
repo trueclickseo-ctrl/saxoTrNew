@@ -15,6 +15,7 @@ Usage:
 
 import os, json, time
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 TOKEN_FILE = os.path.join(BASE_DIR, "saxo_token.json")
@@ -114,15 +115,37 @@ def fetch_prices(instruments: list[dict], token: str = None) -> tuple[dict[str, 
     saxo_ok = False
 
     if token:
-        for inst in instruments:
-            sym        = inst["symbol"]
-            uic        = inst.get("uic")
-            asset_type = inst.get("asset_type", "FxSpot")
-            if uic:
-                px = _saxo_mid(token, uic, asset_type)
-                if px is not None:
-                    prices[sym] = round(px, 5)
-                    saxo_ok = True
+        # One sequential request per pair used to take ~10-30s+ for a full
+        # 27-pair dashboard refresh (each round-trip is independent — no
+        # ordering or rate-limit reason to serialize them). Fetch concurrently.
+        jobs = [inst for inst in instruments if inst.get("uic")]
+
+        # A single pass through a large batch (e.g. the forex dashboard's
+        # ~90+ instruments: every open position + every EUR/USD conversion
+        # pair, see forex_dashboard.py) drops a meaningful fraction to
+        # per-request timeouts/transient hiccups under concurrent load —
+        # confirmed live 2026-08-22 (35 of 94 failed in one run, a
+        # different random subset each time, not the same instruments
+        # repeatedly). One retry pass for just the misses recovers most of
+        # them cheaply, and matters more now that this is the ONLY source
+        # for forex's live currency-conversion rates (Yahoo fallback
+        # removed from that path per explicit user direction — Saxo only
+        # for live orders/dashboard, Yahoo stays historical/backtest-only).
+        for attempt in range(2):
+            misses = [inst for inst in jobs if inst["symbol"] not in prices]
+            if not misses:
+                break
+            with ThreadPoolExecutor(max_workers=10) as pool:
+                futures = {
+                    pool.submit(_saxo_mid, token, inst["uic"], inst.get("asset_type", "FxSpot")): inst["symbol"]
+                    for inst in misses
+                }
+                for fut in as_completed(futures):
+                    sym = futures[fut]
+                    px  = fut.result()
+                    if px is not None:
+                        prices[sym] = round(px, 5)
+                        saxo_ok = True
 
     source = "saxo" if saxo_ok else "unavailable"
     return prices, source
