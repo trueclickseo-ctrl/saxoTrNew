@@ -1184,6 +1184,39 @@ _run("runner: _run_exits cancels stop+TP orders before closing", test_run_exits_
 
 
 # ═══════════════════════════════════════════════════════════════════════
+section("15. Every universe quote currency has an FX fallback rate (2026-08-22)")
+# ═══════════════════════════════════════════════════════════════════════
+# User hit this live: `python forex_dashboard.py` raised/warned on CZKSEK=X
+# ("possibly delisted"). Investigation found ILS fails live 100% of the
+# time (same KeyError('exchangeTimezoneName') class as TRY/MXN/CNH, fixed
+# 2026-08-21) and CZK + 11 other currencies fetch live fine but had zero
+# fallback -- forex_dashboard.py's own _eur_per_unit() silently swallows
+# ANY fx.get_rate_to_sek() failure into rate=1.0 (wildly wrong for
+# anything but EUR), so a transient Yahoo hiccup on an unlisted currency
+# quietly corrupts displayed P&L/exposure rather than raising or warning.
+# This test asserts every quote currency the live 117-pair universe
+# actually uses has a fallback -- so expanding the universe again can't
+# silently reopen this same gap.
+
+
+def test_every_universe_quote_currency_has_fx_fallback():
+    import fx
+    from forex.universe import PAIRS
+    quote_ccys = {p["symbol"][3:6] for p in PAIRS if len(p["symbol"]) >= 6}
+    missing = sorted(c for c in quote_ccys if c not in fx.FALLBACK_RATES_TO_SEK)
+    assert not missing, (
+        f"quote currencies used in forex/universe.py with no entry in "
+        f"fx.FALLBACK_RATES_TO_SEK: {missing} -- a transient (or, like ILS, "
+        f"permanent) live-fetch failure on any of these either raises "
+        f"(fx.get_rate_to_sek, forex/runner.py callers with no except) or "
+        f"silently corrupts P&L display to a 1.0 rate (forex_dashboard.py)"
+    )
+
+
+_run("fx: every forex universe quote currency has a FALLBACK_RATES_TO_SEK entry", test_every_universe_quote_currency_has_fx_fallback)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════
 

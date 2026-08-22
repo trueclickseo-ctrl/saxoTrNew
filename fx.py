@@ -44,6 +44,37 @@ FALLBACK_RATES_TO_SEK = {
     "TRY": 0.21,   # Turkish lira
     "MXN": 0.55,   # Mexican peso
     "CNH": 1.41,   # offshore Chinese yuan (renminbi)
+    # Added 2026-08-22 — user hit this live: forex_dashboard.py raised on
+    # CZKSEK=X and printed the exact same "possibly delisted" symptom as the
+    # three above for ILS. Checked every quote currency actually used in
+    # forex/universe.py's 117-pair universe (23 total) against a live fetch
+    # that day: ILS fails 100% of the time with the same KeyError
+    # ('exchangeTimezoneName') as TRY/MXN/CNH — a structurally broken ticker,
+    # not a transient outage (rate below triangulated via ILS=X / USDSEK=X
+    # since ILSSEK=X itself never returns anything). CZK fetched live fine
+    # every time it was tested that same day, but had zero fallback, so ANY
+    # transient Yahoo hiccup on it raises RuntimeError with no safety net —
+    # added for resilience, same as the rest of this table. The other
+    # currencies below (AED/AUD/HKD/HUF/NOK/NZD/PLN/RON/SGD/THB/ZAR) fetch
+    # live fine but were previously undocumented/unprotected the same way —
+    # filled in from live rates the same day so a future flake on any of
+    # them degrades to a loud warning instead of a silent 1.0-rate P&L
+    # distortion (forex_dashboard.py's _eur_per_unit swallows the exception
+    # and falls back to rate=1.0 unconditionally when this table has no
+    # entry — wildly wrong for anything but literal EUR).
+    "CZK": 0.44,   # Czech koruna
+    "ILS": 3.17,   # Israeli shekel (triangulated: USDSEK / USDILS)
+    "AED": 2.57,   # UAE dirham
+    "AUD": 6.78,   # Australian dollar
+    "HKD": 1.21,   # Hong Kong dollar
+    "HUF": 0.030,  # Hungarian forint
+    "NOK": 1.02,   # Norwegian krone
+    "NZD": 5.65,   # New Zealand dollar
+    "PLN": 2.57,   # Polish zloty
+    "RON": 2.10,   # Romanian leu
+    "SGD": 7.45,   # Singapore dollar
+    "THB": 0.28,   # Thai baht
+    "ZAR": 0.59,   # South African rand
 }
 
 # Cached per process run so a single cycle doesn't refetch the same rate
