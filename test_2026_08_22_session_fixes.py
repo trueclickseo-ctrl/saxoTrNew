@@ -1033,6 +1033,156 @@ _run("run_forex_watchdog.bat exists and calls --only-forex", test_forex_watchdog
 _run("etf_dashboard: reads the real etf_strategy.log path", test_etf_dashboard_reads_real_log_path)
 
 
+def test_bracket_tp_leg_uses_order_price_field():
+    # Regression for 2026-08-22: _place_bracket's take-profit child leg sent
+    # "Price" instead of "OrderPrice" -- Saxo's real API rejects this with
+    # "Orders[1].OrderPrice must be set for orders that are not of type
+    # Market or TraspasoIn", confirmed live (a real GBPCHF LBO trade hit it),
+    # so every gap/london_breakout bracket order silently fell back to two
+    # unlinked stop+TP orders instead of a true OCO bracket. Verified fixed
+    # against Saxo's live /trade/v2/orders/precheck endpoint (PreCheckResult
+    # "Ok"), not just reasoned about -- see [[saxo-api-verification]].
+    import inspect
+    import re
+    import saxo_order
+    src = inspect.getsource(saxo_order._place_bracket)
+    tp_leg_block = src.split('"OrderType":     "Limit"')[1][:200]
+    assert '"OrderPrice":' in tp_leg_block, (
+        "_place_bracket's take-profit leg must set 'OrderPrice', not 'Price' "
+        "-- Saxo's API rejects 'Price' on a non-Market child order"
+    )
+    assert not re.search(r'"Price":\s', tp_leg_block), (
+        "_place_bracket's take-profit leg still contains a bare 'Price' key "
+        "-- Saxo rejects this field name for Limit orders inside a bracket"
+    )
+
+
+_run("saxo_order: bracket TP leg uses OrderPrice, not Price", test_bracket_tp_leg_uses_order_price_field)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+section("14. Universal broker-side stop+TP for every strategy (2026-08-22)")
+# ═══════════════════════════════════════════════════════════════════════
+# User: "I want stop loss every part of strategy so when a pair bought on
+# Saxo it create stops loss according to our strategy and also same time
+# take profit coverage implemented on Saxo. I do not want to depend on the
+# scheduler to do this." Previously only gap/london_breakout computed a
+# take-profit target -- the other 9 strategies (ema/rsi/donchian/bb/
+# pullback/ml/zscore/supertrend/cnn_lstm) only ever got a stop-loss at
+# entry; profit-taking depended entirely on the next scheduled
+# run_exits_only() catching should_exit(). Fixed in forex/runner.py:
+# _resolve_tp_price() gives every strategy a broker-side TP at entry
+# (its own target if it has one, else DEFAULT_TP_RR x its own stop
+# distance) via the now-fixed true OCO bracket, _heal_missing_tp()
+# generalized from gap-only to any position with a tp_price, and
+# _run_exits() now cancels the resting stop+TP orders before a
+# scheduler-driven close so neither is left orphaned.
+
+
+def test_resolve_tp_price_uses_default_rr_when_strategy_has_none():
+    import forex.runner as runner
+    sig = {"close": 1.0940, "stop_price": 1.0895}  # EMA-shaped: no tp_price/gap_target
+    tp = runner._resolve_tp_price(sig, "Buy")
+    expected = 1.0940 + runner.DEFAULT_TP_RR * (1.0940 - 1.0895)
+    assert abs(tp - expected) < 1e-9, f"expected {expected}, got {tp}"
+    assert tp > sig["close"], "a Buy's take-profit must be above entry"
+
+    sig_sell = {"close": 1.0940, "stop_price": 1.0985}
+    tp_sell = runner._resolve_tp_price(sig_sell, "Sell")
+    expected_sell = 1.0940 - runner.DEFAULT_TP_RR * (1.0985 - 1.0940)
+    assert abs(tp_sell - expected_sell) < 1e-9, f"expected {expected_sell}, got {tp_sell}"
+    assert tp_sell < sig_sell["close"], "a Sell's take-profit must be below entry"
+
+
+def test_resolve_tp_price_respects_strategys_own_target():
+    import forex.runner as runner
+    sig_lbo = {"close": 1.09336, "stop_price": 1.08468, "tp_price": 1.10770}
+    assert runner._resolve_tp_price(sig_lbo, "Buy") == 1.10770, (
+        "london_breakout's own tp_price must not be overridden by the default R:R"
+    )
+    sig_gap = {"close": 10.9075, "stop_price": 10.95, "gap_target": 10.85}
+    assert runner._resolve_tp_price(sig_gap, "Sell") == 10.85, (
+        "gap's own gap_target must not be overridden by the default R:R"
+    )
+
+
+def test_pos_record_always_stores_tp_price():
+    import inspect
+    import forex.runner as runner
+    src = inspect.getsource(runner._run_entries)
+    assert '"tp_price":       tp,' in src or '"tp_price": tp' in src.replace("  ", " "), (
+        "_run_entries' pos_record must store tp_price for every strategy "
+        "(previously only london_breakout's own sig[\"tp_price\"] was ever "
+        "recorded, so the dashboard/healer had no target for the other 9 "
+        "strategies even after a bracket order was placed)"
+    )
+
+
+def test_heal_missing_tp_not_restricted_to_gap():
+    import inspect
+    import forex.runner as runner
+    src = inspect.getsource(runner._heal_missing_tp)
+    assert 'startswith("gap:")' not in src, (
+        "_heal_missing_tp must no longer be gap-only -- every strategy now "
+        "gets a tp_price at entry and needs the same healing safety net"
+    )
+    assert 'v.get("tp_price")' in src or "v.get('tp_price')" in src, (
+        "_heal_missing_tp must key off tp_price (set for every strategy now), "
+        "not gap_target (gap-only)"
+    )
+
+
+def test_fetch_open_orders_uses_open_order_type_field():
+    # Regression for 2026-08-22: Saxo's live order objects carry the order
+    # type under "OpenOrderType", not "OrderType" -- confirmed against a
+    # real order dump. Reading "OrderType" silently returned None for every
+    # order, so the "is a stop/TP already live on Saxo?" dedup check in
+    # _heal_missing_stops/_heal_missing_tp could never match, undermining
+    # the "queries Saxo first to avoid duplicates" guarantee both docstrings
+    # make -- more consequential now that TP healing covers all 10 strategies.
+    import inspect
+    import forex.runner as runner
+    src = inspect.getsource(runner._fetch_open_orders)
+    assert 'o.get("OpenOrderType")' in src, (
+        '_fetch_open_orders must read o.get("OpenOrderType"), not '
+        '"OrderType" -- Saxo does not return an "OrderType" field on live orders'
+    )
+
+
+def test_run_exits_cancels_resting_orders_before_market_close():
+    # Regression for 2026-08-22: when OUR should_exit() closes a position
+    # (hard-stop/time-stop/trailing) rather than the broker's own resting
+    # stop/TP order firing, those two resting orders were left live,
+    # protecting a position that had just gone flat -- either could fire
+    # later and open an unintended new position in the opposite direction
+    # (the exact "naked order" class of risk found live in the GBPCHF LBO
+    # bracket-fallback case, 2026-08-22). Now cancelled before the market
+    # close is sent, for every strategy (not just gap/LBO).
+    import inspect
+    import forex.runner as runner
+    src = inspect.getsource(runner._run_exits)
+    cancel_block = src.split('order = {"AccountKey"')[0]
+    assert "_cancel_order(oid, akey)" in src, (
+        "_run_exits must cancel the position's resting stop_order_id/"
+        "tp_order_id via _cancel_order before placing the market close"
+    )
+    close_order_idx = src.index('resp = _post("/trade/v2/orders", order)')
+    cancel_idx = src.index("_cancel_order(oid, akey)")
+    assert cancel_idx < close_order_idx, (
+        "orders must be cancelled BEFORE the market close is sent, not after "
+        "-- cancelling after leaves a window where the resting order could "
+        "fire against an already-flat position"
+    )
+
+
+_run("runner: _resolve_tp_price applies DEFAULT_TP_RR when a strategy has no target", test_resolve_tp_price_uses_default_rr_when_strategy_has_none)
+_run("runner: _resolve_tp_price keeps a strategy's own tp_price/gap_target", test_resolve_tp_price_respects_strategys_own_target)
+_run("runner: pos_record always stores tp_price, not just for LBO", test_pos_record_always_stores_tp_price)
+_run("runner: _heal_missing_tp generalized beyond gap-only", test_heal_missing_tp_not_restricted_to_gap)
+_run("runner: _fetch_open_orders reads OpenOrderType, not OrderType", test_fetch_open_orders_uses_open_order_type_field)
+_run("runner: _run_exits cancels stop+TP orders before closing", test_run_exits_cancels_resting_orders_before_market_close)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════

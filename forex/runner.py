@@ -182,6 +182,36 @@ BREAKEVEN_THRESHOLD_ATR = 1.0
 # Gap strategy: move stop to entry_price once price is this % toward the gap target
 BREAKEVEN_GAP_FILL_PCT  = 0.50
 
+# ── Default take-profit (2026-08-22) ──────────────────────────────────────────
+# gap/london_breakout compute their own tp_price/gap_target from their own
+# session-range logic. The other 9 strategies (ema/rsi/donchian/bb/pullback/
+# ml/zscore/supertrend/cnn_lstm) only ever computed a stop_price — profit was
+# taken exclusively by the scheduler's periodic should_exit()/trailing-stop
+# scan, so a position sat with only downside protection at the broker between
+# runs. Per explicit user direction: every position must get BOTH legs placed
+# on Saxo atomically at entry, not dependent on the next scheduled run.
+# DEFAULT_TP_RR gives those 9 strategies a broker-side take-profit at this
+# multiple of their own already-computed stop distance (entry-to-stop) —
+# matching london_breakout's established 2:1 reward:risk convention (see
+# docs/forex_strategies.md's "TP ratio | 2.0 × range" for LBO). This does not
+# change any strategy's own exit logic (trailing stop, time-stop, hard-stop
+# are still evaluated every run exactly as before) -- it only adds a resting
+# Limit order at the broker so a winning trade can be captured even if a
+# scheduled run is delayed or skipped.
+DEFAULT_TP_RR = 2.0
+
+
+def _resolve_tp_price(sig: dict, direction: str) -> float:
+    """Take-profit price for a signal: the strategy's own target if it
+    computed one (gap's gap_target, london_breakout's tp_price), else
+    DEFAULT_TP_RR applied to the signal's own stop distance."""
+    tp = sig.get("tp_price") or sig.get("gap_target")
+    if tp is not None:
+        return tp
+    stop_distance = abs(sig["close"] - sig["stop_price"])
+    return (sig["close"] + DEFAULT_TP_RR * stop_distance if direction == "Buy"
+            else sig["close"] - DEFAULT_TP_RR * stop_distance)
+
 
 # ── Saxo HTTP helpers ─────────────────────────────────────────────────────────
 
@@ -975,10 +1005,10 @@ def _cancel_order(order_id: str, akey: str) -> bool:
     except requests.exceptions.HTTPError as exc:
         if exc.response is not None and exc.response.status_code == 404:
             return True
-        logger.warning(f"  [BREAKEVEN] Could not cancel stop {order_id}: {exc}")
+        logger.warning(f"  Could not cancel order {order_id}: {exc}")
         return False
     except Exception as exc:
-        logger.warning(f"  [BREAKEVEN] Could not cancel stop {order_id}: {exc}")
+        logger.warning(f"  Could not cancel order {order_id}: {exc}")
         return False
 
 
@@ -1161,6 +1191,19 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
             logger.info(f"  [DRY] {close_side:<4} {qty:,}x {sym}[{tag}] "
                         f"({strat_name}) — {reason}  P&L {pnl_pct:+.2f}%")
         else:
+            # This close is happening because OUR should_exit() logic fired
+            # (hard-stop/time-stop/trailing), not because the broker's own
+            # resting stop/TP order triggered it. Those two resting orders
+            # are therefore still live and now protecting a position that's
+            # about to go flat -- cancel them FIRST, before sending the
+            # market close, or either one could fire in the gap and open an
+            # unintended new position in the opposite direction (confirmed
+            # live 2026-08-22: this exact gap is how a bracket's un-linked
+            # fallback legs end up orphaned -- see saxo_order.place_with_stop).
+            for oid_key in ("stop_order_id", "tp_order_id"):
+                oid = pos.get(oid_key)
+                if oid and oid not in ("synced", None, ""):
+                    _cancel_order(oid, akey)
             resp = _post("/trade/v2/orders", order)
             logger.info(f"  {close_side} {resp.get('OrderId','?')}: {qty:,}x {sym}[{tag}] "
                         f"({strat_name}) — {reason}  P&L {pnl_pct:+.2f}%")
@@ -1345,12 +1388,16 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                   else f"adx={sig.get('adx', 0):.1f}")
         stop_oid = None; tp_oid = None
         agree_tag = f"  agree={agrees}/{len(STRATEGIES)}{ml_info}"
+        # london_breakout/gap provide their own session-range-based target;
+        # every other strategy gets a broker-side TP at DEFAULT_TP_RR times
+        # its own stop distance, so it's protected on both sides at the
+        # broker from the moment it's opened (see DEFAULT_TP_RR docstring).
+        tp = _resolve_tp_price(sig, direction)
         if dry_run:
             logger.info(f"  [DRY] {direction:<4} {qty:,}x {sym}[{tag}] "
                         f"({strat_name})  @ {sig['close']:.5f}  "
-                        f"stop={sig['stop_price']:.5f}  {detail}{agree_tag}")
+                        f"stop={sig['stop_price']:.5f}  tp={tp:.5f}  {detail}{agree_tag}")
         else:
-            tp = sig.get("tp_price") or sig.get("gap_target")   # london_breakout + gap both provide TP
             entry_oid, stop_oid, tp_oid = saxo_order.place_with_stop(
                 post_fn           = _post,
                 account_key       = akey,
@@ -1385,6 +1432,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             "direction":      direction,
             "entry_price":    sig["close"],
             "stop_price":     sig["stop_price"],
+            "tp_price":       tp,   # broker-side target for every strategy now (own or DEFAULT_TP_RR fallback)
             "quantity":       qty,
             "entry_date":     today_str,
             "entry_datetime": datetime.now().isoformat(),  # hour-based time stop for session gaps
@@ -1441,7 +1489,13 @@ def _fetch_open_orders(akey: str) -> set | None:
         for o in orders:
             dur = o.get("Duration", {}).get("DurationType", "")
             if dur == "GoodTillCancel":
-                result.add((o.get("Uic"), o.get("BuySell"), o.get("OrderType")))
+                # Saxo's live order objects carry the type under
+                # "OpenOrderType", not "OrderType" -- confirmed live 2026-08-22
+                # (dumped a real order response). Reading "OrderType" here
+                # returned None for every order, so this dedup check never
+                # matched and _heal_missing_stops/_heal_missing_tp couldn't
+                # tell an existing live order from a missing one.
+                result.add((o.get("Uic"), o.get("BuySell"), o.get("OpenOrderType")))
         return result
     except Exception as exc:
         logger.warning(f"[heal] Could not fetch open orders from Saxo: {exc} — skipping heal")
@@ -1509,13 +1563,15 @@ def _heal_missing_stops(positions: dict, akey: str) -> int:
 
 def _heal_missing_tp(positions: dict, akey: str) -> int:
     """
-    Place GTC Limit TP orders for gap positions that have a gap_target but no tp_order_id.
+    Place GTC Limit TP orders for ANY position that has a tp_price but no
+    tp_order_id -- every strategy now gets a tp_price at entry (its own
+    session-range target for gap/london_breakout, DEFAULT_TP_RR's fallback
+    for everything else, see _run_entries), so this is no longer gap-only.
     Queries Saxo first to avoid duplicates.
     Returns number of TP orders successfully placed.
     """
     missing = [(k, v) for k, v in positions.items()
-               if k.startswith("gap:") and
-               v.get("gap_target") is not None and
+               if v.get("tp_price") is not None and
                v.get("tp_order_id") is None]
     if not missing:
         return 0
@@ -1530,7 +1586,7 @@ def _heal_missing_tp(positions: dict, akey: str) -> int:
         uic        = pos["uic"]
         direction  = pos.get("direction", "Buy")
         qty        = pos["quantity"]
-        tp_price   = pos["gap_target"]
+        tp_price   = pos["tp_price"]
         close_side = "Sell" if direction == "Buy" else "Buy"
         rounded_tp = round(tp_price, get_price_decimals(sym))
 

@@ -12,6 +12,11 @@ independent book, one slot per LBO pair)
 **Swing risk per trade**: 0.5% of account equity (cut from 1% 2026-08-22 —
 see Audit below; margin relief, not a strategy change)  
 **Day-trading capital**: 15,000 SEK dedicated, 1.5% risk per trade  
+**Stop-loss + take-profit**: every strategy places BOTH as native Saxo orders
+atomically at entry (2026-08-22) — a true OCO bracket via
+`saxo_order.place_with_stop()`, not dependent on a scheduled run to add
+protection later. See "Strategy Comparison" below for each strategy's
+take-profit rule.  
 **Risk gates — SIM-testing state, NOT the intended live config**: portfolio
 heat cap and currency-exposure cap are both currently disabled (raised to
 effectively unlimited) for full SIM testing across the expanded universe.
@@ -819,19 +824,31 @@ been historically validated so far (only EMA, on 7 majors, before
 2026-08-22). Slot counts corrected 2026-08-22 — the table below had been
 stale since before the universe expansion.
 
-| # | Strategy | Type | Win Rate (design target) | Key Indicators | Stop | Time Stop | Slots | Book |
-|---|----------|------|----------|---------------|------|-----------|-------|------|
-| 1 | EMA Crossover | Trend | ~55% | EMA(5/30) + ADX(14) | 1.5×ATR | 45d | **117** | Swing |
-| 2 | RSI(2) Pullback | Reversion-in-trend | ~60% | RSI(2) + EMA(200) | 1.5×ATR | 12d | **117** | Swing |
-| 3 | Donchian Break | Momentum | ~50% | 30d High/Low + EMA(200) + ADX | 2.0×ATR | 30d | **117** | Swing |
-| 4 | BB Reversion | Mean-reversion | ~60% | BB(20,2) + RSI(14) | 2.0×ATR | 8d | **117** | Swing |
-| 5 | **Pullback-to-EMA** ★ | Trend continuation | **~70%+** | EMA(20/50) + ADX(14) | 1.5×ATR | 25d | **117** | Swing |
-| 6 | **Weekend Gap Fill** ★★ | Structural mean-rev | **~80–85%** | Gap % + live price | 1.5×gap | 7d | **117** | Swing |
-| 7 | SuperTrend | Trend | ~65% | ST(10,3) + EMA(200) | 2.0×ATR | 40d | **117** | Swing |
-| 8 | Z-Score Rev | Mean-reversion | ~63% | 20d z-score + EMA(200) | 2.5×ATR | 12d | **117** | Swing |
-| 9 | ML Signals | ML / Logistic Reg | ~57–62% | 7 features, per-pair retrain | 2.0×ATR | 20d | **117** | Swing |
-| 10 | **CNN-LSTM** ★★★ | Deep Learning | **~55–65%** | 16 features, global model, attention | 2.5×ATR | 15d | **117** | Swing |
-| **11** | **London Breakout** ★★ | **Day Trading** | **~58–63%** | **H1 Asian/London range + session clock** | **Range boundary** | **20:00 UTC** | **28** | **Day** |
+| # | Strategy | Type | Win Rate (design target) | Key Indicators | Stop | Take-Profit | Time Stop | Slots | Book |
+|---|----------|------|----------|---------------|------|------|-----------|-------|------|
+| 1 | EMA Crossover | Trend | ~55% | EMA(5/30) + ADX(14) | 1.5×ATR | 2.0×R | 45d | **117** | Swing |
+| 2 | RSI(2) Pullback | Reversion-in-trend | ~60% | RSI(2) + EMA(200) | 1.5×ATR | 2.0×R | 12d | **117** | Swing |
+| 3 | Donchian Break | Momentum | ~50% | 30d High/Low + EMA(200) + ADX | 2.0×ATR | 2.0×R | 30d | **117** | Swing |
+| 4 | BB Reversion | Mean-reversion | ~60% | BB(20,2) + RSI(14) | 2.0×ATR | 2.0×R | 8d | **117** | Swing |
+| 5 | **Pullback-to-EMA** ★ | Trend continuation | **~70%+** | EMA(20/50) + ADX(14) | 1.5×ATR | 2.0×R | 25d | **117** | Swing |
+| 6 | **Weekend Gap Fill** ★★ | Structural mean-rev | **~80–85%** | Gap % + live price | 1.5×gap | Gap target | 7d | **117** | Swing |
+| 7 | SuperTrend | Trend | ~65% | ST(10,3) + EMA(200) | 2.0×ATR | 2.0×R | 40d | **117** | Swing |
+| 8 | Z-Score Rev | Mean-reversion | ~63% | 20d z-score + EMA(200) | 2.5×ATR | 2.0×R | 12d | **117** | Swing |
+| 9 | ML Signals | ML / Logistic Reg | ~57–62% | 7 features, per-pair retrain | 2.0×ATR | 2.0×R | 20d | **117** | Swing |
+| 10 | **CNN-LSTM** ★★★ | Deep Learning | **~55–65%** | 16 features, global model, attention | 2.5×ATR | 2.0×R | 15d | **117** | Swing |
+| **11** | **London Breakout** ★★ | **Day Trading** | **~58–63%** | **H1 Asian/London range + session clock** | **Range boundary** | **2.0× range** | **20:00 UTC** | **28** | **Day** |
+
+**"2.0×R" = `DEFAULT_TP_RR` (`forex/runner.py`)** — 2× that strategy's own
+stop distance (entry→stop), on the profit side. Added 2026-08-22: before
+this, strategies 1–5 and 7–10 only ever placed a stop-loss at entry —
+profit-taking depended entirely on the next scheduled `run_exits_only()`
+catching `should_exit()`. Every strategy's own stop/time-stop/trailing-stop
+logic is unchanged; the take-profit is an *additional* resting order at the
+broker (a true OCO bracket alongside the stop, via `saxo_order.place_with_stop`)
+so a winning trade is captured even if a scheduled run is late or skipped —
+per explicit user direction not to depend on the scheduler for this. Gap and
+London Breakout already had their own session-range-derived target and are
+unaffected by the default.
 
 ---
 
