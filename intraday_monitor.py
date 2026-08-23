@@ -12,6 +12,11 @@ Usage:
     python intraday_monitor.py --dry     # one check, no real orders placed
 """
 
+import ctypes as _ct
+_hwnd = _ct.windll.kernel32.GetConsoleWindow()
+if _hwnd: _ct.windll.user32.ShowWindow(_hwnd, 0)
+del _ct, _hwnd
+
 import argparse
 import json
 import logging
@@ -28,6 +33,7 @@ _ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _ROOT)
 
 import saxo_auth
+import proc_lock
 
 # ── Logging ────────────────────────────────────────────────────────────────
 _LOG_DIR  = os.path.join(_ROOT, "logs")
@@ -398,8 +404,28 @@ def run_once(dry_run: bool = False) -> None:
     if not akey:
         logger.warning("Could not fetch AccountKey — monitor may miss some prices")
 
-    fx_closed  = _check_forex(akey, dry_run)
-    fut_closed = _check_futures(akey, dry_run)
+    # Cross-process locks -- this script runs as a SEPARATE process from
+    # forex/runner.py and futures/runner.py, but reads/writes the exact
+    # SAME forex_state.json/futures_state.json. Confirmed live 2026-08-24
+    # this is a real double-entry/lost-update risk (this monitor's
+    # scheduled 06:00 fire is the same instant as forex's own Intraday
+    # Scan trigger, and 15 min before futures' 06:15 daily run) -- see
+    # proc_lock.py. Only locked for real runs; dry_run never saves state.
+    if dry_run:
+        fx_closed  = _check_forex(akey, dry_run)
+        fut_closed = _check_futures(akey, dry_run)
+    else:
+        proc_lock.acquire(proc_lock.FOREX_LOCK, "intraday_monitor")
+        try:
+            fx_closed = _check_forex(akey, dry_run)
+        finally:
+            proc_lock.release(proc_lock.FOREX_LOCK)
+
+        proc_lock.acquire(proc_lock.FUTURES_LOCK, "intraday_monitor")
+        try:
+            fut_closed = _check_futures(akey, dry_run)
+        finally:
+            proc_lock.release(proc_lock.FUTURES_LOCK)
 
     total = fx_closed + fut_closed
     if total:

@@ -1667,61 +1667,28 @@ def _heal_missing_tp(positions: dict, akey: str) -> int:
 
 # ── Cross-process lock ─────────────────────────────────────────────────────────
 # Discovered live 2026-08-24: `ATOS Forex Gap Fill` and `ATOS Forex Gap Monday
-# Early` both fire at the exact same instant (Mon 03:00 PKT) -- confirmed via
-# Task Scheduler that neither had ever run under this schedule before (both
-# "never run" at time of discovery). This is a real double-entry risk, not
-# just redundant scanning: forex_state.json's atomic write (_save_state)
-# only prevents file CORRUPTION, not a race between two full processes --
-# both can load state before either writes back, both independently decide
-# to open the same gap signal, both place a REAL Saxo order, and whichever
-# saves last silently drops the other's position from local state while both
-# real orders exist on Saxo. Same class of bug as the LBO duplicate-schedule
-# fix from 2026-08-20 ([[forex_london_breakout]]), just a different pair of
-# tasks. Couldn't fix this by disabling the redundant task (both
-# Disable-ScheduledTask and schtasks were denied for this account/session at
-# the time) so it's fixed here instead -- and this also covers every OTHER
-# overlapping trigger pair in docs/scheduling.md's "Net effect" list (06:20
-# Daily Run vs. the 06:30 Intraday Scan tick if a scan runs long, etc.), not
-# just today's specific collision.
-LOCK_FILE          = os.path.join(DATA_DIR, "forex_runner.lock")
-LOCK_STALE_SECONDS = 20 * 60   # generous vs. observed ~3-4 min full 117-pair scans
-LOCK_WAIT_TIMEOUT  = 15 * 60   # give up waiting and proceed anyway rather than deadlock forever
+# Early` both fire at the exact same instant (Mon 03:00 PKT). This is a real
+# double-entry risk, not just redundant scanning: forex_state.json's atomic
+# write (_save_state) only prevents file CORRUPTION, not a race between two
+# full processes -- both can load state before either writes back, both
+# independently decide to open the same signal, both place a REAL Saxo
+# order, and whichever saves last silently drops the other's position from
+# local state while both real orders exist on Saxo. Same class of bug as the
+# LBO duplicate-schedule fix from 2026-08-20 ([[forex_london_breakout]]).
+# Extended the same day to a shared proc_lock.py once intraday_monitor.py
+# was found to independently read/write this SAME forex_state.json from a
+# completely separate process, invisible to a forex-runner-only lock -- see
+# proc_lock.py's module docstring for the full writeup and FUTURES_LOCK's
+# equivalent fix for futures_state.json.
+import proc_lock
 
 
 def _acquire_lock(label: str = "") -> bool:
-    """Blocks (polling) until no other forex/runner.py invocation holds the
-    lock, then claims it. Never skips a run -- only serializes concurrent
-    ones, so no strategy's entries are silently dropped, just sequenced.
-    A stale lock (holder crashed/never released) is cleared automatically.
-    Returns True if the lock file was written (False only on an I/O error,
-    in which case the run proceeds unprotected rather than blocking on a
-    broken filesystem)."""
-    deadline = time.time() + LOCK_WAIT_TIMEOUT
-    while True:
-        try:
-            if os.path.exists(LOCK_FILE):
-                age = time.time() - os.path.getmtime(LOCK_FILE)
-                if age >= LOCK_STALE_SECONDS:
-                    logger.info(f"[lock] Stale lock ({age:.0f}s old) — clearing")
-                elif time.time() < deadline:
-                    time.sleep(5)
-                    continue
-                else:
-                    logger.warning(f"[lock] Still held after {LOCK_WAIT_TIMEOUT}s wait — "
-                                    f"proceeding anyway (assuming a stuck/crashed holder)")
-            with open(LOCK_FILE, "w") as f:
-                f.write(f"{os.getpid()} {label} {datetime.now().isoformat()}")
-            return True
-        except Exception as exc:
-            logger.warning(f"[lock] Could not acquire lock file: {exc} — proceeding without it")
-            return False
+    return proc_lock.acquire(proc_lock.FOREX_LOCK, label, logger=logger)
 
 
 def _release_lock() -> None:
-    try:
-        os.remove(LOCK_FILE)
-    except Exception:
-        pass
+    proc_lock.release(proc_lock.FOREX_LOCK)
 
 
 # ── Main daily cycle ──────────────────────────────────────────────────────────

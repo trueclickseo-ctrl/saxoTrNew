@@ -1449,6 +1449,116 @@ _run("runner: lock serializes two real concurrent processes (not just threads)",
 
 
 # ═══════════════════════════════════════════════════════════════════════
+section("19. Cross-module lock: intraday_monitor.py + futures/runner.py (2026-08-24)")
+# ═══════════════════════════════════════════════════════════════════════
+# User asked to check ALL tasks for conflicts, not just the one already
+# found. Real gap found: intraday_monitor.py is a SEPARATE script/process
+# from forex/runner.py and futures/runner.py, but independently reads AND
+# WRITES the exact same forex_state.json / futures_state.json -- the
+# section-18 forex-only lock was completely invisible to it. Concrete
+# overlap: `SaxoTr Intraday Monitor` fires 06:00 weekdays, the SAME
+# instant as forex's own `ATOS Forex Intraday Scan` trigger, and 15 min
+# before futures' `ATOS Futures Daily Run` (06:15). Extracted the lock
+# into a shared proc_lock.py (FOREX_LOCK/FUTURES_LOCK) so forex/runner.py,
+# futures/runner.py, and intraday_monitor.py all serialize against the
+# SAME lock files regardless of which script/process is running.
+
+
+def test_proc_lock_module_has_both_lock_paths():
+    import proc_lock
+    assert proc_lock.FOREX_LOCK != proc_lock.FUTURES_LOCK, (
+        "forex and futures need separate lock files -- they protect "
+        "different state files and must not block each other"
+    )
+    assert proc_lock.FOREX_LOCK.endswith("forex_runner.lock")
+    assert proc_lock.FUTURES_LOCK.endswith("futures_runner.lock")
+
+
+def test_forex_runner_delegates_to_shared_proc_lock():
+    import inspect
+    import forex.runner as runner
+    src = inspect.getsource(runner)
+    assert "import proc_lock" in src, (
+        "forex/runner.py must use the shared proc_lock module, not its "
+        "own standalone lock implementation -- otherwise intraday_monitor.py "
+        "(a separate process/script) can't serialize against it"
+    )
+
+
+def test_futures_runner_uses_proc_lock_for_live_runs():
+    import inspect
+    import futures.runner as runner
+    src = inspect.getsource(runner)
+    assert "proc_lock.FUTURES_LOCK" in src and "proc_lock.acquire" in src, (
+        "futures/runner.py must acquire proc_lock.FUTURES_LOCK around its "
+        "--live run -- intraday_monitor.py independently writes the same "
+        "futures_state.json 15 minutes before this task's own daily trigger"
+    )
+
+
+def test_intraday_monitor_locks_both_forex_and_futures_checks():
+    import inspect
+    import intraday_monitor
+    src = inspect.getsource(intraday_monitor.run_once)
+    assert "proc_lock.FOREX_LOCK" in src, (
+        "intraday_monitor.py's run_once() must lock FOREX_LOCK around "
+        "_check_forex() -- it independently writes forex_state.json from "
+        "a process forex/runner.py's own lock can't see"
+    )
+    assert "proc_lock.FUTURES_LOCK" in src, (
+        "intraday_monitor.py's run_once() must lock FUTURES_LOCK around "
+        "_check_futures() -- same reasoning for futures_state.json"
+    )
+
+
+def test_cross_module_lock_serializes_different_scripts():
+    # End-to-end proof that the SAME lock file genuinely serializes two
+    # DIFFERENT scripts (simulating forex/runner.py vs intraday_monitor.py),
+    # not just two invocations of the same one.
+    import subprocess
+    import os
+
+    lock_file = os.path.join("data", "forex_runner.lock")
+    if os.path.exists(lock_file):
+        os.remove(lock_file)
+
+    runner_sim = (
+        "import sys; sys.path.insert(0,'.'); import proc_lock; import time; "
+        "t0=time.time(); proc_lock.acquire(proc_lock.FOREX_LOCK, 'runner_sim'); "
+        "print(f'RUNNER ACQUIRED {time.time()-t0:.2f}'); time.sleep(1.2); "
+        "proc_lock.release(proc_lock.FOREX_LOCK)"
+    )
+    monitor_sim = (
+        "import sys; sys.path.insert(0,'.'); import proc_lock; import time; "
+        "t0=time.time(); proc_lock.acquire(proc_lock.FOREX_LOCK, 'monitor_sim'); "
+        "print(f'MONITOR ACQUIRED {time.time()-t0:.2f}'); "
+        "proc_lock.release(proc_lock.FOREX_LOCK)"
+    )
+    p1 = subprocess.Popen([sys.executable, "-c", runner_sim], stdout=subprocess.PIPE, text=True)
+    time.sleep(0.3)
+    p2 = subprocess.Popen([sys.executable, "-c", monitor_sim], stdout=subprocess.PIPE, text=True)
+    out1, _ = p1.communicate(timeout=30)
+    out2, _ = p2.communicate(timeout=30)
+    if os.path.exists(lock_file):
+        os.remove(lock_file)
+
+    monitor_line = [l for l in out2.splitlines() if "ACQUIRED" in l][0]
+    monitor_wait = float(monitor_line.split()[-1])
+    assert monitor_wait > 0.9, (
+        f"the 'monitor' process must wait for the 'runner' process to "
+        f"release before acquiring (runner holds for 1.2s) -- monitor "
+        f"acquired after only {monitor_wait:.2f}s:\nrunner: {out1}\nmonitor: {out2}"
+    )
+
+
+_run("proc_lock: FOREX_LOCK and FUTURES_LOCK are distinct files", test_proc_lock_module_has_both_lock_paths)
+_run("forex/runner.py: delegates to shared proc_lock (not its own standalone lock)", test_forex_runner_delegates_to_shared_proc_lock)
+_run("futures/runner.py: acquires FUTURES_LOCK around its live run", test_futures_runner_uses_proc_lock_for_live_runs)
+_run("intraday_monitor.py: locks both FOREX_LOCK and FUTURES_LOCK around its checks", test_intraday_monitor_locks_both_forex_and_futures_checks)
+_run("proc_lock: same lock file serializes two DIFFERENT scripts, not just one", test_cross_module_lock_serializes_different_scripts)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════
 

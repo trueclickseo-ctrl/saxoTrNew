@@ -1225,4 +1225,19 @@ if __name__ == "__main__":
         sys.exit(0)
 
     active = list(STRATEGIES.keys()) if args.strategy == "all" else [args.strategy]
-    run_daily(dry_run=not args.live, active_strategies=active)
+    # Cross-process lock -- futures/runner.py currently has no overlapping
+    # sibling schedule of its own (unlike forex's Gap Fill/Monday Early),
+    # but intraday_monitor.py independently reads/writes this SAME
+    # futures_state.json from a separate process (SaxoTr Intraday Monitor
+    # fires 06:00, 15 min before this task's own 06:15 -- close enough to
+    # overlap if either run is slow). See proc_lock.py for the full
+    # writeup. Dry-runs are never locked -- no real orders, no reason to
+    # block manual testing on a live run in progress.
+    if args.live:
+        import proc_lock
+        proc_lock.acquire(proc_lock.FUTURES_LOCK, "daily")
+    try:
+        run_daily(dry_run=not args.live, active_strategies=active)
+    finally:
+        if args.live:
+            proc_lock.release(proc_lock.FUTURES_LOCK)
