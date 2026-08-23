@@ -1370,6 +1370,85 @@ _run("saxo_fx: DKK (no direct EUR pair) triangulates via USD+EURUSD", test_saxo_
 
 
 # ═══════════════════════════════════════════════════════════════════════
+section("18. Cross-process lock prevents overlapping live runs (2026-08-24)")
+# ═══════════════════════════════════════════════════════════════════════
+# Found live: `ATOS Forex Gap Fill` and `ATOS Forex Gap Monday Early` both
+# fire at the exact same instant (Mon 03:00 PKT) -- neither had ever run
+# under this schedule (both showed Task Scheduler's "never run" sentinel),
+# so this was about to be untested in production. Two independent
+# forex/runner.py processes both entering the same weekend-gap signal
+# concurrently is a real double-entry risk (forex_state.json's atomic
+# write only guards against file corruption, not two full processes
+# racing to read-then-write it) -- same class of bug as the LBO duplicate-
+# schedule fix from 2026-08-20. Couldn't disable the redundant task
+# (Disable-ScheduledTask and schtasks both denied for this account this
+# session) so fixed with a cross-process file lock instead -- verified
+# live with two real separate OS processes (not just threads): the second
+# correctly waited for the first to fully release before acquiring, never
+# ran concurrently.
+
+
+def test_lock_functions_exist_and_are_wired_into_cli():
+    import inspect
+    import forex.runner as runner
+    assert hasattr(runner, "_acquire_lock") and hasattr(runner, "_release_lock"), (
+        "forex/runner.py must define _acquire_lock/_release_lock"
+    )
+    src = inspect.getsource(runner)
+    main_section = src[src.index("active = list(STRATEGIES) if args.strategy"):]
+    assert "_acquire_lock(" in main_section and "_release_lock(" in main_section, (
+        "the CLI dispatch (main()) must acquire the lock before calling "
+        "run_daily()/run_exits_only() and release it in a finally block -- "
+        "this is what actually protects the two real overlapping scheduled "
+        "tasks, not just the lock functions existing in isolation"
+    )
+
+
+def test_lock_serializes_two_real_processes():
+    # End-to-end proof, not just a unit test of the function in isolation:
+    # spawn two REAL separate Python processes (matching how Task Scheduler
+    # actually launches overlapping triggers) and confirm the second only
+    # acquires after the first fully releases.
+    import subprocess
+    import time
+    import os
+
+    lock_file = os.path.join("data", "forex_runner.lock")
+    if os.path.exists(lock_file):
+        os.remove(lock_file)
+
+    script = (
+        "import sys; sys.path.insert(0, '.'); import forex.runner as fr; "
+        "import time; t0=time.time(); fr._acquire_lock(sys.argv[1]); "
+        "print(f'{sys.argv[1]} ACQUIRED {time.time()-t0:.2f}'); "
+        "time.sleep(float(sys.argv[2])); fr._release_lock(); "
+        "print(f'{sys.argv[1]} RELEASED {time.time()-t0:.2f}')"
+    )
+    pA = subprocess.Popen([sys.executable, "-c", script, "A", "1.5"],
+                          stdout=subprocess.PIPE, text=True)
+    time.sleep(0.3)
+    pB = subprocess.Popen([sys.executable, "-c", script, "B", "0.2"],
+                          stdout=subprocess.PIPE, text=True)
+    outA, _ = pA.communicate(timeout=30)
+    outB, _ = pB.communicate(timeout=30)
+    if os.path.exists(lock_file):
+        os.remove(lock_file)
+
+    b_acquired_line = [l for l in outB.splitlines() if "ACQUIRED" in l][0]
+    b_wait_seconds = float(b_acquired_line.split()[-1])
+    assert b_wait_seconds > 1.0, (
+        f"Process B must wait for Process A to release before acquiring "
+        f"(A holds for 1.5s) -- B acquired after only {b_wait_seconds:.2f}s, "
+        f"meaning the lock did not actually serialize the two processes:\n"
+        f"A: {outA}\nB: {outB}"
+    )
+
+
+_run("runner: lock functions exist and are wired into the CLI dispatch", test_lock_functions_exist_and_are_wired_into_cli)
+_run("runner: lock serializes two real concurrent processes (not just threads)", test_lock_serializes_two_real_processes)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════
 
