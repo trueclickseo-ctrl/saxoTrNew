@@ -1155,18 +1155,30 @@ def _apply_breakeven_stop(key: str, pos: dict, df, strat_name: str,
     entry_price = float(pos.get("entry_price", 0))
     cur_stop    = float(pos.get("stop_price", 0))
     cur_close   = float(df["Close"].iloc[-1])
-    cur_high    = float(df["High"].iloc[-1])
-    cur_low     = float(df["Low"].iloc[-1])
 
     if strat_name == "gap":
         gap_target = float(pos.get("gap_target", entry_price))
         if abs(gap_target - entry_price) < 1e-8:
             return False
+        # cur_close, not cur_high/cur_low. Same staleness bug as the one
+        # fixed in should_exit() above (df.strategy_gap docstring there) --
+        # missed here originally since gap's breakeven path was rarely
+        # exercised before session gaps started actually trading
+        # 2026-08-24 (they were structurally blocked by the consensus-
+        # filter bug fixed in signal_filter.py the same day). cur_high/low
+        # is the CURRENT PERIOD's cumulative extreme (whole day for
+        # weekly, whole H1 candle for session) -- once price so much as
+        # wicked 50%+ of the way to target for an instant, this one-shot
+        # trigger fired PERMANENTLY, moving the stop to breakeven even if
+        # price immediately reverted. Confirmed live: 15+ session gap
+        # trades 2026-08-24 got their stop moved to ~entry_price within
+        # the same evaluation cycle they opened in, then stopped out for
+        # a quick small loss on ordinary noise -- not a real reversal.
         if direction == "Buy":
-            fill_pct      = (cur_high - entry_price) / (gap_target - entry_price)
+            fill_pct      = (cur_close - entry_price) / (gap_target - entry_price)
             should_trigger = fill_pct >= BREAKEVEN_GAP_FILL_PCT and cur_stop < entry_price
         else:
-            fill_pct      = (entry_price - cur_low) / (entry_price - gap_target)
+            fill_pct      = (entry_price - cur_close) / (entry_price - gap_target)
             should_trigger = fill_pct >= BREAKEVEN_GAP_FILL_PCT and cur_stop > entry_price
     else:
         atr_entry = float(pos.get("atr_at_entry", 0))

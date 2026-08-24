@@ -603,6 +603,63 @@ def get_strategy_summary(module: str = "forex") -> list[dict]:
     return result
 
 
+def get_strategy_summary_since(module: str, since: str) -> list[dict]:
+    """Same shape as get_strategy_summary(), scoped to trades closed on or
+    after `since` (e.g. today's date, "YYYY-MM-DD") -- for a daily digest
+    rather than the all-time picture. Also returns the distinct symbols
+    each strategy traded in that window (daily_summary.py's "currencies"
+    column) since that's naturally computed alongside the rest here."""
+    with _conn() as c:
+        rows = c.execute("""
+            SELECT strategy,
+                   COUNT(*)                                                     AS n,
+                   SUM(realized_pnl)                                            AS total_pnl,
+                   SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END)           AS wins,
+                   SUM(CASE WHEN realized_pnl < 0 THEN 1 ELSE 0 END)           AS losses,
+                   SUM(CASE WHEN realized_pnl > 0 THEN realized_pnl ELSE 0 END) AS gross_profit,
+                   SUM(CASE WHEN realized_pnl < 0 THEN realized_pnl ELSE 0 END) AS gross_loss,
+                   MAX(realized_pnl)                                            AS best,
+                   MIN(realized_pnl)                                            AS worst,
+                   SUM(commission)                                              AS total_costs
+              FROM trades
+             WHERE module=? AND status='closed' AND timestamp_close >= ?
+             GROUP BY strategy
+             ORDER BY total_pnl DESC
+        """, (module, since)).fetchall()
+        open_counts = {row["strategy"]: row["n"] for row in c.execute("""
+            SELECT strategy, COUNT(*) AS n FROM trades
+             WHERE module=? AND status='open' GROUP BY strategy
+        """, (module,)).fetchall()}
+        symbols_by_strategy: dict = {}
+        for row in c.execute("""
+            SELECT DISTINCT strategy, symbol FROM trades
+             WHERE module=? AND status='closed' AND timestamp_close >= ?
+        """, (module, since)).fetchall():
+            symbols_by_strategy.setdefault(row["strategy"], []).append(row["symbol"])
+
+    result = []
+    for r in rows:
+        n  = r["n"] or 0
+        gp = r["gross_profit"] or 0.0
+        gl = abs(r["gross_loss"] or 0.0)
+        strat = r["strategy"] or "—"
+        result.append({
+            "strategy":      strat,
+            "trades":        n,
+            "wins":          r["wins"]   or 0,
+            "losses":        r["losses"] or 0,
+            "open":          open_counts.get(strat, 0),
+            "win_rate":      round((r["wins"] or 0) / n * 100, 1) if n else 0.0,
+            "total_pnl":     round(r["total_pnl"] or 0.0, 2),
+            "profit_factor": round(gp / gl, 2) if gl > 0 else None,
+            "best":          round(r["best"]  or 0.0, 2),
+            "worst":         round(r["worst"] or 0.0, 2),
+            "total_costs":   round(r["total_costs"] or 0.0, 2),
+            "symbols":       sorted(symbols_by_strategy.get(strat, [])),
+        })
+    return result
+
+
 def get_pair_summary(module: str = "forex") -> list[dict]:
     """
     Per-symbol (currency pair / ticker) P&L breakdown within a module.

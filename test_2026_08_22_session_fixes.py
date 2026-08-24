@@ -1742,6 +1742,55 @@ _run("futures: margin gate wired into the entry loop", test_margin_gate_wired_in
 
 
 # ═══════════════════════════════════════════════════════════════════════
+section("2026-08-24: gap breakeven used sticky High/Low, same bug as should_exit")
+# ═══════════════════════════════════════════════════════════════════════
+# should_exit()'s target-hit check was fixed 2026-08-22/24 to use the
+# CURRENT close instead of the whole-period cumulative High/Low (which,
+# once price so much as wicked through a level, stayed "true" for the
+# rest of the period even after price reverted). _apply_breakeven_stop()
+# has the exact same shape of check for gap positions but was missed by
+# that fix -- it still used cur_high/cur_low. Invisible in practice until
+# 2026-08-24, when session gaps (London/NY/Tokyo) started actually
+# trading for the first time (previously blocked entirely by the
+# consensus-filter bug fixed the same day) -- confirmed live: 15+ session
+# gap trades got their stop silently moved to ~entry_price on a brief
+# wick, then stopped out for a quick small loss on ordinary noise a few
+# minutes later, well before any real reversal.
+
+
+def test_gap_breakeven_does_not_trigger_on_a_reverted_wick():
+    import forex.runner as runner
+    import pandas as pd
+    # Buy gap: entry=1.2000, target=1.2100. Price wicked to 1.2060 (60% of
+    # the way to target) within this bar/period but CLOSED back at 1.2010
+    # (only 10% of the way) -- must NOT trigger breakeven on the stale wick.
+    pos = {"direction": "Buy", "entry_price": 1.2000, "stop_price": 1.1900,
+           "gap_target": 1.2100, "breakeven_triggered": False}
+    df = pd.DataFrame([{"Open": 1.2000, "High": 1.2060, "Low": 1.1990, "Close": 1.2010}])
+    triggered = runner._apply_breakeven_stop("gap:EURUSD", pos, df, "gap", "AKEY", dry_run=True)
+    assert triggered is False, "must judge fill_pct off the current close, not a reverted intrabar wick"
+    assert pos["stop_price"] == 1.1900, "stop must stay at its original level, not jump to entry"
+
+
+def test_gap_breakeven_still_triggers_when_close_really_is_past_threshold():
+    import forex.runner as runner
+    import pandas as pd
+    # Same setup, but price genuinely closed 60% of the way to target.
+    pos = {"direction": "Buy", "entry_price": 1.2000, "stop_price": 1.1900,
+           "gap_target": 1.2100, "breakeven_triggered": False}
+    df = pd.DataFrame([{"Open": 1.2000, "High": 1.2065, "Low": 1.1990, "Close": 1.2060}])
+    triggered = runner._apply_breakeven_stop("gap:EURUSD", pos, df, "gap", "AKEY", dry_run=True)
+    assert triggered is True, "must still trigger when the close itself clears the threshold"
+    assert pos["stop_price"] == 1.2000, "stop must move to entry_price once genuinely triggered"
+
+
+_run("gap breakeven ignores a reverted intrabar wick (uses close, not sticky high/low)",
+     test_gap_breakeven_does_not_trigger_on_a_reverted_wick)
+_run("gap breakeven still triggers when the close genuinely clears the fill threshold",
+     test_gap_breakeven_still_triggers_when_close_really_is_past_threshold)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════
 
