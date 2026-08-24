@@ -626,6 +626,46 @@ def _heat_allows_entry(positions: dict, market_data: dict, universe: dict,
     return True
 
 
+# ── Live margin gate (2026-08-24) ───────────────────────────────────────────
+# The heat gate above is our own self-computed proxy; this checks Saxo's
+# real margin math directly. Futures shares the SAME account margin pool as
+# forex/ETF/stocks -- confirmed live 2026-08-24 that ~24M EUR of pre-cap-fix
+# legacy FOREX positions alone pushed real margin utilization to 98.56%,
+# which would have blocked futures (and every other module) from trading
+# too, regardless of futures' own heat looking fine. Per explicit user
+# direction: reserve real margin headroom for every strategy/module, always.
+MAX_MARGIN_UTILIZATION_PCT = 50.0
+_MARGIN_CACHE_TTL_SECONDS  = 20
+_margin_cache: dict = {"utilization": None, "checked_at": 0.0}
+
+
+def _margin_allows_entry() -> bool:
+    """True if Saxo's own live margin utilization is still below
+    MAX_MARGIN_UTILIZATION_PCT. Cached briefly to avoid hammering
+    balances/me once per signal. Fails OPEN if the check itself fails."""
+    now = time.time()
+    if _margin_cache["utilization"] is not None and \
+       now - _margin_cache["checked_at"] < _MARGIN_CACHE_TTL_SECONDS:
+        util = _margin_cache["utilization"]
+    else:
+        try:
+            bal  = _get("/port/v1/balances/me")
+            util = bal.get("InitialMargin", {}).get("MarginUtilizationPct")
+        except Exception as exc:
+            logger.warning(f"  [MARGIN] Could not check margin utilization: {exc} — not blocking")
+            return True
+        if util is None:
+            return True
+        _margin_cache["utilization"] = util
+        _margin_cache["checked_at"]  = now
+
+    if util >= MAX_MARGIN_UTILIZATION_PCT:
+        logger.warning(f"  [MARGIN] utilization {util:.1f}% >= {MAX_MARGIN_UTILIZATION_PCT:.0f}% "
+                        f"— blocking new entries to preserve room for every strategy")
+        return False
+    return True
+
+
 # ── Drawdown circuit breaker ──────────────────────────────────────────────────
 
 def _update_peak_equity(equity: float) -> float:
@@ -798,6 +838,8 @@ def _run_strategy_entries(strat_name: str, strat_mod, positions: dict,
         # Portfolio-level guards per signal
         if _correlation_blocks_signal(sig, positions):
             continue
+        if not _margin_allows_entry():
+            break  # real Saxo margin too tight — preserve room for every module
         if not _heat_allows_entry(positions, market_data, universe, equity):
             break  # Heat limit is portfolio-wide — no point checking remaining signals
 

@@ -947,6 +947,56 @@ def _heat_allows_entry(positions: dict, equity: float) -> bool:
     return True
 
 
+# ── Live margin gate (2026-08-24) ───────────────────────────────────────────
+# _heat_allows_entry above is a SOFT, self-computed proxy (stop-distance x
+# qty) and was deliberately disabled for SIM testing. It is not a substitute
+# for this: Saxo's own margin math is the actual hard constraint, and it can
+# diverge sharply from our own heat estimate -- confirmed live 2026-08-24,
+# ~24M EUR of pre-cap-fix legacy positions (opened before RISK_PCT's cap
+# existed) pushed real margin utilization to 98.56% while our own heat
+# metric looked unremarkable, and that 98.56% would have silently blocked
+# EVERY other strategy and module sharing this account (LBO, futures, ETF,
+# stocks) from ever getting a turn -- not just forex's own swing book.
+# Per explicit user direction: reserve real margin headroom for every
+# strategy, always, not just the one that happens to be scanning first.
+# Unlike _heat_allows_entry, this is NOT disabled and applies to every
+# strategy including day-trade ones (LBO) -- running out of real broker
+# margin isn't a soft risk-budget choice, it's a hard wall regardless of
+# which internal "book" a position is nominally assigned to.
+MAX_MARGIN_UTILIZATION_PCT = 50.0   # leave HALF the margin pool for other strategies/modules
+_MARGIN_CACHE_TTL_SECONDS  = 20     # avoid hammering balances/me once per signal
+_margin_cache: dict = {"utilization": None, "checked_at": 0.0}
+
+
+def _margin_allows_entry() -> bool:
+    """True if Saxo's own live margin utilization is still below
+    MAX_MARGIN_UTILIZATION_PCT. Cached briefly so a strategy placing many
+    entries in one run doesn't re-fetch balances/me for every signal.
+    Fails OPEN (returns True) if the check itself can't be made -- a
+    lookup failure shouldn't silently freeze all trading."""
+    now = time.time()
+    if _margin_cache["utilization"] is not None and \
+       now - _margin_cache["checked_at"] < _MARGIN_CACHE_TTL_SECONDS:
+        util = _margin_cache["utilization"]
+    else:
+        try:
+            bal  = _get("/port/v1/balances/me")
+            util = bal.get("InitialMargin", {}).get("MarginUtilizationPct")
+        except Exception as exc:
+            logger.warning(f"  [MARGIN] Could not check margin utilization: {exc} — not blocking")
+            return True
+        if util is None:
+            return True
+        _margin_cache["utilization"] = util
+        _margin_cache["checked_at"]  = now
+
+    if util >= MAX_MARGIN_UTILIZATION_PCT:
+        logger.warning(f"  [MARGIN] utilization {util:.1f}% >= {MAX_MARGIN_UTILIZATION_PCT:.0f}% "
+                        f"— blocking new entries to preserve room for every strategy")
+        return False
+    return True
+
+
 def _update_peak_equity(equity: float) -> None:
     peak = 0.0
     if os.path.exists(PEAK_EQUITY_FILE):
@@ -1407,6 +1457,8 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                         f"— spread {spread:.3f}% wider than {MAX_SPREAD_PCT}% "
                         f"(illiquid right now, not a good time to trade this pair)")
             continue
+        if not _margin_allows_entry():
+            break   # real Saxo margin too tight — stop entries for EVERY strategy, LBO included
         if strat_name not in DAY_TRADE_STRATEGIES and not _heat_allows_entry(positions, equity):
             break   # heat cap reached — stop all entries for this strategy
         rp_kw     = {"risk_pct": sig["risk_pct_override"]} if "risk_pct_override" in sig else {}

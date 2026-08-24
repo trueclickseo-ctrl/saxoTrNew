@@ -1559,6 +1559,125 @@ _run("proc_lock: same lock file serializes two DIFFERENT scripts, not just one",
 
 
 # ═══════════════════════════════════════════════════════════════════════
+section("20. Live margin gate reserves headroom for every strategy (2026-08-24)")
+# ═══════════════════════════════════════════════════════════════════════
+# User: "buy in small so we have margin for every strategy... always keep
+# the margin." Root cause of the day's margin crisis: ~24M EUR of
+# pre-cap-fix legacy forex positions pushed real Saxo margin utilization
+# to 98.56%, which would have blocked LBO/futures/every other module from
+# trading -- while forex's own SELF-COMPUTED heat metric (already
+# disabled for SIM testing anyway) had no visibility into it, since it's
+# just a stop-distance x qty proxy, not Saxo's real margin math. New
+# _margin_allows_entry() in both forex/runner.py and futures/runner.py
+# checks Saxo's OWN live MarginUtilizationPct directly and blocks new
+# entries above 50% -- applies to every strategy, including LBO, which
+# bypasses the (disabled) heat gate entirely.
+
+
+def _mock_get_factory(utilization):
+    def _mock_get(path, params=None):
+        if path == "/port/v1/balances/me":
+            return {"InitialMargin": {"MarginUtilizationPct": utilization}}
+        raise AssertionError(f"unexpected path in margin test: {path}")
+    return _mock_get
+
+
+def test_forex_margin_gate_blocks_above_threshold():
+    import forex.runner as runner
+    runner._margin_cache["utilization"] = None
+    runner._margin_cache["checked_at"] = 0.0
+    orig_get = runner._get
+    try:
+        runner._get = _mock_get_factory(75.0)
+        assert runner._margin_allows_entry() is False, (
+            "must block new entries when Saxo's real margin utilization (75%) "
+            "is above MAX_MARGIN_UTILIZATION_PCT"
+        )
+    finally:
+        runner._get = orig_get
+        runner._margin_cache["utilization"] = None
+
+
+def test_forex_margin_gate_allows_below_threshold():
+    import forex.runner as runner
+    runner._margin_cache["utilization"] = None
+    runner._margin_cache["checked_at"] = 0.0
+    orig_get = runner._get
+    try:
+        runner._get = _mock_get_factory(30.0)
+        assert runner._margin_allows_entry() is True, (
+            "must allow new entries when Saxo's real margin utilization (30%) "
+            "is comfortably below MAX_MARGIN_UTILIZATION_PCT"
+        )
+    finally:
+        runner._get = orig_get
+        runner._margin_cache["utilization"] = None
+
+
+def test_forex_margin_gate_fails_open_on_lookup_error():
+    import forex.runner as runner
+    runner._margin_cache["utilization"] = None
+    runner._margin_cache["checked_at"] = 0.0
+    orig_get = runner._get
+    try:
+        def _raise(path, params=None):
+            raise RuntimeError("network error")
+        runner._get = _raise
+        assert runner._margin_allows_entry() is True, (
+            "a failed margin lookup must NOT silently freeze all trading -- "
+            "fail open, not closed"
+        )
+    finally:
+        runner._get = orig_get
+        runner._margin_cache["utilization"] = None
+
+
+def test_futures_margin_gate_blocks_above_threshold():
+    import futures.runner as runner
+    runner._margin_cache["utilization"] = None
+    runner._margin_cache["checked_at"] = 0.0
+    orig_get = runner._get
+    try:
+        runner._get = _mock_get_factory(80.0)
+        assert runner._margin_allows_entry() is False
+    finally:
+        runner._get = orig_get
+        runner._margin_cache["utilization"] = None
+
+
+def test_margin_gate_wired_into_forex_entry_loop_for_every_strategy():
+    import inspect
+    import forex.runner as runner
+    src = inspect.getsource(runner._run_entries)
+    idx_margin = src.index("_margin_allows_entry()")
+    idx_daytrade_check = src.index("DAY_TRADE_STRATEGIES and not _heat_allows_entry")
+    assert idx_margin < idx_daytrade_check, (
+        "_margin_allows_entry() must be checked unconditionally, before the "
+        "DAY_TRADE_STRATEGIES exemption on the heat gate -- LBO and other "
+        "day-trade strategies must NOT be able to bypass the real margin "
+        "check the way they bypass the soft heat gate"
+    )
+
+
+def test_margin_gate_wired_into_futures_entry_loop():
+    import inspect
+    import futures.runner as runner
+    src = inspect.getsource(runner._run_strategy_entries)
+    assert "_margin_allows_entry()" in src, (
+        "futures/runner.py's per-strategy entries loop (_run_strategy_entries) "
+        "must call _margin_allows_entry()"
+    )
+
+
+_run("forex: margin gate blocks entries above 50% real Saxo utilization", test_forex_margin_gate_blocks_above_threshold)
+_run("forex: margin gate allows entries below threshold", test_forex_margin_gate_allows_below_threshold)
+_run("forex: margin gate fails open (doesn't freeze trading) on lookup error", test_forex_margin_gate_fails_open_on_lookup_error)
+_run("futures: margin gate blocks entries above threshold", test_futures_margin_gate_blocks_above_threshold)
+_run("forex: margin gate applies to every strategy, LBO included (not just swing)", test_margin_gate_wired_into_forex_entry_loop_for_every_strategy)
+_run("futures: margin gate wired into the entry loop", test_margin_gate_wired_into_futures_entry_loop)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════
 
