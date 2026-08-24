@@ -420,129 +420,136 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         L.append(f"  {DM}No open forex positions.{W}")
     L.append(HR)
 
-    # ── Per-strategy summary ──────────────────────────────────────
+    # ── Strategy breakdown — the dashboard's main analytical view ──
+    # Sorted by realized P&L (best to worst), one row per strategy, every
+    # number a strategy's track record actually needs: win rate, profit
+    # factor, realized vs unrealized. No per-pair/currency table here by
+    # design (2026-08-24, explicit request) — that's a different question
+    # ("which pairs work") from this one ("which strategies work"); see
+    # pnl_dashboard.py or the Strategy Overlap Tracker artifact for that.
     L.append("")
-    L.append(f"  {BD}STRATEGY BREAKDOWN{W}")
+    L.append(f"  {BD}STRATEGY BREAKDOWN{W}  {DM}(sorted by realized P&L){W}")
     L.append("")
 
     strat_labels = {
-        "ema":        ("EMA Trend",        "EMA(5/30)+ADX(14)",     "Sharpe 1.62",  "117"),
-        "rsi":        ("RSI Pullback",     "RSI(2)<10 dip-buy",     "mean-rev",     "117"),
-        "donchian":   ("Donchian Break",   "30-day high/low",       "EMA+ADX gate", "117"),
-        "bb":         ("BB Reversion",     "BB(20,2)+RSI(14) fade", "8d stop",      "117"),
-        "pullback":   ("EMA Pullback ★",   "EMA(20) in EMA(50)",    "~70% WR",      "117"),
-        "gap":        ("Gap Fill ★★",      "Weekend gap fade",      "~80-85% WR",   "117"),
-        "supertrend": ("SuperTrend",       "ST(10,3)+EMA(200)",     "~65% WR",      "117"),
-        "zscore":     ("Z-Score Rev",      "20-day z-score fade",   "~63% WR",      "117"),
-        "ml":         ("ML Signals",       "Logistic reg (7 feat)", "~60% WR",      "117"),
-        "cnn_lstm":   ("CNN-LSTM",         "Deep learning (117 pr)", "36.9% val acc — barely trades", "117"),
-        "london_breakout": ("LBO Day Trade", "London/NY range break", "~58-63% WR", "28"),
+        "ema":        ("EMA Trend",        "117"),
+        "rsi":        ("RSI Pullback",     "117"),
+        "donchian":   ("Donchian Break",   "117"),
+        "bb":         ("BB Reversion",     "117"),
+        "pullback":   ("EMA Pullback ★",   "117"),
+        "gap":        ("Gap Fill ★★",      "117"),
+        "supertrend": ("SuperTrend",       "117"),
+        "zscore":     ("Z-Score Rev",      "117"),
+        "ml":         ("ML Signals",       "117"),
+        "cnn_lstm":   ("CNN-LSTM",         "117"),
+        "london_breakout": ("LBO Day Trade", "28"),
     }
 
     # Realized P&L per strategy (closed trades) drives the headline number and
-    # color — this is each strategy's actual locked-in track record. The loop
-    # used to only sum unrealized P&L of currently-open positions, so a
-    # strategy sitting on a real net loss (e.g. pullback: -5,116 realized,
-    # containing the -5,544 worst trade) still rendered green/positive purely
-    # because its open positions happened to be up right now — paper gains
-    # that could reverse tomorrow, masking a genuine losing track record.
-    # Unrealized is shown separately alongside it, not blended into the total.
+    # color — this is each strategy's actual locked-in track record, not
+    # paper gains from currently-open positions that could reverse tomorrow.
+    # Unrealized is shown alongside it, never blended into the same total.
     try:
         import pnl_tracker
-        stats_by_strat = {r["strategy"]: r for r in pnl_tracker.get_strategy_summary("forex")}
+        strat_rows = pnl_tracker.get_strategy_summary("forex")  # already sorted by total_pnl desc
     except Exception:
-        stats_by_strat = {}
+        strat_rows = []
+    stats_by_strat = {r["strategy"]: r for r in strat_rows}
 
-    for strat, (label, desc, metric, max_slots) in strat_labels.items():
+    # Strategies with a closed trade come first (real track record, best to
+    # worst); strategies still 100% open (no closed trades yet, so no row
+    # from get_strategy_summary) follow after, alphabetically — nothing to
+    # rank them by yet, but they should still show their open count.
+    ordered = [s for s in stats_by_strat if s in strat_labels]
+    ordered += sorted(s for s in strat_labels if s not in stats_by_strat)
+
+    SB_HDR = (
+        f"  {DM}{'Strategy':<16}  {'Active':>6}  {'Closed':>7}  {'W/L':>7}  "
+        f"{'WR%':>6}  {'PF':>6}  {'Realized P&L':>15}  {'Unrealized':>13}{W}"
+    )
+    L.append(SB_HDR)
+    L.append(HR)
+
+    grand_realized = grand_unrealized = 0.0
+    grand_closed = grand_wins = grand_losses = 0
+
+    for strat in ordered:
+        label, max_slots = strat_labels[strat]
         sc    = STRAT_COL.get(strat, DM)
         count = sum(1 for p in positions if p["strategy"] == strat)
+
         unrealized = 0.0
         for p in positions:
             if p["strategy"] != strat:
                 continue
-            sym     = p["symbol"]
-            now_px  = live.get(sym)
+            sym    = p["symbol"]
+            now_px = live.get(sym)
             if now_px and p["entry"] > 0:
                 quote_ccy = sym[3:6] if len(sym) >= 6 else ""
                 eur_rate  = _eur_per_unit(quote_ccy, live)
                 if eur_rate is not None:
                     raw = (now_px - p["entry"]) if p["direction"] == "Buy" else (p["entry"] - now_px)
                     unrealized += raw * p["qty"] * eur_rate
+
         stats    = stats_by_strat.get(strat, {})
         realized = stats.get("total_pnl", 0.0)
         n_closed = stats.get("trades", 0)
         wins     = stats.get("wins", 0)
         losses   = stats.get("losses", 0)
+        wr       = stats.get("win_rate", 0.0)
+        pf       = stats.get("profit_factor")
         best     = stats.get("best", 0.0)
-        pnl_col  = GR if realized >= 0 else RD
-        u_col    = GR if unrealized >= 0 else RD
+
+        grand_realized   += realized
+        grand_unrealized += unrealized
+        grand_closed     += n_closed
+        grand_wins       += wins
+        grand_losses     += losses
+
+        pnl_col = GR if realized >= 0 else RD
+        u_col   = GR if unrealized >= 0 else RD
+        wr_col  = GR if wr >= 50 else (YL if n_closed else DM)
+        pf_s    = f"{pf:.2f}" if pf is not None else ("∞" if realized > 0 and n_closed else "—")
+        wr_s    = f"{wr:.1f}%" if n_closed else "—"
+
+        realized_cell   = _pad_ansi(f"{pnl_col}{BD}{realized:>+,.0f} EUR{W}", 15)
+        unrealized_cell = _pad_ansi(f"{u_col}{unrealized:>+,.0f} EUR{W}", 13)
         L.append(
-            f"  {sc}{BD}{label:<18}{W}  {DM}{desc:<24}{W}  {metric:<14}  "
-            f"max {max_slots:<4}  {count}/{max_slots} active  "
-            f"{DM}{n_closed} closed ({wins}W/{losses}L){W}  "
-            f"P&L: {pnl_col}{BD}{realized:>+,.0f} EUR{W}  "
-            f"{DM}(open: {u_col}{unrealized:>+,.0f}{DM} unrealized){W}"
+            f"  {sc}{BD}{label:<16}{W}  {DM}{f'{count}/{max_slots}':>6}{W}  "
+            f"{n_closed:>7}  {DM}{f'{wins}W/{losses}L':>7}{W}  "
+            f"{wr_col}{wr_s:>6}{W}  {DM}{pf_s:>6}{W}  "
+            f"{realized_cell}  {unrealized_cell}"
         )
         # Flag when one trade dominates the total — a "profitable" strategy
         # total can be almost entirely one outlier win, masking a real losing
         # trend in every other trade (found 2026-08-21: Gap Fill's +13,759
         # total was 130% explained by one legacy oversized trade from before
         # a sizing bug fix — the other 16 trades net -4,082).
-        if realized > 0 and best > 0 and best >= 0.5 * realized:
+        if n_closed >= 2 and realized > 0 and best > 0 and best >= 0.5 * realized:
             pct = best / realized * 100
             L.append(
-                f"  {DM}{'':<18}  {YL}⚠ single best trade ({best:>+,.0f} EUR) is {pct:.0f}% of "
+                f"  {DM}{'':<16}  {YL}⚠ single best trade ({best:>+,.0f} EUR) is {pct:.0f}% of "
                 f"this total — check it isn't propping up an otherwise-losing strategy{W}"
             )
 
+    L.append(HR)
+    g_wr = (grand_wins / grand_closed * 100) if grand_closed else 0.0
+    try:
+        g_pf = pnl_tracker.get_summary("forex").get("forex", {}).get("profit_factor")
+    except Exception:
+        g_pf = None
+    g_pf_s = f"{g_pf:.2f}" if g_pf is not None else "—"
+    g_col  = GR if grand_realized >= 0 else RD
+    gu_col = GR if grand_unrealized >= 0 else RD
+    g_realized_cell   = _pad_ansi(f"{g_col}{BD}{grand_realized:>+,.0f} EUR{W}", 15)
+    g_unrealized_cell = _pad_ansi(f"{gu_col}{grand_unrealized:>+,.0f} EUR{W}", 13)
+    L.append(
+        f"  {BD}{'ALL STRATEGIES':<16}{W}  {DM}{open_count:>6}{W}  {grand_closed:>7}  "
+        f"{DM}{f'{grand_wins}W/{grand_losses}L':>7}{W}  {g_col}{g_wr:>5.1f}%{W}  {DM}{g_pf_s:>6}{W}  "
+        f"{g_realized_cell}  {g_unrealized_cell}"
+    )
     L.append("")
     L.append(HR)
-
-    # ── Universe tier breakdown: core (live-candidate) vs exotic (SIM-only) ──
-    # The 83 EM/exotic pairs added 2026-08-21 are SIM-only test candidates —
-    # this is how their track record gets reviewed before deciding whether to
-    # fold any into the live universe (which stays the original 34 for now).
-    try:
-        from forex.universe import get_tier
-        pair_stats = pnl_tracker.get_pair_summary("forex")
-        tier_totals = {"core": {"pnl": 0.0, "n": 0, "wins": 0},
-                       "exotic": {"pnl": 0.0, "n": 0, "wins": 0}}
-        for r in pair_stats:
-            t = get_tier(r["symbol"])
-            tier_totals[t]["pnl"]  += r["total_pnl"]
-            tier_totals[t]["n"]    += r["trades"]
-            tier_totals[t]["wins"] += r["wins"]
-        L.append("")
-        L.append(f"  {BD}UNIVERSE TIER BREAKDOWN{W}  {DM}(live-candidate vs SIM-only test pairs){W}")
-        L.append("")
-        for tier, label in (("core", "Core (34 — live candidate)"), ("exotic", "Exotic (83 — SIM test only)")):
-            tt = tier_totals[tier]
-            wr = (tt["wins"] / tt["n"] * 100) if tt["n"] else 0.0
-            tc = GR if tt["pnl"] >= 0 else RD
-            L.append(f"  {BD}{label:<28}{W}  {tt['n']:>3} closed  |  WR {wr:>5.1f}%  |  "
-                     f"P&L: {tc}{BD}{tt['pnl']:>+,.0f} EUR{W}")
-        L.append(HR)
-
-        # ── Per-pair breakdown — every pair that's had at least one closed
-        # trade, sorted best to worst. Answers "which pairs are actually
-        # profitable" directly instead of needing a DB query each time.
-        L.append("")
-        L.append(f"  {BD}PAIR BREAKDOWN{W}  {DM}(every pair with a closed trade, best to worst){W}")
-        L.append("")
-        for r in pair_stats:
-            tier  = get_tier(r["symbol"])
-            tcol  = GR if r["total_pnl"] >= 0 else RD
-            tier_tag = f"{DM}[{tier}]{W}"
-            pf = f"{r['profit_factor']:.2f}" if r["profit_factor"] is not None else "—"
-            L.append(
-                f"  {BD}{r['symbol']:<8}{W} {tier_tag:<16}  {r['trades']:>2} closed "
-                f"({r['wins']}W/{r['losses']}L, WR {r['win_rate']:>5.1f}%)  "
-                f"PF {pf:>6}  best {r['best']:>+9,.0f}  worst {r['worst']:>+9,.0f}  "
-                f"P&L: {tcol}{BD}{r['total_pnl']:>+9,.0f} EUR{W}"
-            )
-        L.append(HR)
-    except Exception:
-        pass
 
     # ── Recent scheduler log ──────────────────────────────────────
     log_lines = _last_log_lines(10)
@@ -566,30 +573,9 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append("")
     L.append(HR)
 
-    # ── P&L summary ───────────────────────────────────────────────
-    try:
-        import pnl_tracker
-        fx_sum = pnl_tracker.get_summary("forex")
-        s      = fx_sum.get("forex", {})
-        pnl_r  = s.get("realized_pnl", 0.0)
-        pc     = GR if pnl_r >= 0 else RD
-        PNL_HR = f"  {DM}{'─'*W_TOTAL}{W}"
-        L.append("")
-        L.append(f"  {BD}FOREX P&L LEDGER{W}  {DM}(pnl_ledger.db — run pnl_dashboard.py for full view){W}")
-        L.append(PNL_HR)
-        L.append(
-            f"  {BD}Realized P&L:{W}  {pc}{BD}{pnl_r:>+,.2f} EUR{W}     "
-            f"{DM}Closed: {s.get('closed_trades',0)}  |  "
-            f"Win rate: {s.get('win_rate',0):.1f}%  |  "
-            f"Best: +{s.get('best_trade',0):.2f} EUR  |  "
-            f"Worst: {s.get('worst_trade',0):+.2f} EUR  |  "
-            f"Profit factor: {s.get('profit_factor') or '—'}{W}"
-        )
-        L.append(PNL_HR)
-    except Exception:
-        pass
-
     # ── Footer ────────────────────────────────────────────────────
+    L.append(f"  {DM}Per-pair/currency breakdown removed from this view by design (2026-08-24) — "
+             f"still available via pnl_tracker.get_pair_summary('forex') if needed.{W}")
     if not once:
         L.append(f"  {DM}Refreshes every {interval}s  |  Ctrl+C to exit  |  "
                  f"Run: python forex/runner.py --live  to force update{W}")
