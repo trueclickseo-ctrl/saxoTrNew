@@ -1079,17 +1079,32 @@ def run_daily(dry_run: bool = True,
         logger.info(f"  Strategy: {name.upper()}  weight={w:.3f}  "
                     f"slots_scale=×{strategy_learner.slot_scale(w):.2f}")
 
-        exits   = _run_strategy_exits(name, mod, positions, market_data,
-                                      universe, equity, akey, today_str, dry_run)
+        exits = entries = 0
+        try:
+            exits = _run_strategy_exits(name, mod, positions, market_data,
+                                        universe, equity, akey, today_str, dry_run)
 
-        if entries_blocked:
-            reason = "daily loss limit" if loss_limit_hit else "drawdown circuit breaker"
-            logger.info(f"  [{name}] Entries BLOCKED — {reason} active")
-            entries = 0
-        else:
-            entries = _run_strategy_entries(name, mod, positions, entry_market_data,
-                                            universe, equity, akey, today_str,
-                                            dry_run, weight=w)
+            if entries_blocked:
+                reason = "daily loss limit" if loss_limit_hit else "drawdown circuit breaker"
+                logger.info(f"  [{name}] Entries BLOCKED — {reason} active")
+            else:
+                entries = _run_strategy_entries(name, mod, positions, entry_market_data,
+                                                universe, equity, akey, today_str,
+                                                dry_run, weight=w)
+        except Exception as exc:
+            # 2026-08-25: mirrors the identical fix in forex/runner.py -- a
+            # single rejected order used to crash this whole function
+            # uncaught, so the ONE _save_state() call at the very bottom
+            # never ran and every already-completed close/entry from
+            # strategies processed earlier in this same run silently
+            # vanished from local tracking even though the broker-side
+            # fills were real. See forex/runner.py's matching except block
+            # for the live GBPNZD case this was confirmed against.
+            logger.error(f"  [{name}] pass crashed, continuing to next "
+                        f"strategy (state already saved below): {exc}")
+
+        if not dry_run:
+            _save_state(state)
 
         if entries == 0 and not entries_blocked:
             open_in = sum(1 for k in positions if k.startswith(f"{name}:"))

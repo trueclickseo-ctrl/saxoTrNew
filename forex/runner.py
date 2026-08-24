@@ -1831,8 +1831,19 @@ def run_exits_only(dry_run: bool = True,
     total_exits = 0
     for strat_name in active_strategies:
         strat_mod = STRATEGIES[strat_name]
-        exits = _run_exits(strat_name, strat_mod, positions,
-                           market_data, akey, dry_run, today_str)
+        exits = 0
+        try:
+            exits = _run_exits(strat_name, strat_mod, positions,
+                               market_data, akey, dry_run, today_str)
+        except Exception as exc:
+            # See the matching try/except in run_daily() for the full
+            # writeup -- same fix, same reason: one rejected close order
+            # must not erase every other strategy's already-completed
+            # closes from this same run.
+            logger.error(f"  [{strat_name}] exits pass crashed, continuing "
+                        f"to next strategy (state already saved below): {exc}")
+        if not dry_run:
+            _save_state(state)
         if exits:
             logger.info(f"  [{strat_name}] Closed {exits} position(s)")
         total_exits += exits
@@ -1980,32 +1991,53 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
         logger.info(f"  Strategy: {strat_name.upper()}  weight={w:.3f}  "
                     f"slots_scale=×{strategy_learner.slot_scale(w):.2f}")
 
-        exits   = _run_exits(strat_name, strat_mod, positions,
-                             market_data, akey, dry_run, today_str)
-        entries = 0
-        # entries_blocked is always False now (see the risk pre-flight block
-        # above) -- kept as a variable rather than removed outright so this
-        # stays a one-line revert if the loss-limit/drawdown gates are ever
-        # turned back on.
-        run_entries = (not entries_blocked
-                       or (strat_name in DAY_TRADE_STRATEGIES and not loss_limit_hit))
-        if run_entries:
-            # Gap and LBO bypass the momentum filter — they need all pairs for
-            # gap-percentage / session-breakout detection, unrelated to trend.
-            # rsi/bb/zscore are MEAN-REVERSION strategies (dip-buy, fade,
-            # z-score reversion) — the filter ranks by DIRECTIONAL trend
-            # strength (price move / ATR), which is backwards for them: their
-            # edge is catching reversals/chop, so restricting them to only the
-            # most-trending pairs suppresses exactly the setups they're
-            # designed to find. Only trend-following strategies (ema,
-            # donchian, pullback, supertrend, ml, cnn_lstm) should be
-            # momentum-filtered.
-            _NO_MOMENTUM_FILTER = ("gap", "london_breakout", "rsi", "bb", "zscore")
-            _edata = market_data if strat_name in _NO_MOMENTUM_FILTER else entry_market_data
-            entries = _run_entries(strat_name, strat_mod, positions,
-                                   _edata, equity, akey, dry_run, today_str,
-                                   live_prices=live_prices, agreement=agreement,
-                                   weight=w)
+        exits = entries = 0
+        try:
+            exits = _run_exits(strat_name, strat_mod, positions,
+                               market_data, akey, dry_run, today_str)
+            # entries_blocked is always False now (see the risk pre-flight
+            # block above) -- kept as a variable rather than removed outright
+            # so this stays a one-line revert if the loss-limit/drawdown
+            # gates are ever turned back on.
+            run_entries = (not entries_blocked
+                           or (strat_name in DAY_TRADE_STRATEGIES and not loss_limit_hit))
+            if run_entries:
+                # Gap and LBO bypass the momentum filter — they need all pairs
+                # for gap-percentage / session-breakout detection, unrelated
+                # to trend. rsi/bb/zscore are MEAN-REVERSION strategies
+                # (dip-buy, fade, z-score reversion) — the filter ranks by
+                # DIRECTIONAL trend strength (price move / ATR), which is
+                # backwards for them: their edge is catching
+                # reversals/chop, so restricting them to only the
+                # most-trending pairs suppresses exactly the setups they're
+                # designed to find. Only trend-following strategies (ema,
+                # donchian, pullback, supertrend, ml, cnn_lstm) should be
+                # momentum-filtered.
+                _NO_MOMENTUM_FILTER = ("gap", "london_breakout", "rsi", "bb", "zscore")
+                _edata = market_data if strat_name in _NO_MOMENTUM_FILTER else entry_market_data
+                entries = _run_entries(strat_name, strat_mod, positions,
+                                       _edata, equity, akey, dry_run, today_str,
+                                       live_prices=live_prices, agreement=agreement,
+                                       weight=w)
+        except Exception as exc:
+            # 2026-08-25: a single rejected order (e.g. WouldExceedMargin)
+            # used to crash out of this entire function uncaught, which
+            # meant _save_state() at the bottom never ran and EVERY
+            # already-completed close/entry from strategies processed
+            # earlier in this same run -- real broker-side fills, not
+            # simulated -- silently vanished from local tracking. Confirmed
+            # live: this is exactly how gap:GBPNZD's real close on 2026-08-24
+            # never persisted, so the next run still saw it as open, fired a
+            # second close against an already-flat position, and created a
+            # brand-new untracked 41,000 GBPNZD long. Catching here and
+            # checkpointing state immediately below (whether this strategy
+            # errored or not) means one bad order can no longer erase
+            # anyone else's work.
+            logger.error(f"  [{strat_name}] pass crashed, continuing to next "
+                        f"strategy (state already saved below): {exc}")
+
+        if not dry_run:
+            _save_state(state)
 
         if exits == 0 and entries == 0:
             remaining = sum(1 for k in positions if k.startswith(prefix))

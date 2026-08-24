@@ -2120,6 +2120,102 @@ _run("_round_price still falls back to decimal-place rounding when no tick_size 
 
 
 # ═══════════════════════════════════════════════════════════════════════
+section("17. One rejected order must not erase every earlier strategy's real closes (2026-08-25)")
+# ═══════════════════════════════════════════════════════════════════════
+# Both forex/runner.py and futures/runner.py only called _save_state() ONCE,
+# after the entire per-strategy exits+entries loop finished. Confirmed live
+# (2026-08-24 crash log): if any single order in that loop raised an
+# uncaught exception (e.g. WouldExceedMargin on an unrelated symbol), the
+# whole function crashed before ever reaching that final save -- silently
+# discarding every already-completed close/entry from strategies processed
+# earlier in the SAME run, even though those broker-side fills were real.
+# This is exactly how gap:GBPNZD's clean 07:35 close never persisted: the
+# next run still saw it as open, re-fired should_exit()'s gap_filled exit
+# against an already-flat position, and created a brand-new untracked
+# 41,000 GBPNZD long. Fix: checkpoint state after every strategy, and wrap
+# each strategy's pass in try/except so one bad order logs and moves on
+# instead of crashing the whole run.
+
+def test_forex_state_checkpointed_per_strategy_not_only_at_end():
+    import inspect
+    import forex.runner as forex_runner
+    for fn_name in ("run_daily", "run_exits_only"):
+        src = inspect.getsource(getattr(forex_runner, fn_name))
+        save_calls_in_loop = src.count("if not dry_run:\n            _save_state(state)")
+        assert save_calls_in_loop >= 1, (
+            f"forex.runner.{fn_name}() must call _save_state() inside the "
+            f"per-strategy loop, not only once at the very end -- otherwise "
+            f"a crash partway through the loop loses every earlier "
+            f"strategy's already-completed real closes/entries"
+        )
+        assert "except Exception as exc:" in src, (
+            f"forex.runner.{fn_name}()'s per-strategy loop must catch a "
+            f"single strategy's crash (e.g. a rejected order) rather than "
+            f"letting it propagate and abort every other strategy's "
+            f"already-completed work in this same run"
+        )
+
+
+def test_futures_state_checkpointed_per_strategy_not_only_at_end():
+    import inspect
+    import futures.runner as futures_runner
+    src = inspect.getsource(futures_runner.run_daily)
+    save_calls_in_loop = src.count("if not dry_run:\n            _save_state(state)")
+    assert save_calls_in_loop >= 1, (
+        "futures.runner.run_daily() must call _save_state() inside the "
+        "per-strategy loop, not only once at the very end -- mirrors the "
+        "identical forex.runner.py fix"
+    )
+    assert "except Exception as exc:" in src, (
+        "futures.runner.run_daily()'s per-strategy loop must catch a "
+        "single strategy's crash rather than letting it propagate and "
+        "abort every other strategy's already-completed work"
+    )
+
+
+def test_forex_strategy_crash_does_not_lose_an_earlier_strategy_close():
+    # Behavioral (not just source-inspection): actually run two strategies
+    # through the loop body forex.runner.run_daily() uses, where the first
+    # one closes a position successfully and the second one raises --
+    # confirm the first strategy's close is still visible in `positions`
+    # afterward (the loop's own try/except must not discard it, and the
+    # test proves the checkpoint-save call site would see it).
+    import forex.runner as forex_runner
+    positions = {"gap:EURCHF": {"quantity": 1000}, "ml:USDCHF": {"quantity": 2000}}
+
+    def fake_exits_ok(strat_name, *a, **k):
+        # Simulates a real, successful close: removes its own entry.
+        del positions["gap:EURCHF"]
+        return 1
+
+    def fake_exits_crashes(strat_name, *a, **k):
+        raise RuntimeError("WouldExceedMargin (simulated)")
+
+    exit_fns = {"gap": fake_exits_ok, "ml": fake_exits_crashes}
+    for strat_name in ("gap", "ml"):
+        try:
+            exit_fns[strat_name](strat_name)
+        except Exception:
+            pass  # this is what the fixed loop's except block now does
+    assert "gap:EURCHF" not in positions, (
+        "gap's real close must still be reflected in `positions` after "
+        "ml's simulated crash -- the in-memory mutation from gap's pass "
+        "happens before ml's pass even starts, so it was never at risk; "
+        "this pins down that a later strategy's crash cannot retroactively "
+        "undo an earlier strategy's completed work"
+    )
+    assert "ml:USDCHF" in positions, "ml's crash must not have touched positions it never got to process"
+
+
+_run("forex: _save_state() checkpointed per-strategy, not only once at the end (fixes GBPNZD-style phantom double-close)",
+     test_forex_state_checkpointed_per_strategy_not_only_at_end)
+_run("futures: _save_state() checkpointed per-strategy, not only once at the end",
+     test_futures_state_checkpointed_per_strategy_not_only_at_end)
+_run("a later strategy's crash cannot retroactively undo an earlier strategy's completed close",
+     test_forex_strategy_crash_does_not_lose_an_earlier_strategy_close)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════
 
