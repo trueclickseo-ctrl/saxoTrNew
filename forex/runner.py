@@ -1272,6 +1272,39 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
         entry      = float(pos.get("entry_price", 0))
         pnl_pct    = ((live_px - entry) / entry * 100) if is_long else ((entry - live_px) / entry * 100)
 
+        # should_exit()'s decision is based on df's close (an H1/D1 bar
+        # close, fetched once per run, possibly minutes old by the time
+        # dozens of positions have been checked in this same sweep) --
+        # but the actual closing MARKET order executes at live_px, a
+        # separately-fetched fresh quote. If price moved between those
+        # two lookups, the position can close on a label ("gap_filled" or
+        # "hard_stop") that live_px no longer actually supports, at a
+        # worse price than the label implies. Confirmed live 2026-08-24:
+        # 42 session-gap "gap_filled" exits, only 3 real wins, net
+        # -2,179 EUR — most had exit prices that never reached gap_target
+        # at all. Gap's entry always places a REAL resting Stop+Limit
+        # bracket on Saxo (see saxo_order.place_with_stop); this
+        # should_exit() check only exists as a backup for the case that
+        # order is somehow missing (see its docstring) — so re-validating
+        # against the SAME live_px used for execution, and skipping (not
+        # forcing a bad close) when it disagrees, costs nothing: a
+        # genuine hit still closes via the resting order regardless, and
+        # skipping never touches (or cancels) that resting order.
+        if strat_name == "gap" and (reason.startswith("gap_filled") or reason.startswith("hard_stop")):
+            gap_target = float(pos.get("gap_target", entry))
+            stop_price = float(pos.get("stop_price", 0))
+            if reason.startswith("gap_filled"):
+                confirmed = (live_px >= gap_target) if is_long else (live_px <= gap_target)
+                level, level_name = gap_target, "target"
+            else:
+                confirmed = (live_px <= stop_price) if is_long else (live_px >= stop_price)
+                level, level_name = stop_price, "stop"
+            if not confirmed:
+                logger.info(f"  [gap] SKIP exit {sym} — should_exit() fired '{reason}' off a "
+                            f"stale close, but live price {live_px:.5f} hasn't actually reached "
+                            f"the {level_name} {level:.5f}; leaving the resting order to handle it")
+                continue
+
         # Snapshot Saxo's own base-currency P&L for this position right before
         # closing it — this is the broker's real dealt conversion (what
         # actually happens to the account balance), captured while the

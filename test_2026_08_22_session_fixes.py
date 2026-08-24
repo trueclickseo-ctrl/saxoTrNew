@@ -1791,6 +1791,95 @@ _run("gap breakeven still triggers when the close genuinely clears the fill thre
 
 
 # ═══════════════════════════════════════════════════════════════════════
+section("2026-08-24: gap exits re-validate should_exit()'s decision against live price")
+# ═══════════════════════════════════════════════════════════════════════
+# should_exit()'s gap_filled/hard_stop decision is based on df's close (an
+# H1/D1 bar, possibly stale by the time _run_exits has worked through many
+# positions in one sweep) but the actual closing market order executes at
+# a separately-fetched live_px. Confirmed live 2026-08-24: 42 session-gap
+# "gap_filled" exits, only 3 real wins, net -2,179 EUR -- most never
+# actually reached gap_target at the live execution price. Fixed:
+# _run_exits() re-validates gap's decision against the same live_px used
+# for execution and skips (leaving the resting Stop/Limit bracket order
+# intact) rather than forcing a close a fresh quote no longer supports.
+
+
+def test_gap_exit_skipped_when_live_price_disagrees_with_stale_close():
+    import forex.runner as runner
+    import forex.strategy_gap as strat_gap
+    import pandas as pd
+    from datetime import date
+    pos = {"direction": "Buy", "entry_price": 1.2000, "stop_price": 1.1900,
+           "gap_target": 1.2100, "quantity": 10000, "entry_date": date.today().isoformat()}
+    positions = {"gap:EURUSD": pos}
+    # df's close is past target (should_exit() says gap_filled)...
+    df = pd.DataFrame([{"Open": 1.2000, "High": 1.2105, "Low": 1.1990, "Close": 1.2105}])
+    market_data = {"EURUSD": df}
+    orig_live_price = runner._live_price
+    try:
+        # ...but the live price has already reverted below target.
+        runner._live_price = lambda uic, akey: 1.2010
+        exits = runner._run_exits("gap", strat_gap, positions, market_data, "AKEY", True,
+                                  date.today().isoformat())
+        assert exits == 0, "a stale-triggered gap_filled must not count as a real exit"
+        assert "gap:EURUSD" in positions, "the position must stay open, not get force-closed on stale data"
+    finally:
+        runner._live_price = orig_live_price
+
+
+def test_gap_exit_still_closes_when_live_price_confirms_the_target():
+    import forex.runner as runner
+    import forex.strategy_gap as strat_gap
+    import pandas as pd
+    from datetime import date
+    pos = {"direction": "Buy", "entry_price": 1.2000, "stop_price": 1.1900,
+           "gap_target": 1.2100, "quantity": 10000, "entry_date": date.today().isoformat()}
+    positions = {"gap:EURUSD": pos}
+    df = pd.DataFrame([{"Open": 1.2000, "High": 1.2105, "Low": 1.1990, "Close": 1.2105}])
+    market_data = {"EURUSD": df}
+    orig_live_price = runner._live_price
+    try:
+        runner._live_price = lambda uic, akey: 1.2110  # genuinely past target
+        exits = runner._run_exits("gap", strat_gap, positions, market_data, "AKEY", True,
+                                  date.today().isoformat())
+        assert exits == 1, "a genuinely-confirmed gap_filled must still close normally"
+        assert "gap:EURUSD" not in positions
+    finally:
+        runner._live_price = orig_live_price
+
+
+def test_gap_hard_stop_also_re_validated_against_live_price():
+    import forex.runner as runner
+    import forex.strategy_gap as strat_gap
+    import pandas as pd
+    from datetime import date
+    # Sell gap: stop_price=1.2100. df's low wicked through it, but live
+    # price has reverted back below the stop.
+    pos = {"direction": "Sell", "entry_price": 1.2000, "stop_price": 1.2100,
+           "gap_target": 1.1900, "quantity": 10000, "entry_date": date.today().isoformat()}
+    positions = {"gap:EURUSD": pos}
+    df = pd.DataFrame([{"Open": 1.2000, "High": 1.2105, "Low": 1.1990, "Close": 1.2105}])
+    market_data = {"EURUSD": df}
+    orig_live_price = runner._live_price
+    try:
+        runner._live_price = lambda uic, akey: 1.2050  # below the 1.2100 stop
+        exits = runner._run_exits("gap", strat_gap, positions, market_data, "AKEY", True,
+                                  date.today().isoformat())
+        assert exits == 0
+        assert "gap:EURUSD" in positions
+    finally:
+        runner._live_price = orig_live_price
+
+
+_run("a stale should_exit() gap_filled decision that live price no longer confirms is skipped, not force-closed",
+     test_gap_exit_skipped_when_live_price_disagrees_with_stale_close)
+_run("a genuinely-confirmed gap_filled exit still closes normally",
+     test_gap_exit_still_closes_when_live_price_confirms_the_target)
+_run("gap's hard_stop exit is also re-validated against live price before closing",
+     test_gap_hard_stop_also_re_validated_against_live_price)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════
 
