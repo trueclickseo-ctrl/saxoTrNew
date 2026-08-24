@@ -1060,6 +1060,44 @@ def test_bracket_tp_leg_uses_order_price_field():
 _run("saxo_order: bracket TP leg uses OrderPrice, not Price", test_bracket_tp_leg_uses_order_price_field)
 
 
+def test_bracket_stop_tp_ids_not_swapped():
+    # Regression for 2026-08-24: _place_bracket() sends Orders=[stop_leg,
+    # tp_leg] but Saxo's response "Orders" array comes back in the OPPOSITE
+    # order -- confirmed live via a direct GBPUSD test bracket (requested
+    # [stop@1.89339, tp@1.91339]; the live order matching child index 0
+    # turned out to be the Limit/tp order, index 1 the Stop). The original
+    # code trusted request order, storing stop_order_id/tp_order_id SWAPPED
+    # for every bracket ever placed. Confirmed live impact: a housekeeping
+    # cleanup pass believing it was cancelling an orphaned stop actually
+    # cancelled the take-profit leg on 7 pending ETF entries instead (the
+    # real stop-loss child, never referenced by the swapped field, survived
+    # undisturbed -- lower severity than it could have been, but still a
+    # real bug: local state's tp_order_id would try to move/cancel what is
+    # actually the stop the next time anything acts on it).
+    import saxo_order
+
+    calls = []
+
+    def fake_post(path, body):
+        calls.append(body)
+        # Mirror Saxo's real, empirically-confirmed response ordering:
+        # response Orders[0] corresponds to request Orders[1] (the tp leg),
+        # response Orders[1] corresponds to request Orders[0] (the stop leg).
+        return {"OrderId": "ENTRY1", "Orders": [{"OrderId": "RESP_A"}, {"OrderId": "RESP_B"}]}
+
+    entry_oid, stop_oid, tp_oid = saxo_order._place_bracket(
+        fake_post, "AKEY", 22, "FxSpot", 1000, "Buy", "Sell", "Stop",
+        1.89339, 1.91339, {"DurationType": "GoodTillCancel"}, "test",
+    )
+    assert entry_oid == "ENTRY1"
+    assert stop_oid == "RESP_B", f"stop_oid must be the SECOND response id (matches the stop leg), got {stop_oid}"
+    assert tp_oid == "RESP_A", f"tp_oid must be the FIRST response id (matches the tp leg), got {tp_oid}"
+
+
+_run("saxo_order: bracket stop_order_id/tp_order_id are not swapped (Saxo reverses the response array)",
+     test_bracket_stop_tp_ids_not_swapped)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 section("14. Universal broker-side stop+TP for every strategy (2026-08-22)")
 # ═══════════════════════════════════════════════════════════════════════

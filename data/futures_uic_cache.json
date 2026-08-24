@@ -56,13 +56,13 @@
     "yf_ticker": "SLV"
   },
   "CL": {
-    "uic": 46093448,
+    "uic": 46652462,
     "asset_type": "ContractFutures",
-    "description": "Light Sweet Crude Oil (WTI) - Sep 2026",
+    "description": "Light Sweet Crude Oil (WTI) - Oct 2026",
     "currency": "USD",
     "symbol": "CL",
     "yf_ticker": "USO",
-    "contract_sym": "CLU6",
+    "contract_sym": "CLV6",
     "contract_size": 1000
   },
   "NG": {

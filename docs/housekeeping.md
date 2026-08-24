@@ -49,7 +49,8 @@ instrument:
 
 | Situation | Action |
 |---|---|
-| Local tracks a position, live shows **zero** exposure at all | Remove the local entry, cancel its now-orphaned stop order |
+| Local tracks a position, live shows **zero** exposure at all, and **no matching entry order is still Working** | Remove the local entry, cancel its now-orphaned stop order |
+| Local tracks a position, live shows **zero** exposure, but a matching-direction entry order (Market/Limit/StopLimit, not a dormant bracket child) is still Working | Left as-is, reported as `pending_entry` — it's a trade that hasn't filled yet (e.g. market closed), not an orphan |
 | Local's combined quantity **exceeds** live exposure (Saxo netted part of it against another strategy's opposite trade) | Scale every entry down **proportionally**, so the total protective-stop coverage can never exceed what's actually open. Flagged as an `estimate` — Saxo's own netting has erased which literal lot belongs to which strategy, so the split preserves each entry's *relative* size and its own risk price, not a verified fact |
 | Local direction is the **opposite** of live direction | Reported only — **never auto-corrected**. Too ambiguous to guess safely; needs a human |
 | Live exposure **exceeds** local tracking (untracked extra) | Reported only — never fabricates a new local entry to explain it |
@@ -320,3 +321,40 @@ one pass, verified against a fresh Saxo snapshot:
 - A follow-up sweep across all 4 modules found and fixed one more
   (`futures/GBPAUD`, newly opened between runs), then two consecutive
   clean runs confirmed a stable, fully-protected steady state.
+
+## 2026-08-24: pending-entry false-orphan bug (found and fixed same day)
+
+Testing the ETF top-10 config change live placed 7 new bracket entries
+(Market orders + nested stop/TP legs) while the US market was still
+closed. The post-run `safeguard.py` hook ran seconds later, saw zero
+live position for all 7 uics, and — with no way at the time to
+distinguish "genuinely orphaned" from "not filled yet" — removed all 7
+from local state and cancelled what it believed was each one's stop
+order.
+
+Investigating live turned up a second, independent bug: `saxo_order.py`'s
+`_place_bracket()` had `stop_order_id`/`tp_order_id` reversed for every
+bracket order ever placed (Saxo's response `Orders` array is in the
+opposite order from the request's), so the order actually cancelled was
+each position's take-profit leg, not its stop — lower-severity than it
+could have been, but only by chance. See
+`bracket_stop_tp_id_swap_bug_2026-08-24` in the assistant's memory for
+the full root-cause writeup; the id-swap fix itself lives in
+`saxo_order.py` and is unrelated to housekeeping's own logic.
+
+**The housekeeping-side fix**: `LiveSnapshot.has_pending_entry(uic,
+direction)` — true if a Working Market/Limit/StopLimit order exists in
+the local entry's own direction and is NOT an `IfDoneSlave` bracket
+child (i.e. a real top-level entry, not a dormant stop/TP leg waiting on
+its parent to fill). `reconcile_module()` now checks this *before*
+treating a zero-live-position local entry as an orphan; if it's true,
+the entry is left completely untouched and reported as `pending_entry`
+instead of `removed_orphan`. Covered by
+`test_pending_entry_left_alone_not_orphaned` and
+`test_bracket_child_orders_do_not_count_as_pending_entry` in
+`test_housekeeping.py`, and verified live against the real 7 pending
+ETF entries (all correctly reported `pending_entry`, none touched).
+
+This closes the gap for *any* module: a bracket entry placed just before
+a market close, a Working limit order still waiting to fill, etc. — not
+just the ETF case that surfaced it.

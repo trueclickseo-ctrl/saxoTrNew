@@ -158,15 +158,21 @@ def run_etf_functional():
 
     # ── SectorRotationStrategy ────────────────────────────────────────────
     # Mock client that returns predetermined price history per UIC
+    # _history() requests LOOKBACK+5 bars as a gap buffer, then trims to the
+    # most recent LOOKBACK (63) bars -- so the price move must sit within
+    # the LAST 63 of these 68 bars (the first 5 are buffer, always dropped).
     MOCK_HIST = {
-        1: [100.0] * 68,         # SPY: flat → 0% return
-        2: [80.0] + [100.0] * 67,  # XLK: +25% return → should rank #1
-        3: [90.0] + [95.0] * 67,   # XLV: +5.6% → rank #2
+        1: [100.0] * 68,                                  # SPY: flat → 0% return
+        2: [80.0] * 5 + [80.0] + [100.0] * 62,             # XLK: +25% return → should rank #1
+        3: [90.0] * 5 + [90.0] + [95.0] * 62,              # XLV: +5.6% → rank #2
     }
 
     def _mock_get(path, params=None):
         uic = (params or {}).get("Uic")
+        count = (params or {}).get("Count")
         hist = MOCK_HIST.get(uic, [])
+        if count is not None:
+            hist = hist[-count:]  # real Saxo history endpoint honors Count -- mock must too
         return {"Data": [{"Close": p} for p in hist]}
 
     mock_client = types.SimpleNamespace(get=_mock_get)

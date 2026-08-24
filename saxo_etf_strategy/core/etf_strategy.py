@@ -68,7 +68,9 @@ class _BaseStrategy:
                     continue
                 if c is not None and float(c) > 0:
                     closes.append(float(c))
-            return closes if len(closes) >= count else None
+            if len(closes) < count:
+                return None
+            return closes[-count:]  # trim the +5 gap buffer back to the exact lookback window
         except Exception as exc:
             logger.debug(f"Price history failed for UIC {uic}: {exc}")
             return None
@@ -143,7 +145,7 @@ class SectorRotationStrategy(_BaseStrategy):
     Top N (cfg.max_candidates_per_run, default 3) get BUY signals.
     Rebalance monthly (run with rebalance_frequency_hours=168 for weekly).
     """
-    SECTORS = ["SPY", "XLK", "XLV", "XLE", "XLF", "XLI", "XLY", "XLP", "XLU", "XLRE", "XLB"]
+    SECTORS = ["XLC", "XLK", "XLV", "XLE", "XLF", "XLI", "XLY", "XLP", "XLU", "XLRE", "XLB"]
     LOOKBACK = 63  # ~3 months of trading days
 
     def generate_signals(self, universe: List[dict]) -> List[ETFSignal]:

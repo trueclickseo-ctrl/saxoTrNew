@@ -140,6 +140,47 @@ _run("ledger-backed module (stocks) reports drift instead of auto-removing a row
 
 
 # ═══════════════════════════════════════════════════════════════════════
+section("Pending entry order: no live position yet, but not an orphan")
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_pending_entry_left_alone_not_orphaned():
+    """2026-08-24: safeguard incorrectly orphaned 7 ETF Market entries placed
+    while the US market was closed (not yet filled -> zero live position),
+    cancelling their bracket legs. A local entry with zero live position must
+    NOT be treated as an orphan if a matching-direction Working entry order
+    (Market/Limit/StopLimit, not an IfDoneSlave bracket child) is still open."""
+    entries = [hk.LocalPosition("fake", "strat:XLB", 35414, "XLB", "Buy", 50,
+                                "Etf", stop_order_id="STOP1")]
+    adapter = FakeAdapter("fake", entries)
+    orders = [make_order("ENTRY1", 35414, "Buy", 50, 53.54, order_type="Market")]
+    snap = make_snapshot(positions=[], orders=orders)   # no live position yet
+    findings = hk.reconcile_module(adapter, snap)
+    assert len(findings) == 1
+    assert findings[0].kind == hk.KIND_PENDING_ENTRY
+    assert adapter.saved_positions is None, "must not touch local state for a pending entry"
+    assert adapter.removed_keys is None, "must NOT orphan a not-yet-filled entry"
+    assert adapter.cancel_calls == [], "must not cancel anything for a pending entry"
+
+
+def test_bracket_child_orders_do_not_count_as_pending_entry():
+    """An IfDoneSlave bracket child (the dormant stop/tp leg of an unfilled
+    parent) must NOT be mistaken for a standalone pending entry order -
+    only a real top-level entry order should suppress the orphan check."""
+    order = make_order("CHILD1", 400, "Sell", 1000, 1.05, order_type="Stop")
+    order["OrderRelation"] = "IfDoneSlave"
+    snap = make_snapshot(positions=[], orders=[order])
+    assert snap.has_pending_entry(400, "Buy") is False, (
+        "a dormant bracket child leg must not be treated as a pending entry order"
+    )
+
+
+_run("a local entry with zero live position but a still-Working entry order is left alone, not orphaned",
+     test_pending_entry_left_alone_not_orphaned)
+_run("a dormant IfDoneSlave bracket child order does not count as a pending entry",
+     test_bracket_child_orders_do_not_count_as_pending_entry)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 section("Overstated local quantity: Saxo netted part of it away")
 # ═══════════════════════════════════════════════════════════════════════
 

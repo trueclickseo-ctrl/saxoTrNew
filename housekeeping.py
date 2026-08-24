@@ -96,6 +96,7 @@ KIND_DIRECTION_MISMATCH = "direction_mismatch" # local direction opposite of liv
 KIND_UNTRACKED_LIVE   = "untracked_live"       # live exposure with no local record at all
 KIND_STOP_REPLACE_FAILED = "stop_replace_failed"
 KIND_LEDGER_DRIFT      = "ledger_drift"        # stocks-only: can't auto-remove a ledger row
+KIND_PENDING_ENTRY     = "pending_entry"       # matching entry order still Working, not filled yet -> left alone
 
 
 # ── Live Saxo snapshot (fetched once, shared by every module) ─────────────
@@ -111,6 +112,24 @@ class LiveSnapshot:
     def working_stops(self, uic: int) -> list:
         return [o for o in self.orders_by_uic.get(uic, [])
                 if o.get("OpenOrderType") in ("Stop", "StopLimit") and o.get("Status") == "Working"]
+
+    def has_pending_entry(self, uic: int, direction: str) -> bool:
+        """True if a Working Market/Limit order exists in the OPENING
+        direction for this uic — i.e. a bracket entry that hasn't filled
+        yet (market closed, awaiting execution), not a closing/stop/tp leg.
+        Found 2026-08-24: reconcile_module() saw zero live position for 7
+        pending ETF entries (US market wasn't open yet) and correctly
+        concluded "no live backing", but that's a DIFFERENT situation from
+        a genuine orphan — the entry is real and about to fill. Removing
+        the local entry and cancelling its still-dormant bracket stop leg
+        on a position that's about to exist is actively harmful, and would
+        repeat every ~30 min until the entry actually fills."""
+        for o in self.orders_by_uic.get(uic, []):
+            if (o.get("Status") == "Working" and o.get("BuySell") == direction
+                    and o.get("OpenOrderType") in ("Market", "Limit", "StopLimit")
+                    and o.get("OrderRelation") != "IfDoneSlave"):
+                return True
+        return False
 
 
 def fetch_live_snapshot() -> LiveSnapshot:
@@ -410,6 +429,19 @@ def reconcile_module(adapter: BaseAdapter, live: LiveSnapshot,
         symbol = entries[0].symbol
 
         if local_net == 0:
+            continue
+
+        if live_net == 0 and live.has_pending_entry(uic, entries[0].direction):
+            # A Working entry order exists in the same direction the local
+            # entries claim, but it hasn't filled yet (e.g. market closed) --
+            # this is a pending trade, not an orphan. Defer judgment to a
+            # later run rather than removing it and cancelling its still-
+            # dormant bracket stop leg on a position that's about to exist.
+            findings.append(Finding(
+                adapter.module, KIND_PENDING_ENTRY, symbol,
+                f"{entries[0].key}: no live position yet but a matching entry "
+                f"order is still Working (not yet filled) — leaving as-is",
+            ))
             continue
 
         if live_net == 0:

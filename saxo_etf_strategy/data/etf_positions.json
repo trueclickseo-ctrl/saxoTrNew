@@ -23,6 +23,90 @@
       "entry_date": "2026-08-17",
       "entry_score": 0.08798320797621129,
       "order_id": "5039666037"
+    },
+    "35414": {
+      "symbol": "XLB",
+      "quantity": 50,
+      "entry_price": 53.54,
+      "entry_date": "2026-08-24",
+      "entry_score": 0.065,
+      "stop_price": 49.26,
+      "tp_price": 64.25,
+      "order_id": "5039787306",
+      "stop_order_id": "5039787308",
+      "tp_order_id": "5039787307"
+    },
+    "35442": {
+      "symbol": "XLI",
+      "quantity": 50,
+      "entry_price": 180.25,
+      "entry_date": "2026-08-24",
+      "entry_score": 0.049,
+      "stop_price": 165.83,
+      "tp_price": 216.3,
+      "order_id": "5039787313",
+      "stop_order_id": "5039787315",
+      "tp_order_id": "5039787314"
+    },
+    "35417": {
+      "symbol": "XLK",
+      "quantity": 50,
+      "entry_price": 183.35,
+      "entry_date": "2026-08-24",
+      "entry_score": 0.016,
+      "stop_price": 168.68,
+      "tp_price": 220.02,
+      "order_id": "5039787316",
+      "stop_order_id": "5039787318",
+      "tp_order_id": "5039787317"
+    },
+    "35418": {
+      "symbol": "XLP",
+      "quantity": 50,
+      "entry_price": 85.99,
+      "entry_date": "2026-08-24",
+      "entry_score": 0.014,
+      "stop_price": 79.11,
+      "tp_price": 103.19,
+      "order_id": "5039787319",
+      "stop_order_id": "5039787321",
+      "tp_order_id": "5039787320"
+    },
+    "5008102": {
+      "symbol": "XLRE",
+      "quantity": 50,
+      "entry_price": 45.08,
+      "entry_date": "2026-08-24",
+      "entry_score": 0.012,
+      "stop_price": 41.47,
+      "tp_price": 54.1,
+      "order_id": "5039787322",
+      "stop_order_id": "5039787324",
+      "tp_order_id": "5039787323"
+    },
+    "35443": {
+      "symbol": "XLY",
+      "quantity": 41,
+      "entry_price": 118.02,
+      "entry_date": "2026-08-24",
+      "entry_score": -0.01,
+      "stop_price": 108.58,
+      "tp_price": 141.62,
+      "order_id": "5039787325",
+      "stop_order_id": "5039787327",
+      "tp_order_id": "5039787326"
+    },
+    "10457306": {
+      "symbol": "XLC",
+      "quantity": 22,
+      "entry_price": 111.4,
+      "entry_date": "2026-08-24",
+      "entry_score": -0.035,
+      "stop_price": 102.49,
+      "tp_price": 133.68,
+      "order_id": "5039787328",
+      "stop_order_id": "5039787330",
+      "tp_order_id": "5039787329"
     }
   },
   "orders": [
@@ -91,6 +175,76 @@
       "reason": "partial_close_margin_relief_2026-08-22",
       "dry_run": false,
       "timestamp": "2026-08-22T00:35:05.913495"
+    },
+    {
+      "uic": 35414,
+      "symbol": "XLB",
+      "side": "Buy",
+      "quantity": 50,
+      "entry_price": 53.54,
+      "order_id": "5039787128",
+      "dry_run": false,
+      "timestamp": "2026-08-24T11:20:54.805430"
+    },
+    {
+      "uic": 35442,
+      "symbol": "XLI",
+      "side": "Buy",
+      "quantity": 50,
+      "entry_price": 180.25,
+      "order_id": "5039787131",
+      "dry_run": false,
+      "timestamp": "2026-08-24T11:20:56.174484"
+    },
+    {
+      "uic": 35417,
+      "symbol": "XLK",
+      "side": "Buy",
+      "quantity": 50,
+      "entry_price": 183.35,
+      "order_id": "5039787134",
+      "dry_run": false,
+      "timestamp": "2026-08-24T11:20:57.552878"
+    },
+    {
+      "uic": 35418,
+      "symbol": "XLP",
+      "side": "Buy",
+      "quantity": 50,
+      "entry_price": 85.99,
+      "order_id": "5039787137",
+      "dry_run": false,
+      "timestamp": "2026-08-24T11:20:58.941562"
+    },
+    {
+      "uic": 5008102,
+      "symbol": "XLRE",
+      "side": "Buy",
+      "quantity": 50,
+      "entry_price": 45.08,
+      "order_id": "5039787140",
+      "dry_run": false,
+      "timestamp": "2026-08-24T11:21:00.309818"
+    },
+    {
+      "uic": 35443,
+      "symbol": "XLY",
+      "side": "Buy",
+      "quantity": 41,
+      "entry_price": 118.02,
+      "order_id": "5039787143",
+      "dry_run": false,
+      "timestamp": "2026-08-24T11:21:01.682305"
+    },
+    {
+      "uic": 10457306,
+      "symbol": "XLC",
+      "side": "Buy",
+      "quantity": 22,
+      "entry_price": 111.4,
+      "order_id": "5039787146",
+      "dry_run": false,
+      "timestamp": "2026-08-24T11:21:03.090386"
     }
   ]
 }

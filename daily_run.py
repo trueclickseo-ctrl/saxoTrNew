@@ -8,7 +8,12 @@ it's safe for an unattended Task Scheduler job).
 The cycle itself: checks the daily risk-off switch and, on the first trading day of the
 month, rebalances the US Blend. Most days it simply holds.
 """
-import sys, os, json, time
+import sys, os, json, time, ctypes as _ct
+# Hide console window immediately when launched by Task Scheduler via python.exe
+_hwnd = _ct.windll.kernel32.GetConsoleWindow()
+if _hwnd: _ct.windll.user32.ShowWindow(_hwnd, 0)
+del _ct, _hwnd
+
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 

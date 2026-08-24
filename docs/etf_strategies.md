@@ -1,15 +1,15 @@
 # ETF Strategy Playbook
 
 **Module**: `saxo_etf_strategy/`  
-**Universe**: Up to 8,922 US-listed ETFs (cached 24h, sourced from Saxo API)  
-**Strategies**: 4 (switch via `etf_config.py` `strategy_name`)  
+**Universe**: Up to 8,924 US-listed ETFs (cached 24h, sourced from Saxo API)  
+**Strategies**: 5 (switch via `etf_config.py` `strategy_name`)  
 **Capital**: 15% of account balance — separate from stocks (85%) and forex/futures  
 **Max positions**: 5 open at once, 3% of account per position  
 **Stop-loss**: 8% | **Take-profit**: 20%  
 **Currency**: EUR (SIM account currency)  
 **Scheduled**: 06:30 PKT daily via `saxo_etf_strategy/run_etf_daily.bat`  
-**Status**: DRY RUN (`dry_run = True`) — review signals for several weeks before live  
-**Last updated**: 2026-08-19  
+**Status**: LIVE (`dry_run = False`) — flipped 2026-08-15, first real SIM orders placed 2026-08-17 (XLV, XLF, XLE)  
+**Last updated**: 2026-08-20 — see [Audit Log](#audit-log-2026-08-20) at bottom for corrections made today  
 
 ---
 
@@ -54,8 +54,8 @@ The 3-month lookback captures intermediate momentum (the "sweet spot" — short 
 
 ### Entry/Exit
 - **Buy**: ETF is in the top-3 by 3-month return AND not already in portfolio
-- **Sell**: ETF drops out of top-3 (rank > 3) OR hits 8% stop OR hits 20% TP
-- **Rebalance**: weekly (checked each run; buys/sells as needed)
+- **Sell**: hits 8% stop OR hits 20% TP only — **rank-drop exit is NOT implemented** (see Known Limitations). A sector that falls out of the top 3 is currently held until it stops out or takes profit, not sold on the rank change.
+- **Rebalance**: the bot runs once daily (Task Scheduler, not a weekly job) and buys whatever newly enters the top-3 into free slots. Without a rank-drop exit, this is closer to "buy-and-hold with daily top-up" than true weekly rebalancing.
 
 ### Parameters
 | Param | Value |
@@ -143,18 +143,44 @@ The curated universe avoids illiquid or inverse/leveraged ETFs. 20/100 MA separa
 Includes: ARKG, XBI, IBB, SOXX, SMH, ARKK, ARKW, XLK, CIBR, BOTZ, ROBO, ICLN, TAN, FAN, BLOK, BETZ, HERO, ESPO, NERD, CLOU, BUG, HACK, UFO, MOON, METV, MSOS, YOLO, MJ, TOKE, POTX, JETS, AWAY, PEJ, KBWB, KRE, BKLN, HYG, EMB, LEMB, PCY, ANGL, SJNK, JNK, BNDX, VXUS, VEA, VWO, EFA, EEM, MCHI
 
 ### Entry/Exit
-- **Buy**: 20d MA crosses above 100d MA (within last 5 bars) AND not already in portfolio
-- **Sell**: 20d MA crosses below 100d MA OR -8% stop OR +20% TP
+- **Buy**: 20d MA is currently above 100d MA AND not already in portfolio — this is a *state* check, not a crossover-event detector (no lookback window tracks when the cross actually happened, so it fires every day the condition holds, not just at the cross)
+- **Sell**: -8% stop OR +20% TP only (no MA-cross-down exit is implemented)
 
 ### Parameters
 | Param | Value |
 |-------|-------|
 | Fast MA | 20 days |
 | Slow MA | 100 days |
-| Signal lookback | 5 bars |
 | Universe size | 50 ETFs |
 | Stop-loss | 8% |
 | Take-profit | 20% |
+
+---
+
+## Strategy 5 — Momentum Scan (full universe)
+
+**File**: `saxo_etf_strategy/core/etf_strategy.py` → `MomentumScanStrategy`  
+**Type**: Full-universe momentum screen  
+
+### Concept
+Scans the entire ~8,924-ETF universe (not a curated list) for the strongest 3-month momentum among liquid, non-leveraged US ETFs.
+
+1. **Filter**: NYSE Arca / NASDAQ only, base ticker ≤ 5 chars (liquidity proxy), excludes leveraged/inverse keywords (ULTRA, 2X, 3X, BEAR, SHORT, INVERSE, etc.) — pre-filters to top 200 candidates by ticker length.
+2. **Score**: for each candidate, requires price above SMA(20) and a positive 63-day return; score = 63-day return.
+3. **Select**: top `max_candidates_per_run` by score.
+
+Runtime is ~3–5 minutes (200 sequential history API calls) — intended for a weekly/off-hours run, not the daily cycle.
+
+### Parameters
+| Param | Value |
+|-------|-------|
+| Lookback | 63 trading days |
+| SMA confirmation | 20 days (price must be above it) |
+| Pre-filter pool | 200 candidates |
+| Stop-loss | 8% |
+| Take-profit | 20% |
+
+Not currently selected by default (`strategy_name = "sector_rotation"`). Not documented until the 2026-08-20 audit — see Audit Log.
 
 ---
 
@@ -162,10 +188,11 @@ Includes: ARKG, XBI, IBB, SOXX, SMH, ARKK, ARKW, XLK, CIBR, BOTZ, ROBO, ICLN, TA
 
 | Strategy | Type | Signal frequency | Best regime |
 |----------|------|-----------------|-------------|
-| **Sector Rotation** ✓ default | Momentum | Weekly rebalance | All regimes |
+| **Sector Rotation** ✓ default | Momentum | Daily run; buys into free slots, no rank-drop exit | All regimes |
 | **Risk-Off** | Regime switching | Low (only on SPY SMA cross) | Bear markets |
 | **Mean Reversion** | Oversold bounce | Low (requires extreme dip) | Volatile markets |
-| **Dual MA** | Trend following | Medium (~10-20/yr) | Trending markets |
+| **Dual MA** | Trend following (state-based) | Fires daily while condition holds | Trending markets |
+| **Momentum Scan** | Full-universe momentum | Low (slow scan, best run weekly) | All regimes |
 
 ---
 
@@ -230,5 +257,23 @@ No shared state files, no shared imports, no shared capital allocation code.
 ## Known Limitations
 
 - `sector_rotation` exit-on-rank-drop not yet implemented — currently only SL/TP exit triggers a sell when a sector falls out of the top 3. A future improvement would add a rank-based exit trigger.
+- `dual_ma` has no crossover-event detection — it's a same-day state check (fast MA > slow MA), so it will keep re-signaling every day the condition holds rather than only at the moment of the cross. A future improvement would track the prior day's MA relationship to detect the actual cross.
 - ETF universe cache (`etf_universe.json`) can grow large — it is gitignored.
-- `dry_run = True` by default — production orders require explicit flip.
+- `dry_run = False` since 2026-08-15 — this module places real SIM orders on every scheduled run.
+
+---
+
+## Audit Log — 2026-08-20
+
+A full read-through of this doc against the live code (`etf_strategy.py`, `etf_executor.py`, `etf_config.py`) turned up several places where the doc had drifted from — or never matched — the implementation. Recorded here so future sessions don't re-introduce the same mistakes or re-trust the stale claims:
+
+| Issue | Was | Now |
+|-------|-----|-----|
+| Live-trading status | Doc said `dry_run = True` / "review for weeks" | Corrected — module has been live since 2026-08-15, real orders since 2026-08-17 |
+| Sector universe bug | Code's `SECTORS` list had `SPY` (not a sector) instead of `XLC` (Communication Services) — confirmed live in logs, XLC was never once a candidate | **Fixed in code** (`etf_strategy.py`): `SPY` → `XLC` |
+| Lookback window bug | `_history()` fetched `count+5` bars but never trimmed back to `count`, so 3-month (63-day) returns for `sector_rotation` and `momentum_scan` were actually measured over up to ~68 days | **Fixed in code** (`etf_strategy.py`): result is now sliced to `closes[-count:]` |
+| Rank-drop exit | Doc claimed sectors are sold when they drop out of top-3 | This was never implemented — doc corrected to state the actual behavior (SL/TP only). Left as a known limitation rather than silently added, since implementing it changes live trading behavior. |
+| Dual MA crossover | Doc claimed a "crosses within last 5 bars" signal | No such event detection exists — it's a same-day state check. Doc corrected; left as a known limitation (dual_ma isn't the active default strategy). |
+| Undocumented strategy | `momentum_scan` existed in code, unmentioned in docs | Added as Strategy 5 |
+
+Position sizing (3% per position, 15%/5 slots), RSI/SMA windowing, mean-reversion, and risk-off logic were all verified correct against the code and did not need changes.

@@ -302,10 +302,24 @@ def _place_bracket(post_fn, account_key, uic, asset_type,
     try:
         resp      = post_fn("/trade/v2/orders", entry_body)
         entry_oid = resp.get("OrderId", "?")
-        # Saxo returns child order IDs in Orders array
+        # Saxo's response "Orders" array is in the OPPOSITE order from the
+        # request's "Orders" array (request sent [stop_leg, tp_leg], but the
+        # response's first entry is consistently the take-profit's id, the
+        # second the stop's) -- confirmed live 2026-08-24 via a direct
+        # request/response comparison (a GBPUSD test bracket: requested
+        # [stop@1.89339, tp@1.91339], response child order 0 turned out to
+        # be the Limit/tp order, child order 1 the Stop order). The original
+        # code trusted request order and stored these SWAPPED into
+        # stop_order_id/tp_order_id -- meaning every bracket order ever
+        # placed (forex gap fills, ETF entries) had these two labels
+        # backwards in local state. Confirmed live impact: a housekeeping
+        # cleanup pass, believing it was cancelling an orphaned STOP,
+        # actually cancelled the TAKE-PROFIT leg on 7 pending ETF entries
+        # (the real stop-loss child survived, undisturbed, since it was
+        # never the one referenced by the swapped stop_order_id field).
         child_ids = [o.get("OrderId") for o in resp.get("Orders", [])]
-        stop_oid  = str(child_ids[0]) if len(child_ids) > 0 else None
-        tp_oid    = str(child_ids[1]) if len(child_ids) > 1 else None
+        tp_oid    = str(child_ids[0]) if len(child_ids) > 0 else None
+        stop_oid  = str(child_ids[1]) if len(child_ids) > 1 else None
         logger.info(
             f"[bracket] {label}  entry={entry_oid}  "
             f"{stop_type} stop@{stop_price}  Limit tp@{tp_price}  "
