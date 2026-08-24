@@ -285,6 +285,7 @@ def should_exit(position: dict, df: pd.DataFrame,
 
     cur_high  = float(df["High"].iloc[-1])
     cur_low   = float(df["Low"].iloc[-1])
+    cur_close = float(df["Close"].iloc[-1])
 
     direction  = position.get("direction", "Buy")
     stop_price = position.get("stop_price", 0.0)
@@ -307,13 +308,32 @@ def should_exit(position: dict, df: pd.DataFrame,
         if calendar_days_held >= TIME_STOP_DAYS:
             return True, f"time_stop ({calendar_days_held}d — gap not filled)"
 
+    # Target-hit check uses the CURRENT close, not the day's cumulative
+    # High/Low. Bug found live 2026-08-24: a position already has a real
+    # resting Limit take-profit order on Saxo at gap_target (placed
+    # atomically at entry, see saxo_order.place_with_stop) -- this
+    # should_exit() check is only a redundant safety net for the case
+    # that order is somehow missing. Using cur_high/cur_low (the whole
+    # day's extreme, which only grows and never resets until the next
+    # calendar day) made this check "sticky": once price so much as
+    # wicked through the target for an instant, EVERY subsequent
+    # exits-only run for the rest of that day would still see it as true
+    # and fire a MARKET order close at whatever price existed at check
+    # time -- which, after the wick reverted, could be far from and even
+    # on the losing side of the target. Confirmed live: 18/18 weekly gap
+    # exits on 2026-08-24 were labeled "gap_filled" (implying the target
+    # was reached, a win) but 16 of them were real losses, net -345 EUR.
+    # cur_close reflects the CURRENT price at evaluation time (df is
+    # re-fetched fresh each run), so this now only fires when price is
+    # STILL at/beyond the target -- self-correcting, and consistent with
+    # what the resting Limit order would independently be doing anyway.
     if direction == "Buy":
-        if cur_high >= gap_target:
+        if cur_close >= gap_target:
             return True, f"gap_filled (target={gap_target:.5f})"
         if cur_low <= stop_price:
             return True, f"hard_stop ({stop_price:.5f})"
     else:
-        if cur_low <= gap_target:
+        if cur_close <= gap_target:
             return True, f"gap_filled (target={gap_target:.5f})"
         if cur_high >= stop_price:
             return True, f"hard_stop ({stop_price:.5f})"

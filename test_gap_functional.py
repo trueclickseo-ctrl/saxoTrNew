@@ -411,20 +411,38 @@ class TestSessionGenerateSignals:
 class TestShouldExitWeekly:
 
     def test_gap_filled_buy(self):
-        """Long position: high >= gap_target → gap_filled exit."""
+        """Long position: CURRENT close >= gap_target → gap_filled exit.
+
+        Regression for 2026-08-24: this used to check the day's High (a
+        stale "touched at some point" signal, not "price is still there
+        now") -- confirmed live that caused a real market-order close at
+        a reverted, worse price while still logging "gap_filled" as if
+        the target had been captured. Close must explicitly be at/beyond
+        target, matching what a resting Limit TP order would also see.
+        """
         pos = _pos("Buy", entry=1.1970, stop=1.1925, target=1.2000)
-        df  = _bar(high=1.2001, low=1.1980)
+        df  = _bar(high=1.2010, low=1.1980, close=1.2005)
         ok, reason = gap.should_exit(pos, df, 1)
         assert ok
         assert "gap_filled" in reason
 
     def test_gap_filled_sell(self):
-        """Short position: low <= gap_target → gap_filled exit."""
+        """Short position: CURRENT close <= gap_target → gap_filled exit."""
         pos = _pos("Sell", entry=1.2030, stop=1.2075, target=1.2000)
-        df  = _bar(high=1.2025, low=1.1999)
+        df  = _bar(high=1.2025, low=1.1990, close=1.1995)
         ok, reason = gap.should_exit(pos, df, 1)
         assert ok
         assert "gap_filled" in reason
+
+    def test_high_touched_target_but_close_reverted_does_not_exit(self):
+        """The exact live bug, as a regression test: price briefly wicked
+        through the target (High beyond it) but has since pulled back --
+        must NOT exit on a stale touch. The resting Limit TP order (not
+        this check) is what should capture a genuine momentary touch."""
+        pos = _pos("Buy", entry=1.1970, stop=1.1925, target=1.2000)
+        df  = _bar(high=1.2010, low=1.1980, close=1.1985)   # wicked through, reverted
+        ok, _ = gap.should_exit(pos, df, 1)
+        assert not ok
 
     def test_hard_stop_buy(self):
         """Long position: low <= stop_price → hard_stop exit."""
@@ -529,7 +547,7 @@ class TestShouldExitSession:
         entry_dt = (datetime.now() - timedelta(hours=2)).isoformat()
         pos = _pos("Buy", entry=1.1970, stop=1.1900, target=1.2000,
                    gap_type="london", entry_datetime=entry_dt)
-        df  = _bar(high=1.2002, low=1.1975)
+        df  = _bar(high=1.2010, low=1.1975, close=1.2005)
         ok, reason = gap.should_exit(pos, df, 0)
         assert ok
         assert "gap_filled" in reason
