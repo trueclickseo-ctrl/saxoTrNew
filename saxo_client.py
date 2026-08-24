@@ -234,6 +234,42 @@ def get_price_decimals(uic: int, asset_type: str) -> int | None:
         return None
 
 
+_tick_size_cache: dict = {}
+
+
+def get_tick_size(uic: int, asset_type: str) -> float | None:
+    """Live TickSize lookup for a specific uic/asset_type, via the same
+    /ref/v1/instruments/details endpoint as get_price_decimals(). Needed
+    because decimal PLACES and tick SIZE are not the same thing for
+    exchange-listed futures: ZC (corn) reports Format.Decimals=2 but its
+    real TickSize is 0.25, so rounding a stop price to 2 decimal places
+    (e.g. 494.48) does NOT land on a valid tick and Saxo rejects it with
+    PriceNotInTickSizeIncrements. Confirmed live 2026-08-24 on ZC's first
+    real trade (the market this instrument became tradeable for the same
+    day the capital cap was raised -- see futures_capital_cap_raised).
+    Cached per (uic, asset_type) for the life of the process. Returns
+    None (caller should fall back to decimal-place rounding) if the
+    lookup fails or the instrument has no TickSize (most FX/CFD types
+    round cleanly by decimal places alone and don't need this)."""
+    key = (uic, asset_type)
+    if key in _tick_size_cache:
+        return _tick_size_cache[key]
+    try:
+        resp = _request_with_retry("GET", f"{SIM_BASE_URL}/ref/v1/instruments/details",
+                                   headers=_headers(),
+                                   params={"Uics": str(uic), "AssetType": asset_type})
+        resp.raise_for_status()
+        data = resp.json().get("Data", [])
+        if not data:
+            return None
+        tick = data[0].get("TickSize")
+        tick = float(tick) if tick is not None else None
+        _tick_size_cache[key] = tick
+        return tick
+    except Exception:
+        return None
+
+
 def place_market_order(uic: int, asset_type: str, buy_sell: str, amount: int) -> dict:
     """
     Places a MARKET order on the SIM account. buy_sell must be 'Buy' or 'Sell'.

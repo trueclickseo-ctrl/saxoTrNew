@@ -2020,6 +2020,106 @@ _run("futures entries store stop_order_id at open time so trailing can amend it 
 
 
 # ═══════════════════════════════════════════════════════════════════════
+section("15. ZC (corn) protective stop: OrderTypeNotSupported fallback + real tick size (2026-08-24)")
+# ═══════════════════════════════════════════════════════════════════════
+# ZC's first real trade (the market this instrument became tradeable for
+# the same day risk_equity_eur was raised) exposed two compounding bugs:
+# (1) ZC's own SupportedOrderTypes has no "Stop"/"StopLimit" at all -- only
+# StopIfTraded/Trigger* -- despite sharing AssetType=ContractFutures with
+# GC/ES, which DO accept the generic types; the entry filled but its stop
+# was rejected with OrderTypeNotSupported, leaving the position naked.
+# (2) ZC reports Format.Decimals=2 but a real TickSize of 0.25, so even a
+# StopIfTraded retry at the "properly rounded" 2dp price still wasn't a
+# valid tick. Both fixed in saxo_order.py; housekeeping.py's stop
+# recognition also missed StopIfTraded, producing a false "naked" alert on
+# an already (manually) protected position -- fixed there too.
+
+def test_stop_order_retries_as_stopiftraded_on_order_type_rejection():
+    import saxo_order
+    import requests
+
+    calls = []
+
+    class _FakeResp:
+        def json(self):
+            return {"ErrorInfo": {"ErrorCode": "OrderTypeNotSupported", "Message": "nope"}}
+
+    def fake_post(path, body):
+        calls.append(dict(body))
+        if body["OrderType"] != "StopIfTraded":
+            exc = requests.exceptions.HTTPError("400 rejected")
+            exc.response = _FakeResp()
+            raise exc
+        return {"OrderId": "STOP_OK"}
+
+    stop_body = {
+        "AccountKey": "AKEY", "Uic": 47897817, "AssetType": "ContractFutures",
+        "Amount": 1, "BuySell": "Sell", "OrderType": "StopLimit",
+        "OrderPrice": 494.5, "StopLimitPrice": 489.5,
+        "OrderDuration": {"DurationType": "DayOrder"}, "ManualOrder": False,
+    }
+    resp = saxo_order._post_stop_order(fake_post, stop_body)
+    assert resp["OrderId"] == "STOP_OK"
+    assert len(calls) == 2, "must retry exactly once, not loop or give up after the first rejection"
+    assert calls[0]["OrderType"] == "StopLimit", "first attempt uses the normal per-asset-type order type"
+    assert calls[1]["OrderType"] == "StopIfTraded", "retry must use StopIfTraded"
+    assert "StopLimitPrice" not in calls[1], "StopIfTraded is a stop-market type -- no StopLimitPrice field"
+
+
+def test_stop_order_does_not_retry_on_unrelated_rejection():
+    """A rejection for any OTHER reason (bad price, margin, etc.) must NOT
+    trigger the StopIfTraded retry -- only OrderTypeNotSupported should."""
+    import saxo_order
+    import requests
+
+    calls = []
+
+    class _FakeResp:
+        def json(self):
+            return {"ErrorInfo": {"ErrorCode": "PriceNotInTickSizeIncrements", "Message": "nope"}}
+
+    def fake_post(path, body):
+        calls.append(dict(body))
+        exc = requests.exceptions.HTTPError("400 rejected")
+        exc.response = _FakeResp()
+        raise exc
+
+    stop_body = {"OrderType": "Stop", "OrderPrice": 1.2345}
+    try:
+        saxo_order._post_stop_order(fake_post, stop_body)
+        assert False, "must propagate a non-OrderTypeNotSupported rejection, not swallow it"
+    except requests.exceptions.HTTPError:
+        pass
+    assert len(calls) == 1, "must not retry for an unrelated rejection reason"
+
+
+def test_round_price_uses_tick_size_when_given_not_decimal_places():
+    import saxo_order
+    # ZC: Format.Decimals=2 suggests 494.48, but real TickSize=0.25 means
+    # only exact multiples of 0.25 are valid -- 494.48 is NOT one.
+    rounded = saxo_order._round_price(494.4833, "ContractFutures", tick_size=0.25)
+    assert rounded == 494.5, f"must round to the nearest 0.25 tick, got {rounded}"
+    assert round(rounded / 0.25, 6) == round(rounded / 0.25), "result must be an exact multiple of the tick size"
+
+
+def test_round_price_falls_back_to_decimals_when_no_tick_size_given():
+    import saxo_order
+    # Existing behavior for instruments with no tick_size override must be unchanged.
+    rounded = saxo_order._round_price(1.234567, "FxSpot", price_decimals=5)
+    assert rounded == 1.23457
+
+
+_run("a stop order rejected with OrderTypeNotSupported retries once as StopIfTraded (fixes ZC going naked at entry)",
+     test_stop_order_retries_as_stopiftraded_on_order_type_rejection)
+_run("a stop rejection for any other reason (price/margin/etc) is NOT retried, just propagated",
+     test_stop_order_does_not_retry_on_unrelated_rejection)
+_run("_round_price uses the instrument's real tick_size when given, not just decimal places (fixes ZC's 0.25 tick)",
+     test_round_price_uses_tick_size_when_given_not_decimal_places)
+_run("_round_price still falls back to decimal-place rounding when no tick_size is given",
+     test_round_price_falls_back_to_decimals_when_no_tick_size_given)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════
 

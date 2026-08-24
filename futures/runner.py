@@ -783,12 +783,13 @@ def _run_strategy_exits(strat_name: str, strat_mod, positions: dict,
                     if old_oid:
                         saxo_client.cancel_order(str(old_oid))
                     dp = saxo_client.get_price_decimals(pos["uic"], pos.get("asset_type", "CfdOnIndex"))
+                    ticksz = saxo_client.get_tick_size(pos["uic"], pos.get("asset_type", "CfdOnIndex"))
                     new_oid = saxo_order.place_protective_stop(
                         post_fn=_post, account_key=akey, uic=pos["uic"],
                         asset_type=pos.get("asset_type", "CfdOnIndex"),
                         amount=pos.get("quantity", 1), direction=direction_now,
                         stop_price=new_stop, label=f"{key} trailing stop",
-                        price_decimals=dp,
+                        price_decimals=dp, tick_size=ticksz,
                     )
                     if new_oid is None:
                         logger.warning(f"  [{strat_name}] {sym}: trailing stop replace FAILED — "
@@ -926,6 +927,7 @@ def _run_strategy_entries(strat_name: str, strat_mod, positions: dict,
                 stop_price  = sig["stop_price"],
                 label       = f"{strat_name}:{sym}",
                 take_profit_price = sig.get("take_profit_price"),  # None unless strategy sets it
+                tick_size   = saxo_client.get_tick_size(uic, asset_type),
             )
         except requests.exceptions.HTTPError as _err:
             _sc = _err.response.status_code if _err.response is not None else 0

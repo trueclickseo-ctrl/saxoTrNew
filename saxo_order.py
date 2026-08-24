@@ -67,7 +67,8 @@ _LONG_ONLY: set[str] = {"Etf", "Stock"}
 
 
 def _round_price(price: float, asset_type: str, symbol: str = "",
-                 price_decimals: int | None = None) -> float:
+                 price_decimals: int | None = None,
+                 tick_size: float | None = None) -> float:
     """price_decimals, when given, is the INSTRUMENT'S OWN decimal precision
     (from Saxo's live Format.Decimals via forex.universe — see the note on
     place_with_stop). Overrides the generic FxSpot default/JPY-only guess
@@ -76,7 +77,17 @@ def _round_price(price: float, asset_type: str, symbol: str = "",
     rejection on AUDTRY (pip_size 0.001 = 4dp, not 5dp): the entry order
     still went through (Market orders don't carry a price), but the STOP
     order was rejected outright, leaving a real position open with NO
-    stop-loss attached. Any TRY/CNH-quoted pair (4dp, not 5dp) hits this."""
+    stop-loss attached. Any TRY/CNH-quoted pair (4dp, not 5dp) hits this.
+
+    tick_size, when given, takes priority over price_decimals entirely:
+    decimal PLACES and tick SIZE are not the same thing for exchange-listed
+    futures whose native tick is coarser than its own decimal precision —
+    ZC (corn) reports 2 decimals but a real TickSize of 0.25, so rounding
+    to 2dp (e.g. 494.48) still isn't a valid tick and gets rejected.
+    Confirmed live 2026-08-24 on ZC's first real trade. See
+    saxo_client.get_tick_size()."""
+    if tick_size:
+        return round(round(price / tick_size) * tick_size, 10)
     if price_decimals is not None:
         return round(price, price_decimals)
     dp = _PRICE_DP.get(asset_type, 5)
@@ -110,6 +121,54 @@ def _stop_type(buy_sell: str, asset_type: str) -> str:
     return "StopLimit" if asset_type in _STOP_LIMIT_TYPES else "Stop"
 
 
+def _order_type_not_supported(exc: Exception) -> bool:
+    """True if exc is a Saxo HTTPError whose body says the OrderType itself
+    isn't accepted for this instrument (as opposed to a price/tick/margin
+    rejection, which needs a different fix)."""
+    resp = getattr(exc, "response", None)
+    if resp is None:
+        return False
+    try:
+        return resp.json().get("ErrorInfo", {}).get("ErrorCode") == "OrderTypeNotSupported"
+    except Exception:
+        return False
+
+
+def _post_stop_order(post_fn, stop_body: dict):
+    """POST a stop-order body, retrying once with OrderType="StopIfTraded"
+    (Saxo's stop-market order type for exchange-listed instruments whose
+    native trading rules don't accept plain "Stop"/"StopLimit") if the
+    first attempt is rejected with OrderTypeNotSupported.
+
+    Found live 2026-08-24 on ZC (corn)'s first real trade -- the market
+    this instrument became tradeable for the same day the capital cap was
+    raised (see futures_capital_cap_raised memory). ZC's own
+    /ref/v1/instruments/details lists SupportedOrderTypes as
+    ['TriggerBreakout', 'TriggerStop', 'TriggerLimit', 'StopIfTraded',
+    'TrailingStopIfTraded', 'Limit', 'Market'] -- no 'Stop' or
+    'StopLimit' at all, despite ZC sharing AssetType=ContractFutures with
+    GC/ES/etc, which DO accept the generic types. This is genuinely
+    instrument-specific (CBOT-listed grain futures, likely ZW/ZS/ZB share
+    it), not something _stop_type()'s asset-type table can predict up
+    front -- caught via a retry-on-rejection instead of a static list, so
+    it self-heals for any other instrument with the same quirk. A
+    StopIfTraded carries no StopLimitPrice (it's a stop-market type, not
+    stop-limit), so that field is dropped on retry."""
+    try:
+        return post_fn("/trade/v2/orders", stop_body)
+    except Exception as exc:
+        if not _order_type_not_supported(exc):
+            raise
+        fallback_body = dict(stop_body)
+        fallback_body["OrderType"] = "StopIfTraded"
+        fallback_body.pop("StopLimitPrice", None)
+        logger.info(
+            f"  stop order type not supported for uic {stop_body.get('Uic')}, "
+            f"retrying as StopIfTraded"
+        )
+        return post_fn("/trade/v2/orders", fallback_body)
+
+
 def _stop_limit_price(order_price: float, close_side: str, asset_type: str,
                       symbol: str = "", price_decimals: int | None = None) -> float:
     """Compute StopLimitPrice: 1% beyond trigger to absorb slippage."""
@@ -136,6 +195,7 @@ def place_protective_stop(
     label: str = "",
     symbol: str = "",
     price_decimals: int | None = None,
+    tick_size: float | None = None,
 ) -> str | None:
     """Place a standalone protective stop for a position that already
     exists (no entry order). Reuses the exact same per-asset-type rules as
@@ -146,12 +206,16 @@ def place_protective_stop(
     direction is the POSITION's own side ("Buy"/"Sell"); the stop order's
     BuySell is computed as the closing side automatically.
 
+    tick_size: see _round_price()'s note -- pass the instrument's live
+    TickSize (saxo_client.get_tick_size()) for exchange-listed futures
+    whose native tick is coarser than its decimal precision suggests.
+
     Returns the new stop order id, or None if Saxo rejected it.
     """
     close = _close_side(direction, asset_type)
     stype = _stop_type(direction, asset_type)
     dur   = _stop_duration(asset_type)
-    rstop = _round_price(stop_price, asset_type, symbol, price_decimals)
+    rstop = _round_price(stop_price, asset_type, symbol, price_decimals, tick_size)
 
     body = {
         "AccountKey":    account_key,
@@ -168,7 +232,7 @@ def place_protective_stop(
         body["StopLimitPrice"] = _stop_limit_price(rstop, close, asset_type, symbol, price_decimals)
 
     try:
-        resp = post_fn("/trade/v2/orders", body)
+        resp = _post_stop_order(post_fn, body)
         oid = str(resp.get("OrderId", "")) or None
         if oid:
             logger.info(f"  [HOUSEKEEPING] Protective stop placed for {label}: "
@@ -191,6 +255,7 @@ def place_with_stop(
     take_profit_price: float | None = None,
     symbol: str = "",
     price_decimals: int | None = None,
+    tick_size: float | None = None,
 ) -> tuple:
     """
     Place a Market entry + native Saxo stop-loss (and optional take-profit).
@@ -236,13 +301,13 @@ def place_with_stop(
     close = _close_side(buy_sell, asset_type)
     stype = _stop_type(buy_sell, asset_type)
     dur   = _stop_duration(asset_type)
-    rstop = _round_price(stop_price, asset_type, symbol, price_decimals)
+    rstop = _round_price(stop_price, asset_type, symbol, price_decimals, tick_size)
 
     slp = (_stop_limit_price(rstop, close, asset_type, symbol, price_decimals)
            if stype == "StopLimit" else None)
 
     if take_profit_price is not None:
-        rtp = _round_price(take_profit_price, asset_type, symbol, price_decimals)
+        rtp = _round_price(take_profit_price, asset_type, symbol, price_decimals, tick_size)
         return _place_bracket(post_fn, account_key, uic, asset_type,
                               amount, buy_sell, close, stype, rstop, rtp, dur, label,
                               stop_limit_price=slp)
@@ -408,7 +473,7 @@ def _place_entry_then_stop(post_fn, account_key, uic, asset_type,
 
     stop_oid = None
     try:
-        stop_resp = post_fn("/trade/v2/orders", stop_body)
+        stop_resp = _post_stop_order(post_fn, stop_body)
         stop_oid  = stop_resp.get("OrderId", "?")
         slp_info  = f"  slp={stop_limit_price}" if stop_limit_price else ""
         logger.info(

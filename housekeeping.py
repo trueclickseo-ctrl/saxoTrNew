@@ -98,6 +98,19 @@ KIND_STOP_REPLACE_FAILED = "stop_replace_failed"
 KIND_LEDGER_DRIFT      = "ledger_drift"        # stocks-only: can't auto-remove a ledger row
 KIND_PENDING_ENTRY     = "pending_entry"       # matching entry order still Working, not filled yet -> left alone
 
+# Order types that count as a real protective stop. "StopIfTraded" and
+# "TrailingStopIfTraded" are Saxo's stop-market equivalents for instruments
+# whose SupportedOrderTypes don't include plain "Stop"/"StopLimit" -- found
+# live 2026-08-24 on ZC (corn), whose own instrument details list only
+# ['TriggerBreakout', 'TriggerStop', 'TriggerLimit', 'StopIfTraded',
+# 'TrailingStopIfTraded', 'Limit', 'Market'] despite sharing AssetType=
+# ContractFutures with GC/ES (which DO accept plain Stop/StopLimit). Before
+# this fix a StopIfTraded order protecting a position was invisible to
+# working_stops()/scan_naked_positions(), producing a false "naked" alert
+# for an already-protected position. See saxo_order._post_stop_order() for
+# the matching order-placement-side fix.
+_STOP_ORDER_TYPES = ("Stop", "StopLimit", "StopIfTraded", "TrailingStopIfTraded")
+
 
 # ── Live Saxo snapshot (fetched once, shared by every module) ─────────────
 
@@ -111,7 +124,7 @@ class LiveSnapshot:
 
     def working_stops(self, uic: int) -> list:
         return [o for o in self.orders_by_uic.get(uic, [])
-                if o.get("OpenOrderType") in ("Stop", "StopLimit") and o.get("Status") == "Working"]
+                if o.get("OpenOrderType") in _STOP_ORDER_TYPES and o.get("Status") == "Working"]
 
     def has_pending_entry(self, uic: int, direction: str) -> bool:
         """True if a Working Market/Limit order exists in the OPENING
@@ -711,7 +724,7 @@ def scan_naked_positions(snapshot: "LiveSnapshot | None" = None,
         close_side = "Sell" if direction == "Buy" else "Buy"
         stops = [o for o in live.orders_by_uic.get(uic, [])
                  if o.get("Status") == "Working" and o.get("BuySell") == close_side
-                 and o.get("OpenOrderType") in ("Stop", "StopLimit")]
+                 and o.get("OpenOrderType") in _STOP_ORDER_TYPES]
         limits = [o for o in live.orders_by_uic.get(uic, [])
                   if o.get("Status") == "Working" and o.get("BuySell") == close_side
                   and o.get("OpenOrderType") == "Limit"]

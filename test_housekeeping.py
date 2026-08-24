@@ -498,8 +498,31 @@ def test_multiple_tickets_same_uic_aggregated_into_one_finding_not_multiplied():
         hk.fetch_live_snapshot = orig_fetch
 
 
+def test_stopiftraded_order_counts_as_real_protection():
+    """2026-08-24: ZC (corn)'s own SupportedOrderTypes has no "Stop"/
+    "StopLimit" at all -- Saxo rejects those outright and only accepts
+    StopIfTraded for this instrument. A real StopIfTraded protective order
+    was being invisible to the naked scan, producing a false "naked" alert
+    on an already-protected position."""
+    orig_forex_load = hk.ADAPTERS["forex"].load
+    orig_fetch = hk.fetch_live_snapshot
+    try:
+        hk.ADAPTERS["forex"].load = lambda: []
+        hk.fetch_live_snapshot = lambda: make_snapshot(
+            positions=[make_position(204, 1, asset_type="ContractFutures")],
+            orders=[make_order("S", 204, "Sell", 1, 494.5, order_type="StopIfTraded")],
+        )
+        naked = hk.scan_naked_positions()
+        assert naked == [], "a StopIfTraded protective order must count as real coverage, not be invisible"
+    finally:
+        hk.ADAPTERS["forex"].load = orig_forex_load
+        hk.fetch_live_snapshot = orig_fetch
+
+
 _run("a live position with zero stop/TP is flagged naked and triggers exactly one email",
      test_naked_position_detected_with_no_stop_at_all)
+_run("a StopIfTraded order (ZC/corn's only supported stop type) counts as real protection, not invisible",
+     test_stopiftraded_order_counts_as_real_protection)
 _run("a live position with full stop coverage is never flagged",
      test_position_with_full_stop_coverage_is_not_naked)
 _run("a take-profit-only position (no stop-loss) is flagged tp_only, not treated as protected",

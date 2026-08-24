@@ -5,13 +5,25 @@
       "asset_type": "FxSpot",
       "direction": "Buy",
       "entry_price": 4415.7,
-      "stop_price": 4494.854345,
+      "stop_price": 4506.266845,
       "quantity": 5,
       "entry_date": "2026-08-17",
       "atr_at_entry": 96.123214,
       "score": 0.0759,
-      "stop_order_id": "5039787111"
+      "stop_order_id": "5039787899"
+    },
+    "donchian:ZC": {
+      "uic": 47897817,
+      "asset_type": "ContractFutures",
+      "direction": "Buy",
+      "entry_price": 510.25,
+      "stop_price": 494.5,
+      "quantity": 1,
+      "entry_date": "2026-08-24",
+      "atr_at_entry": 10.511118,
+      "strategy": "donchian",
+      "stop_order_id": "5039787915"
     }
   },
-  "last_run": "2026-08-24T16:17:21.229531"
+  "last_run": "2026-08-24T16:59:00.285743"
 }
