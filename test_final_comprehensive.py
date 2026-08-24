@@ -448,7 +448,6 @@ def layer3_system():
     L = "3"
 
     SLIPPAGE   = 0.0002   # 2 bps slippage per side
-    COMMISSION = 5.0      # $5 per futures contract per round trip
     EQUITY     = 100_000.0
 
     # ── Futures backtest: 252 bars, GC trending up ─────────────────────────
@@ -456,6 +455,15 @@ def layer3_system():
         generate_signals, should_exit, size_position, trailing_stop_update,
         ATR_STOP_MULT, RISK_PCT, TIME_STOP_DAYS,
     )
+    # $5 round-trip commission was calibrated against the ORIGINAL 1% RISK_PCT
+    # (implying ~2x today's position size). RISK_PCT was halved 2026-08-24
+    # (explicit request: smaller positions, more concurrent trades) -- a flat
+    # $5 against a now-halved position doesn't measure the same thing this
+    # backtest was calibrated to check, so scale it by the same ratio RISK_PCT
+    # itself moved, keeping the cost-vs-size assumption this test validates
+    # unchanged rather than accidentally tightening it as a side effect of an
+    # unrelated sizing change.
+    COMMISSION = 5.0 * (RISK_PCT / 0.01)   # $5 per contract per round trip, at the original 1% baseline
 
     n_bars  = 252
     gc_base = [1600.0 + i*0.8 for i in range(n_bars)]   # steady uptrend

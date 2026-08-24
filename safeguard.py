@@ -90,40 +90,11 @@ def _stop_pct(asset_type: str) -> float:
     return DEFAULT_STOP_PCT.get(asset_type, _DEFAULT_FALLBACK_PCT)
 
 
-_decimals_cache: dict = {}
-
-
-def _live_price_decimals(uic: int, asset_type: str) -> int | None:
-    """Live Format.Decimals lookup for a specific uic/asset_type, same
-    endpoint+fallback logic already proven in place_all_stops.py. Needed
-    because forex.runner.get_price_decimals() only knows the 117-pair FX
-    universe -- a naked position can be ANY uic across ANY module, e.g. a
-    futures-module symbol like CADMXN whose real Saxo AssetType is FxSpot
-    but isn't in that pair list. Found 2026-08-24: a generic 5dp FxSpot
-    guess for such a symbol triggered a live PriceNotInTickSizeIncrements
-    rejection (CADMXN actually needs 4dp) -- the exact bug class already
-    documented for forex's own pairs, just reachable through a different
-    door (an untracked instrument, not a mis-detected JPY/TRY suffix)."""
-    key = (uic, asset_type)
-    if key in _decimals_cache:
-        return _decimals_cache[key]
-    try:
-        import requests
-        r = requests.get(f"{saxo_client.SIM_BASE_URL}/ref/v1/instruments/details",
-                         headers=saxo_client._headers(),
-                         params={"Uics": str(uic), "AssetType": asset_type}, timeout=15)
-        r.raise_for_status()
-        data = r.json().get("Data", [])
-        if not data:
-            return None
-        fmt = data[0].get("Format") or {}
-        dp = fmt.get("OrderDecimals") or fmt.get("Decimals")
-        dp = int(dp) if dp is not None else None
-        _decimals_cache[key] = dp
-        return dp
-    except Exception as exc:
-        logger.warning(f"[safeguard] live decimals lookup failed for uic {uic}: {exc}")
-        return None
+# Live Format.Decimals lookup moved to saxo_client.get_price_decimals() so
+# futures/runner.py's trailing-stop fix (2026-08-24, same day) can share it
+# instead of duplicating this a third time. Kept as a thin local alias so
+# every existing call site below (and the test suite) doesn't need to change.
+_live_price_decimals = saxo_client.get_price_decimals
 
 
 def _fix_naked_position(n: "housekeeping.NakedPosition") -> FixOutcome:

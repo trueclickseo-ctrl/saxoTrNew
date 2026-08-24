@@ -469,9 +469,14 @@ def run_futures_functional():
     chk("should_exit no exit when price rising and stop not hit", not no_exit2)
 
     # ── size_position ─────────────────────────────────────────────────────
-    # equity=100_000, ATR=50, contract_size=1 → 100k*0.01 / (1.5*50*1) = 13
+    # equity=100_000, ATR=50, contract_size=1 → 100k*RISK_PCT / (1.5*50*1).
+    # RISK_PCT lowered 1%->0.5% 2026-08-24 (explicit request: smaller
+    # positions, more concurrent trades) -- expected count derived from the
+    # live constant, not hardcoded, so this doesn't go stale again.
+    from futures.strategy import RISK_PCT as _FUT_RISK_PCT
+    expected_sz = int(100_000 * _FUT_RISK_PCT / (1.5 * 50.0 * 1.0))
     sz = size_position(100_000, 50.0, 1.0)
-    chk("size_position: 100k equity, ATR=50 → 13 contracts", sz == 13, f"got {sz}")
+    chk(f"size_position: 100k equity, ATR=50 -> {expected_sz} contracts", sz == expected_sz, f"got {sz}")
     chk("size_position: ATR=0 → returns 1 (min)", size_position(100_000, 0.0, 1.0) == 1)
     chk("size_position: equity=0 → returns 1 (min)", size_position(0, 50.0, 1.0) == 1)
     chk("size_position: result >= 1", sz >= 1)

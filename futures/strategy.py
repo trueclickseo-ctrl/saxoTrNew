@@ -47,7 +47,18 @@ BREAKOUT_PERIOD = 30    # entry: close above N-day highest close
 EXIT_PERIOD     = 5     # exit:  close below N-day lowest close (tight trailing)
 ATR_PERIOD      = 14    # True Range ATR lookback
 ATR_STOP_MULT   = 1.5   # stop = entry âˆ’ ATR_STOP_MULT Ã— ATR
-RISK_PCT        = 0.01  # 1% of account equity risked per trade
+RISK_PCT        = 0.005  # 0.5% of account equity risked per trade — smaller on
+                          # purpose (2026-08-24, explicit request: small size,
+                          # more concurrent trades). Halving from 1% doubles
+                          # how many positions fit under PORTFOLIO_HEAT_LIMIT
+                          # (6 -> 12 at full risk each) while staying above the
+                          # ~0.35% floor needed for a single contract of the
+                          # priciest instrument (gold) to still clear the
+                          # MAX_RISK_OVERSHOOT skip check -- a more aggressive
+                          # cut (tried 0.15% first) skips MORE signals instead
+                          # of taking more, the opposite of the goal, since a
+                          # 1-contract minimum can't shrink below its own ATR-
+                          # based floor.
 MAX_POSITIONS   = 5     # one position per market (5 markets)
 TIME_STOP_DAYS  = 30    # calendar days before time-stop fires
 

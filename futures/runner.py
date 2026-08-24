@@ -44,6 +44,7 @@ sys.path.insert(0, _HERE)
 import requests
 import pandas as pd
 import saxo_auth
+import saxo_client
 import saxo_order
 
 from futures.universe import load_universe, MARKETS
@@ -764,6 +765,36 @@ def _run_strategy_exits(strat_name: str, strat_mod, positions: dict,
                 new_stop = strat_mod.trailing_stop_update(
                     cur_stop, float(df["Close"].iloc[-1]), atr_now, direction_now)
             if round(new_stop, 6) != round(cur_stop, 6) and new_stop > 0:
+                # Cancel the real broker-side stop and place a new one at
+                # the trailed level, not just update this local belief.
+                # Found live 2026-08-24: this used to only touch pos[...]
+                # -- the real Saxo stop order sat at whatever level it was
+                # set at entry FOREVER, silently diverging from what local
+                # state (and this position's own should_exit() check)
+                # believed. Confirmed on GC: local state trailed the stop
+                # to 4474.13 as price ran up, but the real order was still
+                # sitting at the original 4283.4 six days later. Not a
+                # cosmetic gap -- if price had reversed sharply, the
+                # position would have kept losing all the way to the real
+                # (stale, wider) stop, not the tighter level the system
+                # believed it had.
+                if not dry_run:
+                    old_oid = pos.get("stop_order_id")
+                    if old_oid:
+                        saxo_client.cancel_order(str(old_oid))
+                    dp = saxo_client.get_price_decimals(pos["uic"], pos.get("asset_type", "CfdOnIndex"))
+                    new_oid = saxo_order.place_protective_stop(
+                        post_fn=_post, account_key=akey, uic=pos["uic"],
+                        asset_type=pos.get("asset_type", "CfdOnIndex"),
+                        amount=pos.get("quantity", 1), direction=direction_now,
+                        stop_price=new_stop, label=f"{key} trailing stop",
+                        price_decimals=dp,
+                    )
+                    if new_oid is None:
+                        logger.warning(f"  [{strat_name}] {sym}: trailing stop replace FAILED — "
+                                       f"position may be under-protected, check manually")
+                    else:
+                        pos["stop_order_id"] = new_oid
                 pos["stop_price"] = round(new_stop, 6)
 
         exit_flag, reason = strat_mod.should_exit(pos, df, cal_days)
@@ -934,6 +965,10 @@ def _run_strategy_entries(strat_name: str, strat_mod, positions: dict,
             "entry_date":   today_str,
             "atr_at_entry": sig["atr"],
             "strategy":     strat_name,
+            # Tracked from 2026-08-24 so trailing-stop updates (see
+            # _run_strategy_exits) can actually cancel+replace the real
+            # broker-side stop instead of only updating this belief.
+            "stop_order_id": stop_oid,
         }
         _log_order({"strategy": strat_name, "side": direction, "symbol": sym,
                     "uic": uic, "quantity": qty, "entry_price": sig["close"],

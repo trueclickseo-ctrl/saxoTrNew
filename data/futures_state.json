@@ -5,11 +5,12 @@
       "asset_type": "FxSpot",
       "direction": "Buy",
       "entry_price": 4415.7,
-      "stop_price": 4474.125238,
-      "quantity": 69,
+      "stop_price": 4474.13,
+      "quantity": 5,
       "entry_date": "2026-08-17",
       "atr_at_entry": 96.123214,
-      "score": 0.0759
+      "score": 0.0759,
+      "stop_order_id": "5039785450"
     }
   },
   "last_run": "2026-08-24T06:15:15.170066"

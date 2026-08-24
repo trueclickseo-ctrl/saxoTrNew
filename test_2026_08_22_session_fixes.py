@@ -1880,6 +1880,108 @@ _run("gap's hard_stop exit is also re-validated against live price before closin
 
 
 # ═══════════════════════════════════════════════════════════════════════
+section("2026-08-24: futures trailing stop now amends the REAL broker order")
+# ═══════════════════════════════════════════════════════════════════════
+# trailing_stop_update()'s new value only ever got written to pos["stop_price"]
+# (local state) -- the real Saxo stop order sat at whatever level it was set
+# at entry FOREVER, silently diverging. Confirmed live on GC: local state
+# trailed to 4474.13 as price ran up, but the real order was still at the
+# original 4283.4 six days later -- if price had reversed sharply, the
+# position would have kept losing all the way to the real (stale, wider)
+# stop, not the tighter level the system believed it had. Fixed: cancel the
+# old broker order and place a new one at the trailed level, tracked via a
+# new stop_order_id field on the position (previously not stored at all).
+
+
+def test_futures_trailing_stop_amends_the_real_order_not_just_local_state():
+    import futures.runner as fr
+    import futures.strategy as strat
+    import pandas as pd
+    # 20-day steady uptrend: ATR is computable (needs >=14 rows) and
+    # should_exit's 5-day-low check never fires (close is always the
+    # period high), isolating the trailing-stop behavior from the exit path.
+    n = 20
+    closes = [4400 + i * 12 for i in range(n)]
+    df = pd.DataFrame({"Open": closes, "High": [c + 3 for c in closes],
+                       "Low": [c - 3 for c in closes], "Close": closes})
+    pos = {"uic": 8176, "asset_type": "FxSpot", "direction": "Buy",
+           "entry_price": 4415.7, "stop_price": 4283.4, "quantity": 5,
+           "entry_date": "2026-08-17", "atr_at_entry": 96.12, "strategy": "donchian",
+           "stop_order_id": "OLD_OID_123"}
+    positions = {"donchian:GC": pos}
+    market_data = {"GC": df}
+    universe = {"GC": {"uic": 8176, "asset_type": "FxSpot"}}
+
+    calls = []
+    orig_cancel = fr.saxo_client.cancel_order
+    orig_dp = fr.saxo_client.get_price_decimals
+    orig_place = fr.saxo_order.place_protective_stop
+    try:
+        fr.saxo_client.cancel_order = lambda oid: calls.append(("cancel", oid)) or True
+        fr.saxo_client.get_price_decimals = lambda uic, at: 2
+        fr.saxo_order.place_protective_stop = (
+            lambda **kw: calls.append(("place", kw["amount"], round(kw["stop_price"], 2)))
+            or "NEW_OID_456")
+
+        exits = fr._run_strategy_exits("donchian", strat, positions, market_data, universe,
+                                       27800, "AKEY", "2026-08-24", dry_run=False)
+        assert exits == 0, "the steady uptrend fixture must not also trigger an exit"
+        assert calls[0] == ("cancel", "OLD_OID_123"), "must cancel the OLD real order first"
+        assert calls[1][0] == "place" and calls[1][1] == 5, "must place a new order for the SAME quantity"
+        assert pos["stop_order_id"] == "NEW_OID_456", "must track the new order id going forward"
+    finally:
+        fr.saxo_client.cancel_order = orig_cancel
+        fr.saxo_client.get_price_decimals = orig_dp
+        fr.saxo_order.place_protective_stop = orig_place
+
+
+def test_futures_trailing_stop_skipped_entirely_in_dry_run():
+    import futures.runner as fr
+    import futures.strategy as strat
+    import pandas as pd
+    n = 20
+    closes = [4400 + i * 12 for i in range(n)]
+    df = pd.DataFrame({"Open": closes, "High": [c + 3 for c in closes],
+                       "Low": [c - 3 for c in closes], "Close": closes})
+    pos = {"uic": 8176, "asset_type": "FxSpot", "direction": "Buy",
+           "entry_price": 4415.7, "stop_price": 4283.4, "quantity": 5,
+           "entry_date": "2026-08-17", "atr_at_entry": 96.12, "strategy": "donchian",
+           "stop_order_id": "OLD_OID_123"}
+    positions = {"donchian:GC": pos}
+    market_data = {"GC": df}
+    universe = {"GC": {"uic": 8176, "asset_type": "FxSpot"}}
+
+    calls = []
+    orig_cancel = fr.saxo_client.cancel_order
+    try:
+        fr.saxo_client.cancel_order = lambda oid: calls.append(("cancel", oid)) or True
+        fr._run_strategy_exits("donchian", strat, positions, market_data, universe,
+                               27800, "AKEY", "2026-08-24", dry_run=True)
+        assert calls == [], "a dry run must never cancel a real order"
+        assert pos["stop_order_id"] == "OLD_OID_123", "dry run must not touch the tracked order id"
+    finally:
+        fr.saxo_client.cancel_order = orig_cancel
+
+
+def test_futures_entry_stores_stop_order_id():
+    import inspect
+    import futures.runner as fr
+    src = inspect.getsource(fr)
+    assert '"stop_order_id": stop_oid' in src, (
+        "futures entries must store the real stop order id so a later trailing "
+        "update can cancel+replace it, not just update local belief"
+    )
+
+
+_run("futures trailing stop cancels the real broker order and places a new one, tracking the new id",
+     test_futures_trailing_stop_amends_the_real_order_not_just_local_state)
+_run("futures trailing stop never touches a real order during a dry run",
+     test_futures_trailing_stop_skipped_entirely_in_dry_run)
+_run("futures entries store stop_order_id at open time so trailing can amend it later",
+     test_futures_entry_stores_stop_order_id)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════
 

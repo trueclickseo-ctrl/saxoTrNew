@@ -199,6 +199,41 @@ def cancel_order(order_id: str) -> bool:
         return False
 
 
+_decimals_cache: dict = {}
+
+
+def get_price_decimals(uic: int, asset_type: str) -> int | None:
+    """Live Format.Decimals lookup for a specific uic/asset_type, via
+    /ref/v1/instruments/details. Needed whenever a symbol's own precision
+    can't be assumed from its AssetType alone -- e.g. a futures-module
+    symbol like GC/CADMXN whose real Saxo AssetType is FxSpot (Saxo's
+    generic FxSpot default is 5dp) but whose actual required precision is
+    2dp (GC/XAUUSD) or 4dp (CADMXN), not 5. Confirmed live 2026-08-24: a
+    generic 5dp guess for both triggered a real PriceNotInTickSizeIncrements
+    rejection. Cached per (uic, asset_type) for the life of the process --
+    an instrument's own decimal precision doesn't change at runtime.
+    Returns None (caller should fall back to its own default) if the
+    lookup itself fails."""
+    key = (uic, asset_type)
+    if key in _decimals_cache:
+        return _decimals_cache[key]
+    try:
+        resp = _request_with_retry("GET", f"{SIM_BASE_URL}/ref/v1/instruments/details",
+                                   headers=_headers(),
+                                   params={"Uics": str(uic), "AssetType": asset_type})
+        resp.raise_for_status()
+        data = resp.json().get("Data", [])
+        if not data:
+            return None
+        fmt = data[0].get("Format") or {}
+        dp = fmt.get("OrderDecimals") or fmt.get("Decimals")
+        dp = int(dp) if dp is not None else None
+        _decimals_cache[key] = dp
+        return dp
+    except Exception:
+        return None
+
+
 def place_market_order(uic: int, asset_type: str, buy_sell: str, amount: int) -> dict:
     """
     Places a MARKET order on the SIM account. buy_sell must be 'Buy' or 'Sell'.
