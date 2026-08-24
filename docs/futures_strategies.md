@@ -5,7 +5,24 @@
 **7 strategies × 5 slots = 35 max open positions**  
 **Risk per trade**: 1% of `risk_equity_eur` (config), ATR-based sizing  
 **Scheduled**: daily at 06:15 PKT (01:15 UTC) via `run_futures_daily.bat`  
-**Last updated**: 2026-08-19
+**Price source**: Saxo's own live quotes and `/chart/v3/charts` for
+historical bars — already 100% Saxo-native, no Yahoo dependency found
+anywhere in this module (audited 2026-08-22).  
+**Concurrency**: `--live` runs and `intraday_monitor.py`'s futures checks
+serialize through the shared `proc_lock.py` (`FUTURES_LOCK`) — added
+2026-08-24 after a forex-side race condition was found causing duplicate
+closes; futures shares the same class of risk (its own state file
+independently touched by `intraday_monitor.py`) even though it hadn't
+manifested yet here.  
+**Margin gate**: every new entry checks Saxo's live margin utilization
+first (`_margin_allows_entry()`) and refuses to place an order above 50%
+utilization — futures shares ONE account-level margin pool with forex/
+ETF/stocks, so this reserves headroom for every other module, not just
+futures' own book. Added 2026-08-24 after ~24M EUR of legacy forex
+positions pushed real utilization to 98.56%, which would have blocked
+futures (and everything else) from trading regardless of futures' own
+risk numbers looking fine.  
+**Last updated**: 2026-08-19 (concurrency/margin notes added 2026-08-24)
 
 ---
 

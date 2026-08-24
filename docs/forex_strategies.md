@@ -27,7 +27,38 @@ use **Saxo's own live quotes only** (2026-08-22, explicit user direction) —
 `forex/runner.py`'s and `forex_dashboard.py`'s `_eur_per_unit()` triangulate
 EUR conversion rates via a Saxo-traded EUR{ccy}/USD{ccy} pair, with no
 Yahoo fallback. Yahoo (`fx.py`, `yfinance`) is used only for historical
-data — `backtest_forex_universe.py` and similar.
+data — `backtest_forex_universe.py` and similar.  
+**Concurrency**: every `--live` invocation of `forex/runner.py` (and
+`futures/runner.py`, and `intraday_monitor.py`'s forex/futures checks)
+serializes through a shared file lock (`proc_lock.py`) — two overlapping
+scheduled triggers now wait for each other instead of racing on
+`forex_state.json`. Added 2026-08-24 after a real race caused duplicate
+closes and orphaned phantom positions (see Audit below).  
+**Margin gate**: every new entry (all strategies, including LBO) checks
+Saxo's own live margin utilization first and refuses to place an order
+above 50% utilization, reserving headroom for every other strategy/module
+sharing the account. Added 2026-08-24 — see Audit below.
+
+---
+
+## Audit — 2026-08-24
+
+Fourth pass, triggered by the user reviewing a batch of "Gap Fill" trade
+emails and asking for a deep audit. Found a chain of related, serious
+issues — not cosmetic.
+
+| # | Finding | Severity | Status |
+|---|---------|----------|--------|
+| 1 | `strategy_gap.py`'s `should_exit()` checked the day's cumulative High/Low against `gap_target` instead of the current price — once price wicked through the target for an instant (common at the thin Monday reopen), every later check that day still saw it as "filled" even after price fully reverted, closing at a stale, often-losing price while logging `gap_filled` (a win) | **Critical** | Fixed — checks current close instead; 18/18 same-morning trades had been mislabeled this way |
+| 2 | `ATOS Forex Gap Fill` and `ATOS Forex Gap Monday Early` fire at the exact same instant (Mon 03:00 PKT) with no coordination — two processes could both load stale state and both act on the same position | **Critical** | Fixed — `proc_lock.py`, shared file lock around every live run |
+| 3 | `intraday_monitor.py` (a separate process) independently reads/writes the same `forex_state.json`/`futures_state.json` as the runners — invisible to fix #2's forex-runner-only lock. Confirmed live: this caused the SAME real gap-fill position to be "closed" 3 times by overlapping runs; the 2nd/3rd closes had nothing left to close and opened brand-new untracked phantom positions instead (CHFMXN x2, GBPMXN x2, zero stop/TP) | **Critical** | Fixed — `proc_lock.py` extended into `intraday_monitor.py` and `futures/runner.py`; the 4 live phantom positions closed manually |
+| 4 | 10 legacy positions from 2026-08-17–21 (before the capital-sizing cap existed) were still open — ~24M EUR notional against an intended ~27,800 EUR trading capital — pushing real Saxo margin utilization to 98.56%, which would have blocked LBO and every other module from trading, independent of any of the above | **Critical** | Closed live (froze margin at 32.7%); new `_margin_allows_entry()` gate in forex+futures prevents recurrence for any future strategy/module |
+
+**Root-cause pattern**: none of #2–#4 were visible from forex's own
+self-computed telemetry (heat, currency exposure) — they only show up by
+checking Saxo's own live account state directly. Same lesson as
+[[saxo_api_verification]], now demonstrated at the account-margin level
+too, not just individual price/UIC lookups.
 
 ---
 
