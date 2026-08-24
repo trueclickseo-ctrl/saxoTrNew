@@ -416,7 +416,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     # ("which pairs work") from this one ("which strategies work"); see
     # pnl_dashboard.py or the Strategy Overlap Tracker artifact for that.
     L.append("")
-    L.append(f"  {BD}STRATEGY BREAKDOWN{W}  {DM}(sorted by realized P&L){W}")
+    L.append(f"  {BD}STRATEGY BREAKDOWN{W}  {DM}(sorted by realized P&L — Closed/W-L/WR/PF/Realized are ALL-TIME, Today is today only){W}")
     L.append("")
 
     strat_labels = {
@@ -463,7 +463,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
 
     SB_HDR = (
         f"  {DM}{'Strategy':<16}  {'Active':>6}  {'Closed':>7}  {'W/L':>7}  "
-        f"{'WR%':>6}  {'PF':>6}  {'Realized P&L':>15}  {'Today':>11}  {'Unrealized':>13}{W}"
+        f"{'WR%':>6}  {'PF':>6}  {'All-Time P&L':>15}  {'Today':>11}  {'Unrealized':>13}{W}"
     )
     L.append(SB_HDR)
     L.append(HR)
