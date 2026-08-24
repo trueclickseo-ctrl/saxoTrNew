@@ -114,7 +114,7 @@ plus 4** — trade ES and GC now, and revisit NQ/ZB when either capital or
 | 10 | Equity in EUR, ATR/`contract_size` in instrument currency, no FX conversion | Medium | Open |
 | 11 | Source files contain mojibake (`â€"`) in comments/docstrings | Low | Open |
 | 12 | **Expanding 5 → 13 markets turns every strategy negative** | **Critical** | Open — needs your call |
-| 13 | At correct sizing only 2 of 13 markets are tradeable — capital is too small | **High** | Open — needs your call |
+| 13 | At correct sizing only 2 of 13 markets are tradeable — capital is too small | **High** | **Resolved 2026-08-24** — `risk_equity_eur` raised 27,800 → 55,200 EUR (Option 2's effect, via capital instead of `RISK_PCT`); ES/GC/DAX/HK50/ZC/YM/NQ now tradeable, ZS/NG/ZB/ZW/CL still excluded (need 66k–453k EUR each) |
 | 14 | `SI` chart fetch returns 400; the market is configured but can never signal | Low | Open |
 
 > **Findings 4 and 6 are now closed.** All 7 strategies are backtested
