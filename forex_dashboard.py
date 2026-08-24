@@ -12,7 +12,6 @@ from datetime import date
 
 BASE_DIR            = os.path.dirname(os.path.abspath(__file__))
 FOREX_STATE_PATH    = os.path.join(BASE_DIR, "data", "forex_state.json")
-FOREX_LOG_PATH      = os.path.join(BASE_DIR, "data", "forex_scheduler.log")
 
 sys.path.insert(0, BASE_DIR)
 import price_service
@@ -181,17 +180,6 @@ def _read_positions() -> list:
                 "order_id":   pos.get("order_id", "—"),
             })
         return out
-    except Exception:
-        return []
-
-
-def _last_log_lines(n: int = 8) -> list:
-    if not os.path.exists(FOREX_LOG_PATH):
-        return []
-    try:
-        with open(FOREX_LOG_PATH, encoding="utf-8", errors="replace") as f:
-            lines = [l.rstrip() for l in f.readlines() if l.strip()]
-        return lines[-n:]
     except Exception:
         return []
 
@@ -549,29 +537,6 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         f"{g_realized_cell}  {g_unrealized_cell}"
     )
     L.append("")
-    L.append(HR)
-
-    # ── Recent scheduler log ──────────────────────────────────────
-    log_lines = _last_log_lines(10)
-    L.append("")
-    L.append(f"  {BD}SCHEDULER LOG{W}  {DM}(last 10 lines from forex_scheduler.log){W}")
-    L.append("")
-    for line in log_lines:
-        # Colour-code log output
-        if "ERROR" in line or "error" in line:
-            L.append(f"  {RD}{line}{W}")
-        elif "BUY" in line or "placed" in line or "LONG" in line:
-            L.append(f"  {GR}{line}{W}")
-        elif "SELL" in line or "SHORT" in line:
-            L.append(f"  {RD}{line}{W}")
-        elif "exit" in line.lower() or "closed" in line.lower():
-            L.append(f"  {YL}{line}{W}")
-        else:
-            L.append(f"  {DM}{line}{W}")
-    if not log_lines:
-        L.append(f"  {DM}No log entries yet.{W}")
-    L.append("")
-    L.append(HR)
 
     # ── Footer ────────────────────────────────────────────────────
     L.append(f"  {DM}Per-pair/currency breakdown removed from this view by design (2026-08-24) — "
