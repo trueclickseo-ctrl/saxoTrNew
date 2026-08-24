@@ -34,13 +34,18 @@
       "previously sized off the raw SIM TotalValue (~957,000 EUR of demo credit),",
       "which made positions roughly 34x larger than the 300,000 SEK of intended",
       "capital and got MACD/Squeeze orders rejected outright by the broker.",
-      "27800 EUR is 300,000 SEK at ~10.8 SEK/EUR -- i.e. the whole stated account.",
-      "LOWER THIS if futures should share capital with the ATOS equity sleeves",
-      "rather than assume the full account."
+      "27800 EUR was 300,000 SEK at ~10.8 SEK/EUR -- i.e. the whole stated account.",
+      "2026-08-24: raised to 55200 (explicit request) so DAX/HK50/YM/NQ/ZC clear",
+      "MAX_RISK_OVERSHOOT (1.5x) at RISK_PCT=1% -- see docs/futures_strategies.md's",
+      "'only 2/13 markets tradeable' finding for the per-market numbers this solves.",
+      "This means futures alone is now sized as if backed by ~600,000 SEK, double",
+      "the account's stated 300,000 SEK -- forex still uses its own 27800 EUR (real",
+      "300,000 SEK) unchanged. LOWER THIS if futures should go back to sharing",
+      "capital with the ATOS equity sleeves instead of exceeding the full account."
     ],
     "futures": {
       "enabled": true,
-      "risk_equity_eur": 27800
+      "risk_equity_eur": 55200
     },
 
     "_forex_comment": [
