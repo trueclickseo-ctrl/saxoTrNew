@@ -1280,6 +1280,17 @@ if __name__ == "__main__":
         proc_lock.acquire(proc_lock.FUTURES_LOCK, "daily")
     try:
         run_daily(dry_run=not args.live, active_strategies=active)
+
+        if args.live:
+            # See forex/runner.py's matching call for why -- reconcile local
+            # state against live Saxo right after every real run, while this
+            # process still holds the lock.
+            try:
+                import housekeeping
+                housekeeping.reconcile_all(["futures"])
+                housekeeping.scan_naked_positions()
+            except Exception as exc:
+                logger.warning(f"  [HOUSEKEEPING] post-run reconciliation failed: {exc}")
     finally:
         if args.live:
             proc_lock.release(proc_lock.FUTURES_LOCK)

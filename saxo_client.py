@@ -160,6 +160,45 @@ def post(path: str, body: dict) -> dict:
     return resp.json()
 
 
+def get_orders(asset_type: str | None = None) -> dict:
+    """Returns all working orders on the SIM account (optionally filtered to
+    one AssetType). Used by housekeeping.py to reconcile stop/limit orders
+    against live positions across every module."""
+    params = {"AssetType": asset_type} if asset_type else None
+    resp = _request_with_retry("GET", f"{SIM_BASE_URL}/port/v1/orders/me",
+                               headers=_headers(), params=params)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_closed_positions() -> dict:
+    """Returns recently closed positions (Saxo's own limited retention
+    window) — used by housekeeping.py to explain why a locally-tracked
+    position no longer has any live backing."""
+    resp = _request_with_retry("GET", f"{SIM_BASE_URL}/port/v1/closedpositions/me",
+                               headers=_headers())
+    resp.raise_for_status()
+    return resp.json()
+
+
+def cancel_order(order_id: str) -> bool:
+    """Cancels a live order. Returns True on success, including if it's
+    already gone (a 404 means nothing left to double-protect against, not
+    a failure worth stopping for)."""
+    try:
+        resp = requests.delete(f"{SIM_BASE_URL}/trade/v2/orders/{order_id}",
+                               headers=_headers(),
+                               params={"AccountKey": get_account_key()}, timeout=15)
+        resp.raise_for_status()
+        return True
+    except requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            return True
+        return False
+    except Exception:
+        return False
+
+
 def place_market_order(uic: int, asset_type: str, buy_sell: str, amount: int) -> dict:
     """
     Places a MARKET order on the SIM account. buy_sell must be 'Buy' or 'Sell'.

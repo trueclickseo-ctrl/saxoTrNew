@@ -1061,6 +1061,18 @@ def run_cycle():
         f"{len(open_trades_now)} positions open  |  "
         f"Equity {total_equity:,.0f} SEK"
     )
+
+    # See housekeeping.py's module docstring for why this runs after every
+    # real cycle -- atos_live.db is a P&L LEDGER, not a simple position
+    # tracker, so its adapter only ever corrects an overstated `shares`
+    # count and never auto-closes a row (that needs a real exit price).
+    try:
+        import housekeeping
+        housekeeping.reconcile_all(["stocks"])
+        housekeeping.scan_naked_positions()
+    except Exception as e:
+        print(f"  [HOUSEKEEPING] post-run reconciliation failed: {e}")
+
     print("\nCycle complete.\n")
 
 

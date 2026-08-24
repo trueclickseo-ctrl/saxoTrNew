@@ -2299,6 +2299,21 @@ if __name__ == "__main__":
                 active = [s for s in active if s != "london_breakout"]
             run_daily(dry_run=not args.live, active_strategies=active,
                       session=args.session)
+
+        if args.live:
+            # Reconcile local state against live Saxo right after every real
+            # run, while this process still holds the lock -- catches drift
+            # from Saxo's own opposite-direction netting or a race-condition
+            # duplicate before the NEXT run's stops/exits act on stale
+            # numbers. See housekeeping.py's module docstring for why this
+            # exists (2026-08-24 audit found 24+ orphaned entries and 6
+            # duplicate stop orders that had accumulated silently).
+            try:
+                import housekeeping
+                housekeeping.reconcile_all(["forex"])
+                housekeeping.scan_naked_positions()
+            except Exception as exc:
+                logger.warning(f"  [HOUSEKEEPING] post-run reconciliation failed: {exc}")
     finally:
         if args.live:
             _release_lock()

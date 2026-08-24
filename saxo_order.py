@@ -125,6 +125,60 @@ def _stop_limit_price(order_price: float, close_side: str, asset_type: str,
         return round(order_price * 1.01, dp)
 
 
+def place_protective_stop(
+    post_fn,
+    account_key: str,
+    uic: int,
+    asset_type: str,
+    amount: int,
+    direction: str,
+    stop_price: float,
+    label: str = "",
+    symbol: str = "",
+    price_decimals: int | None = None,
+) -> str | None:
+    """Place a standalone protective stop for a position that already
+    exists (no entry order). Reuses the exact same per-asset-type rules as
+    place_with_stop() (Stop vs StopLimit, price dp, GTC vs DayOrder, close
+    side) so a housekeeping/reconciliation fix is held to the same
+    tick-size/order-type correctness as a normal entry.
+
+    direction is the POSITION's own side ("Buy"/"Sell"); the stop order's
+    BuySell is computed as the closing side automatically.
+
+    Returns the new stop order id, or None if Saxo rejected it.
+    """
+    close = _close_side(direction, asset_type)
+    stype = _stop_type(direction, asset_type)
+    dur   = _stop_duration(asset_type)
+    rstop = _round_price(stop_price, asset_type, symbol, price_decimals)
+
+    body = {
+        "AccountKey":    account_key,
+        "Uic":           uic,
+        "AssetType":     asset_type,
+        "Amount":        amount,
+        "BuySell":       close,
+        "OrderType":     stype,
+        "OrderPrice":    rstop,
+        "OrderDuration": dur,
+        "ManualOrder":   False,
+    }
+    if stype == "StopLimit":
+        body["StopLimitPrice"] = _stop_limit_price(rstop, close, asset_type, symbol, price_decimals)
+
+    try:
+        resp = post_fn("/trade/v2/orders", body)
+        oid = str(resp.get("OrderId", "")) or None
+        if oid:
+            logger.info(f"  [HOUSEKEEPING] Protective stop placed for {label}: "
+                        f"{close} {amount} @ {rstop} → {oid}")
+        return oid
+    except Exception as exc:
+        logger.warning(f"  [HOUSEKEEPING] Protective stop FAILED for {label}: {exc}")
+        return None
+
+
 def place_with_stop(
     post_fn,
     account_key: str,

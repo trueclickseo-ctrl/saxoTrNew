@@ -98,6 +98,18 @@ class ETFBot:
         self.executor.process_signals(signals)
         log.info("=== ETF run complete ===")
 
+        if not self.cfg.dry_run:
+            # See housekeeping.py's module docstring (project root) -- catches
+            # local state drift against live Saxo (e.g. a position netted
+            # away by another module trading the same underlying) right
+            # after every real run.
+            try:
+                import housekeeping
+                housekeeping.reconcile_all(["etf"])
+                housekeeping.scan_naked_positions()
+            except Exception:
+                log.exception("[HOUSEKEEPING] post-run reconciliation failed")
+
     def run_forever(self) -> None:
         interval_sec = self.cfg.strategy.rebalance_frequency_hours * 3600
         while True:
