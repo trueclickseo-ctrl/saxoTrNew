@@ -43,8 +43,8 @@ strategy for the window.
 
 ## Why win rate / profit factor might look worse than expected right now
 
-Two real bugs were found and fixed the same day this report was built,
-both specific to the `gap` strategy's session-based sub-strategies
+Three real bugs were found and fixed the same day this report was built,
+all specific to the `gap` strategy's session-based sub-strategies
 (London/NY/Tokyo — as opposed to the weekly variant, which was
 unaffected):
 
@@ -60,10 +60,26 @@ unaffected):
    minutes later stopped it out at (near) breakeven for a small loss.
    Confirmed live: **all 19** of that day's `hard_stop` gap exits had a
    logged stop price exactly equal to entry price, for a combined
-   **−€1,530.64** — not real strategy underperformance, a bug that's now
-   fixed.
+   **−€1,530.64**.
+3. **Exits closed on a stale `should_exit()` decision.** The decision
+   (`gap_filled`/`hard_stop`) is based on an H1/D1 bar close, possibly
+   minutes old by the time dozens of positions have been checked in one
+   sweep — but the actual closing market order executes at a separately
+   fetched, genuinely fresh live price. If price moved between those two
+   lookups, a position closed on a label the fresh price no longer
+   supported, at a worse price than the label implied. Confirmed live:
+   **42** `gap_filled` exits that day, only **3** real wins, net
+   **−€2,179.19** — most never actually reached their target at the live
+   execution price. Fixed by re-validating against the same live price
+   used for execution and skipping (not force-closing) when it disagrees
+   — the resting Stop+Limit bracket order already on Saxo remains the
+   real protection either way, so nothing is left unprotected by skipping.
 
-Because session gaps were structurally blocked until the same day this
-bug started actually being exercised, its real-world impact was
-invisible until then. Both fixes are in place; trade counts closed
-*after* the fix landed reflect the corrected behavior.
+None of this was real strategy underperformance — **all three** are now
+fixed. Combined day-total impact from bugs #2 and #3: **−€3,710.83**
+across 61 trades (61 of gap's 61 closes that day; only 3 were real wins).
+Because session gaps were structurally blocked until bug #1's fix landed
+the same day, bugs #2 and #3's real-world impact was invisible until
+then — they'd been latent in code paths that had (almost) never actually
+run in production before. All three fixes are in place; trade counts
+closed *after* they landed reflect the corrected behavior.
