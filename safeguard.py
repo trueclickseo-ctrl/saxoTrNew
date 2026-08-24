@@ -190,22 +190,16 @@ def _fix_mismatches(modules: list[str], snapshot: "housekeeping.LiveSnapshot") -
                                        f"the entry order fills or expires"))
         elif f.kind in (housekeeping.KIND_REMOVED_ORPHAN, housekeeping.KIND_SCALED_DOWN,
                        housekeeping.KIND_DUPLICATE_STOP, housekeeping.KIND_STOP_REPLACE_FAILED,
-                       housekeeping.KIND_STOP_MISSING):
+                       housekeeping.KIND_STOP_MISSING, housekeeping.KIND_STOP_STALE):
             # Already handled by reconcile_all()'s normal (non-aggressive)
             # behavior — not part of what safeguard was specifically asked
-            # to resolve, but surfaced for completeness.
+            # to resolve, but surfaced for completeness. KIND_STOP_STALE
+            # moved into this bucket 2026-08-25: _check_stop_integrity()
+            # now auto-corrects local's stop_price to match the real
+            # broker order instead of only reporting it (see its
+            # docstring for why the broker side is trustworthy here).
             outcomes.append(FixOutcome("mismatch", f.module, f.symbol, f.kind,
                                        f.kind != housekeeping.KIND_STOP_REPLACE_FAILED, f.detail))
-        elif f.kind == housekeeping.KIND_STOP_STALE:
-            # 2026-08-24: a real Working stop exists, just at a different
-            # price than local state believes -- ambiguous which side is
-            # stale (see _check_stop_integrity()'s docstring), so this is
-            # never auto-corrected. Reported as NOT fixed (there IS
-            # something a human should look at), but distinctly from a
-            # generic error -- the position is still protected, just not
-            # necessarily where the dashboard displays it as protected.
-            outcomes.append(FixOutcome("mismatch", f.module, f.symbol,
-                                       "stop_price_mismatch_needs_review", False, f.detail))
         else:
             outcomes.append(FixOutcome("mismatch", f.module, f.symbol, "error", False, f.detail))
     return outcomes

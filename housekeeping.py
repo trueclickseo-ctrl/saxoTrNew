@@ -103,7 +103,7 @@ KIND_LEDGER_DRIFT      = "ledger_drift"        # stocks-only: can't auto-remove 
 KIND_PENDING_ENTRY     = "pending_entry"       # matching entry order still Working, not filled yet -> left alone
 KIND_FULLY_UNTRACKED   = "fully_untracked"     # live position, ZERO local record in ANY module -- structurally invisible to reconcile_module()
 KIND_STOP_MISSING      = "stop_missing"        # local's remembered stop_order_id isn't a live Working order at all -> re-placed at local's own stop_price
-KIND_STOP_STALE        = "stop_stale"          # a real Working order exists at that id, but its live price != local's stop_price -> report only, ambiguous which side is stale
+KIND_STOP_STALE        = "stop_stale"          # a real Working order exists at that id, but its live price != local's stop_price -> local adopts the broker's real price (the broker order is what actually protects the position, so it's the ground truth), fixed and reported
 
 # Order types that count as a real protective stop. "StopIfTraded" and
 # "TrailingStopIfTraded" are Saxo's stop-market equivalents for instruments
@@ -660,11 +660,16 @@ def _check_stop_integrity(adapter: BaseAdapter, live: LiveSnapshot, entries: lis
       (the strategy's own number, not a guess), so this is fixed
       immediately by placing one there. Reported as KIND_STOP_MISSING.
     - a Working order DOES exist at that id, but its live price differs
-      from what local state believes: ambiguous which side is stale (a
-      trailing stop that updated locally but never reached the broker --
-      the exact bug found 2026-08-24 in futures -- looks identical to a
-      broker-side adjustment local state never learned about). Report
-      only; a human decides. KIND_STOP_STALE.
+      from what local state believes (root cause found 2026-08-24: save()
+      never persisted stop_price, only quantity/stop_order_id, so any
+      trailing/breakeven update that changed the real broker order left
+      local's remembered price stale forever after -- now fixed, but this
+      corrects the backlog it already created). The broker's real Working
+      order is what actually protects the position and is what any
+      future trailing/breakeven update will read live from Saxo before
+      moving it further anyway, so it's the trustworthy side here --
+      local simply adopts it. Auto-corrected, not just reported.
+      KIND_STOP_STALE.
 
     Replaces the previous dashboard-only "near stop" warning, which
     required someone to be watching the terminal to notice anything --
@@ -706,12 +711,15 @@ def _check_stop_integrity(adapter: BaseAdapter, live: LiveSnapshot, entries: lis
         except (TypeError, ValueError):
             continue
         if abs(live_price - e.stop_price) > max(abs(e.stop_price) * _STOP_PRICE_TOLERANCE_PCT, 1e-6):
+            old_price = e.stop_price
+            e.stop_price = live_price
+            fixed.append(e)
             findings.append(Finding(
                 adapter.module, KIND_STOP_STALE, symbol,
-                f"{e.key}: local state believes its stop ({e.stop_order_id}) is at "
-                f"{e.stop_price}, but the real broker order is at {live_price} — not "
-                f"auto-corrected (ambiguous which side is stale), but the position IS "
-                f"protected at {live_price}, not {e.stop_price}",
+                f"{e.key}: local state believed its stop ({e.stop_order_id}) was at "
+                f"{old_price}, but the real broker order is at {live_price} — local "
+                f"corrected to match the real broker order (the position was always "
+                f"protected at {live_price}; only local's bookkeeping was wrong)",
             ))
     return fixed
 

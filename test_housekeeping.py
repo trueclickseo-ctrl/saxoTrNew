@@ -404,12 +404,12 @@ def test_stop_matching_live_price_produces_no_finding():
     assert adapter.replace_calls == [], "a correctly-priced live stop must not be touched"
 
 
-def test_stop_price_drift_is_reported_not_auto_corrected():
+def test_stop_price_drift_is_auto_corrected_to_match_the_real_broker_order():
     """A real Working order exists at that id, just at a different price
-    than local state believes -- ambiguous which side is stale (could be
-    a trailing stop that updated locally but never reached the broker, OR
-    the broker side being right and local being the stale one). Report
-    only, never auto-fixed."""
+    than local state believes (the stop_price-never-persisted bug found
+    2026-08-24). The broker's real Working order is what actually
+    protects the position, so local adopts it -- no broker-side order is
+    touched, only local's own bookkeeping."""
     entries = [hk.LocalPosition("fake", "strat:KKK", 11, "KKK", "Buy", 1000, "FxSpot",
                                 stop_order_id="DRIFTED", stop_price=1.10000)]
     adapter = FakeAdapter("fake", entries)
@@ -418,8 +418,12 @@ def test_stop_price_drift_is_reported_not_auto_corrected():
     findings = hk.reconcile_module(adapter, snap)
     stale = [f for f in findings if f.kind == hk.KIND_STOP_STALE]
     assert len(stale) == 1
-    assert adapter.replace_calls == [], "must never auto-correct a price mismatch -- ambiguous which side is right"
-    assert adapter.cancel_calls == [], "must not cancel the real (if unexpected) live stop"
+    assert entries[0].stop_price == 1.15000, "local must adopt the broker's real stop price"
+    assert adapter.saved_positions is not None and any(
+        p.key == "strat:KKK" and p.stop_price == 1.15000 for p in adapter.saved_positions
+    ), "the correction must actually be persisted"
+    assert adapter.replace_calls == [], "must never touch the real (already-correct) broker order"
+    assert adapter.cancel_calls == [], "must not cancel the real live stop"
 
 
 def test_entry_with_no_stop_order_id_is_skipped_not_flagged():
@@ -440,8 +444,8 @@ _run("a stop order that exists but isn't Working (filled/cancelled) is treated t
      test_stop_present_but_not_working_status_also_gets_replaced)
 _run("a stop correctly matching the live order's price produces no finding and isn't touched",
      test_stop_matching_live_price_produces_no_finding)
-_run("a stop whose live price differs from local's belief is reported, never auto-corrected",
-     test_stop_price_drift_is_reported_not_auto_corrected)
+_run("a stop whose live price differs from local's belief is auto-corrected to match the real broker order",
+     test_stop_price_drift_is_auto_corrected_to_match_the_real_broker_order)
 _run("an entry with no stop_order_id at all is skipped by this check (scan_naked_positions's job instead)",
      test_entry_with_no_stop_order_id_is_skipped_not_flagged)
 
