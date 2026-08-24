@@ -47,18 +47,22 @@ BREAKOUT_PERIOD = 30    # entry: close above N-day highest close
 EXIT_PERIOD     = 5     # exit:  close below N-day lowest close (tight trailing)
 ATR_PERIOD      = 14    # True Range ATR lookback
 ATR_STOP_MULT   = 1.5   # stop = entry âˆ’ ATR_STOP_MULT Ã— ATR
-RISK_PCT        = 0.005  # 0.5% of account equity risked per trade — smaller on
-                          # purpose (2026-08-24, explicit request: small size,
-                          # more concurrent trades). Halving from 1% doubles
-                          # how many positions fit under PORTFOLIO_HEAT_LIMIT
-                          # (6 -> 12 at full risk each) while staying above the
-                          # ~0.35% floor needed for a single contract of the
-                          # priciest instrument (gold) to still clear the
-                          # MAX_RISK_OVERSHOOT skip check -- a more aggressive
-                          # cut (tried 0.15% first) skips MORE signals instead
-                          # of taking more, the opposite of the goal, since a
-                          # 1-contract minimum can't shrink below its own ATR-
-                          # based floor.
+RISK_PCT        = 0.01   # 1% of account equity risked per trade. REVERTED
+                          # 2026-08-24 (same day) from a 0.5% attempt -- see
+                          # docs/futures_strategies.md's "only 2 of 13 markets
+                          # tradeable" finding: at 27,800 EUR capital, most
+                          # markets' contract size already needs MORE than 1%
+                          # just to clear a single contract's MAX_RISK_OVERSHOOT
+                          # check (CL alone needs ~20x today's budget). Cutting
+                          # RISK_PCT further doesn't widen the tradeable universe
+                          # -- it can't, the excluded markets were never close --
+                          # it only shrinks the two that already qualify (ES,
+                          # GC), pushing GC from a comfortable 0.54x of budget to
+                          # a tight 1.08x, closer to also being skipped. "more
+                          # markets trading" and "smaller size" are in real
+                          # tension here for the large-contract-size markets;
+                          # this reverts to the known-working value rather than
+                          # picking a new number that serves neither goal.
 MAX_POSITIONS   = 5     # one position per market (5 markets)
 TIME_STOP_DAYS  = 30    # calendar days before time-stop fires
 

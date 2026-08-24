@@ -50,7 +50,7 @@ ATR_PERIOD     = 20    # ATR period (20d = one trading month)
 ATR_STOP_MULT  = 2.0   # initial stop: 2Ã—ATR from entry
 TRAIL_MULT     = 1.5   # trailing stop: MA50 Â± 1.5Ã—ATR
 TS_THRESHOLD   = 0.003 # trend strength min: 0.3% of price
-RISK_PCT       = 0.005  # smaller on purpose — see futures/strategy.py's RISK_PCT comment
+RISK_PCT       = 0.01   # reverted 2026-08-24 -- see futures/strategy.py's RISK_PCT comment
 TIME_STOP_DAYS = 60    # 60 calendar days (~3 months)
 
 # How many bars of vol history to compute the vol percentile

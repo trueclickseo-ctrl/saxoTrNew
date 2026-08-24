@@ -49,7 +49,7 @@ ADX_PERIOD    = 14
 ADX_MIN       = 18
 ATR_PERIOD    = 14
 ATR_STOP_MULT = 2.0
-RISK_PCT      = 0.005  # smaller on purpose — see futures/strategy.py's RISK_PCT comment
+RISK_PCT      = 0.01   # reverted 2026-08-24 -- see futures/strategy.py's RISK_PCT comment
 TIME_STOP_DAYS = 20
 SIGNAL_LOOKBACK = 3    # bars to look back for a fresh MACD crossover
 # Zero-line: MACD must have been positive at some point in this lookback window

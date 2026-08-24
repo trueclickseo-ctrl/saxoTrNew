@@ -49,7 +49,7 @@ KC_EMA_PERIOD  = 20
 KC_ATR_MULT    = 1.5
 ATR_PERIOD     = 14
 ATR_STOP_MULT  = 2.0
-RISK_PCT       = 0.005  # smaller on purpose — see futures/strategy.py's RISK_PCT comment
+RISK_PCT       = 0.01   # reverted 2026-08-24 -- see futures/strategy.py's RISK_PCT comment
 TIME_STOP_DAYS = 15
 MIN_BARS       = BB_PERIOD + ATR_PERIOD + 5
 
