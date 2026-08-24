@@ -163,6 +163,19 @@ def _fix_mismatches(modules: list[str], snapshot: "housekeeping.LiveSnapshot") -
                                        "no_local_entry_to_fix", True,
                                        f.detail + " — protection (if needed) is handled by "
                                        f"the naked-position fix pass, not this one"))
+        elif f.kind == housekeeping.KIND_PENDING_ENTRY:
+            # 2026-08-24: nothing IS wrong here — the entry just hasn't
+            # filled yet (e.g. market closed). Before this case existed
+            # every such finding fell through to the generic "error" branch
+            # below and got reported as NOT FIXED, which reads as a real
+            # failure when it's actually working-as-intended (see
+            # LiveSnapshot.has_pending_entry()'s docstring). Recorded as
+            # informational/resolved so it doesn't misrepresent a normal,
+            # temporary state as something safeguard failed to fix.
+            outcomes.append(FixOutcome("mismatch", f.module, f.symbol,
+                                       "entry_not_filled_yet", True,
+                                       f.detail + " — nothing to fix, will resolve itself once "
+                                       f"the entry order fills or expires"))
         elif f.kind in (housekeeping.KIND_REMOVED_ORPHAN, housekeeping.KIND_SCALED_DOWN,
                        housekeeping.KIND_DUPLICATE_STOP, housekeeping.KIND_STOP_REPLACE_FAILED):
             # Already handled by reconcile_all()'s normal (non-aggressive)

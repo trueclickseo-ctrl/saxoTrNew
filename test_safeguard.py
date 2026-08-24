@@ -263,6 +263,31 @@ def test_untracked_live_reported_fixed_but_defers_protection_to_naked_pass():
         hk.ADAPTERS.update(orig_adapters)
 
 
+def test_pending_entry_reported_fixed_not_error():
+    """2026-08-24: a pending_entry finding (order still Working, not filled
+    yet) fell through _fix_mismatches's generic else-branch before this fix
+    and got reported as action="error", fixed=False -- i.e. "NOT FIXED" in
+    the safeguard email/report, misrepresenting a normal, temporary,
+    working-as-intended state as a real failure."""
+    orig_adapters = dict(hk.ADAPTERS)
+    try:
+        entries = [hk.LocalPosition("fake", "strat:XLB", 35414, "XLB", "Buy", 50, "Etf",
+                                    stop_order_id="STOP1")]
+        adapter = FakeAdapter("fake", entries)
+        hk.ADAPTERS.clear()
+        hk.ADAPTERS["fake"] = adapter
+        orders = [make_order("ENTRY1", 35414, "Buy", 50, 53.54, order_type="Market")]
+        snap = make_snapshot(positions=[], orders=orders)  # not filled yet
+        outcomes = sg._fix_mismatches(["fake"], snap)
+        assert len(outcomes) == 1
+        assert outcomes[0].fixed is True, "must not be reported as NOT FIXED -- nothing is actually wrong"
+        assert outcomes[0].action == "entry_not_filled_yet"
+        assert adapter.removed_keys is None
+    finally:
+        hk.ADAPTERS.clear()
+        hk.ADAPTERS.update(orig_adapters)
+
+
 def test_ledger_drift_never_auto_resolved_even_by_safeguard():
     orig_adapters = dict(hk.ADAPTERS)
     try:
@@ -284,6 +309,8 @@ _run("a direction-mismatched local entry gets removed + its stop cancelled, repo
      test_direction_mismatch_entry_removed_and_reported_fixed)
 _run("untracked live exposure has no local entry to remove -- reported fixed but defers protection to the naked pass",
      test_untracked_live_reported_fixed_but_defers_protection_to_naked_pass)
+_run("a pending (not-yet-filled) entry is reported fixed, not NOT FIXED/error",
+     test_pending_entry_reported_fixed_not_error)
 _run("a ledger row (stocks) is NEVER auto-closed, even in safeguard's aggressive mode",
      test_ledger_drift_never_auto_resolved_even_by_safeguard)
 
