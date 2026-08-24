@@ -62,7 +62,7 @@ ADX_PERIOD    = 14     # ADX smoothing period
 ADX_MIN       = 25     # minimum ADX to confirm trend (< 25 = ranging, skip)
 ATR_PERIOD    = 14     # ATR lookback for stop sizing
 ATR_STOP_MULT = 1.5    # stop = entry +/- ATR_STOP_MULT * ATR
-RISK_PCT      = 0.005  # 0.5% of equity risked per trade (was 1%, cut 2026-08-22 — shared Saxo margin pool was hit at 99% utilization with the 6% heat cap already disabled for SIM testing; smaller positions leave more margin free to test more pairs simultaneously)
+RISK_PCT      = 0.0025  # 0.25% of equity risked per trade (was 1%->0.5% on 2026-08-22, cut again 2026-08-24 after removing the daily-loss/drawdown entry gates let many strategies pile onto the same pair in one run — smaller per-trade size leaves more margin free to run more strategies/pairs simultaneously)
 MAX_POSITIONS = 4      # maximum concurrent open positions across all pairs
 TIME_STOP_DAYS = 45    # calendar days before forced exit
 LOT_ROUND     = 1_000  # round down to nearest N units (Saxo micro-lot)

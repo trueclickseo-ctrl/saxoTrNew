@@ -48,7 +48,7 @@ from datetime import datetime, timezone
 MIN_GAP_PCT    = 0.10   # minimum gap size as % of price (filters spread noise)
 MAX_GAP_PCT    = 2.00   # maximum gap size — extreme gaps fill less reliably
 ATR_STOP_MULT  = 1.5    # stop = 1.5 × gap_size
-RISK_PCT       = 0.005  # 0.5% equity risk per trade (was 1%, cut 2026-08-22 to free shared margin for more pairs)
+RISK_PCT       = 0.0025  # 0.25% equity risk per trade (was 1%->0.5% on 2026-08-22, cut again 2026-08-24 -- see strategy.py's RISK_PCT comment)
 TIME_STOP_DAYS = 7      # calendar days (≈ 5 trading days Mon-Fri)
 LOT_ROUND      = 1_000  # Saxo micro-lot minimum
 MIN_BARS       = 5      # need at least a few bars to confirm reference close
@@ -72,7 +72,7 @@ SESSION_GAPS = {
         "max_gap_pct":      0.40,
         "stop_mult":        2.0,    # wider relative stop for shorter time horizon
         "time_stop_hours":  8,      # exit if gap not filled within London session
-        "risk_pct":         0.005,  # 0.5% per trade (lower WR than weekly ~65%)
+        "risk_pct":         0.0025,  # 0.25% per trade -- cut 2026-08-24, see module RISK_PCT comment
     },
     "newyork": {
         "open_hour_utc":    12,     # New York opens 12:00 UTC = 17:00 PKT
@@ -81,7 +81,7 @@ SESSION_GAPS = {
         "max_gap_pct":      0.40,
         "stop_mult":        2.0,
         "time_stop_hours":  6,      # exit if gap not filled within NY morning
-        "risk_pct":         0.005,
+        "risk_pct":         0.0025,
     },
     "tokyo": {
         "open_hour_utc":    0,      # Tokyo/Asia opens 00:00 UTC = 05:00 PKT
@@ -90,7 +90,7 @@ SESSION_GAPS = {
         "max_gap_pct":      0.30,
         "stop_mult":        2.0,
         "time_stop_hours":  7,      # covers full Asian session + early London overlap
-        "risk_pct":         0.005,
+        "risk_pct":         0.0025,
     },
 }
 

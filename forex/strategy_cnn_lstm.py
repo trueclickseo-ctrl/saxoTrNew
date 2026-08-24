@@ -52,7 +52,7 @@ CONFIDENCE_THRESHOLD = 0.45  # softmax prob threshold to emit a signal
 ADX_MIN              = 15    # minimum trend strength (skip choppy pairs)
 ATR_PERIOD           = 14
 ATR_STOP_MULT        = 2.5
-RISK_PCT             = 0.005  # was 0.01, cut 2026-08-22 to free shared margin for more pairs
+RISK_PCT             = 0.0025  # was 0.01->0.005 on 2026-08-22, cut again 2026-08-24 -- see strategy.py's RISK_PCT comment
 TIME_STOP_DAYS       = 15
 LOT_ROUND            = 1_000
 
