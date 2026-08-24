@@ -36,7 +36,11 @@ class ETFStrategyConfig:
     lookback_days_fast: int = 20
     lookback_days_slow: int = 100
     min_avg_daily_turnover_usd: float = 1_000_000  # dual_ma liquidity filter
-    max_candidates_per_run: int = 3               # top-N for rotation strategies
+    max_candidates_per_run: int = 10               # top-N for rotation strategies — widened
+                                                    # 2026-08-24 from 3 for broader testing;
+                                                    # etf_executor.process_signals() weights
+                                                    # capital by rank so #1 still gets more
+                                                    # than #10, not an equal split
     rebalance_frequency_hours: int = 24
 
 
@@ -46,10 +50,16 @@ class ETFRiskConfig:
     # (same SIM account as shares — capital is separated in code, not at broker level)
     etf_account_key: str = ""
 
-    # Conservative: 15% of account balance, 5 positions max, 8% SL / 20% TP
+    # Conservative: 15% of account balance, 10 positions max, 8% SL / 20% TP.
+    # max_positions widened 3->10 alongside max_candidates_per_run above —
+    # same 15% total budget now spread rank-weighted across up to 10 names
+    # instead of an equal split across 5, so each individual position is
+    # naturally smaller (keeps margin/cash headroom free) while still
+    # giving the top-ranked pick more capital than the bottom-ranked one.
     total_allocation_pct_of_account: float = 0.15
-    max_positions: int = 5
-    max_position_pct: float = 0.03   # 15% / 5 slots = 3% of total cash per position
+    max_positions: int = 10
+    max_position_pct: float = 0.03   # ceiling per name; rank-1's weighted share
+                                      # (~2.7% of the 15% budget) stays under this
     stop_loss_pct: float = 0.08
     take_profit_pct: float = 0.20
 

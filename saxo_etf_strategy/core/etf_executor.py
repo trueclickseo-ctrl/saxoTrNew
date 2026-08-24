@@ -90,23 +90,44 @@ class ETFExecutor:
 
         allocation_budget  = cash * self.cfg.risk.total_allocation_pct_of_account
         per_position_limit = cash * self.cfg.risk.max_position_pct
-        per_position_budget = min(
-            allocation_budget / max(1, slots_free),
-            per_position_limit,
-        )
 
-        logger.info(f"ETF budget: {allocation_budget:.0f} cash-ccy  "
-                    f"({slots_free} free slots, {per_position_budget:.0f} per position)")
+        # Rank-weighted allocation, not an equal split. signals is already
+        # ranked best-to-worst by the strategy (index 0 = strongest score) --
+        # linear weight by rank so #1 gets the largest slice of the fixed
+        # 15%-of-cash budget and the weakest candidate gets the smallest,
+        # rather than every rank getting an identical dollar amount.
+        # Requested 2026-08-24 alongside widening max_candidates_per_run
+        # 3->10: testing more candidates shouldn't mean betting on the
+        # 10th-best idea as hard as the 1st-best one, and spreading the
+        # same total budget across more names naturally keeps every single
+        # position small (more room stays free for other modules).
+        n = len(signals)
+        weights = [n - i for i in range(n)]          # rank0 -> n, rank(n-1) -> 1
+        weight_sum = sum(weights) or 1
+
+        if n:
+            logger.info(f"ETF budget: {allocation_budget:.0f} cash-ccy  "
+                        f"({slots_free} free slots, {n} ranked candidates, rank-weighted — "
+                        f"top pick gets ~{allocation_budget*weights[0]/weight_sum:.0f}, "
+                        f"bottom pick gets ~{allocation_budget*weights[-1]/weight_sum:.0f})")
+        else:
+            logger.info(f"ETF budget: {allocation_budget:.0f} cash-ccy "
+                        f"({slots_free} free slots, 0 candidates)")
 
         # Iterate ALL signals (not just top-N) so that already-held positions
         # don't waste free slots — stop only when slots_free entries have been made.
         slots_filled = 0
-        for signal in signals:
+        for rank, signal in enumerate(signals):
             if slots_filled >= slots_free:
                 break
             if self.state.get_position(signal.uic):
                 logger.debug(f"Already holding {signal.symbol} — skipping")
                 continue
+            weight = weights[rank] if rank < len(weights) else 1
+            per_position_budget = min(
+                allocation_budget * weight / weight_sum,
+                per_position_limit,
+            )
             self._enter_position(signal, per_position_budget)
             slots_filled += 1
 
