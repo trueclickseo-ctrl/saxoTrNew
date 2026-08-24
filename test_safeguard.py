@@ -333,11 +333,13 @@ def test_verification_catches_a_fix_that_did_not_actually_take():
     call_n = {"n": 0}
     try:
         hk.ADAPTERS.clear()
-        # uic=50 must be a known forex uic so scan_naked_positions's FxSpot
-        # fallback classifies the naked position as "forex", matching the
-        # ["forex"]-scoped run_safeguard() call below.
+        # uic=37 (NZDUSD) must be a REAL forex-universe uic -- since 2026-08-24
+        # scan_naked_positions's FxSpot fallback classifies against forex's
+        # full 117-pair reference list (forex.runner.PAIRS), not just
+        # currently-tracked local positions, so a made-up uic no longer
+        # resolves to "forex" here.
         hk.ADAPTERS["forex"] = FakeAdapter(
-            "forex", [hk.LocalPosition("forex", "other:XXX", 50, "XXX", "Buy", 1, "FxSpot")])
+            "forex", [hk.LocalPosition("forex", "other:NZDUSD", 37, "NZDUSD", "Buy", 1, "FxSpot")])
         sg.saxo_client.get_account_key = lambda: "AKEY"
         sg.saxo_order.place_protective_stop = lambda **kw: "OID"  # claims success
 
@@ -345,10 +347,10 @@ def test_verification_catches_a_fix_that_did_not_actually_take():
             call_n["n"] += 1
             if call_n["n"] == 1:
                 # first fetch: sees the naked position
-                return make_snapshot(positions=[make_position(50, -10000, current_price=1.5)])
+                return make_snapshot(positions=[make_position(37, -10000, current_price=1.5)])
             # second fetch (post-fix verification): STILL shows no stop --
             # simulates the placed order having failed silently downstream.
-            return make_snapshot(positions=[make_position(50, -10000, current_price=1.5)])
+            return make_snapshot(positions=[make_position(37, -10000, current_price=1.5)])
 
         hk.fetch_live_snapshot = fetch_side_effect
         sg._send_safeguard_email = lambda outcomes: emails.append(outcomes) or True

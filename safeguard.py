@@ -163,6 +163,18 @@ def _fix_mismatches(modules: list[str], snapshot: "housekeeping.LiveSnapshot") -
                                        "no_local_entry_to_fix", True,
                                        f.detail + " — protection (if needed) is handled by "
                                        f"the naked-position fix pass, not this one"))
+        elif f.kind == housekeeping.KIND_FULLY_UNTRACKED:
+            # 2026-08-24: a live position with zero local record in any
+            # module (the EURCHF/stocks-UIC-202 blind spot). Nothing local
+            # to remove or fix here either — same reasoning as
+            # KIND_UNTRACKED_LIVE, protection is the naked-fix pass's job.
+            # This finding's whole purpose is to make sure a human sees it,
+            # since no automated check before it existed ever would have.
+            outcomes.append(FixOutcome("mismatch", f.module, f.symbol,
+                                       "no_local_record_needs_human_review", True,
+                                       f.detail + " — protection (if needed) is handled by "
+                                       f"the naked-position fix pass; this finding exists so "
+                                       f"a human decides what this position actually is"))
         elif f.kind == housekeeping.KIND_PENDING_ENTRY:
             # 2026-08-24: nothing IS wrong here — the entry just hasn't
             # filled yet (e.g. market closed). Before this case existed

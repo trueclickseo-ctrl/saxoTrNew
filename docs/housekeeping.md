@@ -55,9 +55,52 @@ instrument:
 | Local direction is the **opposite** of live direction | Reported only — **never auto-corrected**. Too ambiguous to guess safely; needs a human |
 | Live exposure **exceeds** local tracking (untracked extra) | Reported only — never fabricates a new local entry to explain it |
 | Two+ Working stop orders on the same instrument/side/price (breakeven move or race-condition retry that left the old one uncancelled) | Cancel all but the newest |
+| A live position with **zero local record in ANY module** (not even a mismatched one) | Reported as `fully_untracked` — see below. This is a separate sweep, not part of the per-module table comparison above |
 
 Sends **one email** summarizing every finding from the run — only if at
 least one finding exists. A clean account produces zero emails.
+
+### The fully-untracked sweep (`_scan_fully_untracked`, added 2026-08-24)
+
+Every row above starts from `reconcile_module()` grouping **local**
+entries by uic (`_group_by_uic(local)`) — a uic that never appears in a
+module's local state at all never enters that loop, full stop. This is
+structurally different from an `untracked_live` finding (which requires
+*some* local entry to exist first, just an undersized one) — a uic with
+**zero** local footprint anywhere was, until this fix, invisible to
+`reconcile_all()` entirely.
+
+Two real incidents hid in exactly this gap: a fully-untracked 20,000-share
+stock position that went naked then self-closed before anyone caught it
+(`stocks_naked_position_blindspot`), and a −2,381,000 EURCHF position
+(three near-simultaneous fills from a pre-cross-process-lock race
+condition on 2026-08-19) that sat unreconciled for **5 days**, invisible
+to `reconcile_all()` the whole time and only ever visible to
+`scan_naked_positions()` during the narrow windows its stop happened to
+lapse.
+
+`_scan_fully_untracked()` runs after the per-module loop inside
+`reconcile_all()`: it builds the set of every uic tracked by *any*
+requested module's adapter, then walks every live position and flags
+whichever ones aren't in that set at all — reported as `fully_untracked`,
+report-only like every other ambiguous finding (a fully-untracked
+position could be a real bug or something opened outside any tracked
+strategy on purpose; only a human decides which).
+
+**First live run surfaced 22 of them** — 13 forex, 9 stocks, all
+currently protected. Several match positions already documented in this
+file's own "first real runs" history below (e.g. AUDCAD at exactly
+−1,446,000) — long-standing legacy exposure that was always safe, just
+never given local tracking or a human decision about its origin.
+
+Module attribution for an ambiguous `FxSpot` uic (forex vs. futures, both
+use this asset type) now checks against forex's **full 117-pair
+reference universe** (`forex.runner.PAIRS`), not just currently-held
+positions — the earlier version defaulted anything not *currently*
+tracked by forex to "futures", which is wrong by construction for a
+finding whose entire premise is "nothing tracks this anywhere." This same
+fix was applied to `scan_naked_positions()`'s own module-attribution
+logic, which had the identical bug.
 
 ### 2. `scan_naked_positions()` — read-only safety scan, live-Saxo-only
 

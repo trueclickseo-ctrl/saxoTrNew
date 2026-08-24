@@ -97,6 +97,7 @@ KIND_UNTRACKED_LIVE   = "untracked_live"       # live exposure with no local rec
 KIND_STOP_REPLACE_FAILED = "stop_replace_failed"
 KIND_LEDGER_DRIFT      = "ledger_drift"        # stocks-only: can't auto-remove a ledger row
 KIND_PENDING_ENTRY     = "pending_entry"       # matching entry order still Working, not filled yet -> left alone
+KIND_FULLY_UNTRACKED   = "fully_untracked"     # live position, ZERO local record in ANY module -- structurally invisible to reconcile_module()
 
 # Order types that count as a real protective stop. "StopIfTraded" and
 # "TrailingStopIfTraded" are Saxo's stop-market equivalents for instruments
@@ -636,6 +637,11 @@ def reconcile_all(modules: list[str] | None = None, aggressive: bool = False,
             logger.warning(f"[housekeeping] {name} reconciliation failed: {exc}")
             all_findings.append(Finding(name, "error", "", f"reconciliation crashed: {exc}"))
 
+    try:
+        all_findings.extend(_scan_fully_untracked(live, modules))
+    except Exception as exc:
+        logger.warning(f"[housekeeping] fully-untracked scan failed: {exc}")
+
     if all_findings:
         for f in all_findings:
             logger.warning(f"[housekeeping] {f.module}/{f.kind} {f.symbol}: {f.detail}")
@@ -644,6 +650,63 @@ def reconcile_all(modules: list[str] | None = None, aggressive: bool = False,
     else:
         logger.info("[housekeeping] reconcile_all: no mismatches found")
     return all_findings
+
+
+def _scan_fully_untracked(live: LiveSnapshot, modules: list[str]) -> list[Finding]:
+    """Catch a live position that reconcile_module() structurally cannot
+    see: one with ZERO local footprint in ANY module, not just an
+    imbalance against an existing local record.
+
+    reconcile_module() groups by uic starting from LOCAL entries
+    (_group_by_uic(local)) — a uic that never appears in local state at
+    all never enters that loop. Found 2026-08-24 via two real incidents
+    that both hid in exactly this gap: a fully-untracked 20,000-share
+    stock position that went naked then self-closed before anyone
+    caught it, and a -2,381,000 EURCHF position (three near-simultaneous
+    fills from a pre-cross-process-lock race condition) that sat
+    unreconciled for 5 days — invisible to reconcile_all() the whole
+    time, and only visible to scan_naked_positions() during the narrow
+    windows its stop happened to lapse.
+
+    Report-only, like every other ambiguous finding here: a
+    fully-untracked live position could be a genuine bug, or a position
+    opened manually/outside any tracked strategy on purpose. Only a
+    human decides what it is; this just guarantees it gets surfaced
+    instead of silently sitting outside every check that exists."""
+    findings: list[Finding] = []
+    tracked_uics: dict[str, set[int]] = {}
+    for name in modules:
+        try:
+            tracked_uics[name] = {lp.uic for lp in ADAPTERS[name].load()}
+        except Exception:
+            tracked_uics[name] = set()
+    all_tracked: set[int] = set()
+    for uics in tracked_uics.values():
+        all_tracked |= uics
+    forex_uics = _forex_universe_uics()
+
+    for uic, positions in live.positions_by_uic.items():
+        if uic in all_tracked:
+            continue
+        net = live.net_amount(uic)
+        if net == 0:
+            continue
+        base0 = positions[0]["PositionBase"]
+        asset_type = base0.get("AssetType", "")
+        module = _ASSET_TYPE_MODULE.get(asset_type)
+        if asset_type == "FxSpot":
+            module = "forex" if uic in forex_uics else "futures"
+        if module not in modules:
+            continue  # not one of the modules this run was asked to check
+        symbol = _symbol_hint(positions[0], module)
+        findings.append(Finding(
+            module, KIND_FULLY_UNTRACKED, symbol,
+            f"uic {uic}: live net {net:+,.0f} has ZERO local record in any module "
+            f"(not even a mismatched one) — reconcile_module() cannot see this uic "
+            f"at all; only scan_naked_positions() would ever have flagged it, and "
+            f"only while it happens to be unprotected",
+        ))
+    return findings
 
 
 # ── Naked-position scan (read-only, live-Saxo-only) ────────────────────────
@@ -671,6 +734,31 @@ _ASSET_TYPE_MODULE = {
     "CfdOnStock":      "stocks",
 }
 
+_forex_universe_uics_cache: set[int] | None = None
+
+
+def _forex_universe_uics() -> set[int]:
+    """Every uic in forex's full configured pair universe (117 pairs),
+    not just ones a strategy currently happens to hold. Disambiguating an
+    untracked FxSpot uic against only CURRENTLY-TRACKED forex positions
+    (as this used to do) is wrong by construction for exactly the
+    positions this matters for: a fully-untracked uic can never appear
+    in forex's local state, so it would always fall through to
+    "futures" by default -- mislabeling ordinary forex pairs like
+    EURUSD. Found 2026-08-24 building _scan_fully_untracked(), which
+    made the same pre-existing mislabeling in scan_naked_positions()
+    much more visible (12 of 13 ambiguous uics in one live run turned
+    out to be real forex pairs, not futures). Cached for the process
+    lifetime — the pair universe doesn't change at runtime."""
+    global _forex_universe_uics_cache
+    if _forex_universe_uics_cache is None:
+        try:
+            import forex.runner as fr
+            _forex_universe_uics_cache = {p["uic"] for p in fr.PAIRS}
+        except Exception:
+            _forex_universe_uics_cache = set()
+    return _forex_universe_uics_cache
+
 
 def scan_naked_positions(snapshot: "LiveSnapshot | None" = None,
                          send_email: bool = True) -> list[NakedPosition]:
@@ -694,7 +782,7 @@ def scan_naked_positions(snapshot: "LiveSnapshot | None" = None,
     live = snapshot or fetch_live_snapshot()
     naked: list[NakedPosition] = []
 
-    forex_uics = {lp.uic for lp in ADAPTERS["forex"].load()}
+    forex_uics = _forex_universe_uics()
 
     for uic, positions in live.positions_by_uic.items():
         # Aggregate to ONE finding per UIC, not one per position ticket.

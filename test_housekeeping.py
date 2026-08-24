@@ -350,6 +350,94 @@ _run("perfectly matching local state produces zero findings and no writes", test
 
 
 # ═══════════════════════════════════════════════════════════════════════
+section("Fully-untracked live position: zero local footprint in ANY module")
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_fully_untracked_live_position_is_flagged():
+    """2026-08-24: reconcile_module() groups by uic starting from LOCAL
+    entries, so a uic with NO local record at all (in any module) never
+    enters that loop -- structurally invisible. This is exactly what let
+    a -2,381,000 EURCHF position and a 20,000-share stock position both
+    hide from reconcile_all() entirely. _scan_fully_untracked() closes
+    that gap with a dedicated live-position sweep."""
+    orig_adapters = dict(hk.ADAPTERS)
+    try:
+        hk.ADAPTERS.clear()
+        hk.ADAPTERS["stocks"] = FakeAdapter("stocks", [])  # nothing tracked anywhere
+        snap = make_snapshot(positions=[make_position(999, -20000, asset_type="Stock")])
+        findings = hk._scan_fully_untracked(snap, ["stocks"])
+        assert len(findings) == 1
+        assert findings[0].kind == hk.KIND_FULLY_UNTRACKED
+        assert findings[0].module == "stocks"
+    finally:
+        hk.ADAPTERS.clear()
+        hk.ADAPTERS.update(orig_adapters)
+
+
+def test_fully_untracked_scan_ignores_uics_with_any_local_record():
+    """A uic already tracked by SOME local entry -- even a mismatched one
+    -- is reconcile_module()'s job, not this scan's. Only a truly BLANK
+    uic (zero entries anywhere) should surface here."""
+    orig_adapters = dict(hk.ADAPTERS)
+    try:
+        hk.ADAPTERS.clear()
+        tracked = [hk.LocalPosition("stocks", "s:AAA", 999, "AAA", "Sell", 5000, "Stock")]
+        hk.ADAPTERS["stocks"] = FakeAdapter("stocks", tracked)
+        snap = make_snapshot(positions=[make_position(999, -20000, asset_type="Stock")])
+        findings = hk._scan_fully_untracked(snap, ["stocks"])
+        assert findings == [], "a uic with ANY local record must be left to reconcile_module(), not flagged here"
+    finally:
+        hk.ADAPTERS.clear()
+        hk.ADAPTERS.update(orig_adapters)
+
+
+def test_fully_untracked_reported_fixed_not_error_by_safeguard():
+    import safeguard as sg
+    orig_adapters = dict(hk.ADAPTERS)
+    try:
+        hk.ADAPTERS.clear()
+        hk.ADAPTERS["stocks"] = FakeAdapter("stocks", [])
+        snap = make_snapshot(positions=[make_position(999, -20000, asset_type="Stock")])
+        outcomes = sg._fix_mismatches(["stocks"], snap)
+        assert len(outcomes) == 1
+        assert outcomes[0].fixed is True, "must not be reported as NOT FIXED -- this finding exists to surface, not to fail"
+        assert outcomes[0].action == "no_local_record_needs_human_review"
+    finally:
+        hk.ADAPTERS.clear()
+        hk.ADAPTERS.update(orig_adapters)
+
+
+def test_fully_untracked_included_in_reconcile_all():
+    orig_adapters = dict(hk.ADAPTERS)
+    orig_fetch = hk.fetch_live_snapshot
+    orig_send = hk._send_email
+    emails = []
+    try:
+        hk.ADAPTERS.clear()
+        hk.ADAPTERS["stocks"] = FakeAdapter("stocks", [])
+        hk.fetch_live_snapshot = lambda: make_snapshot(positions=[make_position(999, -20000, asset_type="Stock")])
+        hk._send_email = lambda subject, html: emails.append(subject) or True
+        findings = hk.reconcile_all()
+        assert any(f.kind == hk.KIND_FULLY_UNTRACKED for f in findings)
+        assert len(emails) == 1
+    finally:
+        hk.ADAPTERS.clear()
+        hk.ADAPTERS.update(orig_adapters)
+        hk.fetch_live_snapshot = orig_fetch
+        hk._send_email = orig_send
+
+
+_run("a live position with ZERO local record in any module is flagged fully_untracked",
+     test_fully_untracked_live_position_is_flagged)
+_run("a uic with ANY local record (even mismatched) is left to reconcile_module(), not double-flagged",
+     test_fully_untracked_scan_ignores_uics_with_any_local_record)
+_run("safeguard reports a fully_untracked finding as fixed/informational, not an error",
+     test_fully_untracked_reported_fixed_not_error_by_safeguard)
+_run("reconcile_all() includes the fully-untracked sweep and still emails on any finding",
+     test_fully_untracked_included_in_reconcile_all)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 section("reconcile_all(): aggregation and email-on-mismatch-only")
 # ═══════════════════════════════════════════════════════════════════════
 
