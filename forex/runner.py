@@ -1906,14 +1906,21 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
     logger.info(f"Strategies     : {strat_label}")
 
     # ── Portfolio risk pre-flight ─────────────────────────────────────────────
+    # 2026-08-24: daily loss limit and drawdown circuit breaker no longer
+    # block entries -- explicit request ("do not block any new entries, let
+    # it run freely, we need to test all strategies"). Both checks still run
+    # and log so today's real P&L/drawdown stays visible; neither can stop a
+    # strategy from entering anymore. Margin/heat gates are unrelated (they
+    # protect against exhausting shared capacity, not against a bad P&L day)
+    # and are untouched.
     if not dry_run:
         _update_peak_equity(equity)
     loss_limit_hit  = not dry_run and _entries_blocked_by_loss_limit(equity)
     drawdown_paused = not dry_run and not _drawdown_allows_entry(equity)
-    entries_blocked = loss_limit_hit or drawdown_paused
-    if entries_blocked:
+    entries_blocked = False
+    if loss_limit_hit or drawdown_paused:
         reason = "daily loss limit" if loss_limit_hit else "drawdown circuit breaker"
-        logger.warning(f"  [RISK] New entries BLOCKED for this run — {reason}")
+        logger.info(f"  [RISK] {reason} condition is true, but no longer blocks entries (disabled for testing)")
     heat_pct = _portfolio_heat_pct(positions, equity)
     logger.info(f"Portfolio heat : {heat_pct:.1%}  (limit {PORTFOLIO_HEAT_LIMIT:.0%})")
 
@@ -1976,8 +1983,10 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
         exits   = _run_exits(strat_name, strat_mod, positions,
                              market_data, akey, dry_run, today_str)
         entries = 0
-        # Day-trade strategies bypass the swing-book drawdown gate but still
-        # respect the daily loss limit (hard safety rail).
+        # entries_blocked is always False now (see the risk pre-flight block
+        # above) -- kept as a variable rather than removed outright so this
+        # stays a one-line revert if the loss-limit/drawdown gates are ever
+        # turned back on.
         run_entries = (not entries_blocked
                        or (strat_name in DAY_TRADE_STRATEGIES and not loss_limit_hit))
         if run_entries:

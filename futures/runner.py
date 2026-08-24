@@ -1054,9 +1054,14 @@ def run_daily(dry_run: bool = True,
     total_entries = 0
 
     # Check portfolio-level entry gates once, before any entries
+    # 2026-08-24: no longer allowed to actually block entries -- explicit
+    # request ("do not block any new entries, let it run freely, we need to
+    # test all strategies"), applied identically to forex/runner.py. Both
+    # checks still run and log so today's real P&L/drawdown stays visible.
+    # Margin/heat gates are untouched (different risk category).
     loss_limit_hit  = not dry_run and _entries_blocked_by_loss_limit(equity)
     drawdown_paused = not dry_run and not _drawdown_allows_entry(equity)
-    entries_blocked = loss_limit_hit or drawdown_paused
+    entries_blocked = False
 
     # ── Load strategy weights — higher weight runs first (priority access) ────
     strat_weights = strategy_learner.get_weights("futures")
