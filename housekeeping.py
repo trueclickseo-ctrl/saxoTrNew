@@ -78,6 +78,10 @@ class LocalPosition:
     quantity:      int
     asset_type:    str
     stop_order_id: str | None = None
+    stop_price:    float = 0.0    # this entry's own intended risk level, straight from its
+                                   # module's state file -- used by _check_stop_integrity() to
+                                   # tell "no live order at all" from "a live order exists but
+                                   # at a different price than intended" without guessing
 
 
 @dataclass
@@ -98,6 +102,8 @@ KIND_STOP_REPLACE_FAILED = "stop_replace_failed"
 KIND_LEDGER_DRIFT      = "ledger_drift"        # stocks-only: can't auto-remove a ledger row
 KIND_PENDING_ENTRY     = "pending_entry"       # matching entry order still Working, not filled yet -> left alone
 KIND_FULLY_UNTRACKED   = "fully_untracked"     # live position, ZERO local record in ANY module -- structurally invisible to reconcile_module()
+KIND_STOP_MISSING      = "stop_missing"        # local's remembered stop_order_id isn't a live Working order at all -> re-placed at local's own stop_price
+KIND_STOP_STALE        = "stop_stale"          # a real Working order exists at that id, but its live price != local's stop_price -> report only, ambiguous which side is stale
 
 # Order types that count as a real protective stop. "StopIfTraded" and
 # "TrailingStopIfTraded" are Saxo's stop-market equivalents for instruments
@@ -206,6 +212,7 @@ class ForexAdapter(BaseAdapter):
                 module=self.module, key=key, uic=v["uic"], symbol=symbol,
                 direction=v.get("direction", "Buy"), quantity=int(v["quantity"]),
                 asset_type="FxSpot", stop_order_id=v.get("stop_order_id"),
+                stop_price=float(v.get("stop_price") or 0.0),
             ))
         return out
 
@@ -220,6 +227,8 @@ class ForexAdapter(BaseAdapter):
                 entry["quantity"] = lp.quantity
                 if lp.stop_order_id:
                     entry["stop_order_id"] = lp.stop_order_id
+                if lp.stop_price:
+                    entry["stop_price"] = lp.stop_price
         r._save_state(state)
 
     def replace_stop(self, pos: LocalPosition, new_quantity: int, price: float) -> str | None:
@@ -254,6 +263,7 @@ class FuturesAdapter(BaseAdapter):
                 module=self.module, key=key, uic=v["uic"], symbol=symbol,
                 direction=v.get("direction", "Buy"), quantity=int(v["quantity"]),
                 asset_type=v.get("asset_type", "FxSpot"), stop_order_id=v.get("stop_order_id"),
+                stop_price=float(v.get("stop_price") or 0.0),
             ))
         return out
 
@@ -268,6 +278,8 @@ class FuturesAdapter(BaseAdapter):
                 entry["quantity"] = lp.quantity
                 if lp.stop_order_id:
                     entry["stop_order_id"] = lp.stop_order_id
+                if lp.stop_price:
+                    entry["stop_price"] = lp.stop_price
         r._save_state(state)
 
     def replace_stop(self, pos: LocalPosition, new_quantity: int, price: float) -> str | None:
@@ -299,6 +311,7 @@ class ETFAdapter(BaseAdapter):
                 module=self.module, key=uic_str, uic=int(uic_str), symbol=v.get("symbol", uic_str),
                 direction="Buy", quantity=int(v["quantity"]),
                 asset_type="Etf", stop_order_id=v.get("stop_order_id"),
+                stop_price=float(v.get("stop_price") or 0.0),
             ))
         return out
 
@@ -316,6 +329,8 @@ class ETFAdapter(BaseAdapter):
                 entry["quantity"] = lp.quantity
                 if lp.stop_order_id:
                     entry["stop_order_id"] = lp.stop_order_id
+                if lp.stop_price:
+                    entry["stop_price"] = lp.stop_price
         tmp = ETF_STATE + ".tmp"
         with open(tmp, "w") as f:
             json.dump(state, f, indent=2)
@@ -546,6 +561,13 @@ def reconcile_module(adapter: BaseAdapter, live: LiveSnapshot,
                 e.quantity = new_qty
                 if new_oid:
                     e.stop_order_id = new_oid
+                    if trigger_price:
+                        # Persist the price the new stop was ACTUALLY placed at (read live,
+                        # not invented) so local state can't silently drift from reality the
+                        # way it did before save() wrote stop_order_id but never stop_price --
+                        # see _check_stop_integrity()'s "stop_stale" finding, which is what
+                        # catches this exact class of drift going forward.
+                        e.stop_price = trigger_price
                 updated.append(e)
                 findings.append(Finding(
                     adapter.module, KIND_SCALED_DOWN, symbol,
@@ -566,6 +588,9 @@ def reconcile_module(adapter: BaseAdapter, live: LiveSnapshot,
         # else: sums match exactly, nothing to fix.
 
         _dedupe_stops(adapter, live, uic, symbol, findings)
+        for fixed_e in _check_stop_integrity(adapter, live, entries, symbol, findings, removed_keys):
+            if fixed_e not in updated:
+                updated.append(fixed_e)
 
     if updated or removed_keys:
         adapter.save(updated, removed_keys)
@@ -615,6 +640,80 @@ def _dedupe_stops(adapter: BaseAdapter, live: LiveSnapshot, uic: int, symbol: st
                 f"cancelled duplicate {sig[0]} stop {o['OrderId']} @ {sig[1]} "
                 f"(kept {keep['OrderId']}, same instrument/side/price)",
             ))
+
+
+_STOP_PRICE_TOLERANCE_PCT = 0.001   # 0.1% -- rounding/decimal-precision noise, not a real drift
+
+
+def _check_stop_integrity(adapter: BaseAdapter, live: LiveSnapshot, entries: list[LocalPosition],
+                          symbol: str, findings: list[Finding],
+                          removed_keys: list[str]) -> list[LocalPosition]:
+    """Verify each local entry's remembered stop_order_id is still a real,
+    live, correctly-priced Working order -- not just that SOME stop covers
+    the instrument (scan_naked_positions already checks that). Two distinct
+    failure modes, handled differently:
+
+    - stop_order_id doesn't correspond to any live Working order at all
+      (filled, cancelled, or the placement silently never really
+      succeeded): unambiguous -- the position needs a real stop and
+      local's own stop_price is a trusted, already-computed risk level
+      (the strategy's own number, not a guess), so this is fixed
+      immediately by placing one there. Reported as KIND_STOP_MISSING.
+    - a Working order DOES exist at that id, but its live price differs
+      from what local state believes: ambiguous which side is stale (a
+      trailing stop that updated locally but never reached the broker --
+      the exact bug found 2026-08-24 in futures -- looks identical to a
+      broker-side adjustment local state never learned about). Report
+      only; a human decides. KIND_STOP_STALE.
+
+    Replaces the previous dashboard-only "near stop" warning, which
+    required someone to be watching the terminal to notice anything --
+    this runs on housekeeping's own schedule regardless, and unlike a
+    proximity warning it catches a REAL bug (wrong protection level), not
+    just "price is close to where it's supposed to stop.\""""
+    fixed: list[LocalPosition] = []
+    live_orders = {str(o.get("OrderId")): o
+                   for o in live.orders_by_uic.get(entries[0].uic, [])}
+    for e in entries:
+        if e.key in removed_keys or not e.stop_order_id or not e.stop_price:
+            continue
+        order = live_orders.get(str(e.stop_order_id))
+        if order is None or order.get("Status") != "Working":
+            new_oid = adapter.replace_stop(e, e.quantity, e.stop_price)
+            if new_oid:
+                e.stop_order_id = new_oid
+                fixed.append(e)
+                findings.append(Finding(
+                    adapter.module, KIND_STOP_MISSING, symbol,
+                    f"{e.key}: remembered stop {e.stop_order_id} was not a live Working "
+                    f"order (filled, cancelled, or never really placed) — re-placed a new "
+                    f"stop {new_oid} at this entry's own {e.stop_price} risk level",
+                ))
+            else:
+                findings.append(Finding(
+                    adapter.module, KIND_STOP_REPLACE_FAILED, symbol,
+                    f"{e.key}: remembered stop {e.stop_order_id} was not a live Working "
+                    f"order, and re-placing one at {e.stop_price} FAILED — position may be "
+                    f"unprotected, check manually",
+                ))
+            continue
+
+        live_price_raw = order.get("Price")
+        if live_price_raw is None:
+            continue
+        try:
+            live_price = float(live_price_raw)
+        except (TypeError, ValueError):
+            continue
+        if abs(live_price - e.stop_price) > max(abs(e.stop_price) * _STOP_PRICE_TOLERANCE_PCT, 1e-6):
+            findings.append(Finding(
+                adapter.module, KIND_STOP_STALE, symbol,
+                f"{e.key}: local state believes its stop ({e.stop_order_id}) is at "
+                f"{e.stop_price}, but the real broker order is at {live_price} — not "
+                f"auto-corrected (ambiguous which side is stale), but the position IS "
+                f"protected at {live_price}, not {e.stop_price}",
+            ))
+    return fixed
 
 
 def reconcile_all(modules: list[str] | None = None, aggressive: bool = False,
@@ -850,6 +949,98 @@ def _symbol_hint(position: dict, module: str | None) -> str:
     return npid or str(position["PositionBase"]["Uic"])
 
 
+NEAR_STOP_THRESHOLD_PCT = 0.5   # matches the removed forex_dashboard.py warning's own threshold
+
+
+@dataclass
+class NearStopPosition:
+    module:        str
+    symbol:        str
+    uic:           int
+    direction:     str
+    quantity:      float
+    current_price: float
+    stop_price:    float
+    distance_pct:  float
+
+
+def scan_near_stop_positions(snapshot: "LiveSnapshot | None" = None,
+                             send_email: bool = True,
+                             threshold_pct: float = NEAR_STOP_THRESHOLD_PCT) -> list[NearStopPosition]:
+    """Read-only scan across every live, ALREADY-protected position: is the
+    live price within threshold_pct of its own protective stop right now?
+
+    This used to be a forex_dashboard.py-only warning, which meant it only
+    ever got noticed if someone happened to have the terminal open at the
+    right moment. Moved here (2026-08-24) so it runs on housekeeping's own
+    schedule regardless of who's watching. Distinct from
+    scan_naked_positions(): that asks "is this protected at all", this
+    asks "is protection about to be tested" -- a position with zero stop
+    coverage is scan_naked_positions()'s job, not this one, so it's
+    skipped here rather than double-reported.
+
+    Report-only, like every other proximity/informational finding here --
+    a position near its stop isn't a bug, it's just where price is; the
+    real bug class (a stop that's silently WRONG) is
+    _check_stop_integrity()'s job, wired into reconcile_module() instead."""
+    live = snapshot or fetch_live_snapshot()
+    near: list[NearStopPosition] = []
+    forex_uics = _forex_universe_uics()
+
+    for uic, positions in live.positions_by_uic.items():
+        net_amount = live.net_amount(uic)
+        if net_amount == 0:
+            continue
+        base0 = positions[0]["PositionBase"]
+        asset_type = base0.get("AssetType", "")
+        module = _ASSET_TYPE_MODULE.get(asset_type)
+        if asset_type == "FxSpot":
+            module = "forex" if uic in forex_uics else "futures"
+
+        direction  = "Buy" if net_amount > 0 else "Sell"
+        close_side = "Sell" if direction == "Buy" else "Buy"
+        stops = [o for o in live.orders_by_uic.get(uic, [])
+                 if o.get("Status") == "Working" and o.get("BuySell") == close_side
+                 and o.get("OpenOrderType") in _STOP_ORDER_TYPES]
+        if not stops:
+            continue  # unprotected -- scan_naked_positions()'s job, not this one
+
+        prices = [p.get("PositionView", {}).get("CurrentPrice") for p in positions]
+        current_price = next((p for p in prices if p), 0.0)
+        if not current_price:
+            continue
+
+        # Closest stop (by price) to current price is the one that matters --
+        # if several strategies each hold their own stop on the same uic,
+        # the nearest is what actually determines "about to be tested."
+        closest = min(stops, key=lambda o: abs(float(o.get("Price", 0)) - current_price))
+        stop_price = float(closest.get("Price", 0))
+        if stop_price <= 0:
+            continue
+        distance_pct = abs(current_price - stop_price) / current_price * 100
+        is_near = ((direction == "Buy" and current_price < stop_price * (1 + threshold_pct / 100)) or
+                  (direction == "Sell" and current_price > stop_price * (1 - threshold_pct / 100)))
+        if not is_near:
+            continue
+
+        symbol = _symbol_hint(positions[0], module)
+        near.append(NearStopPosition(
+            module=module or "unknown", symbol=symbol, uic=uic, direction=direction,
+            quantity=abs(net_amount), current_price=float(current_price),
+            stop_price=stop_price, distance_pct=distance_pct,
+        ))
+
+    if near:
+        for n in near:
+            logger.warning(f"[housekeeping] NEAR-STOP {n.module}/{n.symbol} {n.direction} "
+                           f"{n.quantity:,.0f} — {n.distance_pct:.2f}% from stop ({n.stop_price})")
+        if send_email:
+            _send_near_stop_email(near, threshold_pct)
+    else:
+        logger.info("[housekeeping] scan_near_stop_positions: nothing within threshold")
+    return near
+
+
 # ── Email ───────────────────────────────────────────────────────────────
 
 def _load_email_cfg() -> dict | None:
@@ -933,6 +1124,31 @@ def _send_naked_email(naked: list[NakedPosition]) -> None:
     _send_email(f"⚠ Naked positions: {len(naked)} unprotected — {now}", html)
 
 
+def _send_near_stop_email(near: list[NearStopPosition], threshold_pct: float) -> None:
+    now = datetime.now().strftime("%d %b %Y  %H:%M PKT")
+    rows = "".join(
+        f"<tr><td>{n.module}</td><td>{n.symbol}</td><td>{n.direction}</td>"
+        f"<td>{n.quantity:,.0f}</td><td>{n.current_price}</td><td>{n.stop_price}</td>"
+        f"<td>{n.distance_pct:.2f}%</td></tr>"
+        for n in near
+    )
+    html = f"""<!DOCTYPE html><html><body style="font-family:sans-serif">
+    <h2 style="color:#d68910">Stop proximity alert — {len(near)} position(s) within {threshold_pct:.1f}% of stop</h2>
+    <p style="color:#666">{now}</p>
+    <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse">
+    <tr><th>Module</th><th>Symbol</th><th>Direction</th><th>Quantity</th><th>Price</th><th>Stop</th><th>Distance</th></tr>
+    {rows}
+    </table>
+    <p style="color:#666;font-size:12px">Each of these already has a real, working protective
+    stop — this is not a naked-position alert, just a heads-up that price is close to
+    triggering it. If a stop fires normally, nothing to do. If you're seeing the SAME
+    position here run after run without ever actually closing, that's worth checking --
+    see _check_stop_integrity() for the separate check that catches a stop silently sitting
+    at the wrong price.</p>
+    </body></html>"""
+    _send_email(f"⚠ Stop proximity: {len(near)} position(s) within {threshold_pct:.1f}% — {now}", html)
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(message)s")
     import argparse
@@ -947,3 +1163,4 @@ if __name__ == "__main__":
         reconcile_all(args.modules)
     if not args.reconcile_only:
         scan_naked_positions()
+        scan_near_stop_positions()

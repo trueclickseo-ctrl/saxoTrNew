@@ -295,8 +295,6 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     total_pnl   = 0.0
     total_cost  = 0.0
     total_costs_eur = 0.0   # spread + accrued swap/financing, NOT included in total_pnl
-    near_stop_count = 0
-    near_stop_list  = []
 
     if positions:
         # Group by strategy for cleaner display
@@ -351,17 +349,14 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
                     pct_s = f"{DM}{'—':>9}{W}"
                     now_s = f"{'—':>10}"
 
-                # Stop proximity warning
+                # Stop proximity — highlighted inline on the row below, not
+                # called out as a separate list (2026-08-24: moved to a
+                # scheduled check in housekeeping.py instead of a passive
+                # dashboard warning that only gets seen if someone's
+                # watching — see scan_stop_integrity()).
                 near = (stop_px > 0 and now_px and
                         ((is_long and now_px < stop_px * 1.005) or
                          (not is_long and now_px > stop_px * 0.995)))
-                if near:
-                    near_stop_count += 1
-                    side_label = "LONG" if is_long else "SHORT"
-                    dist_warn  = abs(now_px - stop_px) / now_px * 100 if now_px else 0
-                    near_stop_list.append(
-                        f"{strat.upper()} {sym} {side_label} — {dist_warn:.2f}% from stop ({stop_px:.5f})"
-                    )
                 stp_col = f"{RD}{BD}" if near else DM
                 stop_s  = f"{stop_px:.5f}"
 
@@ -398,12 +393,6 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
             f"{RD}{total_costs_eur:>+,.0f} EUR{DM}  →  "
             f"Net of costs: {W}{nc}{BD}{net_pnl:>+,.0f} EUR{W}"
         )
-
-        # Near-stop warning with details
-        if near_stop_count:
-            L.append(f"  {RD}{BD}⚠  {near_stop_count} position(s) within 0.5% of stop — review immediately!{W}")
-            for ns in near_stop_list:
-                L.append(f"  {RD}   • {ns}{W}")
     else:
         L.append(f"  {DM}No open forex positions.{W}")
     L.append(HR)

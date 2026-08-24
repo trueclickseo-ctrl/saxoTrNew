@@ -78,10 +78,11 @@ class FakeAdapter(hk.BaseAdapter):
         return True
 
 
-def make_position(uic, amount, asset_type="FxSpot"):
+def make_position(uic, amount, asset_type="FxSpot", current_price=None):
     """One raw Saxo position record, shaped like /port/v1/positions/me."""
+    view = {"CurrentPrice": current_price} if current_price is not None else {}
     return {"PositionBase": {"Uic": uic, "Amount": amount, "AssetType": asset_type},
-            "PositionView": {}}
+            "PositionView": view}
 
 
 def make_order(order_id, uic, buy_sell, amount, price, order_type="Stop",
@@ -214,6 +215,32 @@ def test_two_strategies_scaled_down_proportionally_to_match_live():
     assert {c[1] for c in adapter.replace_calls} == {65028, 48972}
 
 
+def test_scale_down_persists_the_corrected_stop_price_not_just_the_order_id():
+    """2026-08-24: found live -- save() wrote the new stop_order_id but
+    never the price it was actually placed at, so local state's
+    stop_price silently drifted from reality every time a scale-down fix
+    touched a position (18 real drifted stops found on the live account
+    the day this was built). trigger_price comes from the CURRENT live
+    order (via _entry_stop_price, mocked here), not invented."""
+    entries = [hk.LocalPosition("fake", "strat_a:CCC", 3, "CCC", "Buy", 81000,
+                                "FxSpot", stop_order_id="OLD_A", stop_price=1.0000)]
+    adapter = FakeAdapter("fake", entries)
+    orig_get_orders = hk.saxo_client.get_orders
+    try:
+        hk.saxo_client.get_orders = lambda: {"Data": [
+            {"OrderId": "OLD_A", "Price": 1.2345},
+        ]}
+        snap = make_snapshot(positions=[make_position(3, 40000)])
+        hk.reconcile_module(adapter, snap)
+        saved = {p.key: p for p in adapter.saved_positions}
+        assert saved["strat_a:CCC"].stop_price == 1.2345, (
+            "the corrected entry's stop_price must be updated to the price the new stop "
+            "was actually placed at, not left at the old (now stale) 1.0000"
+        )
+    finally:
+        hk.saxo_client.get_orders = orig_get_orders
+
+
 def test_scale_down_never_exceeds_live_exposure_with_three_way_split():
     entries = [
         hk.LocalPosition("fake", f"s{i}:CCC", 3, "CCC", "Sell", qty, "FxSpot", stop_order_id=f"OLD{i}")
@@ -255,6 +282,8 @@ def test_forex_adapter_replace_stop_cancels_old_before_placing_new():
 
 _run("two strategies on the same symbol scaled down proportionally, summing exactly to live exposure",
      test_two_strategies_scaled_down_proportionally_to_match_live)
+_run("a scale-down fix persists the corrected stop_price, not just the new order id",
+     test_scale_down_persists_the_corrected_stop_price_not_just_the_order_id)
 _run("ForexAdapter.replace_stop cancels the old order before placing the corrected one",
      test_forex_adapter_replace_stop_cancels_old_before_placing_new)
 _run("proportional split across 3 strategies still sums exactly to live exposure",
@@ -327,6 +356,94 @@ _run("literal duplicate stop orders (same side+price) collapsed to one, keeping 
      test_exact_duplicate_stop_cancelled_keeps_newest)
 _run("two stop orders at different prices on the same instrument are NOT treated as duplicates",
      test_different_price_stops_are_not_treated_as_duplicates)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+section("Stop integrity: the real broker order, not just proximity to price")
+# ═══════════════════════════════════════════════════════════════════════
+# 2026-08-24: replaces the forex_dashboard.py-only "near stop" warning,
+# which only ever got noticed if someone was watching the terminal at the
+# right moment. This checks something more valuable than proximity: does
+# the LOCAL entry's remembered stop_order_id actually correspond to a
+# real, correctly-priced Working order right now?
+
+def test_stop_missing_entirely_gets_replaced_at_local_stop_price():
+    entries = [hk.LocalPosition("fake", "strat:HHH", 8, "HHH", "Buy", 1000, "FxSpot",
+                                stop_order_id="GONE", stop_price=1.05)]
+    adapter = FakeAdapter("fake", entries)
+    # "GONE" isn't in the live orders at all -- filled, cancelled, or never really placed
+    snap = make_snapshot(positions=[make_position(8, 1000)], orders=[])
+    findings = hk.reconcile_module(adapter, snap)
+    missing = [f for f in findings if f.kind == hk.KIND_STOP_MISSING]
+    assert len(missing) == 1
+    assert adapter.replace_calls == [("strat:HHH", 1000, 1.05)], (
+        "must re-place a stop at THIS entry's own already-computed risk level, not guess a new one"
+    )
+    assert adapter.saved_positions is not None, "the corrected stop_order_id must be persisted"
+
+
+def test_stop_present_but_not_working_status_also_gets_replaced():
+    entries = [hk.LocalPosition("fake", "strat:III", 9, "III", "Sell", 1000, "FxSpot",
+                                stop_order_id="CANCELLED_OID", stop_price=2.5)]
+    adapter = FakeAdapter("fake", entries)
+    stale = make_order("CANCELLED_OID", 9, "Buy", 1000, 2.5, status="Cancelled")
+    snap = make_snapshot(positions=[make_position(9, -1000)], orders=[stale])
+    findings = hk.reconcile_module(adapter, snap)
+    assert any(f.kind == hk.KIND_STOP_MISSING for f in findings)
+    assert adapter.replace_calls == [("strat:III", 1000, 2.5)]
+
+
+def test_stop_matching_live_price_produces_no_finding():
+    entries = [hk.LocalPosition("fake", "strat:JJJ", 10, "JJJ", "Buy", 1000, "FxSpot",
+                                stop_order_id="GOOD", stop_price=1.10000)]
+    adapter = FakeAdapter("fake", entries)
+    good = make_order("GOOD", 10, "Sell", 1000, 1.10000)
+    snap = make_snapshot(positions=[make_position(10, 1000)], orders=[good])
+    findings = hk.reconcile_module(adapter, snap)
+    assert not any(f.kind in (hk.KIND_STOP_MISSING, hk.KIND_STOP_STALE) for f in findings)
+    assert adapter.replace_calls == [], "a correctly-priced live stop must not be touched"
+
+
+def test_stop_price_drift_is_reported_not_auto_corrected():
+    """A real Working order exists at that id, just at a different price
+    than local state believes -- ambiguous which side is stale (could be
+    a trailing stop that updated locally but never reached the broker, OR
+    the broker side being right and local being the stale one). Report
+    only, never auto-fixed."""
+    entries = [hk.LocalPosition("fake", "strat:KKK", 11, "KKK", "Buy", 1000, "FxSpot",
+                                stop_order_id="DRIFTED", stop_price=1.10000)]
+    adapter = FakeAdapter("fake", entries)
+    drifted = make_order("DRIFTED", 11, "Sell", 1000, 1.15000)  # 4.5% away from local's belief
+    snap = make_snapshot(positions=[make_position(11, 1000)], orders=[drifted])
+    findings = hk.reconcile_module(adapter, snap)
+    stale = [f for f in findings if f.kind == hk.KIND_STOP_STALE]
+    assert len(stale) == 1
+    assert adapter.replace_calls == [], "must never auto-correct a price mismatch -- ambiguous which side is right"
+    assert adapter.cancel_calls == [], "must not cancel the real (if unexpected) live stop"
+
+
+def test_entry_with_no_stop_order_id_is_skipped_not_flagged():
+    """No stop_order_id at all means nothing to verify -- that's
+    scan_naked_positions()'s job (is there ANY stop covering this), not
+    this check's (is the SPECIFIC remembered stop correct)."""
+    entries = [hk.LocalPosition("fake", "strat:LLL", 12, "LLL", "Buy", 1000, "FxSpot", stop_order_id=None)]
+    adapter = FakeAdapter("fake", entries)
+    snap = make_snapshot(positions=[make_position(12, 1000)], orders=[])
+    findings = hk.reconcile_module(adapter, snap)
+    assert not any(f.kind in (hk.KIND_STOP_MISSING, hk.KIND_STOP_STALE) for f in findings)
+    assert adapter.replace_calls == []
+
+
+_run("a stop_order_id with no matching live order at all is re-placed at the entry's own stop_price",
+     test_stop_missing_entirely_gets_replaced_at_local_stop_price)
+_run("a stop order that exists but isn't Working (filled/cancelled) is treated the same as missing",
+     test_stop_present_but_not_working_status_also_gets_replaced)
+_run("a stop correctly matching the live order's price produces no finding and isn't touched",
+     test_stop_matching_live_price_produces_no_finding)
+_run("a stop whose live price differs from local's belief is reported, never auto-corrected",
+     test_stop_price_drift_is_reported_not_auto_corrected)
+_run("an entry with no stop_order_id at all is skipped by this check (scan_naked_positions's job instead)",
+     test_entry_with_no_stop_order_id_is_skipped_not_flagged)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -619,6 +736,94 @@ _run("a stop covering less than the full position is flagged partial",
      test_partial_stop_coverage_flagged_partial)
 _run("multiple position tickets on the same uic are aggregated into ONE finding, not multiplied",
      test_multiple_tickets_same_uic_aggregated_into_one_finding_not_multiplied)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+section("scan_near_stop_positions(): replaces the old dashboard-only proximity warning")
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_position_near_its_stop_is_flagged():
+    orig_forex_load = hk.ADAPTERS["forex"].load
+    orig_fetch = hk.fetch_live_snapshot
+    emails = []
+    orig_send = hk._send_email
+    try:
+        hk.ADAPTERS["forex"].load = lambda: []
+        hk.fetch_live_snapshot = lambda: make_snapshot(
+            positions=[make_position(400, 100000, current_price=1.10400)],  # LONG
+            orders=[make_order("S", 400, "Sell", 100000, 1.10000)],          # 0.36% below price
+        )
+        hk._send_email = lambda subject, html: emails.append(subject) or True
+        near = hk.scan_near_stop_positions()
+        assert len(near) == 1
+        assert near[0].distance_pct < 0.5
+        assert len(emails) == 1
+    finally:
+        hk.ADAPTERS["forex"].load = orig_forex_load
+        hk.fetch_live_snapshot = orig_fetch
+        hk._send_email = orig_send
+
+
+def test_position_far_from_stop_is_not_flagged():
+    orig_forex_load = hk.ADAPTERS["forex"].load
+    orig_fetch = hk.fetch_live_snapshot
+    try:
+        hk.ADAPTERS["forex"].load = lambda: []
+        hk.fetch_live_snapshot = lambda: make_snapshot(
+            positions=[make_position(401, 100000, current_price=1.20000)],  # LONG, well above stop
+            orders=[make_order("S", 401, "Sell", 100000, 1.10000)],
+        )
+        near = hk.scan_near_stop_positions()
+        assert near == []
+    finally:
+        hk.ADAPTERS["forex"].load = orig_forex_load
+        hk.fetch_live_snapshot = orig_fetch
+
+
+def test_naked_position_is_not_double_reported_as_near_stop():
+    """A position with zero stop coverage is scan_naked_positions()'s
+    finding, not this one's -- reporting it here too would double-count
+    the same underlying gap as two different alert types."""
+    orig_forex_load = hk.ADAPTERS["forex"].load
+    orig_fetch = hk.fetch_live_snapshot
+    try:
+        hk.ADAPTERS["forex"].load = lambda: []
+        hk.fetch_live_snapshot = lambda: make_snapshot(
+            positions=[make_position(402, 100000, current_price=1.10000)], orders=[],
+        )
+        near = hk.scan_near_stop_positions()
+        assert near == [], "an unprotected position must not appear in the near-stop scan at all"
+    finally:
+        hk.ADAPTERS["forex"].load = orig_forex_load
+        hk.fetch_live_snapshot = orig_fetch
+
+
+def test_closest_stop_used_when_multiple_strategies_share_a_uic():
+    orig_forex_load = hk.ADAPTERS["forex"].load
+    orig_fetch = hk.fetch_live_snapshot
+    try:
+        hk.ADAPTERS["forex"].load = lambda: []
+        hk.fetch_live_snapshot = lambda: make_snapshot(
+            positions=[make_position(403, 100000, current_price=1.10000)],
+            orders=[make_order("FAR",  403, "Sell", 60000, 1.00000),
+                   make_order("NEAR", 403, "Sell", 40000, 1.09800)],  # 0.18% away -- this one matters
+        )
+        near = hk.scan_near_stop_positions()
+        assert len(near) == 1
+        assert near[0].stop_price == 1.098
+    finally:
+        hk.ADAPTERS["forex"].load = orig_forex_load
+        hk.fetch_live_snapshot = orig_fetch
+
+
+_run("a position within threshold of its stop is flagged and emailed",
+     test_position_near_its_stop_is_flagged)
+_run("a position well clear of its stop is not flagged",
+     test_position_far_from_stop_is_not_flagged)
+_run("a fully naked position is not double-reported here -- that's scan_naked_positions()'s job",
+     test_naked_position_is_not_double_reported_as_near_stop)
+_run("with multiple stops on one uic, the CLOSEST one determines the distance reported",
+     test_closest_stop_used_when_multiple_strategies_share_a_uic)
 
 
 # ═══════════════════════════════════════════════════════════════════════
