@@ -384,7 +384,17 @@ def _signed(lp: LocalPosition) -> int:
     return lp.quantity if lp.direction == "Buy" else -lp.quantity
 
 
-def reconcile_module(adapter: BaseAdapter, live: LiveSnapshot) -> list[Finding]:
+def reconcile_module(adapter: BaseAdapter, live: LiveSnapshot,
+                     aggressive: bool = False) -> list[Finding]:
+    """aggressive=True additionally removes local entries whose claimed
+    direction has ZERO live backing (a direction_mismatch, not just a
+    zero-exposure orphan) instead of only reporting them. Used by
+    safeguard.py, which — unlike this function's own conservative default
+    used by the unattended post-trade hooks — is explicitly asked to
+    resolve every finding, not just the unambiguous ones. Safe because the
+    entry is provably fictional in its own claimed direction regardless:
+    the real live exposure it was confused with is a SEPARATE thing this
+    function never touches."""
     findings: list[Finding] = []
     local = adapter.load()
     if not local:
@@ -424,11 +434,32 @@ def reconcile_module(adapter: BaseAdapter, live: LiveSnapshot) -> list[Finding]:
             continue
 
         if (live_net > 0) != (local_net > 0):
-            findings.append(Finding(
-                adapter.module, KIND_DIRECTION_MISMATCH, symbol,
-                f"live net {live_net:+,.0f} vs local net {local_net:+,.0f} — OPPOSITE direction, "
-                f"not auto-corrected (too ambiguous to guess safely)",
-            ))
+            if aggressive:
+                for e in entries:
+                    if adapter.can_auto_remove:
+                        if e.stop_order_id:
+                            adapter.cancel_stop(e.stop_order_id)
+                        removed_keys.append(e.key)
+                        findings.append(Finding(
+                            adapter.module, KIND_DIRECTION_MISMATCH, symbol,
+                            f"{e.key}: local {e.direction} {e.quantity} has ZERO live backing in "
+                            f"that direction (live net {live_net:+,.0f} is entirely opposite-signed) "
+                            f"— removed from state, cancelled its stop"
+                            + (f" {e.stop_order_id}" if e.stop_order_id else ""),
+                        ))
+                    else:
+                        findings.append(Finding(
+                            adapter.module, KIND_LEDGER_DRIFT, symbol,
+                            f"{e.key}: local {e.direction} {e.quantity} has ZERO live backing in "
+                            f"that direction, but this is a ledger row — NOT auto-closed. Needs a "
+                            f"real exit price/date.",
+                        ))
+            else:
+                findings.append(Finding(
+                    adapter.module, KIND_DIRECTION_MISMATCH, symbol,
+                    f"live net {live_net:+,.0f} vs local net {local_net:+,.0f} — OPPOSITE direction, "
+                    f"not auto-corrected (too ambiguous to guess safely)",
+                ))
             continue
 
         if abs(live_net) < abs(local_net):
@@ -540,19 +571,22 @@ def _dedupe_stops(adapter: BaseAdapter, live: LiveSnapshot, uic: int, symbol: st
             ))
 
 
-def reconcile_all(modules: list[str] | None = None) -> list[Finding]:
+def reconcile_all(modules: list[str] | None = None, aggressive: bool = False,
+                  snapshot: "LiveSnapshot | None" = None, send_email: bool = True) -> list[Finding]:
     """Run reconciliation across the given modules (default: all four)
-    against a single fresh Saxo snapshot. Emails a report only if any
-    finding was produced. Safe to call after every live run or on a
-    periodic schedule — a clean account produces zero findings and no
-    email."""
+    against a single fresh Saxo snapshot (or a caller-supplied one — see
+    safeguard.py, which shares one snapshot across reconcile_all(),
+    scan_naked_positions(), and its own fix pass rather than hitting Saxo's
+    API three times). Emails a report only if any finding was produced.
+    Safe to call after every live run or on a periodic schedule — a clean
+    account produces zero findings and no email."""
     modules = modules or list(ADAPTERS)
-    live = fetch_live_snapshot()
+    live = snapshot or fetch_live_snapshot()
     all_findings: list[Finding] = []
     for name in modules:
         adapter = ADAPTERS[name]
         try:
-            all_findings.extend(reconcile_module(adapter, live))
+            all_findings.extend(reconcile_module(adapter, live, aggressive=aggressive))
         except Exception as exc:
             logger.warning(f"[housekeeping] {name} reconciliation failed: {exc}")
             all_findings.append(Finding(name, "error", "", f"reconciliation crashed: {exc}"))
@@ -560,7 +594,8 @@ def reconcile_all(modules: list[str] | None = None) -> list[Finding]:
     if all_findings:
         for f in all_findings:
             logger.warning(f"[housekeeping] {f.module}/{f.kind} {f.symbol}: {f.detail}")
-        _send_reconcile_email(all_findings)
+        if send_email:
+            _send_reconcile_email(all_findings)
     else:
         logger.info("[housekeeping] reconcile_all: no mismatches found")
     return all_findings
@@ -570,12 +605,16 @@ def reconcile_all(modules: list[str] | None = None) -> list[Finding]:
 
 @dataclass
 class NakedPosition:
-    module:     str
-    symbol:     str
-    uic:        int
-    direction:  str
-    quantity:   float
-    protection: str        # "none" | "tp_only" | "partial"
+    module:         str
+    symbol:         str
+    uic:            int
+    direction:      str
+    quantity:       float
+    protection:     str        # "none" | "tp_only" | "partial"
+    asset_type:     str = ""
+    current_price:  float = 0.0
+    stop_coverage:  float = 0.0   # quantity already covered by an existing (partial) stop
+    uncovered_qty:  float = 0.0   # quantity - stop_coverage; what a fix still needs to protect
 
 
 _ASSET_TYPE_MODULE = {
@@ -588,7 +627,8 @@ _ASSET_TYPE_MODULE = {
 }
 
 
-def scan_naked_positions() -> list[NakedPosition]:
+def scan_naked_positions(snapshot: "LiveSnapshot | None" = None,
+                         send_email: bool = True) -> list[NakedPosition]:
     """Read-only safety scan across every live Saxo position, regardless
     of which module (or none) is tracking it locally: does a working
     stop-loss order actually cover it?
@@ -606,47 +646,65 @@ def scan_naked_positions() -> list[NakedPosition]:
     "by design" — this function's job is only to make sure that decision
     actually gets made, via the report/email, not to guess.
     """
-    live = fetch_live_snapshot()
+    live = snapshot or fetch_live_snapshot()
     naked: list[NakedPosition] = []
 
     forex_uics = {lp.uic for lp in ADAPTERS["forex"].load()}
 
     for uic, positions in live.positions_by_uic.items():
-        for p in positions:
-            base = p["PositionBase"]
-            amount = base["Amount"]
-            if amount == 0:
-                continue
-            asset_type = base.get("AssetType", "")
-            module = _ASSET_TYPE_MODULE.get(asset_type)
-            if asset_type == "FxSpot":
-                module = "forex" if uic in forex_uics else "futures"
+        # Aggregate to ONE finding per UIC, not one per position ticket.
+        # Saxo doesn't tie a working stop order to a specific ticket — ANY
+        # working stop for this uic/side reduces the SAME shared pool of
+        # exposure regardless of which ticket it was originally meant for.
+        # Checking each ticket independently against the uic's total stop
+        # coverage double(or n-times)-credits that same coverage across
+        # every ticket sharing it: found 2026-08-24 building safeguard.py's
+        # fix pass — a uic with 2+ naked tickets AND some pre-existing
+        # partial coverage would get "fixed" with a real gap still left
+        # over, because each ticket's own uncovered_qty subtracted the
+        # SAME existing coverage instead of it being spent once, and the
+        # post-fix verification (also per-ticket) couldn't see the gap
+        # either since summed new coverage still cleared each ticket's own
+        # amount individually.
+        net_amount = live.net_amount(uic)
+        if net_amount == 0:
+            continue
+        base0 = positions[0]["PositionBase"]
+        asset_type = base0.get("AssetType", "")
+        module = _ASSET_TYPE_MODULE.get(asset_type)
+        if asset_type == "FxSpot":
+            module = "forex" if uic in forex_uics else "futures"
 
-            direction = "Buy" if amount > 0 else "Sell"
-            close_side = "Sell" if direction == "Buy" else "Buy"
-            stops = [o for o in live.orders_by_uic.get(uic, [])
-                     if o.get("Status") == "Working" and o.get("BuySell") == close_side
-                     and o.get("OpenOrderType") in ("Stop", "StopLimit")]
-            limits = [o for o in live.orders_by_uic.get(uic, [])
-                      if o.get("Status") == "Working" and o.get("BuySell") == close_side
-                      and o.get("OpenOrderType") == "Limit"]
+        direction = "Buy" if net_amount > 0 else "Sell"
+        close_side = "Sell" if direction == "Buy" else "Buy"
+        stops = [o for o in live.orders_by_uic.get(uic, [])
+                 if o.get("Status") == "Working" and o.get("BuySell") == close_side
+                 and o.get("OpenOrderType") in ("Stop", "StopLimit")]
+        limits = [o for o in live.orders_by_uic.get(uic, [])
+                  if o.get("Status") == "Working" and o.get("BuySell") == close_side
+                  and o.get("OpenOrderType") == "Limit"]
 
-            stop_coverage = sum(o["Amount"] for o in stops)
-            if stop_coverage >= abs(amount):
-                continue  # fully protected
-            protection = "tp_only" if (not stops and limits) else "partial" if stops else "none"
+        stop_coverage = sum(o["Amount"] for o in stops)
+        if stop_coverage >= abs(net_amount):
+            continue  # fully protected
+        protection = "tp_only" if (not stops and limits) else "partial" if stops else "none"
 
-            symbol = _symbol_hint(p, module)
-            naked.append(NakedPosition(
-                module=module or "unknown", symbol=symbol, uic=uic,
-                direction=direction, quantity=abs(amount), protection=protection,
-            ))
+        symbol = _symbol_hint(positions[0], module)
+        prices = [p.get("PositionView", {}).get("CurrentPrice") for p in positions]
+        current_price = next((p for p in prices if p), 0.0)
+        naked.append(NakedPosition(
+            module=module or "unknown", symbol=symbol, uic=uic,
+            direction=direction, quantity=abs(net_amount), protection=protection,
+            asset_type=asset_type, current_price=float(current_price),
+            stop_coverage=stop_coverage, uncovered_qty=abs(net_amount) - stop_coverage,
+        ))
 
     if naked:
         for n in naked:
             logger.warning(f"[housekeeping] NAKED {n.module}/{n.symbol} {n.direction} "
                            f"{n.quantity:,.0f} — protection={n.protection}")
-        _send_naked_email(naked)
+        if send_email:
+            _send_naked_email(naked)
     else:
         logger.info("[housekeeping] scan_naked_positions: everything protected")
     return naked

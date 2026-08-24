@@ -1431,7 +1431,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
 
         # ── Signal filter: consensus + ML meta-filter ──────────────────────
         passes, features, reason = signal_filter.evaluate(
-            sym, direction, sig, agreement, STRATEGIES)
+            sym, direction, sig, agreement, STRATEGIES, firing_strategy=strat_name)
         if not passes:
             logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] "
                         f"— signal_filter: {reason}")
@@ -2301,19 +2301,20 @@ if __name__ == "__main__":
                       session=args.session)
 
         if args.live:
-            # Reconcile local state against live Saxo right after every real
+            # Reconcile local state against live Saxo AND fix/verify every
+            # naked-position and mismatch finding, right after every real
             # run, while this process still holds the lock -- catches drift
             # from Saxo's own opposite-direction netting or a race-condition
             # duplicate before the NEXT run's stops/exits act on stale
-            # numbers. See housekeeping.py's module docstring for why this
-            # exists (2026-08-24 audit found 24+ orphaned entries and 6
-            # duplicate stop orders that had accumulated silently).
+            # numbers. See housekeeping.py's and safeguard.py's module
+            # docstrings (2026-08-24 audit found 24+ orphaned entries, 6
+            # duplicate stops, and — once safeguard.py existed to actually
+            # act instead of only report — 19 fully naked live positions).
             try:
-                import housekeeping
-                housekeeping.reconcile_all(["forex"])
-                housekeeping.scan_naked_positions()
+                import safeguard
+                safeguard.run_safeguard(["forex"])
             except Exception as exc:
-                logger.warning(f"  [HOUSEKEEPING] post-run reconciliation failed: {exc}")
+                logger.warning(f"  [SAFEGUARD] post-run fix pass failed: {exc}")
     finally:
         if args.live:
             _release_lock()

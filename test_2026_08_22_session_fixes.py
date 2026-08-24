@@ -1672,6 +1672,70 @@ def test_margin_gate_wired_into_futures_entry_loop():
 _run("forex: margin gate blocks entries above 50% real Saxo utilization", test_forex_margin_gate_blocks_above_threshold)
 _run("forex: margin gate allows entries below threshold", test_forex_margin_gate_allows_below_threshold)
 _run("forex: margin gate fails open (doesn't freeze trading) on lookup error", test_forex_margin_gate_fails_open_on_lookup_error)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+section("2026-08-24: session gap fills (London/NY/Tokyo) never passed consensus")
+# ═══════════════════════════════════════════════════════════════════════
+# compute_agreement()'s upfront cross-strategy re-scan calls every strategy's
+# plain generate_signals() to build the consensus map. For gap during a
+# session window (London/NY/Tokyo) the REAL entry path uses a DIFFERENT
+# function -- generate_session_signals(session, h1_data, ...) -- so gap's own
+# live signal was never rediscovered by the re-scan and never counted toward
+# its own consensus. MIN_AGREEMENT=1 is documented as "unrestricted" (the
+# firing strategy counts as agreeing with itself) but that invariant only
+# held for strategies whose re-scan path matches their real entry path.
+# Confirmed live 2026-08-24 12:09 PKT: 5 real London-session gap signals
+# (USDNOK, NZDHUF, GBPHUF, USDHUF, EURNOK) ALL rejected "consensus=0/1
+# required" -- not a data quality issue, every one was a structurally
+# guaranteed rejection. Fixed by passing the firing strategy's own name into
+# evaluate()/extract_features() and force-including it in its own agreement
+# list, independent of whether the upfront re-scan happened to rediscover it.
+
+
+def test_consensus_always_counts_the_firing_strategy_itself():
+    import forex.signal_filter as sf
+    # agreement map has NOTHING for this symbol -- exactly what happens for a
+    # session gap signal, since compute_agreement()'s re-scan never finds it.
+    agreement = {}
+    signal = {"symbol": "USDNOK", "direction": "Sell", "atr": 0.05, "close": 10.5, "adx": 20}
+    passes, features, reason = sf.evaluate(
+        "USDNOK", "Sell", signal, agreement, {"gap": None}, firing_strategy="gap")
+    assert passes, f"MIN_AGREEMENT=1 must be unrestricted regardless of the upfront re-scan: {reason}"
+    assert features["gap"] == 1, "the firing strategy's own flag must be set in its feature vector"
+
+
+def test_consensus_still_blocks_when_firing_strategy_omitted_and_min_agreement_raised():
+    """Guards against the fix silently defeating MIN_AGREEMENT>1 -- a strategy
+    still needs an actual OTHER confirmer when min_agreement=2, forcing itself
+    in only satisfies the "counts as agreeing with itself" part."""
+    import forex.signal_filter as sf
+    agreement = {}
+    signal = {"symbol": "USDNOK", "direction": "Sell", "atr": 0.05, "close": 10.5, "adx": 20}
+    passes, features, reason = sf.evaluate(
+        "USDNOK", "Sell", signal, agreement, {"gap": None},
+        min_agreement=2, firing_strategy="gap")
+    assert not passes, "forcing self-agreement must not satisfy a min_agreement > 1 requirement on its own"
+
+
+def test_runner_passes_firing_strategy_into_evaluate():
+    import inspect
+    import forex.runner as runner
+    src = inspect.getsource(runner._run_entries)
+    assert "firing_strategy=strat_name" in src, (
+        "forex/runner.py's _run_entries must pass its own strategy name into "
+        "signal_filter.evaluate() so the consensus check can't silently reject "
+        "a strategy whose upfront agreement re-scan uses a different code path "
+        "than its real entry logic (gap's session vs weekly split, 2026-08-24)"
+    )
+
+
+_run("signal_filter: the firing strategy always counts toward its own consensus (fixes session gap's permanent 0/1 rejection)",
+     test_consensus_always_counts_the_firing_strategy_itself)
+_run("signal_filter: forcing self-agreement doesn't defeat a real min_agreement>1 confirmer requirement",
+     test_consensus_still_blocks_when_firing_strategy_omitted_and_min_agreement_raised)
+_run("forex/runner.py: _run_entries wires firing_strategy through to signal_filter.evaluate",
+     test_runner_passes_firing_strategy_into_evaluate)
 _run("futures: margin gate blocks entries above threshold", test_futures_margin_gate_blocks_above_threshold)
 _run("forex: margin gate applies to every strategy, LBO included (not just swing)", test_margin_gate_wired_into_forex_entry_loop_for_every_strategy)
 _run("futures: margin gate wired into the entry loop", test_margin_gate_wired_into_futures_entry_loop)

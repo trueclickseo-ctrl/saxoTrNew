@@ -1062,16 +1062,16 @@ def run_cycle():
         f"Equity {total_equity:,.0f} SEK"
     )
 
-    # See housekeeping.py's module docstring for why this runs after every
+    # See safeguard.py's module docstring for why this runs after every
     # real cycle -- atos_live.db is a P&L LEDGER, not a simple position
     # tracker, so its adapter only ever corrects an overstated `shares`
-    # count and never auto-closes a row (that needs a real exit price).
+    # count and never auto-closes a row (that needs a real exit price);
+    # naked-position protection is still fixed+verified like every module.
     try:
-        import housekeeping
-        housekeeping.reconcile_all(["stocks"])
-        housekeeping.scan_naked_positions()
+        import safeguard
+        safeguard.run_safeguard(["stocks"])
     except Exception as e:
-        print(f"  [HOUSEKEEPING] post-run reconciliation failed: {e}")
+        print(f"  [SAFEGUARD] post-run fix pass failed: {e}")
 
     print("\nCycle complete.\n")
 

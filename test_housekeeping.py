@@ -424,6 +424,39 @@ def test_partial_stop_coverage_flagged_partial():
         hk.fetch_live_snapshot = orig_fetch
 
 
+def test_multiple_tickets_same_uic_aggregated_into_one_finding_not_multiplied():
+    """A uic with 2+ position tickets and SOME pre-existing partial stop
+    coverage must produce exactly ONE naked finding sized to the TOTAL
+    uncovered gap -- not one finding per ticket, each independently (and
+    wrongly) crediting the same shared coverage. Found 2026-08-24: the
+    per-ticket version let a real protection gap survive a "fix" because
+    summed new stops still cleared each ticket's OWN amount individually
+    even though the true aggregate gap was never closed."""
+    orig_forex_load = hk.ADAPTERS["forex"].load
+    orig_fetch = hk.fetch_live_snapshot
+    try:
+        hk.ADAPTERS["forex"].load = lambda: []
+        # uic 300: two 92,000 tickets (net 184,000) + one existing 22,000
+        # stop that covers neither ticket individually but IS real, shared
+        # protection against the aggregate.
+        hk.fetch_live_snapshot = lambda: make_snapshot(
+            positions=[make_position(300, 92000, asset_type="FxSpot"),
+                      make_position(300, 92000, asset_type="FxSpot")],
+            orders=[make_order("S", 300, "Sell", 22000, 150.0)],
+        )
+        naked = hk.scan_naked_positions()
+        assert len(naked) == 1, "must be ONE finding per uic, not one per ticket"
+        assert naked[0].quantity == 184000
+        assert naked[0].stop_coverage == 22000
+        assert naked[0].uncovered_qty == 162000, (
+            "uncovered gap must be computed once against the TOTAL, not per-ticket "
+            f"(got {naked[0].uncovered_qty})"
+        )
+    finally:
+        hk.ADAPTERS["forex"].load = orig_forex_load
+        hk.fetch_live_snapshot = orig_fetch
+
+
 _run("a live position with zero stop/TP is flagged naked and triggers exactly one email",
      test_naked_position_detected_with_no_stop_at_all)
 _run("a live position with full stop coverage is never flagged",
@@ -432,6 +465,8 @@ _run("a take-profit-only position (no stop-loss) is flagged tp_only, not treated
      test_take_profit_only_is_flagged_tp_only_not_fully_protected)
 _run("a stop covering less than the full position is flagged partial",
      test_partial_stop_coverage_flagged_partial)
+_run("multiple position tickets on the same uic are aggregated into ONE finding, not multiplied",
+     test_multiple_tickets_same_uic_aggregated_into_one_finding_not_multiplied)
 
 
 # ═══════════════════════════════════════════════════════════════════════

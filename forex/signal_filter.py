@@ -103,14 +103,28 @@ def compute_agreement(market_data: dict, live_prices: dict,
 def extract_features(sym: str, direction: str,
                      agreement: dict,
                      signal: dict,
-                     strategy_names: list) -> dict:
+                     strategy_names: list,
+                     firing_strategy: str = "") -> dict:
     """
     Build the feature vector for one signal event.
 
     Returns a dict with keys matching _CSV_COLS (minus key/date/outcome).
+
+    firing_strategy: the strategy that actually produced `signal`. Forced
+    into `agrees` even if compute_agreement()'s upfront cross-strategy
+    re-scan didn't independently rediscover it — that re-scan calls each
+    strategy's plain generate_signals(), which for session-based gap
+    (London/NY/Tokyo) is a DIFFERENT, weekly-only code path than the
+    H1-based generate_session_signals() _run_entries() actually uses.
+    Found 2026-08-24: this silently gave every session gap signal
+    agreement_count=0 forever (the firing strategy never counted as
+    agreeing with itself), permanently blocking 2 of gap's 3 sub-
+    strategies despite MIN_AGREEMENT=1 being documented as "unrestricted."
     """
     sym_agreement = agreement.get(sym, {"Buy": [], "Sell": []})
-    agrees        = sym_agreement.get(direction, [])
+    agrees        = list(sym_agreement.get(direction, []))
+    if firing_strategy and firing_strategy not in agrees:
+        agrees.append(firing_strategy)
 
     def flag(name: str) -> int:
         return 1 if name in agrees else 0
@@ -219,7 +233,8 @@ def passes_ml(features: dict, threshold: float = ML_THRESHOLD) -> tuple[bool, fl
 
 def evaluate(sym: str, direction: str, signal: dict,
              agreement: dict, strategies: dict,
-             min_agreement: int = MIN_AGREEMENT) -> tuple[bool, dict, str]:
+             min_agreement: int = MIN_AGREEMENT,
+             firing_strategy: str = "") -> tuple[bool, dict, str]:
     """
     Run both Phase 1 and Phase 2 filters on a signal.
 
@@ -228,7 +243,7 @@ def evaluate(sym: str, direction: str, signal: dict,
         reason = "" if passes, or short explanation if blocked
     """
     features = extract_features(sym, direction, agreement, signal,
-                                list(strategies.keys()))
+                                list(strategies.keys()), firing_strategy)
 
     # Phase 1 — consensus
     if not passes_consensus(features, min_agreement):

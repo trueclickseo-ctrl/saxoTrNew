@@ -1,15 +1,27 @@
-# Housekeeping Agent
+# Housekeeping & Safeguard Agents
 
-Cross-module state reconciliation for Forex, Futures, ETF and Shares
-(ATOS). Built 2026-08-24 after a manual audit of 4 suspected mismatched
-positions turned into a full account sweep that found **24 orphaned
-local entries, 6 duplicate stop orders, 4 overstated positions, 4
-untracked live positions, and 21 completely unprotected live
-positions** — the manual fix only caught the tip of it. This tool exists
-so that never has to be found by hand again.
+Cross-module state reconciliation and auto-fix for Forex, Futures, ETF
+and Shares (ATOS). Two cooperating agents, built 2026-08-24:
 
-Code: [`housekeeping.py`](../housekeeping.py) (project root).
-Tests: [`test_housekeeping.py`](../test_housekeeping.py) — 16/16 passing.
+- **`housekeeping.py`** — pulls live Saxo state, compares it to each
+  module's local state, auto-fixes the unambiguous cases, and *reports*
+  the ambiguous ones (direction mismatches, naked positions) for a human
+  to decide.
+- **`safeguard.py`** — runs immediately after housekeeping and *resolves*
+  those ambiguous cases too, then re-verifies against a fresh Saxo
+  snapshot before declaring anything fixed. Built the same day, once a
+  live run showed housekeeping alone still left 23 naked positions and 8
+  mismatches sitting unresolved.
+
+Together they exist so that the class of drift a manual audit first
+caught by hand on 2026-08-24 (initially thought to be 4 positions, turned
+out to be dozens once actually swept) never has to be found by hand
+again — and, as of safeguard.py, never has to be *fixed* by hand again
+either.
+
+Code: [`housekeeping.py`](../housekeeping.py), [`safeguard.py`](../safeguard.py) (project root).
+Tests: [`test_housekeeping.py`](../test_housekeeping.py) — 17/17,
+[`test_safeguard.py`](../test_safeguard.py) — 16/16.
 
 ## The problem this solves
 
@@ -58,17 +70,92 @@ account, does a working stop-loss order actually cover it?
 | `partial` | A stop exists but covers less than the full quantity |
 | *(not reported)* | Fully covered |
 
-**Deliberately never auto-closes or auto-protects anything.** Unlike a
-quantity mismatch (where "make the numbers agree" has one obviously
-correct direction), a naked position could be a genuine bug, a strategy
-that intentionally manages risk without a broker-side stop, or a position
-caught mid-way through its own entry sequence. Only a human — or that
-strategy's own code — should decide whether "no stop" means "bug" or "by
-design." This function's job is only to make sure that decision actually
-gets made, via the report/email, not to guess.
+**Aggregated per Saxo `Uic`, not per position ticket.** Saxo doesn't tie a
+working stop order to a specific ticket — any working stop for a
+uic/side reduces the same shared pool of exposure regardless of which
+ticket it was originally meant for. An earlier per-ticket version (fixed
+2026-08-24, same day it was built) let a real protection gap survive
+`safeguard.py`'s fix pass: a uic with 2+ naked tickets *and* some
+pre-existing partial coverage got "fixed" with a real gap still left
+over, because each ticket's own uncovered quantity subtracted the same
+existing coverage instead of it being spent once — and the per-ticket
+verification couldn't see the gap either, since summed new coverage
+still cleared each ticket's own amount individually even though the true
+aggregate exposure wasn't fully covered.
+
+By itself (`housekeeping.py`), this function **never auto-closes or
+auto-protects anything** — it only reports, for the reasons below.
+`safeguard.py` (next section) is what actually acts on its findings.
+
+Unlike a quantity mismatch (where "make the numbers agree" has one
+obviously correct direction), a naked position could be a genuine bug, a
+strategy that intentionally manages risk without a broker-side stop, or a
+position caught mid-way through its own entry sequence. `housekeeping.py`
+alone doesn't try to tell those apart — it just makes sure the question
+gets asked (via the report/email). `safeguard.py` *does* act, using a
+deliberately conservative, asset-class-generic fallback (see below) since
+by the time something reaches this scan, the original strategy's own
+risk intent is usually already lost.
 
 Sends **one email** listing every naked position found — only if at
 least one exists.
+
+## `safeguard.py` — actually fixes what housekeeping only reports
+
+Runs right after `housekeeping.reconcile_all()` and `scan_naked_positions()`
+and resolves both categories they leave for a human:
+
+| Finding | How safeguard resolves it |
+|---|---|
+| Naked / under-protected position (`none`, `tp_only`, `partial`) | Places a protective stop for the **uncovered** quantity only (never duplicates existing partial coverage), at a conservative asset-class-default distance from the position's own live current price — see `DEFAULT_STOP_PCT` below. An existing take-profit order is left untouched. |
+| `direction_mismatch` | Removes the local entry — it has **zero** live backing in its own claimed direction, so this is the same operation as an ordinary zero-exposure orphan, just discovered via a different comparison (`reconcile_all(..., aggressive=True)`). The *real* opposite-direction exposure that confused the old entry is a separate thing this never touches — its protection is handled by the naked-position fix above, not by inventing a new local entry to explain it. |
+| `untracked_live` | No local entry is wrong, so there's nothing to remove. Recorded as resolved with a note that protection (if needed) is handled by the naked-position pass — avoids double-counting one root cause as two different "fixed" claims. |
+| `ledger_drift` (stocks) | **Never auto-resolved**, even by safeguard — a ledger row needs a real exit price/date, which no automated process has. Reported `NOT FIXED`. |
+
+### Default stop distance (`DEFAULT_STOP_PCT`)
+
+Not tuned to any strategy's real risk logic — that's unknown/lost for an
+untracked position. Wide enough to avoid an immediate re-trigger on
+normal noise, tight enough to actually bound the loss:
+
+| AssetType | Default |
+|---|---|
+| `FxSpot` | 2% |
+| `CfdOnIndex` / `ContractFutures` | 3% |
+| `Etf` | 5% |
+| `Stock` / `CfdOnStock` | 8% (matches the existing `US_BLEND_STOP_PCT` precedent from the 2026-08-22 margin incident, where 6 naked stock positions were given 8% stops by hand) |
+
+### Price precision — live lookup, not a generic guess
+
+A naked position can be *any* uic across *any* module. `forex.runner`'s
+own `get_price_decimals()` only knows its cached 117-pair FX universe —
+it doesn't know about a futures-module symbol like CADMXN whose real
+Saxo `AssetType` is `FxSpot` but isn't in that list. Found live
+2026-08-24: the generic 5dp FxSpot guess triggered a real
+`PriceNotInTickSizeIncrements` rejection (CADMXN actually needs 4dp) —
+the exact tick-size bug class already documented for forex's own pairs
+(see `account_margin_2026-08-22` session notes), just reachable through a
+different door. Fixed via `_live_price_decimals()`, a direct
+`/ref/v1/instruments/details` lookup (same endpoint+fallback pattern
+already proven in `place_all_stops.py`), used for any `FxSpot` position
+outside forex's own universe.
+
+### Verification — never trust the return value alone
+
+After every fix, `run_safeguard()` re-fetches a **fresh** Saxo snapshot
+and re-checks that the specific thing it just fixed is actually fixed —
+matched by `uic` (not module+symbol, which can shift mid-run once a
+mismatch-fix changes which module's adapter still references that uic).
+A fix that Saxo silently didn't apply, or that a later event undid, gets
+flipped to `NOT FIXED` with a `VERIFICATION FAILED` note rather than
+trusted on faith. Naked-position fixes run **before** mismatch fixes
+deliberately — removing a direction-mismatched local entry changes the
+forex-uic set `scan_naked_positions()` uses to classify an `FxSpot`
+position as forex vs. futures, so fixing mismatches first would make that
+classification shift mid-run.
+
+Sends exactly **one confirmation email** per run — only if there was
+something to do — listing every item with its verified outcome.
 
 ## Module adapters
 
@@ -107,25 +194,38 @@ So `StocksAdapter`:
 | ETF | [`saxo_etf_strategy/run_etf_bot.py`](../saxo_etf_strategy/run_etf_bot.py) — end of `ETFBot.run_once()`, gated on `not self.cfg.dry_run` |
 | Stocks | [`atos_runner.py`](../atos_runner.py) — end of `run_cycle()` |
 
-Each call site scopes `reconcile_all()` to just its own module (fast,
-targeted) and always runs the full `scan_naked_positions()` sweep
-afterward (inherently account-wide — a naked position from any module
-matters regardless of which module just ran). Failures are caught and
-logged, never allowed to fail the trading run itself.
+Each call site calls `safeguard.run_safeguard([module])`, scoped to just
+its own module for the mismatch-fix pass — `safeguard` internally runs
+housekeeping's checks against one shared Saxo snapshot, fixes what it
+can, and runs the naked-position sweep account-wide (inherently
+account-wide — a naked position from any module matters regardless of
+which module just ran). Failures are caught and logged, never allowed to
+fail the trading run itself.
 
-## Periodic safety net
+## Periodic safety nets
 
-`ATOS Housekeeping` — a Windows Scheduled Task created 2026-08-24, runs
-**every 30 minutes**, any day, independent of any module's own schedule.
-Exists because a module's post-run reconciliation only fires when *that*
-module runs live — this catches drift caused by a *different* module's
-trade even on a day this module stays flat.
+Two Windows Scheduled Tasks, both created 2026-08-24, independent of any
+module's own schedule — a module's post-run hook only fires when *that*
+module runs live, so these catch drift caused by a *different* module's
+trade even on a day this module stays flat:
 
-- Action: `run_housekeeping.bat` → `python housekeeping.py` (both
-  `reconcile_all()` and `scan_naked_positions()`, all 4 modules)
-- Log: `data/housekeeping_scheduler.log`
-- Read-only unless it finds something to fix; sends email only on a
-  mismatch/naked finding, same as the per-run wiring.
+| Task | Runs | Action | Log |
+|---|---|---|---|
+| `ATOS Housekeeping` | every 30 min | `python housekeeping.py` — report-only, both functions, all 4 modules | `data/housekeeping_scheduler.log` |
+| `ATOS Safeguard` | every 30 min, offset 15 min | `python safeguard.py` — fixes and verifies, all 4 modules | `data/safeguard_scheduler.log` |
+
+Both are read-only/no-op unless they find something to do; both email
+only when there's something to report.
+
+**Note on Windows Task Scheduler in this environment**: creating a *new*
+task by name reliably works via `Register-ScheduledTask`. Modifying or
+disabling an *existing* task does not — `Disable-ScheduledTask`,
+`schtasks /Change`, and `schtasks /Create /F` (overwrite) were all denied
+by the environment's own permission layer while diagnosing the
+`ATOS Forex Gap London` task's disabled trigger the same day (see
+[[forex_module]]). The reliable workaround is the same one used there:
+create a new, correctly-configured task under a different name rather
+than trying to fix the old one in place.
 
 ## Manual use
 
@@ -143,12 +243,23 @@ python housekeeping.py --reconcile-only
 python housekeeping.py --naked-only
 ```
 
+```bash
+# Fix + verify pass, all 4 modules
+python safeguard.py
+
+# Just one/some modules
+python safeguard.py --modules forex futures
+```
+
 Or from Python:
 
 ```python
 import housekeeping
 findings = housekeeping.reconcile_all(["forex"])   # or None for all 4
 naked    = housekeeping.scan_naked_positions()
+
+import safeguard
+outcomes = safeguard.run_safeguard(["forex"])       # or None for all 4
 ```
 
 ## Email
@@ -158,15 +269,18 @@ this codebase — `forex/notifier.py`, `scheduler_watchdog.py`,
 `intraday_monitor.py`). Two templates, both sent only when there's
 something to report:
 
-- **Reconciliation report** — table of every finding (module, symbol,
-  kind, detail), with a note that `estimate`-flagged rows involve
-  per-strategy attribution Saxo's netting has erased.
-- **Naked position alert** — table of every unprotected live position
-  (module, symbol, direction, quantity, protection level), with a note
-  that this scan never auto-closes or auto-protects — it's a decision
-  for a human.
+- **Reconciliation report** (`housekeeping.py`) — table of every finding
+  (module, symbol, kind, detail), with a note that `estimate`-flagged
+  rows involve per-strategy attribution Saxo's netting has erased.
+- **Naked position alert** (`housekeeping.py`) — table of every
+  unprotected live position (module, symbol, direction, quantity,
+  protection level), with a note that this scan never auto-closes or
+  auto-protects — it's a decision for a human.
+- **Safeguard confirmation** (`safeguard.py`) — table of every item it
+  attempted, each row showing verified `FIXED` or `NOT FIXED`, never
+  claimed on faith.
 
-## 2026-08-24 first real run
+## 2026-08-24: first real runs
 
 The first live `reconcile_all()` run (forex only, since that's where the
 manual audit started) found and fixed, in a single pass:
@@ -182,11 +296,27 @@ manual audit started) found and fixed, in a single pass:
   quantity exceeded live exposure; corrected proportionally.
 - **4 flagged as direction-mismatch, not touched** (CHFJPY, EURCHF,
   USDCHF, EURUSD) — including EURCHF at −2,381,000 live vs +55,000
-  local, and EURUSD at +1,284,000 live vs −15,000 local. These need
-  manual investigation, not an automated guess.
+  local, and EURUSD at +1,284,000 live vs −15,000 local.
 
-The follow-up `scan_naked_positions()` sweep (all 4 modules) found **21
-live positions with zero or partial protection**, including three
-unprotected EURCHF shorts totaling −2,381,000 and two unprotected AUDCAD
-futures shorts totaling −1,446,000 — see the session notes for the full
-list and what was decided about each.
+The follow-up `scan_naked_positions()` sweep (all 4 modules) found **23
+live positions with zero or partial protection** (after the per-uic
+aggregation fix — see above; the pre-fix, per-ticket count read higher
+and would have under-protected several of them anyway), including three
+unprotected EURCHF tickets totaling −2,381,000 and two unprotected AUDCAD
+futures tickets totaling −1,446,000.
+
+`safeguard.py`'s first live run then resolved essentially all of it in
+one pass, verified against a fresh Saxo snapshot:
+
+- **19 of 19 naked positions fixed** on the first attempt (protective
+  stops placed for the uncovered quantity, correct side, verified) — the
+  one exception (`futures/CADMXN`, `PriceNotInTickSizeIncrements`) is
+  what led directly to the `_live_price_decimals()` fix above; a retry
+  immediately after fixed and verified it too.
+- **8 of 8 mismatches resolved**: 4 direction-mismatched local entries
+  removed and verified (CHFJPY, EURCHF×2, USDCHF, EURUSD), 4
+  untracked-live findings (NZDUSD, CADJPY, GBPJPY, CHFCNH) confirmed
+  already fully protected by the naked-position pass.
+- A follow-up sweep across all 4 modules found and fixed one more
+  (`futures/GBPAUD`, newly opened between runs), then two consecutive
+  clean runs confirmed a stable, fully-protected steady state.
