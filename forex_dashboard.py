@@ -437,12 +437,22 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     # color — this is each strategy's actual locked-in track record, not
     # paper gains from currently-open positions that could reverse tomorrow.
     # Unrealized is shown alongside it, never blended into the same total.
+    #
+    # The lifetime total alone can hide a genuinely bad day: gap's all-time
+    # +10,049 EUR still reads as "winning" even on a day it lost -3,710 EUR
+    # (2026-08-24), because older wins net against it in the same number.
+    # A separate TODAY column exists specifically so a bad day is visible
+    # immediately, not just recoverable by knowing to check the ledger.
     try:
         import pnl_tracker
-        strat_rows = pnl_tracker.get_strategy_summary("forex")  # already sorted by total_pnl desc
+        strat_rows  = pnl_tracker.get_strategy_summary("forex")  # already sorted by total_pnl desc
+        today_str   = date.today().isoformat()
+        today_rows  = pnl_tracker.get_strategy_summary_since("forex", today_str)
     except Exception:
         strat_rows = []
+        today_rows = []
     stats_by_strat = {r["strategy"]: r for r in strat_rows}
+    today_by_strat = {r["strategy"]: r for r in today_rows}
 
     # Strategies with a closed trade come first (real track record, best to
     # worst); strategies still 100% open (no closed trades yet, so no row
@@ -453,7 +463,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
 
     SB_HDR = (
         f"  {DM}{'Strategy':<16}  {'Active':>6}  {'Closed':>7}  {'W/L':>7}  "
-        f"{'WR%':>6}  {'PF':>6}  {'Realized P&L':>15}  {'Unrealized':>13}{W}"
+        f"{'WR%':>6}  {'PF':>6}  {'Realized P&L':>15}  {'Today':>11}  {'Unrealized':>13}{W}"
     )
     L.append(SB_HDR)
     L.append(HR)
@@ -488,26 +498,43 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         pf       = stats.get("profit_factor")
         best     = stats.get("best", 0.0)
 
+        today_stats = today_by_strat.get(strat, {})
+        today_pnl   = today_stats.get("total_pnl", 0.0)
+        today_n     = today_stats.get("trades", 0)
+
         grand_realized   += realized
         grand_unrealized += unrealized
         grand_closed     += n_closed
         grand_wins       += wins
         grand_losses     += losses
 
-        pnl_col = GR if realized >= 0 else RD
-        u_col   = GR if unrealized >= 0 else RD
-        wr_col  = GR if wr >= 50 else (YL if n_closed else DM)
-        pf_s    = f"{pf:.2f}" if pf is not None else ("∞" if realized > 0 and n_closed else "—")
-        wr_s    = f"{wr:.1f}%" if n_closed else "—"
+        pnl_col   = GR if realized >= 0 else RD
+        u_col     = GR if unrealized >= 0 else RD
+        wr_col    = GR if wr >= 50 else (YL if n_closed else DM)
+        pf_s      = f"{pf:.2f}" if pf is not None else ("∞" if realized > 0 and n_closed else "—")
+        wr_s      = f"{wr:.1f}%" if n_closed else "—"
+        today_col = GR if today_pnl >= 0 else RD
 
         realized_cell   = _pad_ansi(f"{pnl_col}{BD}{realized:>+,.0f} EUR{W}", 15)
+        today_cell      = _pad_ansi(f"{today_col}{today_pnl:>+,.0f} EUR{W}" if today_n else f"{DM}—{W}", 11)
         unrealized_cell = _pad_ansi(f"{u_col}{unrealized:>+,.0f} EUR{W}", 13)
         L.append(
             f"  {sc}{BD}{label:<16}{W}  {DM}{f'{count}/{max_slots}':>6}{W}  "
             f"{n_closed:>7}  {DM}{f'{wins}W/{losses}L':>7}{W}  "
             f"{wr_col}{wr_s:>6}{W}  {DM}{pf_s:>6}{W}  "
-            f"{realized_cell}  {unrealized_cell}"
+            f"{realized_cell}  {today_cell}  {unrealized_cell}"
         )
+        # Flag specifically when a losing day is hidden inside a still-
+        # positive lifetime total — the exact case that prompted this
+        # column: gap's +10,049 all-time reads as "winning" even on a day
+        # it lost -3,710 (2026-08-24), because older wins are baked into
+        # the same number. Only fires when the lifetime total is positive;
+        # if it's already negative there's nothing being masked.
+        if realized > 0 and today_pnl < 0 and abs(today_pnl) >= 0.25 * realized:
+            L.append(
+                f"  {DM}{'':<16}  {RD}⚠ today alone is {today_pnl:>+,.0f} EUR — "
+                f"lifetime total above nets positive only because of earlier trades{W}"
+            )
         # Flag when one trade dominates the total — a "profitable" strategy
         # total can be almost entirely one outlier win, masking a real losing
         # trend in every other trade (found 2026-08-21: Gap Fill's +13,759
@@ -527,14 +554,17 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     except Exception:
         g_pf = None
     g_pf_s = f"{g_pf:.2f}" if g_pf is not None else "—"
-    g_col  = GR if grand_realized >= 0 else RD
-    gu_col = GR if grand_unrealized >= 0 else RD
+    grand_today = sum(r.get("total_pnl", 0.0) for r in today_rows)
+    g_col   = GR if grand_realized >= 0 else RD
+    gt_col  = GR if grand_today >= 0 else RD
+    gu_col  = GR if grand_unrealized >= 0 else RD
     g_realized_cell   = _pad_ansi(f"{g_col}{BD}{grand_realized:>+,.0f} EUR{W}", 15)
+    g_today_cell      = _pad_ansi(f"{gt_col}{grand_today:>+,.0f} EUR{W}" if today_rows else f"{DM}—{W}", 11)
     g_unrealized_cell = _pad_ansi(f"{gu_col}{grand_unrealized:>+,.0f} EUR{W}", 13)
     L.append(
         f"  {BD}{'ALL STRATEGIES':<16}{W}  {DM}{open_count:>6}{W}  {grand_closed:>7}  "
         f"{DM}{f'{grand_wins}W/{grand_losses}L':>7}{W}  {g_col}{g_wr:>5.1f}%{W}  {DM}{g_pf_s:>6}{W}  "
-        f"{g_realized_cell}  {g_unrealized_cell}"
+        f"{g_realized_cell}  {g_today_cell}  {g_unrealized_cell}"
     )
     L.append("")
 
