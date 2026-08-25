@@ -186,6 +186,14 @@ Not currently selected by default (`strategy_name = "sector_rotation"`). Not doc
 
 ## Strategy Comparison
 
+> **DECISION (2026-08-26, closed — do not re-run this comparison):** user
+> asked which strategy is most profitable; all 4 backtestable strategies
+> were compared on real 10-year data (table below) and Sector Rotation
+> won on both CAGR and Sharpe. User's explicit call: **"just keep that
+> one is good"** — stay on `sector_rotation`, do not switch, do not
+> re-litigate this unless something changes (new years of data, a
+> strategy's code changes, or the user raises it again themselves).
+
 **Real 10-year backtest added 2026-08-26** (`backtest_etf.py` for Sector
 Rotation, `backtest_etf_other_strategies.py` for the other 3) -- entry
 logic transcribed exactly from each strategy's real production code in
