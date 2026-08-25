@@ -1285,6 +1285,27 @@ SCANDI_SYMBOLS = {
     "PLNDKK", "AUDDKK", "DKKHUF", "DKKCZK", "PLNSEK", "DKKSGD", "DKKPLN", "SGDSEK",
 }
 
+# HIGH_VOLUME_SYMBOLS — added 2026-08-26, explicit user request after
+# noticing EURNOK/GBPUSD moved very differently over the same window
+# (EURNOK barely, GBPUSD more) and asking whether that's a liquidity
+# effect. It is: EURNOK is a Scandi cross (NOK has comparatively low
+# global FX turnover per the BIS Triennial Survey), GBPUSD is a G7 major.
+# This is a CURATED SUBSET of CORE_SYMBOLS (not a new, mutually-exclusive
+# tier like SCANDI/EXOTIC above — every symbol here already reports as
+# get_tier()=='core') marking the genuinely highest-liquidity pairs: the
+# 7 G7 majors + the 10 most commonly-traded G10 cross pairs, so
+# strategies can be evaluated specifically on "does this work on liquid
+# majors" separately from CORE's broader mix (which also includes the
+# EUR/USD-vs-NOK/SEK/DKK/MXN pairs). User explicitly chose "majors +
+# liquid crosses (~15-18 pairs)" over "7 majors only" when asked.
+HIGH_VOLUME_SYMBOLS = {
+    # 7 G7 majors
+    "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "NZDUSD", "USDCHF",
+    # 10 major G10 crosses
+    "EURGBP", "EURJPY", "GBPJPY", "EURCHF", "AUDJPY",
+    "EURAUD", "EURCAD", "GBPCHF", "GBPCAD", "GBPAUD",
+}
+
 
 def get_tier(symbol: str) -> str:
     """'core' (live-trading candidate, 34 pairs), 'scandi' (SIM-only NOK/SEK/DKK

@@ -22,7 +22,7 @@ FOREX_STATE_PATH    = os.path.join(BASE_DIR, "data", "forex_state.json")
 
 sys.path.insert(0, BASE_DIR)
 import price_service
-from forex.universe import PAIRS as _UNIVERSE_PAIRS, CORE_SYMBOLS, SCANDI_SYMBOLS
+from forex.universe import PAIRS as _UNIVERSE_PAIRS, CORE_SYMBOLS, SCANDI_SYMBOLS, HIGH_VOLUME_SYMBOLS
 
 _UNIVERSE_BY_SYMBOL = {p["symbol"]: p for p in _UNIVERSE_PAIRS}
 
@@ -597,12 +597,14 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     # table it's attached to (2026-08-25, explicit "clear separation"
     # request; SCANDI color added same day when that tier was introduced):
     CORE_COLOR, SCANDI_COLOR, EXOTIC_COLOR, ALLTIER_COLOR = GR, MG, YL, CY
+    HIGH_VOLUME_COLOR = WH
 
-    exotic_symbols   = {p["symbol"] for p in _UNIVERSE_PAIRS} - CORE_SYMBOLS - SCANDI_SYMBOLS
-    core_positions   = [p for p in positions if p["symbol"] in CORE_SYMBOLS]
-    scandi_positions = [p for p in positions if p["symbol"] in SCANDI_SYMBOLS]
-    exotic_positions = [p for p in positions if p["symbol"] in exotic_symbols]
-    open_count       = len(positions)
+    exotic_symbols      = {p["symbol"] for p in _UNIVERSE_PAIRS} - CORE_SYMBOLS - SCANDI_SYMBOLS
+    core_positions      = [p for p in positions if p["symbol"] in CORE_SYMBOLS]
+    high_volume_positions = [p for p in positions if p["symbol"] in HIGH_VOLUME_SYMBOLS]
+    scandi_positions    = [p for p in positions if p["symbol"] in SCANDI_SYMBOLS]
+    exotic_positions    = [p for p in positions if p["symbol"] in exotic_symbols]
+    open_count          = len(positions)
 
     # ── Positions tables — CORE (34) first, then SCANDI (32), then EXOTIC
     # (83), 2026-08-25. CORE leads because it's the actionable half of the
@@ -614,6 +616,18 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         "OPEN POSITIONS — CORE (34 pairs, live-trading candidates)",
         core_positions, live, position_costs, W_TOTAL, HR, color=CORE_COLOR)
     L.extend(core_lines)
+
+    # HIGH VOLUME — added 2026-08-26, a CURATED SUBSET of CORE (7 G7 majors
+    # + 10 major crosses), not a new partition -- every pair here already
+    # counts inside CORE above, so its P&L/cost is deliberately excluded
+    # from the TOTAL sum below to avoid double-counting. Exists to let
+    # strategies be judged specifically on the highest-liquidity pairs,
+    # separate from CORE's broader mix (which also includes the Scandi-
+    # adjacent EUR/USD-vs-NOK/SEK/DKK/MXN pairs).
+    high_volume_lines, _hv_pnl, _hv_cost, _hv_costs_eur = _positions_section(
+        "OPEN POSITIONS — HIGH VOLUME (17 pairs, subset of CORE, majors + liquid crosses)",
+        high_volume_positions, live, position_costs, W_TOTAL, HR, color=HIGH_VOLUME_COLOR)
+    L.extend(high_volume_lines)
 
     scandi_lines, scandi_pnl, scandi_cost, scandi_costs_eur = _positions_section(
         "OPEN POSITIONS — SCANDI (32 pairs, SIM-only, NOK/SEK/DKK crosses)",
@@ -662,6 +676,15 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         "STRATEGY BREAKDOWN — CORE (34 pairs, live-trading candidates)",
         positions, live, symbols=CORE_SYMBOLS, universe_size=34,
         color=CORE_COLOR, total_label="CORE TOTAL"))
+
+    # HIGH VOLUME — added 2026-08-26, curated CORE subset (7 G7 majors + 10
+    # major crosses), same LBO inclusion as CORE (LBO trades its own
+    # 28-pair majors/crosses subset, genuinely overlaps here, unlike
+    # SCANDI/EXOTIC below where LBO structurally never trades).
+    L.extend(_strategy_breakdown_table(
+        "STRATEGY BREAKDOWN — HIGH VOLUME (17 pairs, subset of CORE, majors + liquid crosses)",
+        positions, live, symbols=HIGH_VOLUME_SYMBOLS, universe_size=17,
+        color=HIGH_VOLUME_COLOR, total_label="HIGH VOL TOTAL"))
 
     L.extend(_strategy_breakdown_table(
         "STRATEGY BREAKDOWN — SCANDI (32 pairs, SIM-only, excl. LBO)",
