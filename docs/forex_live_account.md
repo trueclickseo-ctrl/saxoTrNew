@@ -2,6 +2,8 @@
 
 **Status**: live, fully armed (`SAXO_LIVE_CONFIRMED=1` set, scheduled tasks registered) as of 2026-08-25. Zero trades placed so far — no signal has fired yet.
 
+**See also**: [forex_live_strategies.md](forex_live_strategies.md) (entry/exit rules for each of the 3 strategies, in depth) and [forex_live_scheduler.md](forex_live_scheduler.md) (every scheduled task, exact trigger times, SIM-conflict history).
+
 **Module**: `forex/runner.py --account live` (same codebase as SIM, account-scoped via `set_account_env()`)
 **Account**: Saxo LIVE, sub-account `1070996INET`, SEK-denominated, opened with 6,000 SEK
 **Strategies**: exactly 3 of the 11 available — `donchian`, `ema`, `rsi` (hard-restricted in code, not just by convention)
@@ -31,6 +33,8 @@ SIM (`forex/runner.py` default, no `--account` flag) runs all 11 strategies acro
 
 ## Entry & exit criteria (all daily-bar-based — no intraday/tick strategies here)
 
+Full detail (per-strategy sections, shared mechanics table, what's deliberately not live) in [forex_live_strategies.md](forex_live_strategies.md). Summary:
+
 | Strategy | Entry | Exit | Time-stop |
 |---|---|---|---|
 | **Donchian Breakout** (`donchian`) | Close breaks above/below the prior 30-day high/low, AND price is on the trend side of EMA(200), AND ADX(14) ≥ 25 | 15-day opposite-channel break, or hard stop (2.0× ATR) | 30 calendar days |
@@ -44,6 +48,8 @@ SIM (`forex/runner.py` default, no `--account` flag) runs all 11 strategies acro
 ---
 
 ## Scheduling
+
+Full detail (including the SIM wall-clock conflict resolution) in [forex_live_scheduler.md](forex_live_scheduler.md). Summary:
 
 Two Windows Scheduled Tasks (both created via `setup_scheduler_live.ps1`, requires Administrator to register):
 
@@ -107,8 +113,48 @@ Deliberate exception: source code (strategy logic, `saxo_order.py`'s bracket-ord
 | 5 | `intraday_monitor.py` (SIM-only) shares a cross-process lock with LIVE despite touching entirely different accounts/files — a live run sat polling against an unrelated process for several minutes | Medium (operational, not financial) | Fixed — separate `FOREX_LIVE_LOCK` |
 | 6 | `SAXO_LIVE_APP_KEY`/`SAXO_LIVE_CONFIRMED` env-var propagation: `SetEnvironmentVariable(...,"User")` does not retroactively update already-running processes (including Explorer, which every Start-Menu-launched terminal inherits from) | Operational | Resolved via reboot with the value already set beforehand; documented for future reference |
 | 7 | `saxo_client._account_key_cache` was a single global value/None, not per-environment | Would have risked a SIM AccountKey leaking into a LIVE order | Fixed — cache keyed by env |
+| 8 | `sync_futures_from_json()` had the exact duplicate-open-row bug already fixed for forex's sync on 2026-08-21, never applied to futures | High (data integrity, not this account, but same class) | Fixed |
+| 9 | `pnl_tracker.log_close()` never multiplied by contract_size for ContractFutures instruments (e.g. ZC at $50/point) | High (futures P&L understated ~35x) | Fixed going forward; historical rows not retroactively audited |
+| 10 | `intraday_monitor.py` closed positions correctly (forex + futures) but never logged them to `trade_logger`/`pnl_tracker` — invisible to every strategy-wise P&L report | High (data integrity) | Fixed |
+| 11 | `forex_dashboard.py` and `forex_live_dashboard.py` had no UTF-8 stdout safeguard (`futures_dashboard.py` already did) — either would crash under redirected/piped output or a non-UTF-8 console codepage | Medium (would surface as an unexplained crash if ever invoked non-interactively) | Fixed — found via the property-based/blackbox testing pass below, not a live incident |
 
-None of these caused a real financial loss — all were caught by direct questioning/verification before the first live trade, not by an incident.
+None of these caused a real financial loss — all were caught by direct questioning/verification/testing before the first live trade, not by an incident.
+
+---
+
+## Testing — methodology, checklist, current status
+
+Built and applied deliberately, not ad hoc: **(1)** an explicit checklist of functions/edge-cases/error-paths written before adding test code, **(2)** deterministic tools (static analysis, property-based fuzzing) rather than only hand-picked examples, **(3)** coverage measurement as an objective stopping condition for closing gaps, **(4)** full regression re-run after every fix, reasoning through blast radius rather than only re-testing the bug in isolation.
+
+**Test file**: `test_2026_08_25_live_forex_account.py` — 61 tests, organized into 16 sections. Read its module docstring for the full written checklist (functions in scope, edge cases covered, explicit out-of-scope list).
+
+**Tools used** (installed to `./.devtools`, never system site-packages — see `.coveragerc`):
+- **pyflakes** (static analysis) across every file touched this session — zero new issues found; every flagged item pre-dates this work (verified against the prior commit).
+- **Hypothesis** (property-based testing) — 6 properties run against hundreds of generated examples each, targeting the real-money sizing/conversion math specifically:
+  - `size_position()` never sizes below the 1,000-unit floor, is monotonic in equity, and returns exactly the documented floor when ATR≤0 (across all 3 live strategies)
+  - `_equity_in_quote()` scales exactly linearly with equity for any positive scale factor
+  - `_sek_per_unit()`'s triangulation satisfies `rate == usdsek / usd_ccy` exactly — this specifically guards against the *inverted-ratio* class of mistake that caused the 11x oversizing bug (#2 above)
+  - `_risk_equity()` never lets sizing scale off more than the configured cap, for any broker-reported balance
+- **coverage.py**, with subprocess tracking enabled (`COVERAGE_PROCESS_START` + `.coveragerc`), run across all 4 test suites combined. Raw combined number (27%) is not meaningful on its own — most of the instrumented files' code is SIM-strategy execution logic outside this account's scope. Used instead to find *specific* untested lines inside the LIVE-added functions, then closed each one: `set_account_env()`'s invalid-input path, `_equity_in_quote()`'s two `None`-return branches, `_risk_equity()` under LIVE, its config-read-failure fallback, and its misconfigured-cap fallback.
+
+**Blackbox tests**: real subprocess invocations (not mocked) of `forex/runner.py`'s CLI and `forex_live_dashboard.py` — confirms the hard rails (disallowed strategy, missing confirmation env var) and the dashboard actually render/exit correctly end-to-end, not just that the underlying functions return the right value in isolation.
+
+**Full regression status** (all 4 suites, re-run after every fix in this pass): 61/61 in the LIVE-account suite; 219/220 total across everything. The 1 failure is a single pre-existing environment flake (subprocess timing / log-file permission, unrelated to any LIVE-account code) documented before this session began — not a regression.
+
+**Re-running**:
+```
+python test_2026_08_25_live_forex_account.py
+```
+Requires `hypothesis` (installed to `./.devtools`, auto-added to `sys.path` by the test file itself — no manual `PYTHONPATH` needed).
+
+**Re-running coverage** (optional, for future gap-closing passes):
+```
+rm -f .coverage .coverage.*
+PYTHONPATH=.devtools COVERAGE_PROCESS_START="$(pwd)/.coveragerc" python -m coverage run --source=forex.runner,forex.signal_filter,saxo_client,saxo_auth,proc_lock,strategy_learner,housekeeping,pnl_tracker test_2026_08_25_live_forex_account.py
+# ...repeat for the other 3 suites, no --source flag needed after the first...
+python -m coverage combine
+python -m coverage report -m
+```
 
 ---
 
