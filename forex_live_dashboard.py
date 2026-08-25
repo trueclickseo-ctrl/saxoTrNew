@@ -138,7 +138,23 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     runner.set_account_env("live")
     now_ts    = datetime.now().strftime("%Y-%m-%d  %H:%M:%S")
     positions = _read_positions()
-    token     = price_service.load_token(env="live")
+    # Real refresh-capable token fetch, not price_service.load_token()'s
+    # passive file-peek (which returns None on an expired access token and
+    # never tries to refresh it). Found 2026-08-25: with LIVE's 20-min
+    # access-token / 1-hour refresh-token lifetime and the keepalive task's
+    # 15-min polling interval, there's a real recurring few-minute window
+    # where the access token has expired but the keepalive hasn't ticked
+    # again yet -- during that window the dashboard's own price fetch
+    # would see load_token() return None and render blank "Now" prices,
+    # even though the underlying refresh_token was perfectly healthy and
+    # a real refresh would have succeeded immediately. get_valid_access_
+    # token() actually performs that refresh instead of just checking a
+    # cached expiry timestamp.
+    import saxo_auth
+    try:
+        token = saxo_auth.get_valid_access_token(env="live")
+    except Exception:
+        token = None
 
     instruments = [{"symbol": p["symbol"], "uic": p["uic"], "asset_type": p["asset_type"]}
                    for p in positions if p.get("uic")]
