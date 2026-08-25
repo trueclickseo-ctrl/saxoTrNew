@@ -1389,13 +1389,16 @@ def test_saxo_fx_instruments_needed_direct_eur_pair():
 
 
 def test_saxo_fx_instruments_needed_usd_triangulation():
-    # DKK has no direct EUR{ccy} pair in forex/universe.py -- must
-    # triangulate via USD{ccy} + EURUSD.
+    # AED has no direct EUR{ccy} pair in forex/universe.py -- must
+    # triangulate via USD{ccy} + EURUSD. (Was DKK until 2026-08-25's SCANDI
+    # tier added EURDKK directly -- saxo_fx correctly started preferring
+    # that direct pair over triangulation, so this test moved to a
+    # currency that genuinely still has no direct EUR{ccy} pair.)
     import saxo_fx
-    insts = saxo_fx._instruments_needed({"DKK"})
+    insts = saxo_fx._instruments_needed({"AED"})
     symbols = {i["symbol"] for i in insts}
-    assert "USDDKK" in symbols and "EURUSD" in symbols and "EURSEK" in symbols, (
-        f"DKK (no direct EURDKK pair) must triangulate via USDDKK + EURUSD "
+    assert "USDAED" in symbols and "EURUSD" in symbols and "EURSEK" in symbols, (
+        f"AED (no direct EURAED pair) must triangulate via USDAED + EURUSD "
         f"+ EURSEK, got {symbols}"
     )
 
@@ -1404,7 +1407,7 @@ _run("atos_runner: no yfinance/fx.py imports remain", test_atos_runner_has_no_yf
 _run("atos_runner: download_universe() sources from saxo_history", test_atos_runner_download_universe_uses_saxo_history)
 _run("saxo_history: paces requests under Saxo's real 120/min chart limit", test_saxo_history_rate_limiter_paces_under_saxo_limit)
 _run("saxo_fx: direct EUR-cross currency needs EURUSD+EURSEK", test_saxo_fx_instruments_needed_direct_eur_pair)
-_run("saxo_fx: DKK (no direct EUR pair) triangulates via USD+EURUSD", test_saxo_fx_instruments_needed_usd_triangulation)
+_run("saxo_fx: AED (no direct EUR pair) triangulates via USD+EURUSD", test_saxo_fx_instruments_needed_usd_triangulation)
 
 
 # ═══════════════════════════════════════════════════════════════════════

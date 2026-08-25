@@ -239,10 +239,10 @@ def test_filter_pairs_for_account_noop_under_sim():
     import forex.runner as r
     r.set_account_env("sim")
     filtered = r._filter_pairs_for_account(r.PAIRS)
-    assert len(filtered) == len(r.PAIRS) == 117, (
+    assert len(filtered) == len(r.PAIRS), (
         "SIM's own pair scan must be completely unaffected by the LIVE filter existing"
     )
-_run("forex/runner: _filter_pairs_for_account() is a no-op under SIM (all 117 pairs unaffected)",
+_run("forex/runner: _filter_pairs_for_account() is a no-op under SIM (all pairs unaffected)",
      test_filter_pairs_for_account_noop_under_sim)
 
 
@@ -290,10 +290,12 @@ _run("forex/runner CLI: --account live --live refuses to run without SAXO_LIVE_C
 
 
 def test_cli_accepts_comma_separated_allowed_strategies_dry_run():
+    import forex.universe as _u
     proc = _run_cli(["--account", "live", "--strategy", "donchian,ema,rsi"])
     assert proc.returncode == 0, f"expected a clean dry-run exit(0), got {proc.returncode}: {proc.stderr}"
-    assert "34 of 117" in proc.stdout or "34 of 117" in proc.stderr, (
-        "the dry-run log should report scanning 34 (CORE) of 117 total pairs"
+    n = len(_u.PAIRS)
+    assert f"34 of {n}" in proc.stdout or f"34 of {n}" in proc.stderr, (
+        f"the dry-run log should report scanning 34 (CORE) of {n} total pairs"
     )
 _run("forex/runner CLI: --account live --strategy donchian,ema,rsi dry-runs cleanly and scans only the 34 core pairs",
      test_cli_accepts_comma_separated_allowed_strategies_dry_run)
@@ -301,18 +303,23 @@ _run("forex/runner CLI: --account live --strategy donchian,ema,rsi dry-runs clea
 
 def test_cli_sim_default_behavior_unaffected():
     # No --account flag at all -- must behave exactly like before this feature
-    # existed. SIM's dry-run genuinely scans all 117 pairs (vs LIVE's 34),
+    # existed. SIM's dry-run genuinely scans all pairs in the universe (vs
+    # LIVE's 34 -- 149 as of 2026-08-25's SCANDI tier addition, up from 117),
     # each needing a real Saxo history fetch, so this legitimately takes
     # longer than the other CLI checks above -- generous timeout, not a hang.
+    # Bumped 240s -> 400s the same day the 32-pair SCANDI tier was added:
+    # ~27% more pairs pushed the real run past the old budget.
+    import forex.universe as _u
     env = dict(os.environ)
     env.pop("SAXO_LIVE_CONFIRMED", None)
     proc = subprocess.run(
         [sys.executable, "runner.py", "--strategy", "donchian"],
         cwd=os.path.join(BASE_DIR, "forex"),
-        env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=240,
+        env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=400,
     )
     assert proc.returncode == 0, f"SIM's own default dry-run must still exit cleanly, got {proc.returncode}: {proc.stderr}"
-    assert "117 of 117" in proc.stdout or "117 of 117" in proc.stderr
+    n = len(_u.PAIRS)
+    assert f"{n} of {n}" in proc.stdout or f"{n} of {n}" in proc.stderr
 _run("forex/runner CLI: omitting --account entirely (SIM default) still dry-runs exactly as before",
      test_cli_sim_default_behavior_unaffected)
 

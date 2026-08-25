@@ -22,7 +22,7 @@ FOREX_STATE_PATH    = os.path.join(BASE_DIR, "data", "forex_state.json")
 
 sys.path.insert(0, BASE_DIR)
 import price_service
-from forex.universe import PAIRS as _UNIVERSE_PAIRS, CORE_SYMBOLS
+from forex.universe import PAIRS as _UNIVERSE_PAIRS, CORE_SYMBOLS, SCANDI_SYMBOLS
 
 _UNIVERSE_BY_SYMBOL = {p["symbol"]: p for p in _UNIVERSE_PAIRS}
 
@@ -261,7 +261,7 @@ STRAT_LABELS_ALL = {
 
 def _strategy_breakdown_table(title: str, positions: list, live: dict,
                                symbols: set | None = None,
-                               universe_size: int = 117,
+                               universe_size: int = 149,
                                exclude: set = frozenset(),
                                color: str = CY,
                                total_label: str | None = None,
@@ -269,12 +269,13 @@ def _strategy_breakdown_table(title: str, positions: list, live: dict,
                                currency_label: str = "EUR") -> list:
     """One STRATEGY BREAKDOWN table, optionally scoped to a pair subset.
 
-    `symbols=None` -> the original all-117-pairs view. Passing
-    forex.universe.CORE_SYMBOLS (34 pairs) or its 83-pair exotic complement
-    restricts realized/today/unrealized stats AND the active-position count
-    to that subset -- this is what lets the dashboard answer "is the 34-pair
-    core universe actually better than the full 117?" directly, per-strategy,
-    instead of only as one blended all-pairs number.
+    `symbols=None` -> the original all-149-pairs view. Passing
+    forex.universe.CORE_SYMBOLS (34 pairs), SCANDI_SYMBOLS (32 pairs), or
+    the 83-pair exotic remainder restricts realized/today/unrealized stats
+    AND the active-position count to that subset -- this is what lets the
+    dashboard answer "is the 34-pair core universe actually better than the
+    full 149?" directly, per-strategy, instead of only as one blended
+    all-pairs number.
 
     `exclude` drops strategies that structurally never trade in this scope
     (e.g. london_breakout from the exotic-only table -- it only ever trades
@@ -565,7 +566,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append(f"  {BD}{CY}╔{'═'*W_TOTAL}╗{W}")
     src_tag = "SAXO LIVE" if price_src == "saxo" else "n/a (token expired)"
     L.append(f"  {BD}{CY}║{'  FOREX QUANT DASHBOARD':^{W_TOTAL}}║{W}")
-    L.append(f"  {BD}{CY}║{f'  11 Strategies  |  117 FX Pairs (34 core + 83 exotic)  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
+    L.append(f"  {BD}{CY}║{f'  11 Strategies  |  149 FX Pairs (34 core + 32 scandi + 83 exotic)  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
     L.append(f"  {BD}{CY}╚{'═'*W_TOTAL}╝{W}")
     L.append("")
 
@@ -587,38 +588,46 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
              f"\033[38;5;214m{BD}■ LBO{W}  day trade")
     L.append(f"  {DM}Scheduler: every 30min 06:00-22:00 PKT (scan)  |  14:00 PKT (exit check)  |  "
              f"Mon 03:00 PKT weekly + session gap windows (gap fill)  |  "
-             f"117 pairs: 34 core + 83 exotic (SIM-only)  |  Max slots 117 (28 for day-trade LBO){W}")
+             f"149 pairs: 34 core + 32 scandi + 83 exotic (SIM-only)  |  Max slots 149 (28 for day-trade LBO){W}")
     L.append(HR)
     L.append("")
 
-    # ── Tier colors — used for every CORE/EXOTIC/ALL section box below, so
-    # the same color always means the same tier no matter which table it's
-    # attached to (2026-08-25, explicit "clear separation" request):
-    CORE_COLOR, EXOTIC_COLOR, ALLTIER_COLOR = GR, YL, CY
+    # ── Tier colors — used for every CORE/SCANDI/EXOTIC/ALL section box
+    # below, so the same color always means the same tier no matter which
+    # table it's attached to (2026-08-25, explicit "clear separation"
+    # request; SCANDI color added same day when that tier was introduced):
+    CORE_COLOR, SCANDI_COLOR, EXOTIC_COLOR, ALLTIER_COLOR = GR, MG, YL, CY
 
-    exotic_symbols   = {p["symbol"] for p in _UNIVERSE_PAIRS} - CORE_SYMBOLS
+    exotic_symbols   = {p["symbol"] for p in _UNIVERSE_PAIRS} - CORE_SYMBOLS - SCANDI_SYMBOLS
     core_positions   = [p for p in positions if p["symbol"] in CORE_SYMBOLS]
+    scandi_positions = [p for p in positions if p["symbol"] in SCANDI_SYMBOLS]
     exotic_positions = [p for p in positions if p["symbol"] in exotic_symbols]
     open_count       = len(positions)
 
-    # ── Positions tables — CORE (34) first, then EXOTIC (83), 2026-08-25 ──
-    # CORE leads because it's the actionable half of the live-vs-SIM-only
-    # decision this whole split exists for; EXOTIC (SIM-only) follows as
-    # reference. Boxed/colored headers (_section_header) replace the old
-    # plain bold title lines for unambiguous visual separation between tiers.
+    # ── Positions tables — CORE (34) first, then SCANDI (32), then EXOTIC
+    # (83), 2026-08-25. CORE leads because it's the actionable half of the
+    # live-vs-SIM-only decision this whole split exists for; SCANDI and
+    # EXOTIC (both SIM-only) follow as reference. Boxed/colored headers
+    # (_section_header) replace the old plain bold title lines for
+    # unambiguous visual separation between tiers.
     core_lines, core_pnl, core_cost, core_costs_eur = _positions_section(
         "OPEN POSITIONS — CORE (34 pairs, live-trading candidates)",
         core_positions, live, position_costs, W_TOTAL, HR, color=CORE_COLOR)
     L.extend(core_lines)
+
+    scandi_lines, scandi_pnl, scandi_cost, scandi_costs_eur = _positions_section(
+        "OPEN POSITIONS — SCANDI (32 pairs, SIM-only, NOK/SEK/DKK crosses)",
+        scandi_positions, live, position_costs, W_TOTAL, HR, color=SCANDI_COLOR)
+    L.extend(scandi_lines)
 
     exotic_lines, exotic_pnl, exotic_cost, exotic_costs_eur = _positions_section(
         "OPEN POSITIONS — EXOTIC (83 pairs, SIM-only)",
         exotic_positions, live, position_costs, W_TOTAL, HR, color=EXOTIC_COLOR)
     L.extend(exotic_lines)
 
-    total_pnl       = core_pnl + exotic_pnl
-    total_cost      = core_cost + exotic_cost
-    total_costs_eur = core_costs_eur + exotic_costs_eur
+    total_pnl       = core_pnl + scandi_pnl + exotic_pnl
+    total_cost      = core_cost + scandi_cost + exotic_cost
+    total_costs_eur = core_costs_eur + scandi_costs_eur + exotic_costs_eur
     tc   = GR if total_pnl >= 0 else RD
     tpct = (total_pnl / total_cost * 100) if total_cost > 0 else 0
     net_pnl = total_pnl + total_costs_eur
@@ -641,14 +650,23 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     # ("which pairs work") from this one ("which strategies work"); see
     # pnl_dashboard.py or the Strategy Overlap Tracker artifact for that.
     #
-    # 2026-08-25: split into CORE (34) / EXOTIC (83) / ALL (117, reference)
-    # so the live-vs-SIM-only universe decision can be made per strategy,
-    # not just from one blended 117-pair number — CORE leads (same reason
-    # as the positions tables above), ALL trails as a reference total only.
+    # 2026-08-25: split into CORE (34) / SCANDI (32) / EXOTIC (83) /
+    # ALL (149, reference) so the live-vs-SIM-only universe decision can be
+    # made per strategy, not just from one blended 149-pair number — CORE
+    # leads (same reason as the positions tables above), ALL trails as a
+    # reference total only. SCANDI added same day as its own tier so its
+    # SIM track record (32 new NOK/SEK/DKK crosses) can be judged on its
+    # own before folding any of it into CORE or writing it off, exactly
+    # the same way EXOTIC's track record already gets judged separately.
     L.extend(_strategy_breakdown_table(
         "STRATEGY BREAKDOWN — CORE (34 pairs, live-trading candidates)",
         positions, live, symbols=CORE_SYMBOLS, universe_size=34,
         color=CORE_COLOR, total_label="CORE TOTAL"))
+
+    L.extend(_strategy_breakdown_table(
+        "STRATEGY BREAKDOWN — SCANDI (32 pairs, SIM-only, excl. LBO)",
+        positions, live, symbols=SCANDI_SYMBOLS, universe_size=32,
+        exclude={"london_breakout"}, color=SCANDI_COLOR, total_label="SCANDI TOTAL"))
 
     L.extend(_strategy_breakdown_table(
         "STRATEGY BREAKDOWN — EXOTIC (83 pairs, SIM-only, excl. LBO)",
@@ -656,8 +674,8 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         exclude={"london_breakout"}, color=EXOTIC_COLOR, total_label="EXOTIC TOTAL"))
 
     L.extend(_strategy_breakdown_table(
-        "STRATEGY BREAKDOWN — ALL 117 PAIRS (blended reference)",
-        positions, live, symbols=None, universe_size=117,
+        "STRATEGY BREAKDOWN — ALL 149 PAIRS (blended reference)",
+        positions, live, symbols=None, universe_size=149,
         color=ALLTIER_COLOR, total_label="ALL TOTAL"))
 
     # ── Footer ────────────────────────────────────────────────────

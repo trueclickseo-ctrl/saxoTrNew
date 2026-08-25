@@ -1205,6 +1205,50 @@ PAIRS = [
         "pip_size":    0.1,
         "min_units":   15_000,
     },
+    # ── Scandinavian cross pairs: Tier 3 "SCANDI" (added 2026-08-25) ─────────
+    # Sourced from Saxo's own SaxoTraderGO screener, "Last three month's
+    # popularity" sort, FX filter (188 total instruments) — the user
+    # screenshotted the full scrollable list and every pair below is one
+    # that appeared there but was missing from our then-117-pair universe.
+    # All 32 are NOK/SEK/DKK crosses (our existing coverage only had these
+    # three currencies paired against EUR/USD — EURNOK/EURSEK/USDNOK/
+    # USDSEK/USDDKK above). UICs, Format.Decimals (-> pip_size), and
+    # MinimumTradeSize all pulled live via find_instrument()/
+    # /ref/v1/instruments/details on Saxo SIM, same as every other exotic
+    # pair here — never guessed. SIM-only, for strategy testing; excluded
+    # from LIVE by construction since LIVE hard-filters to CORE_SYMBOLS.
+    {"symbol": "NOKSEK", "description": "Norwegian Krone / Swedish Krone", "base": "NOK", "quote": "SEK", "uic": 32,    "yf_ticker": "NOKSEK=X", "pip_size": 0.001,  "min_units": 10_000},
+    {"symbol": "GBPNOK", "description": "British Pound / Norwegian Krone", "base": "GBP", "quote": "NOK", "uic": 27,    "yf_ticker": "GBPNOK=X", "pip_size": 0.001,  "min_units": 1_000},
+    {"symbol": "GBPDKK", "description": "British Pound / Danish Krone",    "base": "GBP", "quote": "DKK", "uic": 25,    "yf_ticker": "GBPDKK=X", "pip_size": 0.001,  "min_units": 1_000},
+    {"symbol": "CHFSEK", "description": "Swiss Franc / Swedish Krone",     "base": "CHF", "quote": "SEK", "uic": 1305,  "yf_ticker": "CHFSEK=X", "pip_size": 0.001,  "min_units": 1_000},
+    {"symbol": "AUDNOK", "description": "Australian Dollar / Norwegian Krone", "base": "AUD", "quote": "NOK", "uic": 30630, "yf_ticker": "AUDNOK=X", "pip_size": 0.001, "min_units": 1_000},
+    {"symbol": "SEKJPY", "description": "Swedish Krone / Japanese Yen",    "base": "SEK", "quote": "JPY", "uic": 2870,  "yf_ticker": "SEKJPY=X", "pip_size": 0.01,   "min_units": 50_000},
+    {"symbol": "GBPSEK", "description": "British Pound / Swedish Krone",   "base": "GBP", "quote": "SEK", "uic": 29,    "yf_ticker": "GBPSEK=X", "pip_size": 0.001,  "min_units": 1_000},
+    {"symbol": "SEKDKK", "description": "Swedish Krone / Danish Krone",    "base": "SEK", "quote": "DKK", "uic": 2047,  "yf_ticker": "SEKDKK=X", "pip_size": 0.001,  "min_units": 50_000},
+    {"symbol": "CADNOK", "description": "Canadian Dollar / Norwegian Krone", "base": "CAD", "quote": "NOK", "uic": 6158, "yf_ticker": "CADNOK=X", "pip_size": 0.001,  "min_units": 1_000},
+    {"symbol": "NOKDKK", "description": "Norwegian Krone / Danish Krone",  "base": "NOK", "quote": "DKK", "uic": 2046,  "yf_ticker": "NOKDKK=X", "pip_size": 0.001,  "min_units": 10_000},
+    {"symbol": "SEKNOK", "description": "Swedish Krone / Norwegian Krone", "base": "SEK", "quote": "NOK", "uic": 2048,  "yf_ticker": "SEKNOK=X", "pip_size": 0.001,  "min_units": 50_000},
+    {"symbol": "JPYDKK", "description": "Japanese Yen / Danish Krone",     "base": "JPY", "quote": "DKK", "uic": 2115,  "yf_ticker": "JPYDKK=X", "pip_size": 0.0001, "min_units": 100_000},
+    {"symbol": "NZDSEK", "description": "New Zealand Dollar / Swedish Krone", "base": "NZD", "quote": "SEK", "uic": 9452, "yf_ticker": "NZDSEK=X", "pip_size": 0.001, "min_units": 1_000},
+    {"symbol": "CADSEK", "description": "Canadian Dollar / Swedish Krone",  "base": "CAD", "quote": "SEK", "uic": 36897, "yf_ticker": "CADSEK=X", "pip_size": 0.001,  "min_units": 1_000},
+    {"symbol": "NZDNOK", "description": "New Zealand Dollar / Norwegian Krone", "base": "NZD", "quote": "NOK", "uic": 5396, "yf_ticker": "NZDNOK=X", "pip_size": 0.001, "min_units": 1_000},
+    {"symbol": "TRYDKK", "description": "Turkish Lira / Danish Krone",     "base": "TRY", "quote": "DKK", "uic": 21321, "yf_ticker": "TRYDKK=X", "pip_size": 0.001,  "min_units": 5_000},
+    {"symbol": "CHFDKK", "description": "Swiss Franc / Danish Krone",      "base": "CHF", "quote": "DKK", "uic": 1311,  "yf_ticker": "CHFDKK=X", "pip_size": 0.001,  "min_units": 1_000},
+    {"symbol": "AUDSEK", "description": "Australian Dollar / Swedish Krone", "base": "AUD", "quote": "SEK", "uic": 24392, "yf_ticker": "AUDSEK=X", "pip_size": 0.001, "min_units": 1_000},
+    {"symbol": "DKKZAR", "description": "Danish Krone / South African Rand", "base": "DKK", "quote": "ZAR", "uic": 9445, "yf_ticker": "DKKZAR=X", "pip_size": 0.001, "min_units": 1_000},
+    {"symbol": "EURDKK", "description": "Euro / Danish Krone",             "base": "EUR", "quote": "DKK", "uic": 16,    "yf_ticker": "EURDKK=X", "pip_size": 0.001,  "min_units": 1_000},
+    {"symbol": "SEKPLN", "description": "Swedish Krone / Polish Zloty",    "base": "SEK", "quote": "PLN", "uic": 21295, "yf_ticker": "SEKPLN=X", "pip_size": 0.001,  "min_units": 50_000},
+    {"symbol": "NZDDKK", "description": "New Zealand Dollar / Danish Krone", "base": "NZD", "quote": "DKK", "uic": 3864, "yf_ticker": "NZDDKK=X", "pip_size": 0.001, "min_units": 1_000},
+    {"symbol": "DKKJPY", "description": "Danish Krone / Japanese Yen",     "base": "DKK", "quote": "JPY", "uic": 4727,  "yf_ticker": "DKKJPY=X", "pip_size": 0.01,   "min_units": 1_000},
+    {"symbol": "NOKCZK", "description": "Norwegian Krone / Czech Koruna",  "base": "NOK", "quote": "CZK", "uic": 41943, "yf_ticker": "NOKCZK=X", "pip_size": 0.01,   "min_units": 10_000},
+    {"symbol": "PLNDKK", "description": "Polish Zloty / Danish Krone",     "base": "PLN", "quote": "DKK", "uic": 3934,  "yf_ticker": "PLNDKK=X", "pip_size": 0.001,  "min_units": 50_000},
+    {"symbol": "AUDDKK", "description": "Australian Dollar / Danish Krone", "base": "AUD", "quote": "DKK", "uic": 3863, "yf_ticker": "AUDDKK=X", "pip_size": 0.001,  "min_units": 1_000},
+    {"symbol": "DKKHUF", "description": "Danish Krone / Hungarian Forint", "base": "DKK", "quote": "HUF", "uic": 9442,  "yf_ticker": "DKKHUF=X", "pip_size": 0.1,    "min_units": 1_000},
+    {"symbol": "DKKCZK", "description": "Danish Krone / Czech Koruna",     "base": "DKK", "quote": "CZK", "uic": 9441,  "yf_ticker": "DKKCZK=X", "pip_size": 0.01,   "min_units": 1_000},
+    {"symbol": "PLNSEK", "description": "Polish Zloty / Swedish Krone",    "base": "PLN", "quote": "SEK", "uic": 20300, "yf_ticker": "PLNSEK=X", "pip_size": 0.001,  "min_units": 50_000},
+    {"symbol": "DKKSGD", "description": "Danish Krone / Singapore Dollar", "base": "DKK", "quote": "SGD", "uic": 9443,  "yf_ticker": "DKKSGD=X", "pip_size": 0.001,  "min_units": 1_000},
+    {"symbol": "DKKPLN", "description": "Danish Krone / Polish Zloty",     "base": "DKK", "quote": "PLN", "uic": 21294, "yf_ticker": "DKKPLN=X", "pip_size": 0.001,  "min_units": 1_000},
+    {"symbol": "SGDSEK", "description": "Singapore Dollar / Swedish Krone", "base": "SGD", "quote": "SEK", "uic": 40953, "yf_ticker": "SGDSEK=X", "pip_size": 0.001, "min_units": 1_000},
 ]
 
 ASSET_TYPE = "FxSpot"
@@ -1212,13 +1256,17 @@ ASSET_TYPE = "FxSpot"
 # ── Universe tiers ──────────────────────────────────────────────────────────
 # CORE = the original 34 majors/crosses/Scandi — the live-trading-candidate
 # universe once the account goes live. EXOTIC = the 83 EM/exotic pairs added
-# 2026-08-21 for SIM-only broad testing. Both tiers are scanned together by
-# every strategy (see SLOTS_PER_STRATEGY in forex/runner.py) so nothing is
-# missed, but every trade is tagged by tier so P&L/win-rate can be evaluated
-# separately per tier — that's how the live-universe decision gets made:
-# review EXOTIC's SIM track record, then decide whether to fold any of it
-# into CORE for live trading. LBO always trades its own narrower 28-pair
-# subset of CORE regardless of this tiering.
+# 2026-08-21 for SIM-only broad testing. SCANDI = 32 more NOK/SEK/DKK cross
+# pairs added 2026-08-25 (see the "Tier 3" comment above PAIRS) — Saxo's own
+# popularity ranking showed these as actively traded, but our CORE/EXOTIC
+# coverage only ever paired NOK/SEK/DKK against EUR/USD. All three tiers are
+# scanned together by every strategy (see SLOTS_PER_STRATEGY in
+# forex/runner.py) so nothing is missed, but every trade is tagged by tier so
+# P&L/win-rate can be evaluated separately per tier — that's how the
+# live-universe decision gets made: review EXOTIC's (and now SCANDI's) SIM
+# track record, then decide whether to fold any of it into CORE for live
+# trading. LBO always trades its own narrower 28-pair subset of CORE
+# regardless of this tiering.
 CORE_SYMBOLS = {
     "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "NZDUSD", "USDCHF",
     "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "CADJPY",
@@ -1230,10 +1278,22 @@ CORE_SYMBOLS = {
     "EURNOK", "EURSEK", "USDNOK", "USDSEK", "USDDKK", "USDMXN",
 }
 
+SCANDI_SYMBOLS = {
+    "NOKSEK", "GBPNOK", "GBPDKK", "CHFSEK", "AUDNOK", "SEKJPY", "GBPSEK", "SEKDKK",
+    "CADNOK", "NOKDKK", "SEKNOK", "JPYDKK", "NZDSEK", "CADSEK", "NZDNOK", "TRYDKK",
+    "CHFDKK", "AUDSEK", "DKKZAR", "EURDKK", "SEKPLN", "NZDDKK", "DKKJPY", "NOKCZK",
+    "PLNDKK", "AUDDKK", "DKKHUF", "DKKCZK", "PLNSEK", "DKKSGD", "DKKPLN", "SGDSEK",
+}
+
 
 def get_tier(symbol: str) -> str:
-    """'core' (live-trading candidate, 34 pairs) or 'exotic' (SIM-only, 83 pairs)."""
-    return "core" if symbol in CORE_SYMBOLS else "exotic"
+    """'core' (live-trading candidate, 34 pairs), 'scandi' (SIM-only NOK/SEK/DKK
+    crosses, 32 pairs), or 'exotic' (SIM-only, everything else, 83 pairs)."""
+    if symbol in CORE_SYMBOLS:
+        return "core"
+    if symbol in SCANDI_SYMBOLS:
+        return "scandi"
+    return "exotic"
 
 
 # Lookup helpers
