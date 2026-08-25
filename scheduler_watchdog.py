@@ -81,6 +81,18 @@ REALERT_AFTER_HOURS = 4
 # daily tasks with buffer; 78h covers weekday-only tasks over a weekend gap;
 # 174h covers the two genuinely-weekly tasks (7 days + buffer).
 WINDOWS_TASKS = {
+    # Added 2026-08-25 after this exact task went silently once-daily for
+    # ~2.5h with zero alert -- it was simply never in this registry before,
+    # a coverage gap unrelated to any detection-logic bug (the OTHER forex
+    # tasks below were always covered correctly). Root cause of that
+    # incident: fix_sim_schedule_conflicts.ps1's Set-ScheduledTask -Trigger
+    # call replaced this task's every-30-min repeating trigger with a bare
+    # once-daily one (see that script's own updated comments). grace=45
+    # (tolerant of normal jitter around a 30-min cadence, catches a missed
+    # cycle within one watchdog pass) and max_first_run_wait=2h (tight,
+    # since this task should never go more than 30 min without having run
+    # under normal operation).
+    "Forex Intraday Scan":    ("ATOS Forex Intraday Scan",    "forex_scheduler.log",   45, 2),
     "Forex Daily Run":        ("ATOS Forex Daily Run",        "forex_scheduler.log",   20, 30),
     "Forex Exit Check":       ("ATOS Forex Exit Check",       "forex_scheduler.log",   20, 30),
     "Forex London Run":       ("ATOS Forex London Run",       "forex_scheduler.log",   20, 30),
@@ -91,7 +103,13 @@ WINDOWS_TASKS = {
     "Futures Daily Run":      ("ATOS Futures Daily Run",      "futures_scheduler.log", 30, 30),
     "ETF Daily Run":          ("ATOS ETF Daily Run",          "etf_scheduler.log",     20, 30),
     "Stocks Daily Run":       ("ATOS Daily Run",              "engine_TODAY.log",      15, 30),  # special-cased below
-    "Intraday Monitor":       ("ATOS Intraday Monitor",       "intraday_monitor.log",  15, 30),
+    # log_file fixed 2026-08-25: this was pointed at data/intraday_monitor.log,
+    # a dead file only a crash traceback ever touches -- the script's real
+    # per-invocation output moved to logs/monitor_{date}.log at some point,
+    # silently orphaning this freshness check the whole time (see _log_path's
+    # updated docstring). "logs/monitor_TODAY.log" is a sentinel _check_windows_task
+    # substitutes with today's real date, same pattern as "engine_TODAY.log".
+    "Intraday Monitor":       ("ATOS Intraday Monitor",       "logs/monitor_TODAY.log", 15, 30),
     "PnL Sync":               ("ATOS PnL Sync",               "pnl_sync.log",          10, 30),
     "LBO London Open":        ("ATOS LBO London Open",        "lbo_london.log",        20, 78),
     "LBO NY Open":             ("ATOS LBO NY Open",            "lbo_ny.log",            20, 78),
@@ -106,6 +124,14 @@ WINDOWS_TASKS = {
     # looking like a normal daily cadence. Exit Check stays once/day.
     "Forex LIVE Daily Run":   ("ATOS Forex LIVE Daily Run",   "forex_live_scheduler.log", 30, 4),
     "Forex LIVE Exit Check":  ("ATOS Forex LIVE Exit Check",  "forex_live_scheduler.log", 30, 30),
+    # Added 2026-08-25 alongside saxo_live_token_keepalive.py itself (see
+    # that file's docstring for why it exists: LIVE's refresh_token only
+    # lives 1h, LIVE's trading runs are ~2h apart, so something has to
+    # touch the token more often than that or every run in between fails
+    # with TOKEN EXPIRED). grace=20 (well under its own 15-min cadence),
+    # max_first_run_wait=1 (tight -- this task should never go an hour
+    # without having run at least once under normal operation).
+    "Saxo LIVE Token Keepalive": ("ATOS Saxo LIVE Token Keepalive", "saxo_live_keepalive.log", 20, 1),
 }
 
 # ── Registry: Claude-native scheduled tasks (no Windows entry) ──────────────
@@ -183,8 +209,20 @@ def _log_path(log_file: str) -> str | None:
     but falling back to the ".fallback" sibling run_hidden.vbs writes to
     when the primary is persistently locked and it had to route around it
     (see run_hidden.vbs) -- whichever exists and is newer wins, so the
-    watchdog doesn't go blind to real output that landed in the fallback."""
-    primary  = os.path.join(DATA_DIR, log_file)
+    watchdog doesn't go blind to real output that landed in the fallback.
+
+    A log_file containing a path separator (e.g. "logs/monitor_TODAY.log")
+    resolves relative to BASE_DIR instead of DATA_DIR -- added 2026-08-25
+    after finding "Intraday Monitor"'s registry entry had been silently
+    checking data/intraday_monitor.log (a dead file, only ever touched by
+    a crash traceback) for who knows how long, while the script's real
+    output moved to logs/monitor_{date}.log at some point without this
+    registry entry being updated to match. Every other bare-filename entry
+    is unaffected -- still resolved under DATA_DIR exactly as before."""
+    if "/" in log_file or os.sep in log_file:
+        primary = os.path.join(BASE_DIR, log_file)
+    else:
+        primary = os.path.join(DATA_DIR, log_file)
     fallback = primary + ".fallback"
     have_primary  = os.path.exists(primary)
     have_fallback = os.path.exists(fallback)
@@ -257,6 +295,9 @@ def _check_windows_task(name: str, task_name: str, log_file: str, grace_min: int
     if log_file == "engine_TODAY.log":
         today = datetime.now().strftime("%Y-%m-%d")
         log_file = f"engine_{today}.log"
+    elif log_file == "logs/monitor_TODAY.log":
+        today = datetime.now().strftime("%Y-%m-%d")
+        log_file = f"logs/monitor_{today}.log"
 
     info = _query_task_info(task_name)
     if info is None:
@@ -288,6 +329,26 @@ def _check_windows_task(name: str, task_name: str, log_file: str, grace_min: int
     # Only judge tasks that fired recently enough that we'd expect fresh output by now.
     if now - last_run > timedelta(hours=24):
         return None  # last run too long ago to be "this check's" concern
+
+    # A task with a tight grace window is expected to repeat frequently
+    # (e.g. every 30 min) -- everything above this point only checks
+    # whether the log/result were CONSISTENT with that one specific
+    # last_run, never whether last_run itself is recent enough given how
+    # often the task is supposed to fire. Found live 2026-08-25: "ATOS
+    # Forex Intraday Scan"'s every-30-min trigger got silently replaced
+    # with a once-daily one by an unrelated schedule-conflict fix, and
+    # every check below this line kept reporting "healthy" for 2.5+ hours
+    # because last_run/the log were perfectly self-consistent for that one
+    # (increasingly stale) run -- nothing compared last_run against "now"
+    # directly. Only applies to tight-grace (<=60 min) tasks; a once/day
+    # task's last_run legitimately sitting there for hours is normal, not
+    # a failure.
+    if grace_min <= 60 and now - last_run > timedelta(minutes=grace_min * 3):
+        mins_ago = (now - last_run).total_seconds() / 60
+        return (f"'{task_name}' hasn't fired since {last_run:%Y-%m-%d %H:%M} "
+                f"({mins_ago:.0f} min ago) -- its own {grace_min}-min grace window implies it's "
+                f"supposed to repeat far more often than that. Its trigger may have been "
+                f"silently replaced or disabled. {_remediation(task_name)}")
 
     if result not in (0, TASK_NEVER_RUN):
         # A non-zero/unrecognized result code can be transient — Task Scheduler

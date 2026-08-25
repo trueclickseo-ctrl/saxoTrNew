@@ -11,20 +11,38 @@
 # left exactly as already configured (Set-ScheduledTask with just
 # -Trigger touches nothing else).
 #
+# CAUTION (added 2026-08-25 after this bit SIM's own scanner): Set-
+# ScheduledTask -Trigger REPLACES the ENTIRE trigger set, not just its
+# start time. That's harmless for a genuinely once-daily task, but
+# "ATOS Forex Intraday Scan" is NOT once-daily -- it repeats every 30 min,
+# 06:00-22:00 PKT. The first version of this script used a bare
+# `New-ScheduledTaskTrigger -Daily -At X` for all 4 tasks, which silently
+# dropped that repetition for Intraday Scan alone, leaving it to fire only
+# once a day. It ran for real at 20:20:08 that day and the scanner sent no
+# further emails until manually caught and fixed via
+# fix_intraday_scan_trigger.ps1. Never reuse the plain-Daily branch below
+# for a task that has its own repeating trigger -- check first.
+#
 # RUN THIS ONCE, AS ADMINISTRATOR:
 #   Right-click PowerShell -> Run as Administrator, then:
 #   powershell -ExecutionPolicy Bypass -File "E:\SaxoTrNew\SaxoTrNew\fix_sim_schedule_conflicts.ps1"
 
 $changes = @(
-    @{ Name = "ATOS Forex Intraday Scan"; OldTime = "06:00"; NewTime = "06:05" }
-    @{ Name = "ATOS Futures Discover";    OldTime = "06:00"; NewTime = "06:10" }
-    @{ Name = "ATOS Forex Exit Check";    OldTime = "14:00"; NewTime = "14:05" }
-    @{ Name = "ATOS Forex London Run";    OldTime = "18:00"; NewTime = "18:05" }
+    @{ Name = "ATOS Forex Intraday Scan"; OldTime = "06:00"; NewTime = "06:05"; RepeatMinutes = 30; RepeatHours = 16 }
+    @{ Name = "ATOS Futures Discover";    OldTime = "06:00"; NewTime = "06:10"; RepeatMinutes = 0 }
+    @{ Name = "ATOS Forex Exit Check";    OldTime = "14:00"; NewTime = "14:05"; RepeatMinutes = 0 }
+    @{ Name = "ATOS Forex London Run";    OldTime = "18:00"; NewTime = "18:05"; RepeatMinutes = 0 }
 )
 
 foreach ($c in $changes) {
     try {
-        $newTrigger = New-ScheduledTaskTrigger -Daily -At $c.NewTime
+        if ($c.RepeatMinutes -gt 0) {
+            $newTrigger = New-ScheduledTaskTrigger -Once -At $c.NewTime `
+                -RepetitionInterval (New-TimeSpan -Minutes $c.RepeatMinutes) `
+                -RepetitionDuration (New-TimeSpan -Hours $c.RepeatHours)
+        } else {
+            $newTrigger = New-ScheduledTaskTrigger -Daily -At $c.NewTime
+        }
         Set-ScheduledTask -TaskName $c.Name -Trigger $newTrigger -ErrorAction Stop | Out-Null
         Write-Host "OK   $($c.Name): $($c.OldTime) -> $($c.NewTime)" -ForegroundColor Green
     } catch {
