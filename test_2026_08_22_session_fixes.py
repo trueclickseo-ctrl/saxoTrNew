@@ -1433,7 +1433,7 @@ def test_lock_functions_exist_and_are_wired_into_cli():
         "forex/runner.py must define _acquire_lock/_release_lock"
     )
     src = inspect.getsource(runner)
-    main_section = src[src.index("active = list(STRATEGIES) if args.strategy"):]
+    main_section = src[src.index("active = requested_strategies if requested_strategies"):]
     assert "_acquire_lock(" in main_section and "_release_lock(" in main_section, (
         "the CLI dispatch (main()) must acquire the lock before calling "
         "run_daily()/run_exits_only() and release it in a finally block -- "

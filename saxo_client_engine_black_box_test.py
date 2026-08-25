@@ -192,7 +192,7 @@ _run("get_positions() returns parsed JSON", t_get_positions_returns_parsed_json)
 section("4. saxo_client.py — get_account_key()")
 
 def t_account_key_prefers_env_var():
-    saxo_client._account_key_cache = None
+    saxo_client._account_key_cache = {}
     with patch.dict(os.environ, {"SAXO_ACCOUNT_KEY": "env_key_789"}):
         with patch("saxo_client.get_account_info") as mock_info:
             key = saxo_client.get_account_key()
@@ -201,18 +201,18 @@ def t_account_key_prefers_env_var():
 _run("get_account_key() uses SAXO_ACCOUNT_KEY env var without hitting the API", t_account_key_prefers_env_var)
 
 def t_account_key_fetched_from_api_when_no_env():
-    saxo_client._account_key_cache = None
+    saxo_client._account_key_cache = {}
     env_without_key = {k: v for k, v in os.environ.items() if k != "SAXO_ACCOUNT_KEY"}
     fake_info = {"Data": [{"AccountKey": "api_key_abc"}]}
     with patch.dict(os.environ, env_without_key, clear=True):
         with patch("saxo_client.get_account_info", return_value=fake_info):
             key = saxo_client.get_account_key()
     assert key == "api_key_abc"
-    saxo_client._account_key_cache = None  # reset for other tests
+    saxo_client._account_key_cache = {}  # reset for other tests
 _run("get_account_key() fetches from API and unwraps list-shaped Data when no env var set", t_account_key_fetched_from_api_when_no_env)
 
 def t_account_key_cached_after_first_api_fetch():
-    saxo_client._account_key_cache = None
+    saxo_client._account_key_cache = {}
     env_without_key = {k: v for k, v in os.environ.items() if k != "SAXO_ACCOUNT_KEY"}
     fake_info = {"Data": [{"AccountKey": "cached_key"}]}
     with patch.dict(os.environ, env_without_key, clear=True):
@@ -221,11 +221,11 @@ def t_account_key_cached_after_first_api_fetch():
             saxo_client.get_account_key()
             saxo_client.get_account_key()
     assert mock_info.call_count == 1, f"expected 1 API call (then cached), got {mock_info.call_count}"
-    saxo_client._account_key_cache = None
+    saxo_client._account_key_cache = {}
 _run("get_account_key() caches the AccountKey after the first API fetch", t_account_key_cached_after_first_api_fetch)
 
 def t_account_key_raises_when_missing_from_response():
-    saxo_client._account_key_cache = None
+    saxo_client._account_key_cache = {}
     env_without_key = {k: v for k, v in os.environ.items() if k != "SAXO_ACCOUNT_KEY"}
     fake_info = {"Data": [{"SomeOtherField": "x"}]}  # no AccountKey at all
     with patch.dict(os.environ, env_without_key, clear=True):
@@ -235,7 +235,7 @@ def t_account_key_raises_when_missing_from_response():
                 return "expected RuntimeError when AccountKey missing from response"
             except RuntimeError:
                 pass
-    saxo_client._account_key_cache = None
+    saxo_client._account_key_cache = {}
 _run("get_account_key() raises RuntimeError (not silently None) when AccountKey missing from API response", t_account_key_raises_when_missing_from_response)
 
 

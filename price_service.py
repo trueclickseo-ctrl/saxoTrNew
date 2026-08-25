@@ -21,6 +21,12 @@ BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 TOKEN_FILE = os.path.join(BASE_DIR, "saxo_token.json")
 SIM_BASE   = "https://gateway.saxobank.com/sim/openapi/"
 
+# 2026-08-25: the real-money LIVE forex account needs its own token file and
+# gateway -- every function below takes `env: str = "sim"`, unchanged default
+# behavior for every existing caller (this module predates LIVE entirely).
+LIVE_TOKEN_FILE = os.path.join(BASE_DIR, "saxo_token_live.json")
+LIVE_BASE       = "https://gateway.saxobank.com/openapi/"
+
 
 # All 7 FX instruments (used by dashboards that need all rates even without open positions)
 FX_INSTRUMENTS = [
@@ -58,10 +64,11 @@ FX_INSTRUMENTS = [
 
 # ── Token ──────────────────────────────────────────────────────────
 
-def load_token() -> str | None:
+def load_token(env: str = "sim") -> str | None:
     """Return a valid access token or None if expired / missing."""
+    token_file = TOKEN_FILE if env == "sim" else LIVE_TOKEN_FILE
     try:
-        d = json.load(open(TOKEN_FILE))
+        d = json.load(open(token_file))
         if time.time() > float(d.get("obtained_at", 0)) + int(d.get("expires_in", 1200)) - 60:
             return None
         return d.get("access_token")
@@ -71,11 +78,12 @@ def load_token() -> str | None:
 
 # ── Saxo single-instrument price ───────────────────────────────────
 
-def _saxo_mid(token: str, uic: int, asset_type: str) -> float | None:
+def _saxo_mid(token: str, uic: int, asset_type: str, env: str = "sim") -> float | None:
     """Fetch mid price from Saxo /trade/v1/infoprices. Returns None on failure."""
+    base = SIM_BASE if env == "sim" else LIVE_BASE
     try:
         r = requests.get(
-            SIM_BASE + "trade/v1/infoprices",
+            base + "trade/v1/infoprices",
             headers={"Authorization": f"Bearer {token}"},
             params={"Uic": uic, "AssetType": asset_type, "FieldGroups": "Quote"},
             timeout=5,
@@ -95,13 +103,14 @@ def _saxo_mid(token: str, uic: int, asset_type: str) -> float | None:
 
 # ── Main entry point ───────────────────────────────────────────────
 
-def fetch_prices(instruments: list[dict], token: str = None) -> tuple[dict[str, float], str]:
+def fetch_prices(instruments: list[dict], token: str = None, env: str = "sim") -> tuple[dict[str, float], str]:
     """
-    Fetch live prices for a list of instruments from Saxo SIM.
+    Fetch live prices for a list of instruments from Saxo.
 
     Args:
         instruments: list of {"symbol": str, "uic": int, "asset_type": str}
-        token:       Saxo access token (auto-loaded from saxo_token.json if None)
+        token:       Saxo access token (auto-loaded from the env's token file if None)
+        env:         "sim" (default, unchanged) or "live" (real-money account)
 
     Returns:
         (prices, source) where source is "saxo" or "unavailable"
@@ -109,7 +118,7 @@ def fetch_prices(instruments: list[dict], token: str = None) -> tuple[dict[str, 
         Instruments where Saxo returns NoAccess (stocks, futures on SIM) are omitted.
     """
     if token is None:
-        token = load_token()
+        token = load_token(env=env)
 
     prices:  dict[str, float] = {}
     saxo_ok = False
@@ -137,7 +146,7 @@ def fetch_prices(instruments: list[dict], token: str = None) -> tuple[dict[str, 
                 break
             with ThreadPoolExecutor(max_workers=10) as pool:
                 futures = {
-                    pool.submit(_saxo_mid, token, inst["uic"], inst.get("asset_type", "FxSpot")): inst["symbol"]
+                    pool.submit(_saxo_mid, token, inst["uic"], inst.get("asset_type", "FxSpot"), env): inst["symbol"]
                     for inst in misses
                 }
                 for fut in as_completed(futures):

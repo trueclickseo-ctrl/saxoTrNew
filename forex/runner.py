@@ -56,7 +56,7 @@ import saxo_order
 import pandas as pd
 import saxo_auth
 
-from forex.universe import PAIRS, ASSET_TYPE, get_pair, price_decimals as get_price_decimals
+from forex.universe import PAIRS, ASSET_TYPE, get_pair, price_decimals as get_price_decimals, CORE_SYMBOLS
 import forex.strategy             as strat_ema
 import forex.strategy_rsi         as strat_rsi
 import forex.strategy_donchian    as strat_donchian
@@ -164,11 +164,72 @@ MAX_CURRENCY_EXPOSURE = 999
 MAX_SPREAD_PCT = 0.20
 
 # ── Constants ─────────────────────────────────────────────────────────────────
+# SIM values, unchanged. `set_account_env("live")` reassigns BASE_URL/
+# STATE_FILE/ORDERS_FILE/PEAK_EQUITY_FILE/ACCOUNT_ENV below at process
+# startup (called once from main(), before any Saxo request or state load
+# happens) -- every function in this file reads these as module globals at
+# call time, so reassigning them once redirects everything downstream with
+# no further changes needed. A single process invocation is always either
+# SIM or LIVE, never both, so a module-level "current account" is safe here.
 BASE_URL    = "https://gateway.saxobank.com/sim/openapi"
 DATA_DIR    = os.path.join(_ROOT, "data")
 STATE_FILE  = os.path.join(DATA_DIR, "forex_state.json")
 ORDERS_FILE = os.path.join(DATA_DIR, "forex_orders.json")
 CHART_BARS  = 340   # enough for ML strategy: EMA(200) + 126 lookback + 14 buffer
+
+ACCOUNT_ENV = "sim"
+
+# 2026-08-25: the real-money LIVE account is restricted to exactly these 3
+# strategies (explicit user decision, not a technical limitation) and to
+# CORE_SYMBOLS only (no exotic pairs) -- enforced in set_account_env() /
+# _filter_pairs_for_account() / the CLI dispatch in main(), not just
+# documented here, so a mistaken invocation can't slip past it.
+LIVE_ALLOWED_STRATEGIES = {"donchian", "ema", "rsi"}
+
+
+def set_account_env(env: str) -> None:
+    """Switches every Saxo-facing constant in this module to the given
+    account ("sim" default, "live" for the real-money account). Must be
+    called exactly once, before any request/state-file access, from
+    main()'s CLI dispatch -- never mid-run."""
+    global BASE_URL, STATE_FILE, ORDERS_FILE, PEAK_EQUITY_FILE, ACCOUNT_ENV
+    if env == "sim":
+        BASE_URL         = "https://gateway.saxobank.com/sim/openapi"
+        STATE_FILE       = os.path.join(DATA_DIR, "forex_state.json")
+        ORDERS_FILE      = os.path.join(DATA_DIR, "forex_orders.json")
+        PEAK_EQUITY_FILE = os.path.join(DATA_DIR, "forex_peak_equity.json")
+    elif env == "live":
+        BASE_URL         = "https://gateway.saxobank.com/openapi"
+        STATE_FILE       = os.path.join(DATA_DIR, "forex_live_state.json")
+        ORDERS_FILE      = os.path.join(DATA_DIR, "forex_live_orders.json")
+        PEAK_EQUITY_FILE = os.path.join(DATA_DIR, "forex_live_peak_equity.json")
+    else:
+        raise ValueError(f"Unknown account env {env!r} -- expected 'sim' or 'live'.")
+    ACCOUNT_ENV = env
+
+
+def _pnl_module() -> str:
+    """pnl_tracker module name for the CURRENT account -- "forex_live" under
+    LIVE, "forex" under SIM (unchanged). Deliberately NOT added to
+    pnl_tracker.MODULES: that tuple drives get_summary()'s no-args grand
+    total, which sums every module together -- adding forex_live there
+    would silently blend real SEK P&L into the same total as SIM's demo
+    EUR/etf/futures credit. Every pnl_tracker function used here already
+    takes `module` as a plain string with no validation against MODULES,
+    so calling it with "forex_live" explicitly works with zero pnl_tracker
+    changes, and it simply never appears in anything that doesn't ask for
+    it by name."""
+    return "forex_live" if ACCOUNT_ENV == "live" else "forex"
+
+
+def _filter_pairs_for_account(pairs: list) -> list:
+    """Under the LIVE account, every pair scan is restricted to
+    CORE_SYMBOLS (34 pairs) -- no exotic pairs ever reach a live signal,
+    regardless of which strategy or session filter is also applied."""
+    if ACCOUNT_ENV != "live":
+        return pairs
+    return [p for p in pairs if p["symbol"] in CORE_SYMBOLS]
+
 
 # ── Portfolio risk limits ─────────────────────────────────────────────────────
 PORTFOLIO_HEAT_LIMIT  = 0.06   # pause new entries when heat ≥ 6% of equity
@@ -216,7 +277,7 @@ def _resolve_tp_price(sig: dict, direction: str) -> float:
 # ── Saxo HTTP helpers ─────────────────────────────────────────────────────────
 
 def _hdrs(idempotent_id: str | None = None) -> dict:
-    h = {"Authorization": f"Bearer {saxo_auth.get_valid_access_token()}"}
+    h = {"Authorization": f"Bearer {saxo_auth.get_valid_access_token(env=ACCOUNT_ENV)}"}
     if idempotent_id:
         # Saxo rejects an identical POST/PATCH to an order endpoint within a
         # 15s rolling window as a duplicate (409 Conflict) unless each attempt
@@ -308,7 +369,7 @@ def _verify_token(scheduled_time: str = "") -> bool:
         return True
     except Exception:
         logger.error("Saxo token appears expired or invalid — sending alert email")
-        fx_notify.send_token_expired(scheduled_time)
+        fx_notify.send_token_expired(scheduled_time, live=(ACCOUNT_ENV == "live"))
         return False
 
 
@@ -370,34 +431,96 @@ def _eur_per_unit(ccy: str, akey: str | None = None) -> float | None:
     return rate
 
 
-def _equity_in_quote(equity_eur: float, symbol: str) -> float | None:
-    """Restate EUR equity in a pair's quote currency, for position sizing.
+_SEK_QUOTE_RATE_CACHE: dict[str, float] = {}
+
+
+def _sek_per_unit(ccy: str, akey: str | None = None) -> float | None:
+    """SEK value of one unit of `ccy` -- the LIVE-account equivalent of
+    _eur_per_unit() above. LIVE is SEK-denominated (SIM is EUR); found
+    2026-08-25 that _equity_in_quote() was calling the EUR function
+    unconditionally, which for LIVE silently treated its 6,000 SEK equity
+    as if it were 6,000 EUR -- an ~11x oversizing on every pair not quoted
+    directly in SEK. Triangulates via USDSEK (always in the 34-pair core
+    universe) + USD{ccy} or {ccy}USD -- EUR is never a needed quote
+    currency for any of the 34 core pairs, so no EUR leg is needed here."""
+    if ccy == "SEK":
+        return 1.0
+    if ccy in _SEK_QUOTE_RATE_CACHE:
+        return _SEK_QUOTE_RATE_CACHE[ccy]
+
+    akey = akey or ""
+    usdsek_pair = _PAIRS_BY_SYMBOL.get("USDSEK")
+    if usdsek_pair is None:
+        return None
+    px_usdsek = _live_price_retry(usdsek_pair["uic"], akey)
+    if not px_usdsek or px_usdsek <= 0:
+        return None
+
+    rate = None
+    if ccy == "USD":
+        rate = px_usdsek
+    else:
+        usd_leg = _PAIRS_BY_SYMBOL.get(f"USD{ccy}")
+        if usd_leg is not None:
+            px = _live_price_retry(usd_leg["uic"], akey)
+            if px and px > 0:
+                rate = px_usdsek / px
+        else:
+            inv_leg = _PAIRS_BY_SYMBOL.get(f"{ccy}USD")
+            if inv_leg is not None:
+                px = _live_price_retry(inv_leg["uic"], akey)
+                if px and px > 0:
+                    rate = px_usdsek * px
+
+    if rate is None:
+        logger.warning(f"Saxo has no live quote for {ccy} (SEK conversion) right now -- treating as unknown")
+        return None
+    _SEK_QUOTE_RATE_CACHE[ccy] = rate
+    return rate
+
+
+def _equity_in_quote(equity_base: float, symbol: str) -> float | None:
+    """Restate account-base-currency equity in a pair's quote currency, for
+    position sizing.
 
     ATR (and therefore stop distance) is quoted in the pair's quote currency.
-    Dividing an EUR risk budget by a JPY distance is a unit error, so the
-    budget is converted first.
+    Dividing a base-currency risk budget by a mismatched-currency distance
+    is a unit error, so the budget is converted first.
+
+    2026-08-25: made account-env aware -- was unconditionally calling the
+    EUR conversion (_eur_per_unit), correct for SIM but silently wrong for
+    LIVE (SEK-denominated): treated 6,000 SEK as 6,000 EUR, an ~11x
+    oversizing on every pair not quoted directly in SEK. Now picks
+    _sek_per_unit() under --account live, _eur_per_unit() under SIM
+    (unchanged).
     """
     quote = symbol[3:6] if len(symbol) >= 6 else ""
     if not quote:
         return None
-    rate = _eur_per_unit(quote)
+    rate = _sek_per_unit(quote) if ACCOUNT_ENV == "live" else _eur_per_unit(quote)
     if not rate or rate <= 0:
         return None
-    return equity_eur / rate
+    return equity_base / rate
 
 
 def _risk_equity(raw_equity: float) -> float:
     """Cap the sizing base at configured real capital.
 
-    The broker figure is SIM demo credit (~945,000 EUR), not the user's money.
-    Sizing off it made positions ~33x the intended 300,000 SEK. FX trades in
-    fine unit increments, so this scales positions down cleanly rather than
-    making pairs untradeable (contrast futures, where lumpy contract sizes mean
-    the cap blocks whole markets).
+    SIM: the broker figure is SIM demo credit (~945,000 EUR), not the user's
+    money. Sizing off it made positions ~33x the intended 300,000 SEK. FX
+    trades in fine unit increments, so this scales positions down cleanly
+    rather than making pairs untradeable (contrast futures, where lumpy
+    contract sizes mean the cap blocks whole markets).
+
+    LIVE (2026-08-25): the account itself IS the real money (SEK-denominated,
+    6,000 SEK opening balance) -- no conversion needed, just a direct cap in
+    case the broker-reported balance ever differs from the intended figure
+    (e.g. before the first deposit clears).
     """
     try:
         import atos.capital_config as _CAP
-        cap = _CAP.forex_risk_equity_eur()
+        cap = (_CAP.forex_live_risk_equity_sek() if ACCOUNT_ENV == "live"
+               else _CAP.forex_risk_equity_eur())
     except Exception as exc:
         logger.warning(f"Could not read forex risk equity cap: {exc}")
         return raw_equity
@@ -407,25 +530,51 @@ def _risk_equity(raw_equity: float) -> float:
 
 
 def _account() -> tuple[float, str]:
+    """Resolves (equity, AccountKey) for the CURRENT account (ACCOUNT_ENV).
+
+    2026-08-25: a single Saxo LIVE login was confirmed to control THREE
+    sub-accounts (SEK/EUR/USD) -- blindly taking accounts/me's Data[0]
+    happened to land on the right (SEK) one only because of list ordering,
+    not because anything guaranteed it. Now resolves the AccountKey FIRST,
+    explicitly matching Currency=='SEK' under --account live (hard-errors
+    if ambiguous rather than guessing -- see saxo_client.get_account_key's
+    identical fix), THEN fetches balances scoped to that specific
+    AccountKey via Saxo's own AccountKey query param, so equity and the
+    account real orders go to are guaranteed to be the same one. SIM is
+    unaffected (single account, same Data[0] fallback as always)."""
     equity, key = 0.0, ""
     try:
-        bal    = _get("/port/v1/balances/me")
+        info = _get("/port/v1/accounts/me")
+        data = info.get("Data", info)
+        accounts = data if isinstance(data, list) and data else ([data] if isinstance(data, dict) else [])
+        expected_ccy = {"live": "SEK"}.get(ACCOUNT_ENV)
+        acct = None
+        if expected_ccy:
+            acct = next((a for a in accounts if isinstance(a, dict) and a.get("Currency") == expected_ccy), None)
+            if acct is None and len(accounts) > 1:
+                currencies = [a.get("Currency") for a in accounts if isinstance(a, dict)]
+                raise RuntimeError(
+                    f"Saxo {ACCOUNT_ENV.upper()} login has {len(accounts)} sub-accounts "
+                    f"({currencies}) but none is {expected_ccy}-denominated -- refusing "
+                    f"to guess which one to trade on."
+                )
+        if acct is None:
+            acct = accounts[0] if accounts else {}
+        key = (acct.get("AccountKey", "") if isinstance(acct, dict) else "") or ""
+    except Exception as exc:
+        logger.warning(f"Could not read AccountKey: {exc}")
+
+    try:
+        bal    = _get("/port/v1/balances/me", {"AccountKey": key} if key else None)
         equity = float(bal.get("TotalValue") or bal.get("NetEquityForMargin")
                        or bal.get("CashBalance") or 0)
         raw    = equity
         equity = _risk_equity(equity)
         if equity < raw:
-            logger.info(f"  Equity {raw:,.0f} EUR (broker) -> sizing off "
-                        f"{equity:,.0f} EUR (capped at configured capital)")
+            logger.info(f"  Equity {raw:,.0f} -> sizing off "
+                        f"{equity:,.0f} (capped at configured capital)")
     except Exception as exc:
         logger.warning(f"Could not read equity: {exc}")
-    try:
-        info = _get("/port/v1/accounts/me")
-        data = info.get("Data", info)
-        acct = data[0] if isinstance(data, list) else data
-        key  = (acct.get("AccountKey", "") if isinstance(acct, dict) else "") or ""
-    except Exception as exc:
-        logger.warning(f"Could not read AccountKey: {exc}")
     return equity, key
 
 
@@ -799,7 +948,7 @@ def _log_order(entry: dict) -> None:
         json.dump(orders[-500:], f, indent=2)
     # Persistent CSV — never truncated
     trade_logger.log_trade(
-        module     = "forex",
+        module     = _pnl_module(),
         strategy   = entry.get("strategy", ""),
         symbol     = entry.get("symbol", ""),
         side       = entry.get("side", ""),
@@ -1038,7 +1187,7 @@ def _drawdown_allows_entry(equity: float) -> bool:
 def _entries_blocked_by_loss_limit(equity: float) -> bool:
     today = date.today().isoformat()
     try:
-        trades    = pnl_tracker.get_closed_trades(module="forex", limit=500, since=today)
+        trades    = pnl_tracker.get_closed_trades(module=_pnl_module(), limit=500, since=today)
         daily_pnl = sum(t.get("realized_pnl") or 0 for t in trades)
     except Exception:
         return False
@@ -1361,7 +1510,7 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
                                 f"close will use an unconverted 1.0 placeholder, "
                                 f"verify data/pnl_ledger.db for {sym} manually")
                 fx_rate = 1.0
-            pnl_tracker.log_close("forex", sym, live_px, reason, strategy=strat_name,
+            pnl_tracker.log_close(_pnl_module(), sym, live_px, reason, strategy=strat_name,
                                   fx_rate_to_base=fx_rate,
                                   gross_pnl_base_override=saxo_pnl_eur)
             if strat_name == "gap":
@@ -1369,13 +1518,14 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
             # Label the signal-log outcome for ML training data
             raw_pnl = ((live_px - pos["entry_price"]) * qty if is_long
                        else (pos["entry_price"] - live_px) * qty)
-            signal_filter.label_outcome(key, won=raw_pnl > 0)
+            signal_filter.label_outcome(key, won=raw_pnl > 0, module=_pnl_module())
             fx_notify.send_trade_closed(
                 strategy=strat_name, symbol=sym, direction=direction,
                 entry=float(pos.get("entry_price", live_px)),
                 exit_px=live_px, pnl_pct=pnl_pct, units=qty,
                 reason=reason,
                 session=pos.get("lbo_session", "") if strat_name == "london_breakout" else "",
+                live=(ACCOUNT_ENV == "live"),
             )
         del positions[key]
         exits += 1
@@ -1476,7 +1626,8 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
 
         # ── Signal filter: consensus + ML meta-filter ──────────────────────
         passes, features, reason = signal_filter.evaluate(
-            sym, direction, sig, agreement, STRATEGIES, firing_strategy=strat_name)
+            sym, direction, sig, agreement, STRATEGIES, firing_strategy=strat_name,
+            module=_pnl_module())
         if not passes:
             logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] "
                         f"— signal_filter: {reason}")
@@ -1603,10 +1754,10 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                     "uic": uic, "quantity": qty, "entry_price": sig["close"],
                     "stop_price": sig["stop_price"], "dry_run": dry_run})
         if not dry_run:
-            pnl_tracker.log_open("forex", strat_name, sym, direction, qty,
+            pnl_tracker.log_open(_pnl_module(), strat_name, sym, direction, qty,
                                  sig["close"], sig["stop_price"], order_id=oid,
                                  currency="EUR")
-            signal_filter.log_signal(pos_key, features)   # builds ML training data
+            signal_filter.log_signal(pos_key, features, module=_pnl_module())   # builds ML training data
             if strat_name == "london_breakout":
                 fx_notify.send_lbo_trade_opened(
                     symbol=sym, direction=direction,
@@ -1780,12 +1931,21 @@ def _heal_missing_tp(positions: dict, akey: str) -> int:
 import proc_lock
 
 
+def _lock_path() -> str:
+    """LIVE uses its own lock, entirely separate from FOREX_LOCK -- see
+    proc_lock.FOREX_LIVE_LOCK's docstring. intraday_monitor.py (SIM-only)
+    re-acquires FOREX_LOCK every minute; sharing it with LIVE meant a real
+    live run could sit polling against an unrelated process for several
+    minutes despite there being zero actual shared-file risk between them."""
+    return proc_lock.FOREX_LIVE_LOCK if ACCOUNT_ENV == "live" else proc_lock.FOREX_LOCK
+
+
 def _acquire_lock(label: str = "") -> bool:
-    return proc_lock.acquire(proc_lock.FOREX_LOCK, label, logger=logger)
+    return proc_lock.acquire(_lock_path(), label, logger=logger)
 
 
 def _release_lock() -> None:
-    proc_lock.release(proc_lock.FOREX_LOCK)
+    proc_lock.release(_lock_path())
 
 
 # ── Main daily cycle ──────────────────────────────────────────────────────────
@@ -1801,8 +1961,9 @@ def run_exits_only(dry_run: bool = True,
     session_filter = SESSION_PAIRS.get(session) if session != "all" else None
     active_pairs   = [p for p in PAIRS
                       if session_filter is None or p["symbol"] in session_filter]
+    active_pairs   = _filter_pairs_for_account(active_pairs)
 
-    mode = "DRY-RUN" if dry_run else "LIVE (Saxo SIM)"
+    mode = "DRY-RUN" if dry_run else f"LIVE (Saxo {ACCOUNT_ENV.upper()})"
     logger.info("=" * 60)
     logger.info(f"  FX Runner [EXITS-ONLY] — {mode}  session={session}  "
                 f"{datetime.now().strftime('%Y-%m-%d %H:%M')}")
@@ -1891,9 +2052,10 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
     session_filter = SESSION_PAIRS.get(session) if session != "all" else None
     active_pairs   = [p for p in PAIRS
                       if session_filter is None or p["symbol"] in session_filter]
+    active_pairs   = _filter_pairs_for_account(active_pairs)
 
     strat_label = "+".join(active_strategies)
-    mode        = "DRY-RUN" if dry_run else "LIVE (Saxo SIM)"
+    mode        = "DRY-RUN" if dry_run else f"LIVE (Saxo {ACCOUNT_ENV.upper()})"
     run_time    = datetime.now().strftime("%H:%M")
     logger.info("=" * 60)
     logger.info(f"  FX Runner [{strat_label}] — {mode}  session={session}  "
@@ -1964,14 +2126,14 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
 
     # ── Pre-compute cross-strategy agreement map for signal filter ────────────
     agreement = signal_filter.compute_agreement(market_data, live_prices, STRATEGIES)
-    sf_status  = signal_filter.training_status()
+    sf_status  = signal_filter.training_status(module=_pnl_module())
     logger.info(f"Signal filter: consensus active | "
                 f"ML training data: {sf_status['labeled_trades']}/{signal_filter.MIN_TRADES_FOR_ML} trades "
                 f"| ML model: {'✓ active' if sf_status['model_exists'] else '— not yet (need more data)'}")
 
     # ── Load strategy weights — higher weight runs first (priority access) ────
-    strat_weights = strategy_learner.get_weights("forex")
-    strategy_learner.log_weights_table("forex")
+    strat_weights = strategy_learner.get_weights(_pnl_module())
+    strategy_learner.log_weights_table(_pnl_module())
     # Sort active strategies by weight descending so proven winners get first
     # pick of currency exposure slots and portfolio heat capacity
     active_strategies = sorted(
@@ -2078,7 +2240,7 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
 
     # ── Strategy learning pass — update weights from today's closed trades ────
     try:
-        learn_result = strategy_learner.run_learning_pass("forex")
+        learn_result = strategy_learner.run_learning_pass(_pnl_module())
         if learn_result["new_trades"] > 0:
             logger.info(f"  [learner] Processed {learn_result['new_trades']} new trade(s) — "
                         f"weights updated")
@@ -2088,9 +2250,9 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
     # ── Run-summary email (live only) ─────────────────────────────────────────
     if not dry_run:
         try:
-            today_trades   = [t for t in trade_logger.tail("forex", n=200)
+            today_trades   = [t for t in trade_logger.tail(_pnl_module(), n=200)
                               if t.get("date") == today_str and t.get("mode") == "LIVE"]
-            strategy_stats = pnl_tracker.get_strategy_summary("forex")
+            strategy_stats = pnl_tracker.get_strategy_summary(_pnl_module())
             fx_notify.send_run_summary(
                 session        = session,
                 entries        = total_entries,
@@ -2101,6 +2263,7 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
                 strategy_stats = strategy_stats,
                 healed_stops   = healed_stops,
                 healed_tp      = healed_tp,
+                live           = (ACCOUNT_ENV == "live"),
             )
         except Exception as exc:
             logger.warning(f"Run-summary email failed: {exc}")
@@ -2118,9 +2281,15 @@ if __name__ == "__main__":
     ap.add_argument("--exits-only",  action="store_true",
                     help="Check stops only — no new entries (intraday stop check)")
     ap.add_argument("--strategy", default="all",
-                    choices=["all", "ema", "rsi", "donchian", "bb", "pullback", "gap",
-                             "supertrend", "zscore", "ml", "cnn_lstm", "london_breakout"],
-                    help="Which strategy to run (default: all)")
+                    help="Which strategy to run: 'all', a single name, or a "
+                         "comma-separated list (e.g. donchian,ema,rsi). Choices: "
+                         "ema, rsi, donchian, bb, pullback, gap, supertrend, "
+                         "zscore, ml, cnn_lstm, london_breakout")
+    ap.add_argument("--account", default="sim", choices=["sim", "live"],
+                    help="Which Saxo account to run against (default: sim). "
+                         "'live' is the real-money account -- restricted to "
+                         "LIVE_ALLOWED_STRATEGIES and CORE_SYMBOLS only, and "
+                         "requires SAXO_LIVE_CONFIRMED=1 to place real orders.")
     ap.add_argument("--status",   action="store_true",
                     help="Print open positions and exit")
     ap.add_argument("--scan",     action="store_true",
@@ -2132,10 +2301,48 @@ if __name__ == "__main__":
                     help="Restrict to session pairs: asian (06:20 PKT) | london (18:00 PKT) | all")
     args = ap.parse_args()
 
+    _VALID_STRATS = set(STRATEGIES)
+    if args.strategy == "all":
+        requested_strategies = None   # resolved below, account-dependent
+    else:
+        requested_strategies = [s.strip() for s in args.strategy.split(",") if s.strip()]
+        bad = [s for s in requested_strategies if s not in _VALID_STRATS]
+        if bad:
+            ap.error(f"--strategy: unknown strategy/strategies {bad} -- "
+                     f"choices are {sorted(_VALID_STRATS)}")
+
+    set_account_env(args.account)
+
+    if args.account == "live":
+        # ── Hard rails for the real-money account (2026-08-25) ────────────
+        # Two independent gates, both required to place a real order:
+        # (1) every requested strategy must be in the approved 3, and
+        # (2) an explicit env-var confirmation, separate from --live itself,
+        # so a copied/scheduled `--account live --live` can't silently place
+        # real orders on a machine that hasn't deliberately opted in.
+        effective_strats = requested_strategies or sorted(LIVE_ALLOWED_STRATEGIES)
+        not_allowed = [s for s in effective_strats if s not in LIVE_ALLOWED_STRATEGIES]
+        if not_allowed:
+            ap.error(f"--account live only allows {sorted(LIVE_ALLOWED_STRATEGIES)} -- "
+                     f"got {not_allowed}. This is a hard restriction on the "
+                     "real-money account, not a default.")
+        if args.live and os.environ.get("SAXO_LIVE_CONFIRMED") != "1":
+            ap.error(
+                "--account live --live requires SAXO_LIVE_CONFIRMED=1 in the "
+                "environment as an explicit second confirmation before any "
+                "real order can be placed. This is deliberate -- set it only "
+                "on the machine/task you actually want placing real orders."
+            )
+        requested_strategies = effective_strats
+
     if args.info:
+        info_pairs = _filter_pairs_for_account(PAIRS)
+        print(f"\nAccount: {ACCOUNT_ENV.upper()}"
+              + ("  (CORE pairs only -- Uics must be re-verified for LIVE, "
+                 "never assume SIM's numbers carry over)" if ACCOUNT_ENV == "live" else ""))
         print(f"\n{'Pair':<10} {'UIC':>6}  {'Bid':>10} {'Ask':>10}  Description")
         print("  " + "-" * 58)
-        for pair in PAIRS:
+        for pair in info_pairs:
             uic = pair["uic"]
             try:
                 resp = _get("/trade/v1/infoprices",
@@ -2355,7 +2562,7 @@ if __name__ == "__main__":
 
         sys.exit(0)
 
-    active = list(STRATEGIES) if args.strategy == "all" else [args.strategy]
+    active = requested_strategies if requested_strategies is not None else list(STRATEGIES)
     # Serialize concurrent live invocations project-wide -- see LOCK_FILE's
     # docstring above _acquire_lock() for why this exists (a real double-
     # entry risk between overlapping scheduled tasks, found 2026-08-24, not
@@ -2396,9 +2603,18 @@ if __name__ == "__main__":
             # docstrings (2026-08-24 audit found 24+ orphaned entries, 6
             # duplicate stops, and — once safeguard.py existed to actually
             # act instead of only report — 19 fully naked live positions).
+            # LIVE uses a plain reconciliation pass (report + basic fixes
+            # via reconcile_module's own aggressive mode), not the full
+            # safeguard.py auto-fix agent -- deliberately more conservative
+            # for the real-money account until volume justifies more
+            # automation (2026-08-25 decision, see the LIVE setup plan).
             try:
-                import safeguard
-                safeguard.run_safeguard(["forex"])
+                if ACCOUNT_ENV == "live":
+                    import housekeeping
+                    housekeeping.reconcile_live_forex()
+                else:
+                    import safeguard
+                    safeguard.run_safeguard(["forex"])
             except Exception as exc:
                 logger.warning(f"  [SAFEGUARD] post-run fix pass failed: {exc}")
     finally:

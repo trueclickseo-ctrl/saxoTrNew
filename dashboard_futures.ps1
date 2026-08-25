@@ -155,6 +155,43 @@ function Draw-Dashboard {
     }
     NL
 
+    # 2026-08-25: added -- this dashboard never had a strategy-wise P&L/WR/PF
+    # view at all, only per-position rows and raw recent-trades CSV lines.
+    # Found while investigating a real ZC stop-loss that was correctly
+    # closed+emailed by intraday_monitor.py but showed nowhere else.
+    Write-Host "  STRATEGY BREAKDOWN  (all-time realized, Today = today only)" -ForegroundColor Cyan
+    Write-Host "  $("-" * 72)" -ForegroundColor DarkGray
+    $stats      = @($d.strategy_stats)
+    $statsToday = @($d.strategy_stats_today)
+    if ($stats.Count -eq 0) {
+        Write-Host "  No closed futures trades yet." -ForegroundColor DarkGray
+    } else {
+        $todayByStrat = @{}
+        foreach ($t in $statsToday) { $todayByStrat[$t.strategy] = $t }
+
+        Write-Host ("  {0,-10} {1,7} {2,8} {3,7} {4,7} {5,14} {6,14}" -f `
+            "Strategy","Closed","W/L","WR%","PF","All-Time P&L","Today") -ForegroundColor DarkGray
+        Write-Host "  $("-" * 72)" -ForegroundColor DarkGray
+
+        foreach ($s in ($stats | Sort-Object -Property total_pnl -Descending)) {
+            $wr    = "{0:N1}%" -f $s.win_rate
+            $pf    = if ($null -ne $s.profit_factor) { "{0:N2}" -f $s.profit_factor } else { "-" }
+            $pnl   = "{0:+0.00;-0.00}" -f [double]$s.total_pnl
+            $pnlC  = if ([double]$s.total_pnl -ge 0) { "Green" } else { "Red" }
+            $stratC = StratColor $s.strategy
+            $todayEntry = $todayByStrat[$s.strategy]
+            $todayStr  = if ($todayEntry) { "{0:+0.00;-0.00}" -f [double]$todayEntry.total_pnl } else { "-" }
+            $todayC    = if ($todayEntry -and [double]$todayEntry.total_pnl -lt 0) { "Red" } elseif ($todayEntry) { "Green" } else { "DarkGray" }
+
+            Write-Host ("  {0,-10} " -f $s.strategy.ToUpper()) -NoNewline -ForegroundColor $stratC
+            $wl = "{0}W/{1}L" -f $s.wins, $s.losses
+            Write-Host ("{0,7} {1,7} {2,7} {3,7} " -f $s.trades, $wl, $wr, $pf) -NoNewline -ForegroundColor White
+            Write-Host ("{0,14}" -f $pnl) -NoNewline -ForegroundColor $pnlC
+            Write-Host ("{0,14}" -f $todayStr) -ForegroundColor $todayC
+        }
+    }
+    NL
+
     Write-Host "  LOG HEALTH" -ForegroundColor Cyan
     Write-Host "  $("-" * 44)" -ForegroundColor DarkGray
     $h = $d.health

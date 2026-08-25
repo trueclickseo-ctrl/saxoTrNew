@@ -113,7 +113,7 @@ def _wrap(title: str, body_html: str) -> str:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def send_token_expired(scheduled_time: str = "") -> None:
+def send_token_expired(scheduled_time: str = "", live: bool = False) -> None:
     """
     Send email when the Saxo token has expired and the run was skipped.
     Call this before exiting from the runner on a 401 error.
@@ -121,12 +121,13 @@ def send_token_expired(scheduled_time: str = "") -> None:
     now      = datetime.now()
     run_time = scheduled_time or now.strftime("%H:%M")
     today    = now.strftime("%Y-%m-%d")
+    env_name = "LIVE (real money)" if live else "SIM"
 
     body = f"""
     <span class="badge warn">⚠ TOKEN EXPIRED</span>
     <p style="color:#d29922; margin-top:14px">
       The scheduled run at <strong>{run_time} PKT</strong> was <strong>SKIPPED</strong>
-      because the Saxo SIM token has expired. No orders were placed or checked.
+      because the Saxo {env_name} token has expired. No orders were placed or checked.
     </p>
     <div class="metric-row" style="margin-top:14px">
       <div class="metric">
@@ -151,8 +152,9 @@ def send_token_expired(scheduled_time: str = "") -> None:
     </p>
     """
 
-    subject = f"FX Autopilot ⚠ TOKEN EXPIRED — run {run_time} SKIPPED [{today}]"
-    _send(subject, _wrap("Saxo Token Expired — Refresh Required", body))
+    tag = "[LIVE] " if live else ""
+    subject = f"{tag}FX Autopilot ⚠ TOKEN EXPIRED — run {run_time} SKIPPED [{today}]"
+    _send(subject, _wrap(f"{'LIVE — ' if live else ''}Saxo Token Expired — Refresh Required", body))
 
 
 def send_run_summary(
@@ -165,6 +167,7 @@ def send_run_summary(
     strategy_stats: list,    # from pnl_tracker.get_strategy_summary("forex")
     healed_stops:  int = 0,
     healed_tp:     int = 0,
+    live:          bool = False,   # True = the real-money LIVE account, not SIM
 ) -> None:
     """
     Send run summary email after each live execution.
@@ -302,9 +305,10 @@ def send_run_summary(
     """
 
     action = (f"{entries}E/{exits}X" if (entries or exits) else "no trades")
-    subject = (f"FX Autopilot — {action} | {holdings} open | "
+    tag = "[LIVE] " if live else ""
+    subject = (f"{tag}FX Autopilot — {action} | {holdings} open | "
                f"${equity:,.0f} equity | {time_} PKT")
-    _send(subject, _wrap(f"Run Complete — {session.upper()} Session", body))
+    _send(subject, _wrap(f"{'LIVE — ' if live else ''}Run Complete — {session.upper()} Session", body))
 
 
 def send_weekly_report(
@@ -496,6 +500,7 @@ def send_trade_closed(
     units:     int,
     reason:    str,
     session:   str = "",
+    live:      bool = False,   # True = the real-money LIVE account, not SIM
 ) -> None:
     """Immediate win/loss alert when ANY forex strategy closes a position.
 
@@ -559,9 +564,10 @@ def send_trade_closed(
       {label}{session_line} · {time_} PKT · {today}
     </p>
     """
-    subject = (f"{label} {'✅' if won else '❌'} {symbol} {result} {sign}{pnl_pct:.2f}% "
+    tag = "[LIVE] " if live else ""
+    subject = (f"{tag}{label} {'✅' if won else '❌'} {symbol} {result} {sign}{pnl_pct:.2f}% "
                f"({pnl_sgn}{pnl_native:,.0f} {quote_ccy}) [{time_} PKT]")
-    _send(subject, _wrap(f"{label} Closed — {symbol} {result}", body))
+    _send(subject, _wrap(f"{'LIVE — ' if live else ''}{label} Closed — {symbol} {result}", body))
 
 
 def send_lbo_trade_closed(**kwargs) -> None:

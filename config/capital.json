@@ -64,6 +64,21 @@
         "1390 EUR = 15,000 SEK at ~10.8 SEK/EUR."
       ],
       "lbo_capital_eur": 1390
+    },
+
+    "_forex_live_comment": [
+      "2026-08-25: the real-money Saxo LIVE forex account, entirely separate from",
+      "the SIM account above -- different broker account, different Saxo app",
+      "registration, different state file (data/forex_live_state.json). The account",
+      "itself is opened/funded in SEK, so risk_equity_sek is a direct figure, no",
+      "EUR conversion needed (unlike forex/futures SIM above). Restricted by",
+      "explicit user decision to exactly 3 strategies (donchian/ema/rsi) and the",
+      "34 CORE_SYMBOLS pairs only -- enforced in forex/runner.py's",
+      "LIVE_ALLOWED_STRATEGIES / _filter_pairs_for_account(), not just here."
+    ],
+    "forex_live": {
+      "enabled": true,
+      "risk_equity_sek": 6000
     }
 
   }

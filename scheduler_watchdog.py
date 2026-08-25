@@ -97,6 +97,15 @@ WINDOWS_TASKS = {
     "LBO NY Open":             ("ATOS LBO NY Open",            "lbo_ny.log",            20, 78),
     "LBO Force Close":        ("ATOS LBO Force Close",        "lbo_close.log",         20, 30),
     "Daily Chart":            ("ATOS Daily Chart",            "daily_chart_scheduler.log", 15, 30),
+    # Real-money LIVE forex account (2026-08-25) -- separate log from SIM's
+    # forex_scheduler.log so a LIVE failure is never masked by SIM's own
+    # (much more frequent) log activity. Daily Run moved from once/day to
+    # 9x/day the same evening (3 scans per FX session) -- max_first_run_wait
+    # tightened to 4h (was 30h) so a degraded task silently firing only
+    # its last remaining trigger (~24h gaps) gets caught quickly instead of
+    # looking like a normal daily cadence. Exit Check stays once/day.
+    "Forex LIVE Daily Run":   ("ATOS Forex LIVE Daily Run",   "forex_live_scheduler.log", 30, 4),
+    "Forex LIVE Exit Check":  ("ATOS Forex LIVE Exit Check",  "forex_live_scheduler.log", 30, 30),
 }
 
 # ── Registry: Claude-native scheduled tasks (no Windows entry) ──────────────

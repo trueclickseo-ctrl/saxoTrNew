@@ -17,6 +17,7 @@ sys.path.insert(0, _ROOT)
 
 import saxo_auth
 import requests
+import pnl_tracker
 
 BASE_URL = "https://gateway.saxobank.com/sim/openapi"
 DATA_DIR = os.path.join(_ROOT, "data")
@@ -220,11 +221,26 @@ def _log_health():
     return {"log_file": None, "log_age_minutes": None, "ran_today": False}
 
 
+def _strategy_stats() -> tuple[list, list]:
+    """Strategy-wise P&L/WR/PF breakdown, mirroring forex_dashboard.py's
+    STRATEGY BREAKDOWN. Added 2026-08-25 -- this dashboard never had it at
+    all (only per-position rows + raw recent-trades CSV lines), so a real
+    closed loss (e.g. a stop-loss caught by intraday_monitor.py) had no
+    strategy-wise view showing it, even though pnl_tracker had the data."""
+    try:
+        all_time = pnl_tracker.get_strategy_summary("futures")
+        today    = pnl_tracker.get_strategy_summary_since("futures", date.today().isoformat())
+        return all_time, today
+    except Exception:
+        return [], []
+
+
 def main():
     equity    = _account()
     positions = _positions()
     trades    = _recent_trades()
     health    = _log_health()
+    strategy_stats, strategy_stats_today = _strategy_stats()
     total_slots = 30
     open_slots  = total_slots - len(positions)
 
@@ -235,6 +251,8 @@ def main():
         "positions":   positions,
         "trades":      trades,
         "health":      health,
+        "strategy_stats":       strategy_stats,
+        "strategy_stats_today": strategy_stats_today,
         "as_of":       datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     print(json.dumps(out, ensure_ascii=False))

@@ -141,6 +141,18 @@ def forex_risk_equity_eur() -> float:
         return 27_800.0
 
 
+def forex_live_risk_equity_sek() -> float:
+    """Equity base (SEK) that the real-money LIVE forex account sizes
+    RISK_PCT of per trade — separate from SIM's forex_risk_equity_eur().
+    The LIVE account is itself SEK-denominated (6,000 SEK opening balance,
+    2026-08-25), so this is a direct cap, no currency conversion needed.
+    """
+    try:
+        return float(_load()["strategies"]["forex_live"]["risk_equity_sek"])
+    except Exception:
+        return 6_000.0
+
+
 def forex_lbo_capital_eur() -> float:
     """Dedicated day-trading capital (EUR) for the London Breakout book.
 

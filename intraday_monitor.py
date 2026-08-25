@@ -34,6 +34,8 @@ sys.path.insert(0, _ROOT)
 
 import saxo_auth
 import proc_lock
+import trade_logger
+import pnl_tracker
 
 # ── Logging ────────────────────────────────────────────────────────────────
 _LOG_DIR  = os.path.join(_ROOT, "logs")
@@ -287,6 +289,25 @@ def _check_forex(akey: str, dry_run: bool) -> int:
         to_remove.append(key)
         closed += 1
 
+        # 2026-08-25: same fix as _check_futures() below -- this close
+        # previously only removed the local position and emailed, never
+        # logged to trade_logger/pnl_tracker. FOREX_STATE is always SIM's
+        # file (this monitor doesn't know about --account live at all yet
+        # -- forex_live_state.json is only touched by the two dedicated
+        # daily LIVE tasks), so "forex" is always the right module here.
+        close_side = "Sell" if is_long else "Buy"
+        if not dry_run:
+            try:
+                trade_logger.log_trade(
+                    module="forex", strategy=strat, symbol=sym, side=close_side,
+                    quantity=qty, price=live, order_id=oid, dry_run=False,
+                    stop_price=stop, notes=f"intraday_monitor: {reason}",
+                )
+                pnl_tracker.log_close("forex", sym, live, reason, strategy=strat,
+                                      asset_type="FxSpot")
+            except Exception as exc:
+                logger.warning(f"[MONITOR] trade/pnl logging failed for {strat}:{sym}: {exc}")
+
         subject = f"[Forex] {'🔴 STOP' if 'STOP' in reason else '🟢 TARGET'} {sym} — {strat.upper()} closed"
         body = (
             f"Position closed by intraday monitor.\n\n"
@@ -370,6 +391,26 @@ def _check_futures(akey: str, dry_run: bool) -> int:
 
         to_remove.append(key)
         closed += 1
+
+        # 2026-08-25: this close previously only removed the local position
+        # and sent an email -- never logged to trade_logger/pnl_tracker, so
+        # every monitor-caught stop-loss/take-profit was invisible to
+        # trades_futures.csv AND every strategy-wise P&L/win-rate report
+        # (found live: a real ZC stop-loss this monitor closed and emailed
+        # correctly never showed up anywhere else). Mirrors exactly how
+        # futures/runner.py's own exit path logs a close.
+        close_side = "Sell" if is_long else "Buy"
+        if not dry_run:
+            try:
+                trade_logger.log_trade(
+                    module="futures", strategy=strat, symbol=sym, side=close_side,
+                    quantity=qty, price=live, order_id=oid, dry_run=False,
+                    stop_price=stop, notes=f"intraday_monitor: {reason}",
+                )
+                pnl_tracker.log_close("futures", sym, live, reason, strategy=strat,
+                                      asset_type=asset_type, contract_size=cs)
+            except Exception as exc:
+                logger.warning(f"[MONITOR] trade/pnl logging failed for {strat}:{sym}: {exc}")
 
         subject = f"[Futures] 🔴 STOP {sym} — {strat.upper()} closed"
         body = (

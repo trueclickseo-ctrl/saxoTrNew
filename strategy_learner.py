@@ -59,6 +59,13 @@ STRATEGY_NAMES = {
         "donchian", "rsi", "ema", "macd", "squeeze",
         "ma_cross", "trend_ma",
     ],
+    # 2026-08-25: the real-money LIVE forex account -- fully separate module
+    # key (own data/forex_live_strategy_weights.json, per _weights_file()'s
+    # existing per-module naming) so LIVE's learned weights are never mixed
+    # with or derived from SIM's 117-pair history. User explicitly requested
+    # LIVE never share SIM's files/state. Starts neutral (1.0x every
+    # strategy) until LIVE accumulates its own closed-trade history.
+    "forex_live": ["donchian", "ema", "rsi"],
 }
 
 

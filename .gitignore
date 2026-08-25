@@ -2,6 +2,7 @@
 # (comments must be on their own line; a trailing '#' is treated as
 #  literal pattern text by git, which silently breaks the ignore rule)
 saxo_token.json
+saxo_token_live.json
 .env
 *.env
 .env.binance
@@ -35,6 +36,13 @@ data/binance_equity_state.json
 data/strategy_monitor.json
 # gap strategy cooldown — per-week, per-pair re-entry block (runtime state, machine-local)
 data/gap_cooldown.json
+# Real-money LIVE forex account runtime state (positions/orders/peak-equity) --
+# machine-local, never source-controlled, same as the other risk/state trackers above
+data/forex_live_state.json
+data/forex_live_orders.json
+data/forex_live_peak_equity.json
+# Cross-process lock files -- runtime-only, never meaningful across machines
+*.lock
 # generated HTML dashboard (was uploaded to namazic.com)
 dashboard/
 

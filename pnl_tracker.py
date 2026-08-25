@@ -121,7 +121,8 @@ def log_close(module: str, symbol: str, exit_price: float,
               timestamp: str = None, order_id: str = None,
               commission: float = 0.0, asset_type: str = "",
               fx_rate_to_base: float = 1.0,
-              gross_pnl_base_override: float | None = None) -> float | None:
+              gross_pnl_base_override: float | None = None,
+              contract_size: float = 1.0) -> float | None:
     """Close the most-recent open trade for module+symbol.
 
     fx_rate_to_base: multiplier converting the raw (entry/exit price currency)
@@ -132,13 +133,24 @@ def log_close(module: str, symbol: str, exit_price: float,
     summed together as if they were all the same currency (they were not: a
     JPY pair's raw P&L number is ~150x its true base-currency value).
 
+    contract_size: multiplier for exchange-traded futures (ContractFutures)
+    where 1 point of price movement is worth more than $1/unit -- e.g. ZC
+    (corn) is $50/point/contract. Found missing entirely 2026-08-25 while
+    investigating a real ZC stop-loss: the raw*qty calc without this
+    understated a real -$475 loss as -$9.50. Defaults to 1.0 (correct for
+    FxSpot/CfdOnIndex-style instruments already quoted at $1/point per unit,
+    and for any close using gross_pnl_base_override instead, which already
+    encodes the real broker-dealt amount and ignores this parameter
+    entirely). Callers for ContractFutures should look this up the same way
+    futures/runner.py's entries already do (uic cache's contract_size).
+
     gross_pnl_base_override: use this exact base-currency gross P&L instead of
-    computing raw*qty*fx_rate_to_base — pass Saxo's own
+    computing raw*qty*contract_size*fx_rate_to_base — pass Saxo's own
     PositionView.ProfitLossOnTradeInBaseCurrency here when available. That's
     the broker's own real dealt conversion, which is what actually happens to
     the account balance — more authoritative than any rate we look up
-    ourselves. fx_rate_to_base is the fallback when this isn't available
-    (e.g. the position lookup failed).
+    ourselves. fx_rate_to_base/contract_size are the fallback when this isn't
+    available (e.g. the position lookup failed).
 
     Returns net realized P&L (after entry + exit commission), in base
     currency, or None if not found.
@@ -162,7 +174,7 @@ def log_close(module: str, symbol: str, exit_price: float,
             gross_pnl = gross_pnl_base_override
         else:
             raw       = (exit_price - ep) if direction in ("Buy", "BUY") else (ep - exit_price)
-            gross_pnl = raw * qty * fx_rate_to_base
+            gross_pnl = raw * qty * contract_size * fx_rate_to_base
         if commission == 0.0:
             commission = calc_commission(module, qty, exit_price, asset_type)
         entry_comm = row["commission"] or 0.0
@@ -360,7 +372,24 @@ def sync_etf_from_json() -> int:
 
 
 def sync_futures_from_json() -> int:
-    """Sync open futures positions from futures_state.json."""
+    """Sync open futures positions from futures_state.json.
+
+    futures/runner.py already logs every open directly and in real time via
+    log_open() (source_ref=None) the moment an order is placed. This sync
+    exists as a catch-up net, same as sync_forex_from_json() below -- and
+    had the EXACT SAME bug that one was fixed for on 2026-08-21: it only
+    deduped against its OWN previous sync ref ("futures:open:{key}"), never
+    against the real-time-logged row for the same position. Since that row's
+    source_ref is None (never equal to the sync ref), every open futures
+    position got silently double-inserted each time --sync ran. Found
+    2026-08-25 investigating why a real ZC stop-loss the intraday monitor
+    correctly closed didn't show up cleanly -- two open 'ZC' rows existed
+    (id 290 from the real-time entry log, id 320 from this sync bug),
+    log_close()'s ORDER BY id DESC LIMIT 1 would only ever close the newer
+    (sync-duplicate) one, leaving the original stuck open forever. Fixed the
+    same way forex's was: skip if ANY open row already exists for this
+    strategy+symbol, not just a prior sync-created one.
+    """
     if not os.path.exists(FUT_JSON):
         return 0
     added = 0
@@ -371,6 +400,14 @@ def sync_futures_from_json() -> int:
             if _already_synced(ref):
                 continue
             strat, sym = key.split(":", 1) if ":" in key else ("donchian", key)
+            with _conn() as c:
+                existing = c.execute(
+                    "SELECT 1 FROM trades WHERE module='futures' AND strategy=? "
+                    "AND symbol=? AND status='open' LIMIT 1",
+                    (strat, sym),
+                ).fetchone()
+            if existing:
+                continue
             with _conn() as c:
                 c.execute("""
                     INSERT INTO trades
@@ -542,12 +579,24 @@ def get_closed_trades(module: str = None, limit: int = 100,
         return [dict(r) for r in c.execute(q, args).fetchall()]
 
 
-def get_strategy_summary(module: str = "forex") -> list[dict]:
+def get_strategy_summary(module: str = "forex", symbols: set | None = None) -> list[dict]:
     """
     Per-strategy P&L breakdown within a module.
     Returns list of dicts sorted by total_pnl descending.
     Only includes strategies with at least one closed trade.
+
+    `symbols`, if given, restricts to trades on those symbols only -- e.g.
+    forex_dashboard.py passes forex.universe.CORE_SYMBOLS / the exotic
+    complement to compare the two universe tiers' track records side by
+    side (which is the actual live-vs-SIM-only decision that split exists
+    to inform).
     """
+    sym_filter = ""
+    params: tuple = (module,)
+    if symbols:
+        sym_filter = f" AND symbol IN ({','.join('?' * len(symbols))})"
+        params = (module, *symbols)
+
     with _conn() as c:
         # WHERE must filter to status='closed' -- open positions have
         # realized_pnl=NULL, which SUM()/CASE-WHEN silently skip for the
@@ -558,7 +607,7 @@ def get_strategy_summary(module: str = "forex") -> list[dict]:
         # 12 of those 14 rows were open, not losses). Strategies with ONLY
         # open positions (0 closed) used to show a misleading "0% WR /
         # $0 P&L" instead of correctly having no row at all.
-        rows = c.execute("""
+        rows = c.execute(f"""
             SELECT strategy,
                    COUNT(*)                                                     AS n,
                    SUM(realized_pnl)                                            AS total_pnl,
@@ -569,19 +618,19 @@ def get_strategy_summary(module: str = "forex") -> list[dict]:
                    MAX(realized_pnl)                                            AS best,
                    MIN(realized_pnl)                                            AS worst
               FROM trades
-             WHERE module=? AND status='closed'
+             WHERE module=? AND status='closed'{sym_filter}
              GROUP BY strategy
              ORDER BY total_pnl DESC
-        """, (module,)).fetchall()
+        """, params).fetchall()
         # Open count needs its own query -- computing it from the same
         # closed-only rowset (the previous approach, shared with the WHERE
         # above) can only ever return 0, since status='open' rows were
         # already excluded before the CASE WHEN could match them. Confirmed
         # this exact zero-every-time bug in get_pair_summary below too.
-        open_counts = {row["strategy"]: row["n"] for row in c.execute("""
+        open_counts = {row["strategy"]: row["n"] for row in c.execute(f"""
             SELECT strategy, COUNT(*) AS n FROM trades
-             WHERE module=? AND status='open' GROUP BY strategy
-        """, (module,)).fetchall()}
+             WHERE module=? AND status='open'{sym_filter} GROUP BY strategy
+        """, params).fetchall()}
 
     result = []
     for r in rows:
@@ -597,20 +646,31 @@ def get_strategy_summary(module: str = "forex") -> list[dict]:
             "win_rate":      round((r["wins"] or 0) / n * 100, 1) if n else 0.0,
             "total_pnl":     round(r["total_pnl"] or 0.0, 2),
             "profit_factor": round(gp / gl, 2) if gl > 0 else None,
+            "gross_profit":  round(gp, 2),
+            "gross_loss":    round(gl, 2),
             "best":          round(r["best"]  or 0.0, 2),
             "worst":         round(r["worst"] or 0.0, 2),
         })
     return result
 
 
-def get_strategy_summary_since(module: str, since: str) -> list[dict]:
+def get_strategy_summary_since(module: str, since: str, symbols: set | None = None) -> list[dict]:
     """Same shape as get_strategy_summary(), scoped to trades closed on or
     after `since` (e.g. today's date, "YYYY-MM-DD") -- for a daily digest
     rather than the all-time picture. Also returns the distinct symbols
     each strategy traded in that window (daily_summary.py's "currencies"
-    column) since that's naturally computed alongside the rest here."""
+    column) since that's naturally computed alongside the rest here.
+
+    `symbols`, if given, restricts to trades on those symbols only -- see
+    get_strategy_summary()'s docstring for why (core/exotic tier split)."""
+    sym_filter = ""
+    params: tuple = (module, since)
+    if symbols:
+        sym_filter = f" AND symbol IN ({','.join('?' * len(symbols))})"
+        params = (module, since, *symbols)
+
     with _conn() as c:
-        rows = c.execute("""
+        rows = c.execute(f"""
             SELECT strategy,
                    COUNT(*)                                                     AS n,
                    SUM(realized_pnl)                                            AS total_pnl,
@@ -622,19 +682,19 @@ def get_strategy_summary_since(module: str, since: str) -> list[dict]:
                    MIN(realized_pnl)                                            AS worst,
                    SUM(commission)                                              AS total_costs
               FROM trades
-             WHERE module=? AND status='closed' AND timestamp_close >= ?
+             WHERE module=? AND status='closed' AND timestamp_close >= ?{sym_filter}
              GROUP BY strategy
              ORDER BY total_pnl DESC
-        """, (module, since)).fetchall()
-        open_counts = {row["strategy"]: row["n"] for row in c.execute("""
+        """, params).fetchall()
+        open_counts = {row["strategy"]: row["n"] for row in c.execute(f"""
             SELECT strategy, COUNT(*) AS n FROM trades
-             WHERE module=? AND status='open' GROUP BY strategy
-        """, (module,)).fetchall()}
+             WHERE module=? AND status='open'{sym_filter} GROUP BY strategy
+        """, (module, *symbols) if symbols else (module,)).fetchall()}
         symbols_by_strategy: dict = {}
-        for row in c.execute("""
+        for row in c.execute(f"""
             SELECT DISTINCT strategy, symbol FROM trades
-             WHERE module=? AND status='closed' AND timestamp_close >= ?
-        """, (module, since)).fetchall():
+             WHERE module=? AND status='closed' AND timestamp_close >= ?{sym_filter}
+        """, params).fetchall():
             symbols_by_strategy.setdefault(row["strategy"], []).append(row["symbol"])
 
     result = []

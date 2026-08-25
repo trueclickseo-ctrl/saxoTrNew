@@ -841,8 +841,14 @@ def _run_strategy_exits(strat_name: str, strat_mod, positions: dict,
                     "exit_price": live_px, "reason": reason,
                     "pnl_pct": round(pnl_pct, 2), "dry_run": dry_run})
         if not dry_run:
+            # 2026-08-25: contract_size was missing entirely here -- for a
+            # ContractFutures instrument (e.g. ZC at $50/point/contract) the
+            # raw price-diff*qty calc silently understated real P&L by that
+            # multiplier (a real -$475 ZC loss recorded as -$9.50 before
+            # commission). Same info dict already used for entry sizing above.
             pnl_tracker.log_close("futures", sym, live_px, reason, strategy=strat_name,
-                                  asset_type=asset_type)
+                                  asset_type=asset_type,
+                                  contract_size=info.get("contract_size", 1))
         del positions[key]
         exits += 1
     return exits

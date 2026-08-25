@@ -49,6 +49,22 @@ _DATA_DIR  = os.path.join(_ROOT, "data")
 _LOG_CSV   = os.path.join(_DATA_DIR, "fx_signal_log.csv")
 _MODEL_PKL = os.path.join(_DATA_DIR, "fx_meta_model.pkl")
 
+
+def _paths_for(module: str) -> tuple[str, str]:
+    """(log_csv, model_pkl) for the given module. "forex" (SIM, the
+    default/only value before 2026-08-25) keeps the original, unchanged
+    filenames -- no risk to existing training data. Any other module (e.g.
+    "forex_live") gets its own separate pair, so the real-money account's
+    consensus/ML signal history and trained model are never mixed with or
+    derived from SIM's. Added 2026-08-25 per explicit user request that
+    LIVE never share SIM's files/functions."""
+    if module == "forex":
+        return _LOG_CSV, _MODEL_PKL
+    return (
+        os.path.join(_DATA_DIR, f"{module}_signal_log.csv"),
+        os.path.join(_DATA_DIR, f"{module}_meta_model.pkl"),
+    )
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 MIN_AGREEMENT     = 1    # minimum strategies agreeing (1 = no filter; 2 = need 1 confirmer)
@@ -176,34 +192,36 @@ _FEATURE_COLS = [
     "agreement_count", "adx", "atr_pct", "day_of_week",
 ]
 
-_model_cache: dict = {}   # {"model": ..., "scaler": ..., "loaded_at": datetime}
+_model_cache: dict = {}   # {module: {"model": ..., "scaler": ..., "loaded_at": datetime}}
 
 
-def _load_model() -> dict | None:
+def _load_model(module: str = "forex") -> dict | None:
     """Load the saved meta-model from disk. Returns None if not found."""
-    global _model_cache
-    if _model_cache and (datetime.now() - _model_cache["loaded_at"]).seconds < 3600:
-        return _model_cache
-    if not os.path.exists(_MODEL_PKL):
+    cached = _model_cache.get(module)
+    if cached and (datetime.now() - cached["loaded_at"]).seconds < 3600:
+        return cached
+    _, model_pkl = _paths_for(module)
+    if not os.path.exists(model_pkl):
         return None
     try:
-        with open(_MODEL_PKL, "rb") as f:
+        with open(model_pkl, "rb") as f:
             obj = pickle.load(f)
-        _model_cache = {**obj, "loaded_at": datetime.now()}
-        logger.info(f"[meta_ml] Loaded model from {_MODEL_PKL}  "
+        loaded = {**obj, "loaded_at": datetime.now()}
+        _model_cache[module] = loaded
+        logger.info(f"[meta_ml] Loaded {module} model from {model_pkl}  "
                     f"(trained on {obj.get('n_samples', '?')} samples)")
-        return _model_cache
+        return loaded
     except Exception as exc:
-        logger.warning(f"[meta_ml] Could not load model: {exc}")
+        logger.warning(f"[meta_ml] Could not load {module} model: {exc}")
         return None
 
 
-def ml_probability(features: dict) -> float | None:
+def ml_probability(features: dict, module: str = "forex") -> float | None:
     """
     Run the ML meta-filter on a feature vector.
     Returns probability of win (0-1), or None if model not available.
     """
-    obj = _load_model()
+    obj = _load_model(module)
     if obj is None:
         return None
     try:
@@ -218,12 +236,13 @@ def ml_probability(features: dict) -> float | None:
         return None
 
 
-def passes_ml(features: dict, threshold: float = ML_THRESHOLD) -> tuple[bool, float | None]:
+def passes_ml(features: dict, threshold: float = ML_THRESHOLD,
+              module: str = "forex") -> tuple[bool, float | None]:
     """
     Apply ML meta-filter. Returns (passes: bool, prob: float | None).
     If model not available, always passes (defers to consensus filter).
     """
-    prob = ml_probability(features)
+    prob = ml_probability(features, module)
     if prob is None:
         return True, None
     return prob >= threshold, prob
@@ -234,7 +253,8 @@ def passes_ml(features: dict, threshold: float = ML_THRESHOLD) -> tuple[bool, fl
 def evaluate(sym: str, direction: str, signal: dict,
              agreement: dict, strategies: dict,
              min_agreement: int = MIN_AGREEMENT,
-             firing_strategy: str = "") -> tuple[bool, dict, str]:
+             firing_strategy: str = "",
+             module: str = "forex") -> tuple[bool, dict, str]:
     """
     Run both Phase 1 and Phase 2 filters on a signal.
 
@@ -253,7 +273,7 @@ def evaluate(sym: str, direction: str, signal: dict,
         )
 
     # Phase 2 — ML (only if model exists and we have enough historical data)
-    ok, prob = passes_ml(features)
+    ok, prob = passes_ml(features, module=module)
     if prob is not None:
         features["ml_prob"] = round(prob, 4)
         if not ok:
@@ -264,41 +284,44 @@ def evaluate(sym: str, direction: str, signal: dict,
 
 # ── Signal logging ────────────────────────────────────────────────────────────
 
-def _ensure_csv() -> None:
+def _ensure_csv(module: str = "forex") -> None:
+    log_csv, _ = _paths_for(module)
     os.makedirs(_DATA_DIR, exist_ok=True)
-    if not os.path.exists(_LOG_CSV) or os.path.getsize(_LOG_CSV) == 0:
-        with open(_LOG_CSV, "w", newline="", encoding="utf-8") as f:
+    if not os.path.exists(log_csv) or os.path.getsize(log_csv) == 0:
+        with open(log_csv, "w", newline="", encoding="utf-8") as f:
             csv.writer(f).writerow(_CSV_COLS)
 
 
-def log_signal(key: str, features: dict) -> None:
+def log_signal(key: str, features: dict, module: str = "forex") -> None:
     """
     Append a signal event to the training log CSV.
     key = "strategy:symbol", e.g. "pullback:AUDJPY"
     """
     try:
-        _ensure_csv()
+        _ensure_csv(module)
+        log_csv, _ = _paths_for(module)
         row = {c: features.get(c, "") for c in _CSV_COLS}
         row["key"]  = key
         row["date"] = date.today().isoformat()
-        with open(_LOG_CSV, "a", newline="", encoding="utf-8") as f:
+        with open(log_csv, "a", newline="", encoding="utf-8") as f:
             csv.DictWriter(f, fieldnames=_CSV_COLS).writerow(row)
     except Exception as exc:
         logger.warning(f"[signal_filter] log_signal failed: {exc}")
 
 
-def label_outcome(key: str, won: bool) -> None:
+def label_outcome(key: str, won: bool, module: str = "forex") -> None:
     """
     Update the most-recent unresolved row for `key` with the trade outcome.
     Called when the trade closes.  Reads the whole CSV, patches, rewrites.
     Silently skips if no unlabeled row found.
     """
-    if not os.path.exists(_LOG_CSV):
+    log_csv, _ = _paths_for(module)
+    if not os.path.exists(log_csv):
         return
     try:
         rows = []
         patched = False
-        with open(_LOG_CSV, newline="", encoding="utf-8") as f:
+        with open(log_csv, newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 rows.append(row)
@@ -309,7 +332,7 @@ def label_outcome(key: str, won: bool) -> None:
                 patched = True
                 break
         if patched:
-            with open(_LOG_CSV, "w", newline="", encoding="utf-8") as f:
+            with open(log_csv, "w", newline="", encoding="utf-8") as f:
                 w = csv.DictWriter(f, fieldnames=_CSV_COLS)
                 w.writeheader()
                 w.writerows(rows)
@@ -319,16 +342,17 @@ def label_outcome(key: str, won: bool) -> None:
 
 # ── Model training ────────────────────────────────────────────────────────────
 
-def retrain(min_samples: int = MIN_TRADES_FOR_ML) -> dict | None:
+def retrain(min_samples: int = MIN_TRADES_FOR_ML, module: str = "forex") -> dict | None:
     """
-    (Re)train the ML meta-filter on all labeled signal rows.
-    Saves to data/fx_meta_model.pkl.
+    (Re)train the ML meta-filter on all labeled signal rows for `module`.
+    Saves to that module's own model file (see _paths_for()).
 
     Returns dict with model stats, or None if not enough data.
     Call weekly (e.g. from a separate scheduler task or manually).
     """
-    if not os.path.exists(_LOG_CSV):
-        logger.info("[meta_ml] No signal log found — skipping retrain")
+    log_csv, model_pkl = _paths_for(module)
+    if not os.path.exists(log_csv):
+        logger.info(f"[meta_ml] No {module} signal log found — skipping retrain")
         return None
 
     try:
@@ -339,12 +363,12 @@ def retrain(min_samples: int = MIN_TRADES_FOR_ML) -> dict | None:
         logger.warning("[meta_ml] scikit-learn not installed — cannot retrain")
         return None
 
-    df = pd.read_csv(_LOG_CSV)
+    df = pd.read_csv(log_csv)
     df = df[df["outcome"].isin(["0", "1", 0, 1])].copy()
     df["outcome"] = df["outcome"].astype(int)
 
     if len(df) < min_samples:
-        logger.info(f"[meta_ml] Only {len(df)} labeled trades "
+        logger.info(f"[meta_ml] Only {len(df)} labeled {module} trades "
                     f"(need {min_samples}) — skipping retrain")
         return None
 
@@ -370,35 +394,36 @@ def retrain(min_samples: int = MIN_TRADES_FOR_ML) -> dict | None:
         "trained_at":  datetime.now().isoformat(),
         "feature_cols": _FEATURE_COLS,
     }
-    with open(_MODEL_PKL, "wb") as f:
+    with open(model_pkl, "wb") as f:
         pickle.dump(obj, f)
 
-    global _model_cache
-    _model_cache = {**obj, "loaded_at": datetime.now()}
+    _model_cache[module] = {**obj, "loaded_at": datetime.now()}
 
     logger.info(
-        f"[meta_ml] Model retrained: n={len(df)}  "
+        f"[meta_ml] {module} model retrained: n={len(df)}  "
         f"CV accuracy={cv_scores.mean():.1%}±{cv_scores.std():.1%}  "
         f"base WR={wr_overall:.1f}%"
     )
     return obj
 
 
-def training_status() -> dict:
+def training_status(module: str = "forex") -> dict:
     """
     Return current status: how many labeled rows, whether model exists,
-    how far from the ML activation threshold.
+    how far from the ML activation threshold. Scoped to `module`'s own
+    signal log/model -- SIM and LIVE never share this state.
     """
+    log_csv, model_pkl = _paths_for(module)
     n_labeled = 0
     n_wins    = 0
-    if os.path.exists(_LOG_CSV):
-        df = pd.read_csv(_LOG_CSV)
+    if os.path.exists(log_csv):
+        df = pd.read_csv(log_csv)
         labeled   = df[df["outcome"].isin(["0", "1"])]
         n_labeled = len(labeled)
         n_wins    = int((labeled["outcome"] == "1").sum())
 
-    model_exists = os.path.exists(_MODEL_PKL)
-    obj          = _load_model() if model_exists else None
+    model_exists = os.path.exists(model_pkl)
+    obj          = _load_model(module) if model_exists else None
 
     return {
         "labeled_trades":   n_labeled,

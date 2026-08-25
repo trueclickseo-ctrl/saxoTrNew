@@ -36,8 +36,17 @@ from datetime import datetime
 
 _DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
-FOREX_LOCK   = os.path.join(_DATA_DIR, "forex_runner.lock")
-FUTURES_LOCK = os.path.join(_DATA_DIR, "futures_runner.lock")
+FOREX_LOCK      = os.path.join(_DATA_DIR, "forex_runner.lock")
+FUTURES_LOCK    = os.path.join(_DATA_DIR, "futures_runner.lock")
+# 2026-08-25: the real-money LIVE forex account gets its OWN lock, separate
+# from FOREX_LOCK. Found live: intraday_monitor.py's every-minute SIM-only
+# check re-acquires FOREX_LOCK constantly, and a --account live run sharing
+# that same lock file was left polling/losing the race against an unrelated
+# process for several minutes despite LIVE and SIM touching completely
+# different Saxo accounts and state files (forex_live_state.json vs
+# forex_state.json) -- there was never a real cross-contamination risk to
+# protect against between them, only needless contention.
+FOREX_LIVE_LOCK = os.path.join(_DATA_DIR, "forex_live_runner.lock")
 
 STALE_SECONDS = 20 * 60   # generous vs. observed ~3-4 min full scans
 WAIT_TIMEOUT  = 15 * 60   # give up waiting and proceed rather than deadlock forever
