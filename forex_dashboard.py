@@ -10,6 +10,13 @@ Usage:
 import os, sys, json, time
 from datetime import date
 
+# 2026-08-25: matches futures_dashboard.py's own safeguard -- without this,
+# any invocation whose stdout isn't already UTF-8 (piped/redirected output,
+# a non-UTF-8 console codepage) crashes with UnicodeEncodeError on the box-
+# drawing characters used throughout this file's output.
+if sys.stdout.encoding != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8")
+
 BASE_DIR            = os.path.dirname(os.path.abspath(__file__))
 FOREX_STATE_PATH    = os.path.join(BASE_DIR, "data", "forex_state.json")
 

@@ -23,6 +23,13 @@ Usage:
 import os, sys, time
 from datetime import date, datetime
 
+# Matches futures_dashboard.py's / forex_dashboard.py's own safeguard --
+# without this, any invocation whose stdout isn't already UTF-8 (piped/
+# redirected output, a non-UTF-8 console codepage) crashes with
+# UnicodeEncodeError on the box-drawing characters used throughout.
+if sys.stdout.encoding != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8")
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 

@@ -86,3 +86,4 @@ data/cnn_lstm/config.json
 # OS clutter
 .DS_Store
 Thumbs.db
+.devtools/
