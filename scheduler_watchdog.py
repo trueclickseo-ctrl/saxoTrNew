@@ -191,6 +191,20 @@ def _query_task_info(task_name: str) -> dict | None:
         out = subprocess.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
             capture_output=True, text=True, timeout=30,
+            # CREATE_NO_WINDOW: without this, every one of these per-task
+            # subprocess calls pops its own visible console window on
+            # Windows, even though scheduler_watchdog.py itself runs
+            # invisibly (pythonw via run_hidden.vbs) -- the parent process
+            # having no window doesn't stop a CHILD process from getting
+            # its own. Found 2026-08-26: with 20 tasks in WINDOWS_TASKS
+            # (13 of them forex/LBO-named, checked again by the separate
+            # "ATOS Forex Watchdog" --only-forex task), each watchdog run
+            # was popping 13-20 empty PowerShell windows in rapid
+            # succession -- purely cosmetic (each closes itself instantly),
+            # but visually disruptive. subprocess.CREATE_NO_WINDOW only
+            # exists on Windows, which this entire module already targets
+            # exclusively (Task Scheduler, schtasks, PowerShell).
+            creationflags=subprocess.CREATE_NO_WINDOW,
         ).stdout.strip()
     except Exception as exc:
         return {"error": f"powershell query failed: {exc}"}
