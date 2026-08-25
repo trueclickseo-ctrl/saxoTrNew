@@ -100,9 +100,15 @@ WINDOWS_TASKS = {
     "Forex Gap NewYork":      ("ATOS Forex Gap NewYork",      "forex_scheduler.log",   20, 78),
     "Forex Gap Monday Early": ("ATOS Forex Gap Monday Early", "forex_scheduler.log",   20, 174),
     "Forex Gap Fill":         ("ATOS Forex Gap Fill",         "forex_scheduler.log",   20, 174),
-    "Futures Daily Run":      ("ATOS Futures Daily Run",      "futures_scheduler.log", 30, 30),
-    "ETF Daily Run":          ("ATOS ETF Daily Run",          "etf_scheduler.log",     20, 30),
-    "Stocks Daily Run":       ("ATOS Daily Run",              "engine_TODAY.log",      15, 30),  # special-cased below
+    # max_first_run_wait tightened 30h -> 2h 2026-08-25: these 3 moved from
+    # once/day to hourly (explicit user request -- "no need every minute"
+    # but also no need to wait a whole day; Stocks/ETF/Futures all already
+    # combine entry AND exit checking in one pass, same as forex) and were
+    # added to INTRADAY_REPEATING_TASKS above so the "hasn't advanced
+    # recently enough" check actually watches them now.
+    "Futures Daily Run":      ("ATOS Futures Daily Run",      "futures_scheduler.log", 30, 2),
+    "ETF Daily Run":          ("ATOS ETF Daily Run",          "etf_scheduler.log",     20, 2),
+    "Stocks Daily Run":       ("ATOS Daily Run",              "engine_TODAY.log",      15, 2),  # special-cased below
     # log_file fixed 2026-08-25: this was pointed at data/intraday_monitor.log,
     # a dead file only a crash traceback ever touches -- the script's real
     # per-invocation output moved to logs/monitor_{date}.log at some point,
@@ -265,6 +271,22 @@ _FAILURE_SIGNATURES = (
 _SUSPICIOUSLY_SMALL_BYTES = 200
 
 
+# Tasks that genuinely fire multiple times within a single day -- the ONLY
+# ones the "hasn't advanced recently enough" check below should apply to.
+# grace_min alone is NOT a reliable proxy for this: several genuinely
+# once-daily tasks (Forex Exit Check, PnL Sync, the LBO session-open
+# tasks) also use a tight grace_min for unrelated reasons (how long their
+# OWN single run is allowed to take to produce output), and briefly
+# false-alarmed on all four the same day this set was added, once as
+# "hasn't fired in N hours" purely because their one daily run was hours
+# in the past and their own NextRunTime (tomorrow, same time) looked more
+# than 12h out -- completely normal for a once-daily task, not a failure.
+INTRADAY_REPEATING_TASKS = {
+    "Forex Intraday Scan", "Forex LIVE Daily Run", "Saxo LIVE Token Keepalive",
+    "Stocks Daily Run", "ETF Daily Run", "Futures Daily Run",
+}
+
+
 def _log_content_failure(log_file: str) -> str | None:
     """Return a description if the log's own content indicates a no-op/crash
     that mtime freshness alone wouldn't catch, else None."""
@@ -340,11 +362,14 @@ def _check_windows_task(name: str, task_name: str, log_file: str, grace_min: int
     # every check below this line kept reporting "healthy" for 2.5+ hours
     # because last_run/the log were perfectly self-consistent for that one
     # (increasingly stale) run -- nothing compared last_run against "now"
-    # directly. Only applies to tight-grace (<=60 min) tasks; a once/day
-    # task's last_run legitimately sitting there for hours is normal, not
-    # a failure.
+    # directly. Only applies to tasks in INTRADAY_REPEATING_TASKS (see that
+    # set's own comment) -- grace_min alone is NOT a safe proxy for "fires
+    # multiple times a day": several genuinely once-daily tasks (Forex
+    # Exit Check, PnL Sync, the LBO tasks) also use a tight grace_min for
+    # unrelated reasons and briefly false-alarmed here the same day this
+    # was first tried with a "grace_min <= 60" condition instead.
     #
-    # BUT: a repeating intraday task legitimately goes quiet overnight
+    # A repeating intraday task also legitimately goes quiet overnight
     # (e.g. 22:05 -> next day 06:05, ~8h) as part of its own intended
     # window -- that gap alone must not trip this check, or it fires a
     # false alarm every single night. Found live 2026-08-25 fixing this
@@ -357,7 +382,7 @@ def _check_windows_task(name: str, task_name: str, log_file: str, grace_min: int
     # exactly the signature a truly broken/disabled trigger leaves, and
     # exactly what "-Once" (never recurs) produced when this was actually
     # broken: a blank NextRunTime, not just a next-day one.
-    if grace_min <= 60 and now - last_run > timedelta(minutes=grace_min * 3):
+    if name in INTRADAY_REPEATING_TASKS and now - last_run > timedelta(minutes=grace_min * 3):
         next_run_looks_healthy = next_run and next_run - now <= timedelta(hours=12)
         if not next_run_looks_healthy:
             mins_ago = (now - last_run).total_seconds() / 60
