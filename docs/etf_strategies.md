@@ -186,13 +186,38 @@ Not currently selected by default (`strategy_name = "sector_rotation"`). Not doc
 
 ## Strategy Comparison
 
-| Strategy | Type | Signal frequency | Best regime |
-|----------|------|-----------------|-------------|
-| **Sector Rotation** ✓ default | Momentum | Daily run; buys into free slots, no rank-drop exit | All regimes |
-| **Risk-Off** | Regime switching | Low (only on SPY SMA cross) | Bear markets |
-| **Mean Reversion** | Oversold bounce | Low (requires extreme dip) | Volatile markets |
-| **Dual MA** | Trend following (state-based) | Fires daily while condition holds | Trending markets |
-| **Momentum Scan** | Full-universe momentum | Low (slow scan, best run weekly) | All regimes |
+**Real 10-year backtest added 2026-08-26** (`backtest_etf.py` for Sector
+Rotation, `backtest_etf_other_strategies.py` for the other 3) -- entry
+logic transcribed exactly from each strategy's real production code in
+`saxo_etf_strategy/core/etf_strategy.py`, same shared 8% SL / 20% TP exit
+rule for all (confirmed uniform across every strategy via
+`etf_executor.review_exits()` -- no strategy has its own distinct exit).
+Equal-weight position sizing across up to 10 slots for every strategy, so
+the numbers below are directly comparable to each other.
+
+| Strategy | Type | Best regime | CAGR | Sharpe | MaxDD | WR% | Trades/yr |
+|----------|------|-------------|------|--------|-------|-----|-----------|
+| **Sector Rotation** ✓ default | Momentum | All regimes | **+12.4%** | **0.84** | -31.6% | 57.1% | 5.0 |
+| **Dual MA** | Trend following (state-based) | Trending markets | +9.1% | 0.63 | -24.5% | 41.8% | 30.7 |
+| **Mean Reversion** | Oversold bounce | Volatile markets | +3.0% | 0.44 | -15.6% | 48.3% | 6.2 |
+| **Risk-Off** | Regime switching | Bear markets | +2.8% | 0.76 | **-11.7%** | 45.8% | 6.4 |
+| **Momentum Scan** | Full-universe momentum | All regimes | not backtestable | — | — | — | — |
+
+**Sector Rotation remains the best choice on both CAGR and Sharpe** — none
+of the other 3 beat it on risk-adjusted return, only Risk-Off comes close
+on Sharpe (0.76) while trading much less drawdown (-11.7% vs -31.6%) for
+much less return (+2.8% vs +12.4%). If capital preservation ever becomes
+the priority over growth, Risk-Off is the one to reconsider; otherwise
+the current default is validated by real data, not just left in place by
+default.
+
+Momentum Scan's numbers are missing because it isn't practically
+backtestable: it scans Saxo's live ~8,924-instrument full universe with
+exchange/ticker-length/description filtering at run time, and no
+equivalent historical dataset (past exchange listings, past descriptions)
+exists to replay accurately — any attempt would carry real survivorship
+bias. This is also already the least-mature of the 5 per the note below
+(never selected by default, undocumented until the 2026-08-20 audit).
 
 ---
 
