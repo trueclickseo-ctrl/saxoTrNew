@@ -10,6 +10,13 @@ Usage:
 import os, sys, json, time
 from datetime import datetime, date
 
+# Same fix applied to forex_dashboard.py/forex_live_dashboard.py/
+# futures_dashboard.py earlier -- without this, redirected/piped output
+# (or a non-UTF-8 console codepage) crashes on this file's box-drawing
+# characters. Found 2026-08-26 while verifying the new Strategy column.
+if sys.stdout.encoding != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8")
+
 BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
 ETF_STATE     = os.path.join(BASE_DIR, "saxo_etf_strategy", "data", "etf_positions.json")
 # The bot's real log (etf_config.py's ETFConfig.log_path default) is
@@ -21,6 +28,25 @@ ETF_LOG       = os.path.join(BASE_DIR, "saxo_etf_strategy", "logs", "etf_strateg
 
 sys.path.insert(0, BASE_DIR)
 import price_service
+from saxo_etf_strategy.config.etf_config import DEFAULT_CONFIG
+
+# Added 2026-08-26 -- user asked which strategy actually bought the open
+# ETF positions; the table had no "Strategy" column at all (unlike forex/
+# futures). Unlike those modules, ETF runs exactly ONE strategy globally
+# at a time (etf_config.py's strategy_name, switched manually, never
+# per-position) -- confirmed via saxo_etf_strategy/logs/etf_strategy.log's
+# full history: every single run since 2026-08-15 logged "strategy
+# selected: sector_rotation", never anything else, so every currently-
+# open position was genuinely opened by Sector Rotation, not inferred.
+_STRATEGY_LABELS = {
+    "sector_rotation": "Sector Rotation",
+    "risk_off":        "Risk-Off Switching",
+    "mean_reversion":  "Mean Reversion",
+    "dual_ma":         "Dual Moving Average",
+    "momentum_scan":   "Momentum Scan",
+}
+_ACTIVE_STRATEGY = _STRATEGY_LABELS.get(
+    DEFAULT_CONFIG.strategy.strategy_name, DEFAULT_CONFIG.strategy.strategy_name)
 
 REFRESH_SECONDS = 60
 STOP_LOSS_PCT   = 0.08   # matches etf_config.py ETFRiskConfig.stop_loss_pct
@@ -176,7 +202,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append(f"  {BD}OPEN POSITIONS{W}  {DM}({len(positions)} active){W}")
     L.append("")
     L.append(
-        f"  {DM}{'Symbol':<7}  {'UIC':>7}  {'Qty':>6}  {'Entry':>8}  "
+        f"  {DM}{'Symbol':<7}  {'Strategy':<20}  {'UIC':>7}  {'Qty':>6}  {'Entry':>8}  "
         f"{'Now':>8}  {'Stop':>8}  {'TP':>8}  "
         f"{'P&L (USD)':>14}  {'%':>8}  {'Score':>7}  Days{W}"
     )
@@ -218,7 +244,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
             pct_s = f"{'+'if pct>=0 else ''}{pct:.2f}%" if pct is not None else "—"
 
             L.append(
-                f"  {BD}{sym:<7}{W}  {DM}{uic_str:>7}{W}  {qty:>6,}  "
+                f"  {BD}{sym:<7}{W}  {YL}{_ACTIVE_STRATEGY:<20}{W}  {DM}{uic_str:>7}{W}  {qty:>6,}  "
                 f"{DM}{ep:>8.2f}{W}  "
                 f"{BD}{now_s:>8}{W}  "
                 f"{stp_col}{stop:>8.2f}{W}  "
