@@ -7,9 +7,23 @@
 # explicit user request, 3 scan times within each of the 3 FX sessions
 # (Asian/London/NY-overlap), to catch a signal as it develops through the
 # day on "today's still-forming candle" rather than only checking once.
-# Each scan still checks all 34 core pairs (not session-filtered) -- the
-# session labels below are just for WHEN each trigger fires, matched to
-# when that session's pairs are typically most liquid.
+#
+# 2026-08-25 (later still, same day): moved from 9 fixed times to a real
+# repeating trigger -- every 45 min, 06:00-22:00 PKT (~22 runs/day, up
+# from 9) -- explicit user request for tighter checking.
+#
+# Trigger construction went through 3 failed attempts before landing on
+# the working one (same story as fix_intraday_scan_trigger.ps1, see that
+# file's comments for the full account): New-ScheduledTaskTrigger's
+# -RepetitionInterval/-RepetitionDuration params are ONLY valid alongside
+# -Once (which then never recurs daily at all), and simply assigning
+# .Repetition.Interval on a plain -Daily trigger fails ("property cannot
+# be found" -- .Repetition is $null until given a real CIM instance).
+# The working approach: build a real MSFT_TaskRepetitionPattern via
+# New-CimInstance, set Interval/Duration as ISO8601 strings ("PT45M"/
+# "PT16H"), assign that to the -Daily trigger's .Repetition property.
+#
+# Each scan still checks all 34 core pairs (not session-filtered).
 #
 # RUN THIS ONCE, AS ADMINISTRATOR (re-run any time the schedule changes --
 # -Force overwrites the existing task's triggers cleanly):
@@ -26,24 +40,29 @@ $vbs  = "E:\SaxoTrNew\SaxoTrNew\run_hidden.vbs"
 $base = "E:\SaxoTrNew\SaxoTrNew"
 $log  = "$base\data\forex_live_scheduler.log"
 
-# 9 daily entry-scan times -- 3 per session window:
-#   Asian   (JPY/AUD/NZD most liquid): 06:00, 08:00, 10:00
-#   London  (EUR/GBP/CHF/Scandi most liquid): 12:30, 14:30, 16:30
-#   NY/overlap (deepest liquidity overall): 18:00 (original slot), 20:00, 22:00
-$entryTimes = @("06:00", "08:00", "10:00", "12:30", "14:30", "16:30", "18:00", "20:00", "22:00")
-
 $action1 = New-ScheduledTaskAction -Execute "wscript.exe" `
            -Argument "`"$vbs`" `"$base\run_forex_live_daily.bat`" `"$log`""
-$triggers1 = foreach ($t in $entryTimes) { New-ScheduledTaskTrigger -Daily -At $t }
+$trigger1 = New-ScheduledTaskTrigger -Daily -At "06:00"
+$rep1 = New-CimInstance -CimClass (Get-CimClass -ClassName MSFT_TaskRepetitionPattern -Namespace Root/Microsoft/Windows/TaskScheduler) -ClientOnly
+$rep1.Interval = "PT45M"
+$rep1.Duration = "PT16H"
+$rep1.StopAtDurationEnd = $true
+$trigger1.Repetition = $rep1
 $settings1 = New-ScheduledTaskSettingsSet `
            -ExecutionTimeLimit (New-TimeSpan -Hours 1) `
            -StartWhenAvailable `
            -RestartCount 1 -RestartInterval (New-TimeSpan -Minutes 10)
 
-Register-ScheduledTask -TaskName "ATOS Forex LIVE Daily Run" `
-           -Action $action1 -Trigger $triggers1 -Settings $settings1 `
-           -Description "Real-money Saxo LIVE forex account -- donchian/ema/rsi, 34 core pairs, 9x/day entries (3 per FX session)" `
-           -RunLevel Highest -Force
+$dailyRunOk = $true
+try {
+    Register-ScheduledTask -TaskName "ATOS Forex LIVE Daily Run" `
+               -Action $action1 -Trigger $trigger1 -Settings $settings1 `
+               -Description "Real-money Saxo LIVE forex account -- donchian/ema/rsi, 34 core pairs, every 45 min 06:00-22:00 PKT" `
+               -RunLevel Highest -Force -ErrorAction Stop | Out-Null
+} catch {
+    $dailyRunOk = $false
+    Write-Host "FAILED to register 'ATOS Forex LIVE Daily Run': $($_.Exception.Message)" -ForegroundColor Red
+}
 
 $action2  = New-ScheduledTaskAction -Execute "wscript.exe" `
             -Argument "`"$vbs`" `"$base\run_forex_live_exits.bat`" `"$log`""
@@ -53,14 +72,24 @@ $settings2 = New-ScheduledTaskSettingsSet `
             -StartWhenAvailable `
             -RestartCount 1 -RestartInterval (New-TimeSpan -Minutes 10)
 
-Register-ScheduledTask -TaskName "ATOS Forex LIVE Exit Check" `
-            -Action $action2 -Trigger $trigger2 -Settings $settings2 `
-            -Description "Real-money Saxo LIVE forex account -- stop/time-stop check only, once daily" `
-            -RunLevel Highest -Force
+$exitCheckOk = $true
+try {
+    Register-ScheduledTask -TaskName "ATOS Forex LIVE Exit Check" `
+                -Action $action2 -Trigger $trigger2 -Settings $settings2 `
+                -Description "Real-money Saxo LIVE forex account -- stop/time-stop check only, once daily" `
+                -RunLevel Highest -Force -ErrorAction Stop | Out-Null
+} catch {
+    $exitCheckOk = $false
+    Write-Host "FAILED to register 'ATOS Forex LIVE Exit Check': $($_.Exception.Message)" -ForegroundColor Red
+}
 
 Write-Host ""
-Write-Host "Registered 'ATOS Forex LIVE Daily Run' -> 9x/day: $($entryTimes -join ', ') local (entries)."
-Write-Host "Registered 'ATOS Forex LIVE Exit Check' -> daily at 14:00 local (exits only)."
+if ($dailyRunOk) {
+    Write-Host "Registered 'ATOS Forex LIVE Daily Run' -> every 45 min, 06:00-22:00 PKT (entries+exits)." -ForegroundColor Green
+}
+if ($exitCheckOk) {
+    Write-Host "Registered 'ATOS Forex LIVE Exit Check' -> daily at 14:00 local (exits only, backstop)." -ForegroundColor Green
+}
 Write-Host ""
 Write-Host "These will NOT place any real order until SAXO_LIVE_CONFIRMED=1 is set" -ForegroundColor Yellow
 Write-Host "as an environment variable visible to Task Scheduler (System or User scope)." -ForegroundColor Yellow

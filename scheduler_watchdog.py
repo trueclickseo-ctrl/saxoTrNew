@@ -343,12 +343,30 @@ def _check_windows_task(name: str, task_name: str, log_file: str, grace_min: int
     # directly. Only applies to tight-grace (<=60 min) tasks; a once/day
     # task's last_run legitimately sitting there for hours is normal, not
     # a failure.
+    #
+    # BUT: a repeating intraday task legitimately goes quiet overnight
+    # (e.g. 22:05 -> next day 06:05, ~8h) as part of its own intended
+    # window -- that gap alone must not trip this check, or it fires a
+    # false alarm every single night. Found live 2026-08-25 fixing this
+    # exact check: right after correctly restoring "ATOS Forex Intraday
+    # Scan"'s trigger, this flagged it as broken again purely because
+    # last_run (today's final 20:00 firing) was hours behind "now" (23:3x)
+    # -- even though NextRunTime correctly showed tomorrow 06:05, proving
+    # the trigger was genuinely healthy. Only escalate when NextRunTime
+    # ALSO looks unhealthy (missing entirely, or absurdly far out) --
+    # exactly the signature a truly broken/disabled trigger leaves, and
+    # exactly what "-Once" (never recurs) produced when this was actually
+    # broken: a blank NextRunTime, not just a next-day one.
     if grace_min <= 60 and now - last_run > timedelta(minutes=grace_min * 3):
-        mins_ago = (now - last_run).total_seconds() / 60
-        return (f"'{task_name}' hasn't fired since {last_run:%Y-%m-%d %H:%M} "
-                f"({mins_ago:.0f} min ago) -- its own {grace_min}-min grace window implies it's "
-                f"supposed to repeat far more often than that. Its trigger may have been "
-                f"silently replaced or disabled. {_remediation(task_name)}")
+        next_run_looks_healthy = next_run and next_run - now <= timedelta(hours=12)
+        if not next_run_looks_healthy:
+            mins_ago = (now - last_run).total_seconds() / 60
+            next_desc = f"{next_run:%Y-%m-%d %H:%M}" if next_run else "none scheduled"
+            return (f"'{task_name}' hasn't fired since {last_run:%Y-%m-%d %H:%M} "
+                    f"({mins_ago:.0f} min ago) -- its own {grace_min}-min grace window implies it's "
+                    f"supposed to repeat far more often than that, and its NextRunTime ({next_desc}) "
+                    f"doesn't look like a healthy near-term occurrence either. Its trigger may have "
+                    f"been silently replaced or disabled. {_remediation(task_name)}")
 
     if result not in (0, TASK_NEVER_RUN):
         # A non-zero/unrecognized result code can be transient — Task Scheduler
