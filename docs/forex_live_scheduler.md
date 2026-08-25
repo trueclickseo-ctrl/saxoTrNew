@@ -4,30 +4,43 @@ Everything that runs automatically for the real-money LIVE account: what fires w
 
 ---
 
-## The two LIVE-specific Windows Scheduled Tasks
+## The three LIVE-specific Windows Scheduled Tasks
 
 | Task | Trigger(s) | Command | Places real orders? |
 |---|---|---|---|
-| **ATOS Forex LIVE Daily Run** | 9x/day: `06:00, 08:00, 10:00, 12:30, 14:30, 16:30, 18:00, 20:00, 22:00` | `python forex\runner.py --account live --strategy donchian,ema,rsi --live` | Yes — the only task that can open a new position |
-| **ATOS Forex LIVE Exit Check** | 1x/day: `14:00` | `python forex\runner.py --account live --strategy donchian,ema,rsi --exits-only --live` | Manages existing positions only — never opens new ones |
+| **ATOS Forex LIVE Daily Run** | every 45 min, `06:00-22:00` PKT | `python forex\runner.py --account live --strategy donchian,ema,rsi --live` | Yes — the only task that can open a new position. Also checks exits (stop-loss/TP/time-stop) every run. |
+| **ATOS Forex LIVE Exit Check** | 1x/day: `14:00` | `python forex\runner.py --account live --strategy donchian,ema,rsi --exits-only --live` | Manages existing positions only — never opens new ones. Backstop only; Daily Run above already checks exits every 45 min. |
+| **ATOS Saxo LIVE Token Keepalive** | every 15 min, all day | `python saxo_live_token_keepalive.py` | No — read-only token refresh, no trading logic at all. |
 
-Both invoke `run_forex_live_daily.bat` / `run_forex_live_exits.bat` via `run_hidden.vbs` (silent, no console window), logging to `data/forex_live_scheduler.log` — a separate log from SIM's much noisier `forex_scheduler.log`, so a LIVE failure is never masked by SIM's own activity.
+**Moved from 9 fixed times/day to every 45 min, 2026-08-25** — explicit user request for tighter checking. `forex/runner.py`'s `run_daily()` (what Daily Run calls) already handles both new-entry scanning and exit checking together every time it runs, so this one task alone covers "scan for new trades and exit on stop-loss/profit target."
 
-**Registration script**: `setup_scheduler_live.ps1` (run as Administrator; safe to re-run any time the schedule needs to change — `-Force` cleanly replaces the existing triggers).
+Daily Run/Exit Check invoke `run_forex_live_daily.bat` / `run_forex_live_exits.bat` via `run_hidden.vbs` (silent, no console window), logging to `data/forex_live_scheduler.log` — a separate log from SIM's much noisier `forex_scheduler.log`, so a LIVE failure is never masked by SIM's own activity. Keepalive logs to `data/saxo_live_keepalive.log`.
+
+**Registration scripts**: `setup_scheduler_live.ps1` (Daily Run + Exit Check) and `setup_saxo_live_keepalive.ps1` (Keepalive) — both run as Administrator; safe to re-run any time the schedule needs to change (`-Force`/`Register-ScheduledTask -Force` cleanly replaces the existing triggers).
 
 ---
 
-## Why these 9 times
+## Why the token keepalive task exists
 
-3 scan times within each of the 3 FX sessions, so a Donchian breakout / EMA crossover / RSI pullback signal — all of which read "today's still-forming daily candle" — has multiple chances to be caught as it develops through the day, rather than only at one fixed check.
+Found 2026-08-25: the real-money LIVE Saxo app issues an access_token good for only 20 min and a refresh_token good for only 1 hour — both far shorter than SIM's (SIM's access_token lasts a full 24h; SIM never hits this problem). With the old 9-fixed-times schedule (gaps of ~2h between runs), the refresh_token was already dead before the next scheduled run even started — every run past the first hour post-login failed with a `TOKEN EXPIRED` alert email and was skipped entirely (no scan, no orders placed, real or otherwise).
 
-| Session | UTC | PKT (UTC+5) | Scan times chosen | Best for (of the 34 core pairs) |
-|---|---|---|---|---|
-| Asian (Tokyo/Sydney) | 00:00–09:00 | 05:00–14:00 | 06:00, 08:00, 10:00 | JPY, AUD, NZD (14 of 34) |
-| London | 07:00–16:00 | 12:00–21:00 | 12:30, 14:30, 16:30 | EUR, GBP, CHF, NOK, SEK, DKK (20 of 34) |
-| London–NY overlap | 12:00–16:00 | 17:00–21:00 | 18:00, 20:00, 22:00 | Deepest liquidity globally — covers the bulk of the pair list at once |
+`saxo_live_token_keepalive.py` calls `saxo_auth.get_valid_access_token(env="live")` every 15 min — comfortably inside the 20-min access-token window — so the refresh chain never goes fully cold between real trading runs. It does **not** replace the one-time interactive login itself (`python saxo_auth.py --live`, browser + your Saxo credentials) — only you can do that; this just keeps an already-valid login alive indefinitely afterward.
 
-Verified in code: `SESSION_PAIRS["asian"]` (14) + `SESSION_PAIRS["london"]` (20) exactly equal all 34 `CORE_SYMBOLS` — no gaps, no overlap. Every scan still checks all 34 pairs regardless of which "session" label the time falls under — there's no separate pair filter per scan time, only the schedule reasoning is session-based.
+---
+
+## Why every 45 min (not session-specific times anymore)
+
+The 45-min cadence checks all 34 core pairs on every run regardless of what session PKT time falls in — no per-time pair filtering. This is simpler than the old 9-times/3-sessions design and matches the same reasoning that motivated it in the first place: a Donchian breakout / EMA crossover / RSI pullback signal reads "today's still-forming daily candle," so more frequent checks catch it sooner as the day develops, rather than waiting for one of a handful of fixed times.
+
+For reference, the 34 core pairs' session liquidity (unchanged, just no longer used to pick specific scan times):
+
+| Session | UTC | PKT (UTC+5) | Best for (of the 34 core pairs) |
+|---|---|---|---|
+| Asian (Tokyo/Sydney) | 00:00–09:00 | 05:00–14:00 | JPY, AUD, NZD (14 of 34) |
+| London | 07:00–16:00 | 12:00–21:00 | EUR, GBP, CHF, NOK, SEK, DKK (20 of 34) |
+| London–NY overlap | 12:00–16:00 | 17:00–21:00 | Deepest liquidity globally — covers the bulk of the pair list at once |
+
+Verified in code: `SESSION_PAIRS["asian"]` (14) + `SESSION_PAIRS["london"]` (20) exactly equal all 34 `CORE_SYMBOLS` — no gaps, no overlap.
 
 ---
 
@@ -58,17 +71,31 @@ Fix script: `fix_sim_schedule_conflicts.ps1` (run as Administrator).
 
 **Not touched**: `ATOS LBO NY Open` also sits at 18:00, deliberately — LBO's own code auto-detects the real NY session boundary rather than blindly trading at trigger time, and the forex "all strategies" scan already explicitly excludes `london_breakout` from its own run (documented in `forex/runner.py`) — a pre-existing, understood coexistence, not a real collision.
 
-**Flagged but not changed**: `ATOS ETF Test Run 2 2026-08-24` also sits at 22:00 — its name suggests a temporary one-off test task, not a permanent fixture; left alone pending confirmation it's still needed.
+**Resolved 2026-08-25**: the 3 `ATOS ETF Test Run N 2026-08-24` tasks flagged above (including the one at 22:00) were confirmed to be one-time, already-fired leftover test triggers from an earlier test session — removed entirely via `fix_stocks_etf_futures_hourly.ps1`, not an active task anymore.
+
+**Superseded 2026-08-25**: LIVE's Daily Run moved from the 9 fixed times above to every 45 min (see "Why every 45 min" above) — this table's specific collision list is now historical (the exact minutes involved have changed), but the underlying principle (LIVE's schedule is the fixed reference point, SIM/other modules shift around it) still applies to any future collision.
+
+---
+
+## 2026-08-25 — first real trade
+
+23:08 PKT, manual invocation (not yet via the scheduled task — that ran later once the schedule fix was applied): `donchian` opened **EURNOK short** (1,000 @ 10.86975, stop 10.98368, TP 10.52803) and **GBPUSD long** (1,000 @ 1.36466, stop 1.35165, TP 1.39047). Both bracket orders verified correct against Saxo's own web trader (Orders tab, Order Blotter, push notifications) — direction, stop/TP placement, and OCO linkage all exactly right. `housekeeping_live`/`safeguard_live` ran immediately after and confirmed clean.
 
 ---
 
 ## Verifying the current live schedule
 
 ```powershell
-Get-ScheduledTask | Where-Object {$_.TaskName -like "ATOS Forex LIVE*"} | ForEach-Object {
-    [PSCustomObject]@{ Name = $_.TaskName; State = $_.State; Times = ($_.Triggers.StartBoundary -join ", ") }
+Get-ScheduledTask | Where-Object {$_.TaskName -like "ATOS Forex LIVE*" -or $_.TaskName -like "*LIVE Token Keepalive*"} | ForEach-Object {
+    Get-ScheduledTaskInfo -TaskName $_.TaskName | Select-Object @{N='Name';E={$_.TaskName}}, LastRunTime, NextRunTime, LastTaskResult
 }
 ```
+
+Confirming the repeating trigger itself is actually correct (not just a one-time occurrence — see the 2026-08-25 findings in [scheduling.md](scheduling.md) for why this specific check matters):
+```powershell
+schtasks /query /tn "ATOS Forex LIVE Daily Run" /xml | Select-String -Pattern "ScheduleByDay|Repetition|Interval|Duration"
+```
+Should show a `CalendarTrigger` with both `ScheduleByDay` (real daily recurrence) and a nested `Repetition` block (the 45-min sub-daily interval) — if `ScheduleByDay` is missing, the trigger only fires once, ever.
 
 Confirming the confirmation gate is still set:
 ```powershell

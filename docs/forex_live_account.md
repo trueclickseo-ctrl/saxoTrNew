@@ -1,6 +1,6 @@
 # Forex LIVE Account — Real Money
 
-**Status**: live, fully armed (`SAXO_LIVE_CONFIRMED=1` set, scheduled tasks registered) as of 2026-08-25. Zero trades placed so far — no signal has fired yet.
+**Status**: live, fully armed (`SAXO_LIVE_CONFIRMED=1` set, scheduled tasks registered) as of 2026-08-25. **First real trade placed 2026-08-25, 23:08 PKT**: `donchian` opened EURNOK short (1,000 @ 10.86975, stop 10.98368, TP 10.52803) and GBPUSD long (1,000 @ 1.36466, stop 1.35165, TP 1.39047) — both bracket orders verified correct against Saxo's own web trader, `housekeeping_live`/`safeguard_live` confirmed clean immediately after.
 
 **See also**: [forex_live_strategies.md](forex_live_strategies.md) (entry/exit rules for each of the 3 strategies, in depth) and [forex_live_scheduler.md](forex_live_scheduler.md) (every scheduled task, exact trigger times, SIM-conflict history).
 
@@ -51,10 +51,11 @@ Full detail (per-strategy sections, shared mechanics table, what's deliberately 
 
 Full detail (including the SIM wall-clock conflict resolution) in [forex_live_scheduler.md](forex_live_scheduler.md). Summary:
 
-Two Windows Scheduled Tasks (both created via `setup_scheduler_live.ps1`, requires Administrator to register):
+Three Windows Scheduled Tasks:
 
-- **`ATOS Forex LIVE Daily Run`** — 9 daily triggers (entries): `06:00, 08:00, 10:00, 12:30, 14:30, 16:30, 18:00, 20:00, 22:00` local time. 3 scans per FX session window (Asian/London/NY-overlap); every scan checks all 34 core pairs, not session-filtered — the reasoning is that a signal reads "today's still-forming daily candle," which keeps updating through the day as price moves, so periodic re-checks can catch a breakout/crossover that develops mid-day.
-- **`ATOS Forex LIVE Exit Check`** — once daily at `14:00`. Stop/time-stop check only on already-open positions; never opens new ones.
+- **`ATOS Forex LIVE Daily Run`** (created via `setup_scheduler_live.ps1`, Administrator) — **every 45 min, 06:00-22:00 PKT** (moved from 9 fixed times/day 2026-08-25, explicit user request). Checks all 34 core pairs every run, for both new entries AND exits (stop-loss/TP/time-stop) together — the reasoning is that a signal reads "today's still-forming daily candle," which keeps updating through the day as price moves, so frequent re-checks catch a breakout/crossover as it develops.
+- **`ATOS Forex LIVE Exit Check`** — once daily at `14:00`. Backstop only — Daily Run above already checks exits every 45 min.
+- **`ATOS Saxo LIVE Token Keepalive`** (created via `setup_saxo_live_keepalive.ps1`, Administrator) — every 15 min, all day. Calls `saxo_auth.get_valid_access_token(env="live")` to keep the refresh-token chain alive; added 2026-08-25 after finding LIVE's app issues a 20-min access token / 1-hour refresh token — far shorter than SIM's 24h token — which the old 9-times/2h-gap schedule couldn't keep alive between runs. Doesn't replace the one-time interactive login (`python saxo_auth.py --live`) itself.
 
 Both run `run_forex_live_daily.bat` / `run_forex_live_exits.bat`, which call:
 ```
@@ -132,8 +133,11 @@ What's reused from SIM's `housekeeping.py`: only generic, account-agnostic build
 | 11 | `forex_dashboard.py` and `forex_live_dashboard.py` had no UTF-8 stdout safeguard (`futures_dashboard.py` already did) — either would crash under redirected/piped output or a non-UTF-8 console codepage | Medium (would surface as an unexplained crash if ever invoked non-interactively) | Fixed — found via the property-based/blackbox testing pass below, not a live incident |
 | 12 | While building `housekeeping_live.py`: removing the old in-`housekeeping.py` `ForexLiveAdapter`/`reconcile_live_forex()` accidentally deleted the *generic* `_scan_fully_untracked()` helper too — still called by SIM's own `reconcile_all()` — leaving an undefined-name bug in SIM's reconciliation path | **Critical** (SIM-affecting, caught via `pyflakes`, not a live incident) | Fixed — restored the generic function; all 34 SIM `test_housekeeping.py` tests re-verified passing |
 | 13 | 3 tests in the account-level suite still asserted the *old* location (`housekeeping.ForexLiveAdapter`/`housekeeping.reconcile_live_forex`) after the split into `housekeeping_live.py` | Test-only (would have been a false regression signal) | Fixed — updated to assert the new module boundary instead |
+| 14 | LIVE's app issues a 20-min access token / 1-hour refresh token (SIM's lasts 24h) — with the old 9-fixed-times/~2h-gap schedule, every run past the first hour post-login failed with `TOKEN EXPIRED` and was skipped entirely | High (real operational gap — zero scans could happen for hours at a time; no financial loss since a skipped run places no order, correct or otherwise) | Fixed — `saxo_live_token_keepalive.py`, every 15 min |
+| 15 | LIVE's schedule moved to every 45 min the same day, but the `New-ScheduledTaskTrigger` construction needed for a real daily-recurring sub-daily-repeating trigger took 3 attempts to get right (PowerShell's `ScheduledTasks` module rejects `-Daily` + repetition params together) | Operational (would have silently only fired once, like the SIM bug below) | Fixed — see [scheduling.md](scheduling.md)'s 2026-08-25 section for the full account |
+| 16 | (SIM, not LIVE, but same-day and same root cause class) An unrelated schedule-conflict-avoidance fix silently deleted SIM's "ATOS Forex Intraday Scan" every-30-min repetition, and `scheduler_watchdog.py` never had a registry entry for that task at all, so nothing alerted for ~2.5h of zero SIM scans | High (SIM signal-detection gap, not LIVE) | Fixed — trigger restored, watchdog registry gap closed, plus 2 real false-positive bugs found and fixed in the watchdog's own new checks along the way |
 
-None of these caused a real financial loss — all were caught by direct questioning/verification/testing before the first live trade, not by an incident.
+None of these caused a real financial loss — all were caught by direct questioning/verification/testing, either before the first live trade (1-13) or the same day it happened (14-16).
 
 ---
 
