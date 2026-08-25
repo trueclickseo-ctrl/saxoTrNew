@@ -38,7 +38,7 @@ Verified in code: `SESSION_PAIRS["asian"]` (14) + `SESSION_PAIRS["london"]` (20)
 3. **Pair filter** — every scan is intersected with `CORE_SYMBOLS` before a signal can fire.
 4. **Currency-matched account selection** — the LIVE login controls 3 sub-accounts (SEK/EUR/USD); every run explicitly resolves the SEK one by currency, hard-erroring rather than guessing if ever ambiguous.
 5. **Cross-process lock** — `proc_lock.FOREX_LIVE_LOCK`, entirely separate from SIM's `FOREX_LOCK`, so a LIVE run never contends with SIM's `intraday_monitor.py` (which re-acquires the SIM lock every minute).
-6. **Post-run reconciliation** — `housekeeping.reconcile_live_forex()` runs after every LIVE invocation (report + basic auto-fix), separate from SIM's fuller `safeguard.py` auto-fix agent.
+6. **Post-run reconciliation + auto-fix** — `safeguard_live.run_safeguard_live()` (its own file, `housekeeping_live.py`/`safeguard_live.py` — never SIM's `housekeeping.py`/`safeguard.py`) runs after every LIVE invocation: places a protective stop on any naked position found, resolves state mismatches, then re-fetches and verifies each fix before reporting it. See [forex_live_account.md](forex_live_account.md)'s "Housekeeping & safeguard" section for the full architecture.
 7. **Portfolio heat / margin caps** — 6% combined open risk, 50% margin utilization — shared reasoning with SIM but computed against LIVE's own equity/positions only.
 
 ---

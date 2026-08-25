@@ -2603,15 +2603,16 @@ if __name__ == "__main__":
             # docstrings (2026-08-24 audit found 24+ orphaned entries, 6
             # duplicate stops, and — once safeguard.py existed to actually
             # act instead of only report — 19 fully naked live positions).
-            # LIVE uses a plain reconciliation pass (report + basic fixes
-            # via reconcile_module's own aggressive mode), not the full
-            # safeguard.py auto-fix agent -- deliberately more conservative
-            # for the real-money account until volume justifies more
-            # automation (2026-08-25 decision, see the LIVE setup plan).
+            # LIVE runs its OWN safeguard_live.py (2026-08-25, later same
+            # day) -- a fully separate module from SIM's safeguard.py, not
+            # shared code/state, per explicit user direction. Built once
+            # LIVE's schedule went to 9x/day: a naked-position safety net is
+            # worth having in place before the first real entry, not after
+            # an incident (exactly SIM's own history with safeguard.py).
             try:
                 if ACCOUNT_ENV == "live":
-                    import housekeeping
-                    housekeeping.reconcile_live_forex()
+                    import safeguard_live
+                    safeguard_live.run_safeguard_live()
                 else:
                     import safeguard
                     safeguard.run_safeguard(["forex"])

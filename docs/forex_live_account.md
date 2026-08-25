@@ -80,7 +80,7 @@ Verified: `SESSION_PAIRS["asian"]` (14) + `SESSION_PAIRS["london"]` (20) exactly
 3. **Pair filter**: every strategy's scan list is intersected with `CORE_SYMBOLS` before signal generation under `--account live` — an exotic pair can never reach a live signal.
 4. **Currency-aware account selection**: the LIVE login controls 3 sub-accounts (SEK/EUR/USD) — `saxo_client.get_account_key()` and `forex/runner.py`'s `_account()` explicitly match `Currency == "SEK"` rather than trusting list order, and hard-error if ambiguous rather than guessing.
 5. **Separate cross-process lock** (`proc_lock.FOREX_LIVE_LOCK`) — LIVE runs never contend with SIM's `intraday_monitor.py` (which re-acquires the SIM lock every minute).
-6. **Post-run reconciliation**: `housekeeping.reconcile_live_forex()` runs after every live invocation (report + basic auto-fix), separate from SIM's full `safeguard.py` auto-fix agent — deliberately more conservative for the real-money account until volume justifies more automation.
+6. **Post-run reconciliation + auto-fix**: `safeguard_live.run_safeguard_live()` runs after every live invocation — fetches a fresh LIVE Saxo snapshot, places a protective stop on any naked position it finds, resolves state mismatches, then **re-fetches and verifies** each fix actually took before reporting it as fixed. See "Housekeeping & safeguard" below — this is now a real auto-fix agent, not just a report, built proactively on 2026-08-25 before any real trade happened.
 
 ---
 
@@ -102,6 +102,19 @@ Deliberate exception: source code (strategy logic, `saxo_order.py`'s bracket-ord
 
 ---
 
+## Housekeeping & safeguard (own module, built 2026-08-25 — before any real trade)
+
+SIM's `housekeeping.py`/`safeguard.py` reconcile local state against a live Saxo snapshot and auto-fix naked positions; they were built *reactively* on 2026-08-24 after a live SIM run surfaced 23 unprotected positions and 8 state mismatches in one day. LIVE gets the equivalent safety net *proactively*, before that kind of incident has any chance to happen for real money — but per explicit user direction ("do not use any of SIM account, always build new for ATOS live"), it is **two entirely separate files**, not a parameter or subclass hanging off SIM's:
+
+- **`housekeeping_live.py`** — `ForexLiveAdapter` (inherits only from the generic `housekeeping.BaseAdapter`, never `housekeeping.ForexAdapter`), `fetch_live_snapshot()` (always `env="live"`, its own function — not `housekeeping.fetch_live_snapshot()` with a parameter), `reconcile_live_forex()`, `scan_naked_positions_live()`, `_scan_fully_untracked()` (LIVE's own zero-local-footprint sweep), and `[LIVE]`-tagged email helpers.
+- **`safeguard_live.py`** — `run_safeguard_live()`: fetches one live snapshot, places a conservative protective stop (2% from current price) on every naked position found, resolves mismatches via `reconcile_live_forex(aggressive=True)`, then **re-fetches a fresh snapshot and verifies** each fix actually stuck before calling it "fixed" — a fix that looks successful but fails verification is downgraded to NOT FIXED, never reported as done on faith. Sends one `[LIVE]`-tagged summary email only if there was something to do.
+
+What's reused from SIM's `housekeeping.py`: only generic, account-agnostic building blocks — the `LocalPosition`/`Finding`/`LiveSnapshot` dataclasses, the `reconcile_module()` diffing algorithm (a pure function, no SIM-specific behavior), and `_symbol_hint()`. Never `housekeeping.ADAPTERS`, `reconcile_all()`, `scan_naked_positions()`, or `ForexAdapter` — those stay SIM-only, unchanged, untouched by any of this.
+
+`forex/runner.py` dispatches to `safeguard_live.run_safeguard_live()` after every `--account live` invocation, and to SIM's own `safeguard.py` after every SIM invocation — never the other way around (source-level checked by the test suite, see below).
+
+---
+
 ## Known issues found & fixed during setup (2026-08-25)
 
 | # | Finding | Severity | Status |
@@ -117,6 +130,8 @@ Deliberate exception: source code (strategy logic, `saxo_order.py`'s bracket-ord
 | 9 | `pnl_tracker.log_close()` never multiplied by contract_size for ContractFutures instruments (e.g. ZC at $50/point) | High (futures P&L understated ~35x) | Fixed going forward; historical rows not retroactively audited |
 | 10 | `intraday_monitor.py` closed positions correctly (forex + futures) but never logged them to `trade_logger`/`pnl_tracker` — invisible to every strategy-wise P&L report | High (data integrity) | Fixed |
 | 11 | `forex_dashboard.py` and `forex_live_dashboard.py` had no UTF-8 stdout safeguard (`futures_dashboard.py` already did) — either would crash under redirected/piped output or a non-UTF-8 console codepage | Medium (would surface as an unexplained crash if ever invoked non-interactively) | Fixed — found via the property-based/blackbox testing pass below, not a live incident |
+| 12 | While building `housekeeping_live.py`: removing the old in-`housekeeping.py` `ForexLiveAdapter`/`reconcile_live_forex()` accidentally deleted the *generic* `_scan_fully_untracked()` helper too — still called by SIM's own `reconcile_all()` — leaving an undefined-name bug in SIM's reconciliation path | **Critical** (SIM-affecting, caught via `pyflakes`, not a live incident) | Fixed — restored the generic function; all 34 SIM `test_housekeeping.py` tests re-verified passing |
+| 13 | 3 tests in the account-level suite still asserted the *old* location (`housekeeping.ForexLiveAdapter`/`housekeeping.reconcile_live_forex`) after the split into `housekeeping_live.py` | Test-only (would have been a false regression signal) | Fixed — updated to assert the new module boundary instead |
 
 None of these caused a real financial loss — all were caught by direct questioning/verification/testing before the first live trade, not by an incident.
 
@@ -127,6 +142,8 @@ None of these caused a real financial loss — all were caught by direct questio
 Built and applied deliberately, not ad hoc: **(1)** an explicit checklist of functions/edge-cases/error-paths written before adding test code, **(2)** deterministic tools (static analysis, property-based fuzzing) rather than only hand-picked examples, **(3)** coverage measurement as an objective stopping condition for closing gaps, **(4)** full regression re-run after every fix, reasoning through blast radius rather than only re-testing the bug in isolation.
 
 **Test file**: `test_2026_08_25_live_forex_account.py` — 61 tests, organized into 16 sections. Read its module docstring for the full written checklist (functions in scope, edge cases covered, explicit out-of-scope list).
+
+**Housekeeping/safeguard test file**: `test_2026_08_25_live_housekeeping_safeguard.py` — 26 tests covering: module independence (source-level check, via `tokenize`-stripped code, that `housekeeping_live.py`/`safeguard_live.py` never reference `housekeeping.ADAPTERS`/`reconcile_all`/`scan_naked_positions`/`ForexAdapter`, or SIM's `safeguard.py`), snapshot-fetch env correctness, adapter load/save/replace_stop/cancel_stop, every naked-position classification (none/tp_only/partial/fully-covered/non-FxSpot-skip/zero-net-skip), the fully-untracked scan, `[LIVE]` email tagging, `_fix_naked_position_live()` (direction-correct stop pricing both sides, no-price edge case, Saxo-rejection handling), and `run_safeguard_live()`'s verification loop — including the specific case of a fix that *looks* successful but fails post-verification, which must be downgraded to NOT FIXED rather than reported on faith.
 
 **Tools used** (installed to `./.devtools`, never system site-packages — see `.coveragerc`):
 - **pyflakes** (static analysis) across every file touched this session — zero new issues found; every flagged item pre-dates this work (verified against the prior commit).
@@ -139,11 +156,12 @@ Built and applied deliberately, not ad hoc: **(1)** an explicit checklist of fun
 
 **Blackbox tests**: real subprocess invocations (not mocked) of `forex/runner.py`'s CLI and `forex_live_dashboard.py` — confirms the hard rails (disallowed strategy, missing confirmation env var) and the dashboard actually render/exit correctly end-to-end, not just that the underlying functions return the right value in isolation.
 
-**Full regression status** (all 4 suites, re-run after every fix in this pass): 61/61 in the LIVE-account suite; 219/220 total across everything. The 1 failure is a single pre-existing environment flake (subprocess timing / log-file permission, unrelated to any LIVE-account code) documented before this session began — not a regression.
+**Full regression status** (re-run after the `housekeeping_live.py`/`safeguard_live.py` build): 61/61 in the LIVE-account suite, 26/26 in the housekeeping/safeguard suite, 34/34 in SIM's own `test_housekeeping.py`, 29/29 in `saxo_client_engine_black_box_test.py`. The main session suite (`test_2026_08_22_session_fixes.py`, 95 tests) intermittently shows 1-2 failures traced to a pre-existing environment flake — a live scheduled task holding `logs/monitor_*.log` open causes a transient `PermissionError` on import, plus stale `.lock` files from interrupted subprocess tests — not a code regression; deleting stale lock files before a run and re-running confirms it.
 
 **Re-running**:
 ```
 python test_2026_08_25_live_forex_account.py
+python test_2026_08_25_live_housekeeping_safeguard.py
 ```
 Requires `hypothesis` (installed to `./.devtools`, auto-added to `sys.path` by the test file itself — no manual `PYTHONPATH` needed).
 

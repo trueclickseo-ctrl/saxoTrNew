@@ -152,13 +152,15 @@ class LiveSnapshot:
         return False
 
 
-def fetch_live_snapshot(env: str = "sim") -> LiveSnapshot:
-    """`env="live"` fetches the real-money account's snapshot instead of
-    SIM's -- used only by reconcile_live_forex() below. Every other caller
-    (reconcile_all(), scan_naked_positions()) stays SIM-only/unchanged."""
-    pos_resp = saxo_client.get_positions(env=env)
+def fetch_live_snapshot() -> LiveSnapshot:
+    """SIM-only, as this module always was. The real-money LIVE account's
+    equivalent (its own snapshot fetch, its own adapter, its own
+    reconciliation entry point) lives entirely in housekeeping_live.py --
+    a deliberately separate file, not an env parameter on this one, per
+    explicit user direction that LIVE never share SIM's module/functions."""
+    pos_resp = saxo_client.get_positions()
     positions = pos_resp.get("Data", pos_resp)
-    ord_resp = saxo_client.get_orders(env=env)
+    ord_resp = saxo_client.get_orders()
     orders = ord_resp.get("Data", ord_resp)
 
     positions_by_uic: dict = {}
@@ -248,47 +250,6 @@ class ForexAdapter(BaseAdapter):
         )
 
 
-class ForexLiveAdapter(ForexAdapter):
-    """The real-money LIVE forex account (2026-08-25) — same reconciliation
-    logic as ForexAdapter, pointed at a different account entirely.
-
-    Reuses ForexAdapter's load()/save() unchanged: forex.runner's module-
-    level set_account_env("live") is what actually redirects
-    _load_state()/_save_state()/_post()/BASE_URL to the LIVE state file and
-    LIVE gateway — this subclass just guarantees that switch happens before
-    each call (load/save/replace_stop can be invoked independently by
-    reconcile_module()) and tags every finding "forex_live", never "forex",
-    so LIVE and SIM can never be silently aggregated together in one report.
-
-    Deliberately NOT included in the default ADAPTERS dict / reconcile_all()
-    — SIM and LIVE are different broker accounts and must never share one
-    fetch_live_snapshot() call. Use reconcile_live_forex() instead."""
-    module = "forex_live"
-
-    def load(self) -> list[LocalPosition]:
-        self._import().set_account_env("live")
-        return super().load()
-
-    def save(self, positions: list[LocalPosition], removed_keys: list[str]) -> None:
-        self._import().set_account_env("live")
-        super().save(positions, removed_keys)
-
-    def replace_stop(self, pos: LocalPosition, new_quantity: int, price: float) -> str | None:
-        r = self._import()
-        r.set_account_env("live")
-        akey = saxo_client.get_account_key(env="live")
-        if pos.stop_order_id:
-            self.cancel_stop(pos.stop_order_id)
-        dp = r.get_price_decimals(pos.symbol)
-        return saxo_order.place_protective_stop(
-            post_fn=lambda path, body: r._post(path, body),
-            account_key=akey, uic=pos.uic, asset_type="FxSpot",
-            amount=new_quantity, direction=pos.direction, stop_price=price,
-            label=f"{pos.key} (housekeeping-LIVE)", symbol=pos.symbol, price_decimals=dp,
-        )
-
-    def cancel_stop(self, order_id: str) -> bool:
-        return saxo_client.cancel_order(order_id, env="live")
 
 
 class FuturesAdapter(BaseAdapter):
@@ -805,42 +766,6 @@ def reconcile_all(modules: list[str] | None = None, aggressive: bool = False,
     return all_findings
 
 
-def reconcile_live_forex(aggressive: bool = True, send_email: bool = True) -> list[Finding]:
-    """Reconciliation for the real-money LIVE forex account (2026-08-25) --
-    deliberately kept separate from reconcile_all() above rather than
-    adding "forex_live" to the shared ADAPTERS dict / modules list. SIM and
-    LIVE are different broker accounts; folding forex_live into ADAPTERS
-    would mean a plain reconcile_all() call (modules=None, used by every
-    existing SIM caller) could compare LIVE local state against a SIM
-    snapshot or vice versa the moment anyone reordered/simplified that
-    call. Call this after every live run instead (see forex/runner.py's
-    --account live dispatch) — same underlying logic (reconcile_module(),
-    same Finding shape, same email path), just a fully separate entry
-    point and a fully separate live Saxo snapshot."""
-    adapter = ForexLiveAdapter()
-    live = fetch_live_snapshot(env="live")
-    all_findings: list[Finding] = []
-    try:
-        all_findings.extend(reconcile_module(adapter, live, aggressive=aggressive))
-    except Exception as exc:
-        logger.warning(f"[housekeeping] forex_live reconciliation failed: {exc}")
-        all_findings.append(Finding("forex_live", "error", "", f"reconciliation crashed: {exc}"))
-
-    try:
-        all_findings.extend(_scan_fully_untracked_live_forex(live, adapter))
-    except Exception as exc:
-        logger.warning(f"[housekeeping] forex_live fully-untracked scan failed: {exc}")
-
-    if all_findings:
-        for f in all_findings:
-            logger.warning(f"[housekeeping-LIVE] {f.module}/{f.kind} {f.symbol}: {f.detail}")
-        if send_email:
-            _send_reconcile_email(all_findings)
-    else:
-        logger.info("[housekeeping] reconcile_live_forex: no mismatches found")
-    return all_findings
-
-
 def _scan_fully_untracked(live: LiveSnapshot, modules: list[str]) -> list[Finding]:
     """Catch a live position that reconcile_module() structurally cannot
     see: one with ZERO local footprint in ANY module, not just an
@@ -894,37 +819,6 @@ def _scan_fully_untracked(live: LiveSnapshot, modules: list[str]) -> list[Findin
             f"(not even a mismatched one) — reconcile_module() cannot see this uic "
             f"at all; only scan_naked_positions() would ever have flagged it, and "
             f"only while it happens to be unprotected",
-        ))
-    return findings
-
-
-def _scan_fully_untracked_live_forex(live: LiveSnapshot, adapter: "ForexLiveAdapter") -> list[Finding]:
-    """Same purpose as _scan_fully_untracked() above (a live position with
-    ZERO local footprint in any module), scoped only to the LIVE forex
-    account. Kept as its own function rather than threading "forex_live"
-    through the shared one, which hardcodes ADAPTERS[name] lookups and a
-    "forex"-vs-"futures" module label that assumes SIM's module set --
-    reusing it directly for LIVE risked either a KeyError or silently
-    mislabeling/dropping a genuinely untracked live position."""
-    try:
-        tracked_uics = {lp.uic for lp in adapter.load()}
-    except Exception:
-        tracked_uics = set()
-    findings: list[Finding] = []
-    for uic, positions in live.positions_by_uic.items():
-        if positions[0]["PositionBase"].get("AssetType") != "FxSpot":
-            continue
-        if uic in tracked_uics:
-            continue
-        net = live.net_amount(uic)
-        if net == 0:
-            continue
-        symbol = _symbol_hint(positions[0], "forex_live")
-        findings.append(Finding(
-            "forex_live", KIND_FULLY_UNTRACKED, symbol,
-            f"uic {uic}: LIVE net {net:+,.0f} has ZERO local record in the "
-            f"forex_live state file at all — reconcile_module() cannot see "
-            f"this uic; only a manual check would catch it.",
         ))
     return findings
 

@@ -326,45 +326,63 @@ _run("forex/runner CLI: an unrecognized --strategy name is rejected on SIM too (
 
 
 # ═══════════════════════════════════════════════════════════════════════
-section("5. housekeeping.py — ForexLiveAdapter never touches SIM's module/state")
+section("5. housekeeping_live.py — a fully separate file from SIM's housekeeping.py")
 # ═══════════════════════════════════════════════════════════════════════
+# 2026-08-25: per explicit user direction ("do not use any of SIM account,
+# always build new for ATOS live"), the LIVE reconciliation/auto-fix agent
+# was moved OUT of housekeeping.py entirely into its own housekeeping_live.py
+# / safeguard_live.py pair -- not a class/function living inside housekeeping.py
+# behind an env parameter. These 3 tests used to check the old in-file
+# location; updated to check the new dedicated module instead. Full
+# independence coverage (source-level checks that housekeeping_live.py never
+# references housekeeping.ADAPTERS/reconcile_all/ForexAdapter, etc.) lives in
+# test_2026_08_25_live_housekeeping_safeguard.py, not duplicated here.
 
 def test_forex_live_adapter_module_tag():
-    import housekeeping as hk
-    adapter = hk.ForexLiveAdapter()
+    import housekeeping_live as hk_live
+    adapter = hk_live.ForexLiveAdapter()
     assert adapter.module == "forex_live"
     assert adapter.module != "forex"
-_run("housekeeping: ForexLiveAdapter tags every finding 'forex_live', never 'forex'",
+_run("housekeeping_live: ForexLiveAdapter tags every finding 'forex_live', never 'forex'",
      test_forex_live_adapter_module_tag)
 
 
-def test_forex_live_adapter_not_in_shared_adapters_dict():
+def test_forex_live_adapter_not_in_sim_adapters_dict():
     import housekeeping as hk
     assert "forex_live" not in hk.ADAPTERS, (
-        "forex_live must NOT be in the shared ADAPTERS dict -- reconcile_all() "
+        "forex_live must NOT be in SIM's ADAPTERS dict -- reconcile_all() "
         "(used by every existing SIM caller with modules=None) would otherwise "
         "compare LIVE local state against a SIM-only snapshot the moment "
         "anyone called it without an explicit modules= list"
     )
-_run("housekeeping: 'forex_live' is deliberately absent from the shared ADAPTERS dict used by reconcile_all()",
-     test_forex_live_adapter_not_in_shared_adapters_dict)
-
-
-def test_reconcile_live_forex_is_a_separate_entry_point():
-    import housekeeping as hk
-    assert hasattr(hk, "reconcile_live_forex"), (
-        "housekeeping.py must expose a dedicated reconcile_live_forex() "
-        "entry point, separate from reconcile_all()"
+    assert not hasattr(hk, "ForexLiveAdapter"), (
+        "ForexLiveAdapter must live only in housekeeping_live.py now, not "
+        "also be defined inside housekeeping.py"
     )
-_run("housekeeping: reconcile_live_forex() exists as its own entry point (not folded into reconcile_all())",
-     test_reconcile_live_forex_is_a_separate_entry_point)
+_run("housekeeping: 'forex_live'/ForexLiveAdapter are deliberately absent from housekeeping.py entirely",
+     test_forex_live_adapter_not_in_sim_adapters_dict)
+
+
+def test_reconcile_live_forex_is_a_separate_module_entry_point():
+    import housekeeping_live as hk_live
+    import housekeeping as hk
+    assert hasattr(hk_live, "reconcile_live_forex"), (
+        "housekeeping_live.py must expose a dedicated reconcile_live_forex() "
+        "entry point, separate from SIM's reconcile_all()"
+    )
+    assert not hasattr(hk, "reconcile_live_forex"), (
+        "reconcile_live_forex() must NOT also exist inside housekeeping.py -- "
+        "it belongs only in housekeeping_live.py now"
+    )
+_run("housekeeping_live: reconcile_live_forex() exists as its own entry point in its own file, not inside housekeeping.py",
+     test_reconcile_live_forex_is_a_separate_module_entry_point)
 
 
 def test_forex_live_adapter_switches_account_env_before_load():
-    import housekeeping as hk
+    import housekeeping_live as hk_live
     import forex.runner as r
     r.set_account_env("sim")   # start from a known state
-    adapter = hk.ForexLiveAdapter()
+    adapter = hk_live.ForexLiveAdapter()
     try:
         adapter.load()   # reads from disk; may return [] if the file doesn't exist yet -- fine
     except Exception:
@@ -375,7 +393,7 @@ def test_forex_live_adapter_switches_account_env_before_load():
         "own forex_state.json instead of forex_live_state.json"
     )
     r.set_account_env("sim")   # reset for any later test in this process
-_run("housekeeping: ForexLiveAdapter.load() switches forex.runner to env='live' before touching local state",
+_run("housekeeping_live: ForexLiveAdapter.load() switches forex.runner to env='live' before touching local state",
      test_forex_live_adapter_switches_account_env_before_load)
 
 
