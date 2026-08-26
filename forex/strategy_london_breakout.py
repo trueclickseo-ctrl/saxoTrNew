@@ -98,7 +98,7 @@ PAIRS = {
     "GBPAUD", "GBPCAD", "GBPCHF", "GBPNZD",
     "AUDCAD", "AUDCHF", "AUDNZD",
     "NZDJPY", "NZDCAD", "NZDCHF",
-    "CHFJPY", "CADCHF",
+    "CHFJPY", "CHFAUD",
 }
 
 # This strategy only uses H1 bars

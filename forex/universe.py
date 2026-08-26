@@ -294,12 +294,23 @@ PAIRS = [
     },
     # ── Cross Pairs: Tier 2 — CAD crosses ────────────────────────────────────
     {
-        "symbol":      "CADCHF",
-        "description": "Canadian Dollar / Swiss Franc",
-        "base":        "CAD",
-        "quote":       "CHF",
-        "uic":         7,            # sequential gap between CADJPY=6 and CHFJPY=8
-        "yf_ticker":   "CADCHF=X",
+        "symbol":      "CHFAUD",
+        "description": "Swiss Franc / Australian Dollar",
+        "base":        "CHF",
+        "quote":       "AUD",
+        # uic=7 was WRONGLY labeled "CADCHF" here (a guessed sequential-gap
+        # fill between CADJPY=6 and CHFJPY=8 that was never actually checked
+        # against Saxo). Confirmed live 2026-08-26 via
+        # /ref/v1/instruments/details/7/FxSpot -- Saxo's own authoritative
+        # Symbol for uic=7 is "CHFAUD" (CurrencyCode=AUD), not "CADCHF". A
+        # full 149-pair audit against Saxo's reference data found this to be
+        # the ONLY mismatch. Every "CADCHF" position/trade recorded before
+        # this fix (local state + pnl_ledger.db) was renamed to CHFAUD --
+        # the entry/exit prices are correct (fetched by uic, not by symbol),
+        # only the label and this pair's derived quote-currency conversions
+        # (CHF instead of the real AUD) were wrong.
+        "uic":         7,
+        "yf_ticker":   "CHFAUD=X",
         "pip_size":    0.0001,
         "min_units":   1_000,
     },
@@ -1274,7 +1285,7 @@ CORE_SYMBOLS = {
     "GBPAUD", "GBPCAD", "GBPCHF", "GBPNZD",
     "AUDCAD", "AUDCHF", "AUDNZD",
     "NZDJPY", "NZDCAD", "NZDCHF",
-    "CHFJPY", "CADCHF",
+    "CHFJPY", "CHFAUD",
     "EURNOK", "EURSEK", "USDNOK", "USDSEK", "USDDKK", "USDMXN",
 }
 

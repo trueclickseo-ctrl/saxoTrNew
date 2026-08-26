@@ -136,7 +136,7 @@ SESSION_PAIRS = {
         "EURGBP", "EURAUD", "EURNZD", "EURCAD", "EURCHF",
         "GBPAUD", "GBPCAD", "GBPCHF", "GBPNZD",
         # Scandinavian / EM — London open gives best liquidity
-        "CADCHF", "EURNOK", "EURSEK", "USDNOK", "USDSEK", "USDDKK", "USDMXN",
+        "CHFAUD", "EURNOK", "EURSEK", "USDNOK", "USDSEK", "USDDKK", "USDMXN",
     },
 }
 

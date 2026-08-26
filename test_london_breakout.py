@@ -652,7 +652,7 @@ def test_bb_pairs_are_28():
 
 def test_bb_pairs_are_valid_forex():
     valid = {
-        "AUDCAD", "AUDCHF", "AUDJPY", "AUDNZD", "AUDUSD", "CADCHF", "CADJPY",
+        "AUDCAD", "AUDCHF", "AUDJPY", "AUDNZD", "AUDUSD", "CHFAUD", "CADJPY",
         "CHFJPY", "EURAUD", "EURCAD", "EURCHF", "EURGBP", "EURJPY", "EURNZD",
         "EURUSD", "GBPAUD", "GBPCAD", "GBPCHF", "GBPJPY", "GBPNZD", "GBPUSD",
         "NZDCAD", "NZDCHF", "NZDJPY", "NZDUSD", "USDCAD", "USDCHF", "USDJPY",
