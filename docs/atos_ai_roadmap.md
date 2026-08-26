@@ -28,7 +28,14 @@ Mapped onto what's already planned, this isn't new scope, it's the connective pu
 - **"Stronger signal scanner, best pairs"** → #2 AI Signal Scoring plus the "rank ALL opportunities" extension (both already in the v1 scope above) and, later, #3 AI Strategy Selector.
 - **"Runs continuously, checks everything, analyzes wins/losses, reports with reasoning"** → #16 Open Position AI / Trade Management, #18 AI Trading Journal, and the Learning Agent from the 6-agent design (all later-phase, not v1).
 
-**Scope of "makes decisions by self," made explicit rather than assumed**: this means the agent autonomously *analyzes and produces recommendations with reasoning* — exactly what the Trading Journal and Learning Agent already do (a trade closes, the agent explains why it won or lost; a pattern emerges across trades, the agent surfaces it). It does **not** mean the agent executes or resizes real orders without the governance already locked in above: the Risk Engine stays a hard gate, and how much the agent's *analysis* is allowed to actually *do* to a live position is still governed by the autonomy-level framework (Shadow mode → Level 1 Advisory → Level 2 Semi-autonomous, the current ceiling → Level 3 Fully autonomous, explicitly much later). An agent that reasons continuously and reports every decision it *would* make is squarely in scope now; an agent that acts on those decisions beyond the Level 2 ceiling is not, until the ceiling itself is deliberately raised.
+**Scope of "makes decisions by self" — ✅ CONFIRMED by the user, locked in (2026-08-26).** Two genuinely different senses of "autonomy" were being conflated, and they're now explicitly separated:
+
+- **Autonomy of analysis/decision-production — IN SCOPE, this is the actual goal.** Every 45-minute cycle, unattended, the agent produces a structured recommendation with reasoning: approve/reject, a confidence score, a suggested size multiplier, and flags — without a human reviewing each signal in real time. This *is* genuine autonomy in the sense that matters day-to-day: nobody is sitting there approving trades one by one. This is what "the agent decides" means.
+- **Autonomy of execution authority — NOT in scope, and treated as a categorically different capability, not a lesser degree of the same thing.** The agent never calls Saxo's order-placement endpoint directly, never overrides the Risk Engine's caps, never touches SL/TP. Conflating "it decides confidently and unattended" with "it can act on that decision beyond what's already approved" is exactly the ambiguity this section exists to close off before it gets expensive later.
+
+**Escalation past Level 2 is gated on evidence, not time — explicit rule, not a default.** The natural temptation once shadow-mode recommendations start looking good is "it's clearly reliable, let it size/adjust stops itself" on a timeline ("we've watched it for N weeks"). Rejected deliberately: time alone doesn't prove much if the market's been calm the whole time. The actual gate: **M live-approved trades with tracked outcomes, where the agent's recommendations have hurt risk-adjusted returns in zero of them, including through at least one adverse/volatile stretch** — not just a quiet run.
+
+**Any increase in autonomy level beyond Level 2 requires a separate, explicitly-approved phase — a written decision, not an assumed extension of trust in the sizing agent.** Sizing working well is not evidence that SL/TP adjustment (or any other Level-3-adjacent capability) should follow automatically — that's a new capability with a new failure mode (see the governance principles at the very top of this document), and it gets its own decision, made deliberately, not inherited from an unrelated success.
 
 ---
 
@@ -376,10 +383,12 @@ And the structured decision the agent returns:
 
 ### Autonomy levels — recommended staging
 
-1. **Shadow mode** (precedes all 3 levels below): the agent evaluates every real signal but influences nothing — ATOS trades exactly as it does today, the agent's decision is only logged next to the actual outcome. Run for a few weeks; compare "what would the agent have done" against what actually happened before trusting it with anything real.
+1. **Shadow mode** (precedes all 3 levels below): the agent evaluates every real signal but influences nothing — ATOS trades exactly as it does today, the agent's decision is only logged next to the actual outcome. Not gated on a fixed time window (see below) — gated on accumulating enough tracked outcomes to actually judge it.
 2. **Level 1 — Advisory only**: agent gives a recommendation, a human approves or rejects manually. No automatic effect on order flow.
-3. **Level 2 — Semi-autonomous** (recommended starting point once shadow mode looks good): the agent can skip or resize a trade automatically, but can never exceed the fixed risk limits already enforced in code. This is the level actually being recommended for "v1 active," not shadow mode itself.
-4. **Level 3 — Fully autonomous** (explicitly much later, after strong testing): agent could also pause a strategy or change its own parameters. Not in scope for any near-term work.
+3. **Level 2 — Semi-autonomous** (recommended starting point once shadow mode looks good, and the current ceiling — see below): the agent can skip or resize a trade automatically, unattended, every cycle, but can never exceed the fixed risk limits already enforced in code and never touches SL/TP. This is genuine day-to-day autonomy (nobody manually reviews each signal) without execution authority (it never calls Saxo directly or overrides the Risk Engine).
+4. **Level 3 — Fully autonomous** (explicitly much later): agent could also pause a strategy, change its own parameters, or adjust SL/TP. Not in scope for any near-term work.
+
+**✅ CONFIRMED (2026-08-26): the gate from Level 2 to anything beyond it is evidence-based, not time-based, and requires a separate explicit decision.** Not "we've run Level 2 for N weeks" — that proves little if the market stayed calm the whole time. The actual bar: a defined number (M) of live-approved trades with tracked outcomes, where the agent's recommendations have hurt risk-adjusted returns in zero of them, **including through at least one adverse or volatile stretch** — and even clearing that bar doesn't auto-grant the next level. Sizing working well is never itself the justification for granting SL/TP authority or any other new capability; each is a distinct decision with its own failure mode, made deliberately, not inherited.
 
 ### Implementation shape referenced (not yet decided)
 
@@ -651,7 +660,7 @@ Then news/sentiment (#14/#15) and strategy discovery (#19) after those ten.
 **Actual v1 sprint (resolved 2026-08-26 — this is what Friday starts with):**
 - [ ] Regime classifier as a plain code function (ADX/ATR/MA-slope/vol-bands → a regime label) — no LLM, no agent, just a feature
 - [ ] Single consolidated agent, one structured JSON call, combining Signal Scoring (0-100, regime as one input factor) + Position Sizing (bounded multiplier only, no SL/TP adjustment)
-- [ ] Shadow mode first: agent evaluates every real SIM signal, logs its decision next to the actual outcome, influences nothing — run for a few weeks before trusting it with anything real
+- [ ] Shadow mode first: agent evaluates every real SIM signal, logs its decision next to the actual outcome, influences nothing — gated on accumulating enough tracked outcomes (including at least one adverse/volatile stretch) to judge it, not on a fixed time window
 - [ ] Only after shadow mode looks good: Level 2 semi-autonomous (agent can skip/resize within the existing fixed risk limits) — still SIM only, still both accounts' history before LIVE
 
 **Everything below this line is the roadmap for later phases, not the Friday sprint:**
