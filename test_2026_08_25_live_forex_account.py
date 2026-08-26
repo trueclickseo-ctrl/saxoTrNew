@@ -284,7 +284,11 @@ _run("forex/runner CLI: --account live --strategy gap is a hard error (gap is no
 def test_cli_rejects_live_without_confirmation_envvar():
     proc = _run_cli(["--account", "live", "--strategy", "donchian", "--live"])
     assert proc.returncode == 2, f"expected argparse hard-error exit(2), got {proc.returncode}: {proc.stderr}"
-    assert "SAXO_LIVE_CONFIRMED" in proc.stderr
+    # Accept either gate: SAXO_LIVE_CONFIRMED (this test's original target) or
+    # LIVE_TRADING_HALTED (2026-08-26 emergency stop, checked first when
+    # active -- see forex/runner.py). Either is a valid reason the run must
+    # be refused; which one fires first depends on whether the halt is on.
+    assert "SAXO_LIVE_CONFIRMED" in proc.stderr or "LIVE_TRADING_HALTED" in proc.stderr
 _run("forex/runner CLI: --account live --live refuses to run without SAXO_LIVE_CONFIRMED=1, even with an allowed strategy",
      test_cli_rejects_live_without_confirmation_envvar)
 

@@ -500,7 +500,8 @@ def send_trade_closed(
     units:     int,
     reason:    str,
     session:   str = "",
-    live:      bool = False,   # True = the real-money LIVE account, not SIM
+    live:      bool = False,   # True = a real-money LIVE account, not SIM
+    net_pnl_native: float | None = None,  # true P&L (price + broker cost), pair's own quote ccy
 ) -> None:
     """Immediate win/loss alert when ANY forex strategy closes a position.
 
@@ -509,24 +510,37 @@ def send_trade_closed(
     so a closed trade's win/loss was invisible unless you read the raw log.
     Generalized 2026-08-21 so every strategy's exit gets the same immediate,
     color-coded win/loss email LBO always had.
+
+    net_pnl_native: when the caller has Saxo's own net (price + cost) P&L for
+    this exact close (forex/runner.py's _position_net_pnl_quote_ccy()), pass
+    it here so the WIN/LOSS badge reflects what actually happened to the
+    account balance. Without it, WIN/LOSS falls back to pnl_pct (raw price
+    move only) — confirmed live 2026-08-26: a live_eur RSI Pullback close
+    showed WIN/+0.41% here (raw price moved in its favor) while Saxo's own
+    web trader recorded a net loss once its ~5 EUR round-trip commission was
+    included — commission this codebase had never subtracted anywhere the
+    email could see it, on a small enough gain that it flipped the sign.
     """
     label   = STRATEGY_LABELS.get(strategy, strategy)
     now     = datetime.now()
     time_   = now.strftime("%H:%M")
     today   = now.strftime("%Y-%m-%d")
-    won     = pnl_pct > 0
-    cls     = "buy" if won else "sell"
-    result  = "WIN ✓" if won else "LOSS ✗"
-    col     = "#3fb950" if won else "#f85149"
-    sign    = "+" if pnl_pct >= 0 else ""
     # P&L in the pair's own quote currency (last 3 chars, standard FX convention:
     # EURUSD -> USD, USDJPY -> JPY, GBPCHF -> CHF) — NOT a fixed SEK rate, which
     # only ever made sense for LBO's mostly-EUR-quoted book and would silently
     # show a wrong number once every strategy/pair calls this.
     quote_ccy = symbol[-3:] if len(symbol) >= 6 else ""
-    pnl_native = round((exit_px - entry) * units if direction == "Buy"
-                       else (entry - exit_px) * units, 0)
+    raw_pnl_native = round((exit_px - entry) * units if direction == "Buy"
+                           else (entry - exit_px) * units, 0)
+    pnl_native = round(net_pnl_native, 0) if net_pnl_native is not None else raw_pnl_native
+    won     = (net_pnl_native > 0) if net_pnl_native is not None else (pnl_pct > 0)
+    cls     = "buy" if won else "sell"
+    result  = "WIN ✓" if won else "LOSS ✗"
+    col     = "#3fb950" if won else "#f85149"
+    sign    = "+" if pnl_pct >= 0 else ""
     pnl_sgn = "+" if pnl_native >= 0 else ""
+    net_note = (" (net of broker cost)" if net_pnl_native is not None
+                and (net_pnl_native > 0) != (raw_pnl_native > 0) else "")
     session_line = f" · {session} session" if session else ""
 
     body = f"""
@@ -541,7 +555,7 @@ def send_trade_closed(
         <div class="val" style="color:{col}">{sign}{pnl_pct:.2f}%</div>
       </div>
       <div class="metric">
-        <div class="lbl">P&L ({quote_ccy})</div>
+        <div class="lbl">P&L ({quote_ccy}){net_note}</div>
         <div class="val" style="color:{col}">{pnl_sgn}{pnl_native:,.0f}</div>
       </div>
       <div class="metric">

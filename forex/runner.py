@@ -195,6 +195,18 @@ LIVE_ALLOWED_STRATEGIES = {"donchian", "ema", "rsi"}
 # duplicate RSI's already-running core signals in a second account).
 LIVE_EUR_ALLOWED_STRATEGIES = {"rsi"}
 
+# 2026-08-26: EMERGENCY HALT, both real-money accounts (SEK "live" and EUR
+# "live_eur") -- explicit user instruction after the P&L base-currency bug
+# was found (a real live_eur close's WIN/LOSS email and ledger figure were
+# both wrong -- see _position_net_pnl_quote_ccy()'s docstring and
+# test_2026_08_26_live_pnl_base_currency_bug.py). Blocks BOTH entries and
+# exits for --live runs on either account -- existing positions still keep
+# their real broker-side stop/TP orders, which don't depend on this flag or
+# on ATOS's scheduler running at all. Do NOT flip this back to False without
+# the user's explicit go-ahead -- it is not something to "fix forward" once
+# the underlying bug is patched; they asked to be the one who lifts it.
+LIVE_TRADING_HALTED = True
+
 
 def set_account_env(env: str) -> None:
     """Switches every Saxo-facing constant in this module to the given
@@ -819,27 +831,33 @@ def _fetch_live_prices(pairs: list) -> dict:
     return prices
 
 
-def _position_pnl_base_ccy(uic: int, qty: float, direction: str,
-                           entry_price: float) -> float | None:
-    """Authoritative NET realized P&L in the account's own base currency
-    (EUR), straight from Saxo's own live conversion — not our own rate
-    estimate, and not just the raw price move.
+def _position_net_pnl_quote_ccy(uic: int, qty: float, direction: str,
+                                entry_price: float) -> float | None:
+    """Authoritative NET realized P&L in the position's own QUOTE currency
+    (e.g. PLN for EURPLN), straight from Saxo's own live figures — not our
+    own rate estimate, and not just the raw price move.
 
-    Saxo's /port/v1/positions/me returns PositionView.ProfitLossOnTrade in
-    the pair's quote currency AND ProfitLossOnTradeInBaseCurrency, already
-    converted using Saxo's own real-time dealt rate (ConversionRateCurrent).
-    That's what actually happens to the account balance, so it's the right
-    source of truth for the P&L ledger — not a manually-applied external rate.
+    Saxo's /port/v1/positions/me returns PositionView.ProfitLossOnTrade
+    (pure price movement, entry vs current price x quantity) and
+    TradeCostsTotal (spread cost at entry + accrued overnight swap/
+    financing), both in the pair's own quote currency. Adding them gives
+    the true net figure, not the gross one (confirmed live 2026-08-21: a
+    position showing +4,362 gross also carried -65 of TradeCostsTotal, not
+    yet subtracted).
 
-    IMPORTANT: ProfitLossOnTradeInBaseCurrency is PURE PRICE MOVEMENT (entry
-    vs current price x quantity) — it does NOT net out spread cost at entry
-    or accrued overnight swap/financing. Those live in a SEPARATE field,
-    TradeCostsTotalInBaseCurrency (confirmed live 2026-08-21: a position
-    showing +4,362.06 EUR gross also carried -65.26 EUR of TradeCostsTotal,
-    not yet subtracted — a position can show green gross and be meaningfully
-    less green, or even red, net of costs, especially after several nights
-    held). Both are added here so the stored realized_pnl is the true net
-    figure, not the gross one.
+    DELIBERATELY does NOT use the "...InBaseCurrency" variants of these
+    same fields. Confirmed live 2026-08-26 on the live_eur account's first
+    closed trade: those fields are NOT denominated in this sub-account's
+    own currency (EUR) — they use Saxo's Client-level base currency, SEK
+    (this Saxo login's primary/default sub-account), regardless of which
+    AccountKey the request runs under. A -1.29 EUR real net loss (confirmed
+    against Saxo's own web trader Closed Positions view) came back from
+    these fields as -14.19 -- off by almost exactly the EUR/SEK rate,
+    because that number was SEK being read as if it were already EUR. The
+    caller must convert this function's quote-currency return value itself,
+    via this codebase's own _eur_per_unit() (Saxo-quote-based, already
+    correct), never via these "InBaseCurrency" fields for a live/live_eur
+    account.
 
     Multiple strategies can hold positions on the same UIC simultaneously, so
     match on quantity + entry price (not just UIC) to find the right row.
@@ -866,10 +884,10 @@ def _position_pnl_base_ccy(uic: int, qty: float, direction: str,
     if best is None:
         return None
     pv  = best.get("PositionView", {})
-    pnl = pv.get("ProfitLossOnTradeInBaseCurrency")
+    pnl = pv.get("ProfitLossOnTrade")
     if pnl is None:
         return None
-    costs = pv.get("TradeCostsTotalInBaseCurrency") or 0.0
+    costs = pv.get("TradeCostsTotal") or 0.0
     return float(pnl) + float(costs)   # costs is already negative-signed
 
 
@@ -1489,12 +1507,11 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
                             f"the {level_name} {level:.5f}; leaving the resting order to handle it")
                 continue
 
-        # Snapshot Saxo's own base-currency P&L for this position right before
-        # closing it — this is the broker's real dealt conversion (what
-        # actually happens to the account balance), captured while the
+        # Snapshot Saxo's own net (price + cost) P&L for this position, in its
+        # own quote currency, right before closing it — captured while the
         # position still exists to look up. Falls back to our own rate
         # estimate below if this lookup fails (network hiccup, no match).
-        saxo_pnl_eur = None if dry_run else _position_pnl_base_ccy(uic, qty, direction, entry)
+        net_pnl_quote = None if dry_run else _position_net_pnl_quote_ccy(uic, qty, direction, entry)
 
         order = {"AccountKey": akey, "Uic": uic, "AssetType": ASSET_TYPE,
                  "Amount": qty, "BuySell": close_side, "OrderType": "Market",
@@ -1534,8 +1551,8 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
             quote_ccy = sym[3:6] if len(sym) >= 6 else ""
             fx_rate   = _eur_per_unit(quote_ccy, akey)
             if fx_rate is None:
-                # Only used if saxo_pnl_eur (Saxo's own authoritative
-                # positions/me conversion, the primary source below) is
+                # Only used if net_pnl_quote (Saxo's own authoritative
+                # positions/me price+cost figure, the primary source below) is
                 # ALSO unavailable -- a double failure. 1.0 is a known-bad
                 # placeholder, not a real rate; logged loudly rather than
                 # silently trusted, since there's no Yahoo fallback to
@@ -1545,22 +1562,32 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
                                 f"close will use an unconverted 1.0 placeholder, "
                                 f"verify data/pnl_ledger.db for {sym} manually")
                 fx_rate = 1.0
+            # net_pnl_quote is in the pair's own quote currency (see
+            # _position_net_pnl_quote_ccy docstring for why the EUR
+            # conversion happens here, via our own _eur_per_unit(), rather
+            # than trusting Saxo's own "...InBaseCurrency" fields).
+            saxo_pnl_eur = (net_pnl_quote * fx_rate) if net_pnl_quote is not None else None
             pnl_tracker.log_close(_pnl_module(), sym, live_px, reason, strategy=strat_name,
                                   fx_rate_to_base=fx_rate,
                                   gross_pnl_base_override=saxo_pnl_eur)
             if strat_name == "gap":
                 _mark_gap_exhausted(sym)
-            # Label the signal-log outcome for ML training data
+            # Label the signal-log outcome for ML training data — prefer the
+            # true net (price + broker cost) figure when we have it, so a
+            # signal that "won" on raw price but lost to cost isn't labeled
+            # a win for training purposes.
             raw_pnl = ((live_px - pos["entry_price"]) * qty if is_long
                        else (pos["entry_price"] - live_px) * qty)
-            signal_filter.label_outcome(key, won=raw_pnl > 0, module=_pnl_module())
+            won_for_ml = (net_pnl_quote > 0) if net_pnl_quote is not None else (raw_pnl > 0)
+            signal_filter.label_outcome(key, won=won_for_ml, module=_pnl_module())
             fx_notify.send_trade_closed(
                 strategy=strat_name, symbol=sym, direction=direction,
                 entry=float(pos.get("entry_price", live_px)),
                 exit_px=live_px, pnl_pct=pnl_pct, units=qty,
                 reason=reason,
                 session=pos.get("lbo_session", "") if strat_name == "london_breakout" else "",
-                live=(ACCOUNT_ENV == "live"),
+                live=(ACCOUNT_ENV in ("live", "live_eur")),
+                net_pnl_native=net_pnl_quote,
             )
         del positions[key]
         exits += 1
@@ -2351,6 +2378,23 @@ if __name__ == "__main__":
                      f"choices are {sorted(_VALID_STRATS)}")
 
     set_account_env(args.account)
+
+    if args.account in ("live", "live_eur") and args.live and LIVE_TRADING_HALTED:
+        ap.error(
+            f"LIVE_TRADING_HALTED is set in forex/runner.py -- all real-money "
+            f"runs (--account {args.account} --live, entries AND exits) are "
+            f"refused until this is cleared. Set by explicit user instruction "
+            f"2026-08-26 after the P&L base-currency bug was found (a real "
+            f"live_eur close's WIN/LOSS email and ledger figure were both "
+            f"wrong -- see _position_net_pnl_quote_ccy() docstring and "
+            f"test_2026_08_26_live_pnl_base_currency_bug.py) -- 'stop new "
+            f"trades now until we fix the PL and Stop Loss properly... Stop "
+            f"the scanner for ATOS LIVE completely until the issue is "
+            f"resolved completely.' Existing positions keep their real "
+            f"broker-side stop/TP orders regardless of this flag -- this "
+            f"only blocks ATOS's own code from running for these accounts. "
+            f"Clear LIVE_TRADING_HALTED only on the user's explicit go-ahead."
+        )
 
     if args.account == "live":
         # ── Hard rails for the real-money account (2026-08-25) ────────────
