@@ -657,6 +657,8 @@ Then news/sentiment (#14/#15) and strategy discovery (#19) after those ten.
 
 ## Task list — starting Friday 2026-08-28, one at a time
 
+**Full phased implementation plan (sprints 0-5, files, hook points, and test gates for each) is in [`docs/atos_ai_implementation_plan.md`](atos_ai_implementation_plan.md) — testing happens within each sprint, not deferred to the end.**
+
 **Actual v1 sprint (resolved 2026-08-26 — this is what Friday starts with):**
 - [ ] Regime classifier as a plain code function (ADX/ATR/MA-slope/vol-bands → a regime label) — no LLM, no agent, just a feature
 - [ ] Single consolidated agent, one structured JSON call, combining Signal Scoring (0-100, regime as one input factor) + Position Sizing (bounded multiplier only, no SL/TP adjustment)
