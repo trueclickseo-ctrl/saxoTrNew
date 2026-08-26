@@ -1119,6 +1119,44 @@ def _currency_exposure(positions: dict) -> dict:
     return exposure
 
 
+def _currency_exposure_notional_eur(positions: dict) -> dict[str, float]:
+    """Net EUR-notional exposure per currency across all open positions --
+    the economically real version of _currency_exposure() above, which only
+    counts positions (a 1,000-unit position and a 48,000-unit position both
+    counted as "1", making it meaningless across a 149-pair universe with
+    wildly varying position sizes -- user's finding, 2026-08-27, reviewing
+    the SIM workbook).
+
+    Buying 1,000 units of AUDCHF means +1,000 AUD (long) and, economically,
+    the same EUR-equivalent value short CHF (you paid that many CHF to get
+    those AUD at the current rate) -- so both legs get the SAME EUR-notional
+    magnitude, opposite sign, using _eur_per_unit() on the BASE currency
+    (Saxo-quote-based, already the correct live-rate source used everywhere
+    else in this module).
+
+    VISIBILITY ONLY, deliberately not wired into any gate yet -- see the
+    2026-08-27 decision: measure real economic exposure correctly first,
+    decide on a real (and preferably volatility-adjusted) € threshold
+    afterward, as its own separate decision. Don't cap on this number
+    without that follow-up decision.
+    """
+    exposure: dict[str, float] = {}
+    for key, pos in positions.items():
+        sym = key.split(":", 1)[1] if ":" in key else key
+        if len(sym) != 6:
+            continue
+        base, quote = sym[:3], sym[3:]
+        qty = pos.get("quantity", 0)
+        rate = _eur_per_unit(base, None)
+        if rate is None:
+            continue
+        notional_eur = qty * rate
+        sign = 1 if pos.get("direction", "Buy") == "Buy" else -1
+        exposure[base]  = exposure.get(base,  0.0) + sign * notional_eur
+        exposure[quote] = exposure.get(quote, 0.0) - sign * notional_eur
+    return exposure
+
+
 def _currency_ok(sym: str, direction: str, exposure: dict) -> bool:
     """Return True if adding this position keeps all currencies within the limit."""
     base  = sym[:3]
@@ -2586,6 +2624,17 @@ if __name__ == "__main__":
                 bar   = ("+" * abs(net)) if net > 0 else ("-" * abs(net))
                 warn  = "  <- AT LIMIT" if abs(net) >= limit else ""
                 print(f"  {ccy}  {net:+d}  {bar}{warn}")
+
+        # Real economic exposure (EUR notional) -- visibility only, not a
+        # gate yet. Position-count exposure above treats a 1,000-unit
+        # position the same as a 48,000-unit one; this doesn't.
+        notional = _currency_exposure_notional_eur(positions)
+        if notional:
+            print(f"\nCurrency exposure (EUR notional, visibility only -- not a gate):")
+            for ccy, net_eur in sorted(notional.items(), key=lambda x: abs(x[1]), reverse=True):
+                if abs(net_eur) < 1:
+                    continue
+                print(f"  {ccy}  {net_eur:+,.0f} EUR")
         sys.exit(0)
 
     if args.scan:
