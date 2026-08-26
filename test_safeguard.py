@@ -19,6 +19,20 @@ sys.path.insert(0, BASE_DIR)
 import housekeeping as hk
 import safeguard as sg
 
+# Redirect the alert-dedup state file (added 2026-08-26) to a scratch path for
+# this whole test run -- _dedup_for_email() persists to disk between calls by
+# design (that's the point: suppress a repeat email in production), but that
+# design directly conflicts with these tests' assumption that every
+# run_safeguard() call they make is independent and always emails when there's
+# something to report. Without this redirect, running this file twice within
+# REALERT_AFTER_HOURS of itself (or after any real production run touched the
+# same fingerprints) silently suppresses emails these tests assert on,
+# producing a flaky "len(emails) == 1" failure that has nothing to do with
+# whatever the test actually changed.
+sg._ALERT_STATE_PATH = os.path.join(BASE_DIR, "data", "_test_safeguard_alert_state.json")
+if os.path.exists(sg._ALERT_STATE_PATH):
+    os.remove(sg._ALERT_STATE_PATH)
+
 GREEN, RED, YELLOW, CYAN, RESET, BOLD = (
     "\033[92m", "\033[91m", "\033[93m", "\033[96m", "\033[0m", "\033[1m"
 )

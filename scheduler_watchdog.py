@@ -124,7 +124,19 @@ WINDOWS_TASKS = {
     # silently orphaning this freshness check the whole time (see _log_path's
     # updated docstring). "logs/monitor_TODAY.log" is a sentinel _check_windows_task
     # substitutes with today's real date, same pattern as "engine_TODAY.log".
-    "Intraday Monitor":       ("ATOS Intraday Monitor",       "logs/monitor_TODAY.log", 15, 30),
+    #
+    # task_name repointed 2026-08-26: "ATOS Intraday Monitor" (the name this
+    # registry always used) turned out to be a vestigial duplicate that only
+    # fires once/week -- the task ACTUALLY doing real intraday stop-loss
+    # monitoring every 1 min, 18h/day, is a differently-named legacy task,
+    # "SaxoTr Intraday Monitor" (predates the "ATOS" naming convention, never
+    # renamed). Both run the identical intraday_monitor.py, so the log path
+    # doesn't change -- only which task's LastRunTime/result this watchdog
+    # actually checks. grace/max_wait tightened to match its real 1-min
+    # cadence (was tuned for the vestigial weekly one) and added to
+    # INTRADAY_REPEATING_TASKS below so a silent multi-hour outage on this
+    # one gets caught, not just "ran once sometime this week."
+    "Intraday Monitor":       ("SaxoTr Intraday Monitor",     "logs/monitor_TODAY.log", 10, 1),
     "PnL Sync":               ("ATOS PnL Sync",               "pnl_sync.log",          10, 30),
     "LBO London Open":        ("ATOS LBO London Open",        "lbo_london.log",        20, 78),
     "LBO NY Open":             ("ATOS LBO NY Open",            "lbo_ny.log",            20, 78),
@@ -324,7 +336,7 @@ _SUSPICIOUSLY_SMALL_BYTES = 200
 # than 12h out -- completely normal for a once-daily task, not a failure.
 INTRADAY_REPEATING_TASKS = {
     "Forex Intraday Scan", "Forex LIVE Daily Run", "Saxo LIVE Token Keepalive",
-    "Stocks Daily Run", "ETF Daily Run", "Futures Daily Run",
+    "Stocks Daily Run", "ETF Daily Run", "Futures Daily Run", "Intraday Monitor",
 }
 
 

@@ -220,6 +220,19 @@ def _fix_mismatches(modules: list[str], snapshot: "housekeeping.LiveSnapshot") -
                                        "entry_not_filled_yet", True,
                                        f.detail + " — nothing to fix, will resolve itself once "
                                        f"the entry order fills or expires"))
+        elif f.kind == housekeeping.KIND_SUSPECT_ORPHAN:
+            # 2026-08-26: live_net==0 contradicted by a still-Working stop
+            # order -- see reconcile_module()'s docstring at that check.
+            # Deliberately left untouched (not removed, not re-fixed here
+            # either) so a genuinely stale snapshot gets a clean re-check
+            # next run instead of safeguard papering over it with a guessed
+            # price-based stop while the real one may still be intact.
+            outcomes.append(FixOutcome("mismatch", f.module, f.symbol,
+                                       "suspect_snapshot_left_alone", True,
+                                       f.detail + " — left alone deliberately; if this keeps "
+                                       f"recurring for the same position, investigate the "
+                                       f"positions/me feed directly rather than trusting either "
+                                       f"snapshot blindly"))
         elif f.kind in (housekeeping.KIND_REMOVED_ORPHAN, housekeeping.KIND_SCALED_DOWN,
                        housekeeping.KIND_DUPLICATE_STOP, housekeeping.KIND_STOP_REPLACE_FAILED,
                        housekeeping.KIND_STOP_MISSING, housekeeping.KIND_STOP_STALE):

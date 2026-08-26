@@ -11,7 +11,21 @@
       "atr_at_entry": 96.123214,
       "score": 0.0759,
       "stop_order_id": "5039798273"
+    },
+    "donchian:ZC": {
+      "uic": 47897817,
+      "asset_type": "ContractFutures",
+      "direction": "Buy",
+      "entry_price": 524.25,
+      "stop_price": 508.3238,
+      "quantity": 1,
+      "entry_date": "2026-08-26",
+      "atr_at_entry": 0.0,
+      "score": 0.0,
+      "stop_order_id": "5039832576",
+      "order_id": "5039822525",
+      "_note": "re-added 2026-08-26 08:2x -- housekeeping's removed_orphan check false-positived on this uic at 07:37 (position was never actually closed, live position confirmed still Open via Saxo API) and cancelled its real stop 5039822527; recovery stop 5039832576 placed at the original 508.3238 level"
     }
   },
-  "last_run": "2026-08-25T06:15:24.919862"
+  "last_run": "2026-08-26T08:00:18.779662"
 }

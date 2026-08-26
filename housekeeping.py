@@ -104,6 +104,7 @@ KIND_PENDING_ENTRY     = "pending_entry"       # matching entry order still Work
 KIND_FULLY_UNTRACKED   = "fully_untracked"     # live position, ZERO local record in ANY module -- structurally invisible to reconcile_module()
 KIND_STOP_MISSING      = "stop_missing"        # local's remembered stop_order_id isn't a live Working order at all -> re-placed at local's own stop_price
 KIND_STOP_STALE        = "stop_stale"          # a real Working order exists at that id, but its live price != local's stop_price -> local adopts the broker's real price (the broker order is what actually protects the position, so it's the ground truth), fixed and reported
+KIND_SUSPECT_ORPHAN    = "suspect_orphan"      # live_net==0 but local's remembered stop is STILL Working -> contradiction, likely an incomplete/stale positions snapshot rather than a real close -> left alone, NOT removed/cancelled
 
 # Order types that count as a real protective stop. "StopIfTraded" and
 # "TrailingStopIfTraded" are Saxo's stop-market equivalents for instruments
@@ -506,7 +507,36 @@ def reconcile_module(adapter: BaseAdapter, live: LiveSnapshot,
             continue
 
         if live_net == 0:
-            # Nothing live backs any of these entries at all.
+            # Nothing live backs any of these entries at all -- UNLESS one of
+            # them still has a genuinely Working stop order at the broker,
+            # which is a contradiction: Saxo cancels/fills a position's stop
+            # order when that position actually closes, so a still-Working
+            # stop is strong evidence the position is too, and live_net==0
+            # is more likely an incomplete/stale positions snapshot than a
+            # real close. Found live 2026-08-26: this branch wrongly removed
+            # donchian:ZC and cancelled its real, still-Working stop
+            # (5039822527) for a position that Saxo's own API confirmed was
+            # STILL OPEN moments later -- a one-off bad snapshot read turned
+            # into a real, hours-long naked position with no way to recover
+            # it automatically (ZC's SIM quote restriction means safeguard's
+            # naked-fix can't re-price a stop for it either). Checking the
+            # order snapshot we already fetched (no extra API call) before
+            # committing to "orphan" would have caught this before any
+            # damage was done.
+            suspect = [e for e in entries if e.stop_order_id and any(
+                o.get("OrderId") == e.stop_order_id and o.get("Status") == "Working"
+                for o in live.orders_by_uic.get(uic, []))]
+            if suspect:
+                findings.append(Finding(
+                    adapter.module, KIND_SUSPECT_ORPHAN, symbol,
+                    f"{suspect[0].key}: live position shows 0 net, but its remembered "
+                    f"stop {suspect[0].stop_order_id} is still a Working order at the "
+                    f"broker — Saxo would have cancelled/filled that stop if the "
+                    f"position genuinely closed, so this looks like a stale/incomplete "
+                    f"positions snapshot rather than a real close. NOT removed or "
+                    f"cancelled — left as-is for the next run to re-check with a fresh snapshot.",
+                ))
+                continue
             for e in entries:
                 if adapter.can_auto_remove:
                     if e.stop_order_id:
