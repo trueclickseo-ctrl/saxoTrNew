@@ -13,9 +13,10 @@ Key fixes vs. the original scaffold:
     acts on stop_loss_pct / take_profit_pct from ETFRiskConfig
 """
 
+import csv
 import logging
 import sys, os
-from datetime import date
+from datetime import date, datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 import pnl_tracker
 import trade_logger
@@ -128,10 +129,10 @@ class ETFExecutor:
                 allocation_budget * weight / weight_sum,
                 per_position_limit,
             )
-            self._enter_position(signal, per_position_budget)
+            self._enter_position(signal, per_position_budget, entry_rank=rank + 1)
             slots_filled += 1
 
-    def _enter_position(self, signal: ETFSignal, budget_ccy: float) -> None:
+    def _enter_position(self, signal: ETFSignal, budget_ccy: float, entry_rank: int = None) -> None:
         if budget_ccy <= 0:
             return
 
@@ -199,6 +200,14 @@ class ETFExecutor:
             "stop_price":    stop_price,    # persisted so review_exits() uses entry stop, not current config
             "tp_price":      tp_price,
             "entry_score":   signal.score,
+            # 1-indexed position in that day's rotation ranking (1 = strongest
+            # candidate) -- the same "rank" process_signals() used to weight
+            # this position's budget allocation, persisted so the dashboard
+            # can show "Top N" instead of only the raw score. Added
+            # 2026-08-26 alongside the rank-performance log below; positions
+            # entered before this field existed fall back to a score-sort
+            # in the dashboard.
+            "entry_rank":    entry_rank,
             "order_id":      order_id,
             "stop_order_id": stop_oid,
             "tp_order_id":   tp_oid,
@@ -367,3 +376,56 @@ class ETFExecutor:
         if not self.cfg.dry_run:
             pnl_tracker.log_close("etf", symbol, live_price, reason, strategy="ETF Rotation",
                                   asset_type="ETF")
+
+    # ------------------------------------------------------------------
+    # Rank/performance history
+    # ------------------------------------------------------------------
+
+    _RANK_LOG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                   "data", "etf_rank_performance_log.csv")
+    _RANK_LOG_FIELDS = ["timestamp", "symbol", "rank", "entry_score", "entry_price",
+                         "entry_date", "days_held", "current_price", "pnl_pct", "pnl_usd"]
+
+    def log_rank_performance(self) -> None:
+        """
+        Append one row per currently-held position to a running CSV so how
+        each rotation rank (Top 1 = strongest pick that day, down to Top 10)
+        actually performs over time can be analyzed later, not just seen as
+        a single dashboard snapshot. Called once per bot run (hourly) --
+        legacy positions entered before entry_rank existed log rank="" and
+        are still worth keeping for their performance trail.
+        """
+        positions = self.state.all_positions()
+        if not positions:
+            return
+
+        now = datetime.now().isoformat(timespec="seconds")
+        rows = []
+        for uic_str, pos in positions.items():
+            uic         = int(uic_str)
+            symbol      = pos.get("symbol", uic_str)
+            entry_price = pos.get("entry_price")
+            live        = self._get_live_price(uic, symbol) if entry_price else None
+            pnl_pct     = (live - entry_price) / entry_price * 100 if live and entry_price else None
+            pnl_usd     = (live - entry_price) * pos.get("quantity", 0) if live and entry_price else None
+            rows.append({
+                "timestamp":     now,
+                "symbol":        symbol,
+                "rank":          pos.get("entry_rank", ""),
+                "entry_score":   pos.get("entry_score", ""),
+                "entry_price":   entry_price,
+                "entry_date":    pos.get("entry_date", ""),
+                "days_held":     (date.today() - date.fromisoformat(pos["entry_date"])).days
+                                 if pos.get("entry_date") else "",
+                "current_price": live if live is not None else "",
+                "pnl_pct":       round(pnl_pct, 3) if pnl_pct is not None else "",
+                "pnl_usd":       round(pnl_usd, 2) if pnl_usd is not None else "",
+            })
+
+        os.makedirs(os.path.dirname(self._RANK_LOG_PATH), exist_ok=True)
+        write_header = not os.path.exists(self._RANK_LOG_PATH)
+        with open(self._RANK_LOG_PATH, "a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=self._RANK_LOG_FIELDS)
+            if write_header:
+                writer.writeheader()
+            writer.writerows(rows)

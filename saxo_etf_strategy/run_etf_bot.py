@@ -96,6 +96,12 @@ class ETFBot:
         log.info(f"Signals: {len(signals)} BUY candidate(s) this run")
 
         self.executor.process_signals(signals)
+
+        try:
+            self.executor.log_rank_performance()
+        except Exception:
+            log.exception("[RANK LOG] failed to append rank/performance snapshot")
+
         log.info("=== ETF run complete ===")
 
         if not self.cfg.dry_run:

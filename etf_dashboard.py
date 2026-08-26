@@ -169,7 +169,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         except Exception:
             pass
 
-    W_TOTAL = 102
+    W_TOTAL = 110  # widened +8 for the new Rank column
     HR      = f"  {DM}{'─' * W_TOTAL}{W}"
     L       = []
 
@@ -184,7 +184,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         src_tag = f"{GR}SAXO LIVE{W}"
     L.append(f"  {BD}{YL}╔{'═' * W_TOTAL}╗{W}")
     L.append(f"  {BD}{YL}║{'  ETF ROTATION DASHBOARD':^{W_TOTAL}}║{W}")
-    L.append(f"  {BD}{YL}║{f'  Sector Momentum · 3-Month Return Rank · Max 5 Positions  |  {now_ts}':^{W_TOTAL}}║{W}")
+    L.append(f"  {BD}{YL}║{f'  Sector Momentum · 3-Month Return Rank · Max 10 Positions  |  {now_ts}':^{W_TOTAL}}║{W}")
     L.append(f"  {BD}{YL}╚{'═' * W_TOTAL}╝{W}")
     L.append(f"  Prices: {src_tag}")
     L.append("")
@@ -192,8 +192,8 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     # ── Strategy info ─────────────────────────────────────────────
     L.append(
         f"  {BD}STRATEGY{W}   {YL}{BD}ETF Rotation{W}  "
-        f"{DM}Ranks 11 US sector ETFs by 3-month total return, holds top 3  |  "
-        f"Stop {STOP_LOSS_PCT*100:.0f}%  |  TP {TAKE_PROFIT_PCT*100:.0f}%  |  Max 5 slots{W}"
+        f"{DM}Ranks 11 US sector ETFs by 3-month total return, holds top 10  |  "
+        f"Stop {STOP_LOSS_PCT*100:.0f}%  |  TP {TAKE_PROFIT_PCT*100:.0f}%  |  Max 10 slots{W}"
     )
     L.append(HR)
     L.append("")
@@ -202,7 +202,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append(f"  {BD}OPEN POSITIONS{W}  {DM}({len(positions)} active){W}")
     L.append("")
     L.append(
-        f"  {DM}{'Symbol':<7}  {'Strategy':<20}  {'UIC':>7}  {'Qty':>6}  {'Entry':>8}  "
+        f"  {DM}{'Rank':<6}  {'Symbol':<7}  {'Strategy':<20}  {'UIC':>7}  {'Qty':>6}  {'Entry':>8}  "
         f"{'Now':>8}  {'Stop':>8}  {'TP':>8}  "
         f"{'P&L (USD)':>14}  {'%':>8}  {'Score':>7}  Days{W}"
     )
@@ -214,9 +214,32 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     near_stops = []
     any_live   = False
 
+    # Display rank: prefer the real entry-time rotation rank (entry_rank,
+    # stored per position since 2026-08-26 -- 1 = strongest 3-month-return
+    # pick that day). Positions opened before that field existed have no
+    # entry_rank, so they're slotted into whichever rank numbers aren't
+    # already claimed by a real one, ordered by entry_score (the same
+    # metric entry_rank was derived from) -- keeps "Top 1..Top 10" always
+    # fully populated instead of blank for older holdings.
+    used_ranks = {p.get("entry_rank") for p in positions.values() if p.get("entry_rank")}
+    fallback_order = sorted(
+        [(u, p) for u, p in positions.items() if not p.get("entry_rank")],
+        key=lambda x: x[1].get("entry_score", 0), reverse=True,
+    )
+    fallback_rank = {}
+    next_rank = 1
+    for u, _ in fallback_order:
+        while next_rank in used_ranks:
+            next_rank += 1
+        fallback_rank[u] = next_rank
+        used_ranks.add(next_rank)
+        next_rank += 1
+
     if positions:
         for uic_str, pos in sorted(positions.items(), key=lambda x: x[1].get("symbol", "")):
             sym   = pos.get("symbol", "?")
+            rank  = pos.get("entry_rank") or fallback_rank.get(uic_str)
+            rank_s = f"Top{rank}" if rank else "—"
             qty   = int(pos.get("quantity", 0))
             ep    = float(pos.get("entry_price", 0))
             score = float(pos.get("entry_score", 0))
@@ -244,7 +267,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
             pct_s = f"{'+'if pct>=0 else ''}{pct:.2f}%" if pct is not None else "—"
 
             L.append(
-                f"  {BD}{sym:<7}{W}  {YL}{_ACTIVE_STRATEGY:<20}{W}  {DM}{uic_str:>7}{W}  {qty:>6,}  "
+                f"  {CY}{rank_s:<6}{W}  {BD}{sym:<7}{W}  {YL}{_ACTIVE_STRATEGY:<20}{W}  {DM}{uic_str:>7}{W}  {qty:>6,}  "
                 f"{DM}{ep:>8.2f}{W}  "
                 f"{BD}{now_s:>8}{W}  "
                 f"{stp_col}{stop:>8.2f}{W}  "
