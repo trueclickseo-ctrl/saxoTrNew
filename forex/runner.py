@@ -73,6 +73,7 @@ import trade_logger
 import strategy_learner
 import forex.notifier      as fx_notify
 import forex.signal_filter as signal_filter
+import forex.forward_observation as forward_observation
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1580,6 +1581,34 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
         # Breakeven stop — move to entry_price once profit threshold reached
         _apply_breakeven_stop(key, pos, df, strat_name, akey, dry_run)
 
+        # Forward-SIM observation (2026-08-27): MAE/MFE from the daily bars
+        # already fetched for should_exit()/trailing-stop above -- no extra
+        # API call per open position per cycle (97 SIM positions x 10
+        # strategies would make that expensive for real intrabar precision
+        # this doesn't need; day-level High/Low since entry is the honest
+        # trade-off). Runs every cycle for every open position, not just
+        # ones that close this cycle.
+        if df is not None and not dry_run:
+            try:
+                entry_dt = pos.get("entry_date", today_str)
+                since_entry = df  # df is already just recent history; entry_date bounds it implicitly enough for daily bars
+                is_long_pos = pos.get("direction", "Buy") == "Buy"
+                worst_price = float(since_entry["Low"].min()) if is_long_pos else float(since_entry["High"].max())
+                best_price  = float(since_entry["High"].max()) if is_long_pos else float(since_entry["Low"].min())
+                entry_px = float(pos.get("entry_price", 0))
+                qty_pos  = pos.get("quantity", 0)
+                sym_quote = sym[3:6] if len(sym) >= 6 else ""
+                rate_pos  = _eur_per_unit(sym_quote, akey)
+                if entry_px and rate_pos:
+                    worst_pnl_eur = ((worst_price - entry_px) * qty_pos * rate_pos if is_long_pos
+                                      else (entry_px - worst_price) * qty_pos * rate_pos)
+                    best_pnl_eur = ((best_price - entry_px) * qty_pos * rate_pos if is_long_pos
+                                     else (entry_px - best_price) * qty_pos * rate_pos)
+                    forward_observation.update_mae_mfe(pos, worst_pnl_eur)
+                    forward_observation.update_mae_mfe(pos, best_pnl_eur)
+            except Exception:
+                pass
+
         exit_flag, reason = strat_mod.should_exit(pos, df, cal_days)
         if not exit_flag:
             continue
@@ -1709,6 +1738,32 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
                 live=(ACCOUNT_ENV in ("live", "live_eur")),
                 net_pnl_native=net_pnl_quote,
             )
+
+            # Forward-SIM observation exit card (2026-08-27) -- only if this
+            # position had an entry card (older positions opened before
+            # this logging existed won't have one, and that's fine, just
+            # skip rather than log a card with no matching entry).
+            card_id = pos.get("observation_card_id")
+            if card_id:
+                gross_pnl_eur = raw_pnl * fx_rate
+                net_pnl_eur = saxo_pnl_eur if saxo_pnl_eur is not None else gross_pnl_eur
+                commission_eur = (gross_pnl_eur - net_pnl_eur) if saxo_pnl_eur is not None else None
+                risk_at_entry = pos.get("risk_eur_at_entry")
+                r_multiple = (round(net_pnl_eur / risk_at_entry, 2)
+                              if risk_at_entry and risk_at_entry > 0 else None)
+                holding_hours = None
+                try:
+                    entry_dt = datetime.fromisoformat(pos.get("entry_datetime", ""))
+                    holding_hours = round((datetime.now() - entry_dt).total_seconds() / 3600, 1)
+                except Exception:
+                    pass
+                forward_observation.log_trade_exit_card(
+                    card_id=card_id, exit_price=live_px, exit_reason=reason,
+                    gross_pnl_eur=gross_pnl_eur, commission_eur=commission_eur,
+                    net_pnl_eur=net_pnl_eur, r_multiple=r_multiple,
+                    mae_eur=pos.get("mae_eur"), mfe_eur=pos.get("mfe_eur"),
+                    holding_hours=holding_hours,
+                )
         del positions[key]
         exits += 1
     return exits
@@ -1877,9 +1932,28 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         # incident this closes. A None cost (lookup failed) does NOT block
         # the entry -- treat "unknown" as "don't block", same as the spread
         # check above, rather than let a transient API hiccup halt trading.
+        #
+        # 2026-08-27: forward-SIM observation phase -- log every signal that
+        # reaches this point (PASS or BLOCKED), not just skip counts, so a
+        # later pass can ask the real question: what was the counterfactual
+        # performance of the trades this gate rejected?
         expected_target_profit = abs(tp - sig["close"]) * qty
         round_trip_cost = _round_trip_cost_quote_ccy(uic, qty, akey)
-        if round_trip_cost is not None and expected_target_profit < round_trip_cost * MIN_EDGE_TO_COST_RATIO:
+        quote_ccy_for_log = sym[3:6] if len(sym) >= 6 else ""
+        eur_rate_for_log = _eur_per_unit(quote_ccy_for_log, akey)
+        blocked = (round_trip_cost is not None and
+                   expected_target_profit < round_trip_cost * MIN_EDGE_TO_COST_RATIO)
+        forward_observation.log_cost_gate_decision(
+            account_env=ACCOUNT_ENV, strategy=strat_name, symbol=sym, direction=direction,
+            entry_price=sig["close"], stop_price=sig["stop_price"], tp_price=tp, qty=qty,
+            expected_target_profit_quote=expected_target_profit, round_trip_cost_quote=round_trip_cost,
+            expected_target_profit_eur=(expected_target_profit * eur_rate_for_log) if eur_rate_for_log else None,
+            round_trip_cost_eur=(round_trip_cost * eur_rate_for_log) if (round_trip_cost is not None and eur_rate_for_log) else None,
+            min_edge_to_cost_ratio=MIN_EDGE_TO_COST_RATIO,
+            decision="BLOCKED" if blocked else "PASS",
+            reason="cost_not_cleared" if blocked else ("cost_unknown" if round_trip_cost is None else ""),
+        )
+        if blocked:
             logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] "
                         f"— target profit {expected_target_profit:.2f} doesn't clear "
                         f"{MIN_EDGE_TO_COST_RATIO}x round-trip cost ({round_trip_cost:.2f}) "
@@ -1945,6 +2019,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             pos_record["range_high"]  = sig.get("range_high", 0)
             pos_record["range_low"]   = sig.get("range_low",  0)
             pos_record["lbo_session"] = sig.get("session", "")
+        exposure_before_notional = _currency_exposure_notional_eur(positions)
         positions[pos_key] = pos_record
         _update_exposure(exposure, sym, direction)
         oid = entry_oid if not dry_run else None
@@ -1956,6 +2031,41 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                                  sig["close"], sig["stop_price"], order_id=oid,
                                  currency="EUR")
             signal_filter.log_signal(pos_key, features, module=_pnl_module())   # builds ML training data
+
+            # Forward-SIM observation card (2026-08-27): structural/hybrid
+            # stop candidates are donchian-specific (its own 15-day exit
+            # channel) -- None for every other strategy, not a guess. See
+            # backtests/donchian_stop_variant_backtest.py for the same
+            # structural-level computation.
+            structural_stop = hybrid_stop = None
+            if strat_name == "donchian":
+                try:
+                    from forex.strategy_donchian import EXIT_PERIOD, ATR_STOP_MULT as _DONCHIAN_ATR_MULT
+                    df_sym = market_data.get(sym)
+                    if df_sym is not None and len(df_sym) > EXIT_PERIOD:
+                        window = df_sym["Close"].iloc[-(EXIT_PERIOD + 1):-1]
+                        is_long_ = (direction == "Buy")
+                        structural_stop = float(window.min()) if is_long_ else float(window.max())
+                        floor_dist = _DONCHIAN_ATR_MULT / 2 * sig["atr"]
+                        hybrid_stop = (min(structural_stop, sig["close"] - floor_dist) if is_long_
+                                       else max(structural_stop, sig["close"] + floor_dist))
+                except Exception:
+                    pass
+            eur_rate_entry = _eur_per_unit(quote_ccy_for_log, akey)
+            risk_eur_entry = (abs(sig["close"] - sig["stop_price"]) * qty * eur_rate_entry
+                               if eur_rate_entry else None)
+            pos_record["risk_eur_at_entry"] = risk_eur_entry  # for a true R-multiple at exit, not a re-derived guess
+            pos_record["observation_card_id"] = forward_observation.log_trade_entry_card(
+                account_env=ACCOUNT_ENV, strategy=strat_name, symbol=sym, direction=direction,
+                entry_price=sig["close"], atr_at_entry=sig["atr"], current_stop=sig["stop_price"],
+                structural_stop=structural_stop, hybrid_stop=hybrid_stop, quantity=qty,
+                risk_eur=risk_eur_entry,
+                cost_eur=(round_trip_cost * eur_rate_entry) if (round_trip_cost is not None and eur_rate_entry) else None,
+                cost_to_edge_ratio=(round(expected_target_profit / round_trip_cost, 2)
+                                    if round_trip_cost else None),
+                exposure_before_eur=exposure_before_notional,
+                exposure_after_eur=_currency_exposure_notional_eur(positions),
+            )
             if strat_name == "london_breakout":
                 fx_notify.send_lbo_trade_opened(
                     symbol=sym, direction=direction,
@@ -2269,6 +2379,16 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
     positions = state.setdefault("positions", {})
     equity, akey = _account()
     today_str    = date.today().isoformat()
+
+    # Forward-SIM observation (2026-08-27): one exposure snapshot per run
+    # cycle, not per strategy -- exposure barely moves within one cycle,
+    # logging it once per strategy would just be noise.
+    forward_observation.log_exposure_snapshot(
+        account_env=ACCOUNT_ENV,
+        count_exposure=_currency_exposure(positions),
+        notional_exposure_eur=_currency_exposure_notional_eur(positions),
+        equity_eur=equity if ACCOUNT_ENV == "sim" else None,  # equity is SEK/EUR-native for live accounts, not EUR
+    )
 
     total_slots = sum(SLOTS_PER_STRATEGY[s] for s in active_strategies)
     logger.info(f"Account equity : {equity:,.0f}")
