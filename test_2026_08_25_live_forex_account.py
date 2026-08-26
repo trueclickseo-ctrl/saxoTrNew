@@ -261,7 +261,7 @@ _run("forex/runner: LIVE_ALLOWED_STRATEGIES is exactly {donchian, ema, rsi}, mat
 section("4. forex/runner.py CLI — hard rails via real subprocess invocations")
 # ═══════════════════════════════════════════════════════════════════════
 
-def _run_cli(args, env_overrides=None):
+def _run_cli(args, env_overrides=None, timeout=60):
     env = dict(os.environ)
     env.pop("SAXO_LIVE_CONFIRMED", None)
     if env_overrides:
@@ -269,7 +269,7 @@ def _run_cli(args, env_overrides=None):
     return subprocess.run(
         [sys.executable, "runner.py", *args],
         cwd=os.path.join(BASE_DIR, "forex"),
-        env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+        env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
     )
 
 
@@ -294,8 +294,13 @@ _run("forex/runner CLI: --account live --live refuses to run without SAXO_LIVE_C
 
 
 def test_cli_accepts_comma_separated_allowed_strategies_dry_run():
+    # 2026-08-26: the cost-clearance gate (_round_trip_cost_quote_ccy) added a
+    # real live Saxo commission lookup per candidate signal reaching that
+    # point in the entry loop -- a real 34-pair x 3-strategy scan now
+    # legitimately takes longer than this call's old 60s budget. Not a hang,
+    # same "more real work per pair" reasoning as the SIM test's 400s below.
     import forex.universe as _u
-    proc = _run_cli(["--account", "live", "--strategy", "donchian,ema,rsi"])
+    proc = _run_cli(["--account", "live", "--strategy", "donchian,ema,rsi"], timeout=150)
     assert proc.returncode == 0, f"expected a clean dry-run exit(0), got {proc.returncode}: {proc.stderr}"
     n = len(_u.PAIRS)
     assert f"34 of {n}" in proc.stdout or f"34 of {n}" in proc.stderr, (
