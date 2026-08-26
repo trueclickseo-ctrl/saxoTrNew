@@ -34,11 +34,14 @@ RETRY_DELAY_SECONDS = 5
 
 
 def _base_url(env: str = "sim") -> str:
-    if env == "live":
+    # "live_eur" (2026-08-26, forex/runner.py's EUR sub-account) is the
+    # same real Saxo LIVE gateway as "live" -- only the AccountKey (see
+    # _EXPECTED_CURRENCY/get_account_key below) differs, never the URL.
+    if env in ("live", "live_eur"):
         return LIVE_BASE_URL
     if env == "sim":
         return SIM_BASE_URL
-    raise ValueError(f"Unknown Saxo env {env!r} -- expected 'sim' or 'live'.")
+    raise ValueError(f"Unknown Saxo env {env!r} -- expected 'sim', 'live', or 'live_eur'.")
 
 
 def _request_with_retry(method: str, url: str, **kwargs):
@@ -139,7 +142,7 @@ _account_key_cache: dict = {}
 # sub-account if that ordering ever changes. `_EXPECTED_CURRENCY` pins down
 # which currency each env's account MUST be; SIM has no entry here because
 # it has only ever had one account (unchanged Data[0] behavior for it).
-_EXPECTED_CURRENCY = {"live": "SEK"}
+_EXPECTED_CURRENCY = {"live": "SEK", "live_eur": "EUR"}
 
 
 def get_account_key(env: str = "sim") -> str:
@@ -153,7 +156,8 @@ def get_account_key(env: str = "sim") -> str:
     sub-accounts and NONE match, this raises rather than guessing, since
     guessing wrong here means a real order goes to the wrong account.
     """
-    override_var = "SAXO_ACCOUNT_KEY" if env == "sim" else "SAXO_LIVE_ACCOUNT_KEY"
+    override_var = {"sim": "SAXO_ACCOUNT_KEY", "live": "SAXO_LIVE_ACCOUNT_KEY"}.get(
+        env, "SAXO_LIVE_EUR_ACCOUNT_KEY")
     key = os.environ.get(override_var)
     if key:
         return key

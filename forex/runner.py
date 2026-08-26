@@ -2676,6 +2676,14 @@ if __name__ == "__main__":
                 if ACCOUNT_ENV == "live":
                     import safeguard_live
                     safeguard_live.run_safeguard_live()
+                elif ACCOUNT_ENV == "live_eur":
+                    # 2026-08-26: EUR sub-account (RSI Pullback / 83 exotic
+                    # pairs) gets its OWN safeguard, same reasoning as the
+                    # SEK account's safeguard_live -- a fully separate
+                    # module, never SIM's safeguard.py or the SEK account's
+                    # safeguard_live.py.
+                    import safeguard_live_eur
+                    safeguard_live_eur.run_safeguard_live_eur()
                 else:
                     import safeguard
                     safeguard.run_safeguard(["forex"])

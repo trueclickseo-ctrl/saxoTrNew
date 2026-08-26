@@ -155,6 +155,13 @@ WINDOWS_TASKS = {
     # looking like a normal daily cadence. Exit Check stays once/day.
     "Forex LIVE Daily Run":   ("ATOS Forex LIVE Daily Run",   "forex_live_scheduler.log", 30, 4),
     "Forex LIVE Exit Check":  ("ATOS Forex LIVE Exit Check",  "forex_live_scheduler.log", 30, 30),
+    # Second real-money account -- EUR sub-account (2026-08-26), RSI
+    # Pullback only on the 83 EXOTIC pairs. Own log, own state, own
+    # SAXO_LIVE_EUR_CONFIRMED flag -- genuinely separate from the SEK
+    # account above, so a failure on one is never masked by the other's
+    # activity. Same grace/max_wait rationale as the SEK entries.
+    "Forex LIVE EUR Daily Run":  ("ATOS Forex LIVE EUR Daily Run",  "forex_live_eur_scheduler.log", 30, 4),
+    "Forex LIVE EUR Exit Check": ("ATOS Forex LIVE EUR Exit Check", "forex_live_eur_scheduler.log", 30, 30),
     # Added 2026-08-25 alongside saxo_live_token_keepalive.py itself (see
     # that file's docstring for why it exists: LIVE's refresh_token only
     # lives 1h, LIVE's trading runs are ~2h apart, so something has to
@@ -339,7 +346,8 @@ _SUSPICIOUSLY_SMALL_BYTES = 200
 # in the past and their own NextRunTime (tomorrow, same time) looked more
 # than 12h out -- completely normal for a once-daily task, not a failure.
 INTRADAY_REPEATING_TASKS = {
-    "Forex Intraday Scan", "Forex LIVE Daily Run", "Saxo LIVE Token Keepalive",
+    "Forex Intraday Scan", "Forex LIVE Daily Run", "Forex LIVE EUR Daily Run",
+    "Saxo LIVE Token Keepalive",
     "Stocks Daily Run", "ETF Daily Run", "Futures Daily Run", "Intraday Monitor",
 }
 
