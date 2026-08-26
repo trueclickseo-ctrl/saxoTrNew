@@ -239,7 +239,7 @@ see §6.
 | `ATOS Forex Gap Fill` | **Mon 03:00 PKT** (= Sun 22:00 UTC) | `run_forex_gap.bat` → `runner.py --strategy gap --live` | The one task that calls `gap` directly. **Retimed 2026-08-21** — was Sun 22:00 PKT (17:00 UTC), 5 hours before the weekly gap window actually opens; now correctly fires right when it does. |
 | `ATOS Forex London Run` | 18:00 PKT (13:00 UTC), daily | `run_forex_london.bat` → `runner.py --live` | "All except LBO" run over the **full 117-pair universe** — widened from the London-session-only 20-pair set on 2026-08-20 (no `--session` flag, defaults to `all`). |
 | `ATOS Forex Exit Check` | 14:00 PKT (09:00 UTC), daily | `run_forex_exits.bat` → `runner.py --exits-only --live` | Stop/time-stop checks only, **all 11 strategies including LBO** (safe — never opens new positions). |
-| `ATOS Forex Intraday Scan` | every 30 min, 06:05-22:05 PKT, daily | `run_forex_intraday.bat` → `runner.py --live` | **Fixed 2026-08-21, broken and re-fixed 2026-08-25** — see the 2026-08-25 section above for the full story (an unrelated schedule-conflict fix silently dropped the repetition again, took 3 attempts to correctly restore). |
+| `ATOS Forex Intraday Scan` | every 30 min, 06:05-03:00 PKT, daily | `run_forex_intraday.bat` → `runner.py --live` | **Fixed 2026-08-21, broken and re-fixed 2026-08-25**; window extended 22:05→03:00 PKT 2026-08-26 to cover the tail of the NY session (~17:00 ET / ~02:00 PKT rollover) — see the 2026-08-25 section above for the earlier repetition-drop story. |
 
 `ATOS Forex Gap Weekly` (a duplicate of Gap Monday Early, same time/command)
 was deleted 2026-08-21 — no longer in this list or in the watchdog registry.
@@ -315,7 +315,7 @@ pointer/summary so this doc stays a complete map of every scheduled task.
 
 | Task | Fires | Command | Notes |
 |---|---|---|---|
-| `ATOS Forex LIVE Daily Run` | every 45 min, 06:00-22:00 PKT | `run_forex_live_daily.bat` → `runner.py --account live --strategy donchian,ema,rsi --live` | **Moved from 9 fixed times/day 2026-08-25.** Handles both entry scanning and exit checking (stop-loss/TP/time-stop) every run. |
+| `ATOS Forex LIVE Daily Run` | every 45 min, 06:00-03:00 PKT | `run_forex_live_daily.bat` → `runner.py --account live --strategy donchian,ema,rsi --live` | **Moved from 9 fixed times/day 2026-08-25**, window extended 22:00→03:00 PKT 2026-08-26. Handles both entry scanning and exit checking (stop-loss/TP/time-stop) every run. |
 | `ATOS Forex LIVE Exit Check` | 14:00 PKT, daily | `run_forex_live_exits.bat` → `runner.py --account live --exits-only --live` | Backstop only — Daily Run above already checks exits every 45 min. |
 | `ATOS Saxo LIVE Token Keepalive` | every 15 min, all day | `run_saxo_live_keepalive.bat` → `saxo_live_token_keepalive.py` | **Added 2026-08-25.** Keeps the LIVE refresh-token chain alive between real trading runs — see the 2026-08-25 findings above for why this was necessary. |
 

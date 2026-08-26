@@ -8,11 +8,13 @@ Everything that runs automatically for the real-money LIVE account: what fires w
 
 | Task | Trigger(s) | Command | Places real orders? |
 |---|---|---|---|
-| **ATOS Forex LIVE Daily Run** | every 45 min, `06:00-22:00` PKT | `python forex\runner.py --account live --strategy donchian,ema,rsi --live` | Yes — the only task that can open a new position. Also checks exits (stop-loss/TP/time-stop) every run. |
+| **ATOS Forex LIVE Daily Run** | every 45 min, `06:00-03:00` PKT | `python forex\runner.py --account live --strategy donchian,ema,rsi --live` | Yes — the only task that can open a new position. Also checks exits (stop-loss/TP/time-stop) every run. |
 | **ATOS Forex LIVE Exit Check** | 1x/day: `14:00` | `python forex\runner.py --account live --strategy donchian,ema,rsi --exits-only --live` | Manages existing positions only — never opens new ones. Backstop only; Daily Run above already checks exits every 45 min. |
 | **ATOS Saxo LIVE Token Keepalive** | every 15 min, all day | `python saxo_live_token_keepalive.py` | No — read-only token refresh, no trading logic at all. |
 
 **Moved from 9 fixed times/day to every 45 min, 2026-08-25** — explicit user request for tighter checking. `forex/runner.py`'s `run_daily()` (what Daily Run calls) already handles both new-entry scanning and exit checking together every time it runs, so this one task alone covers "scan for new trades and exit on stop-loss/profit target."
+
+**Window extended 06:00-22:00 → 06:00-03:00 PKT, 2026-08-26** — the FX trading day doesn't actually roll over until ~17:00 New York time (5pm ET, the industry-standard daily-candle convention), which lands at ~02:00 AM PKT during EDT — 4 hours after the old 22:00 cutoff. The old window was missing the tail end of the NY session; 03:00 PKT gives an hour of buffer past the real rollover point so the last scan of the day reliably sees the fully-closed candle.
 
 Daily Run/Exit Check invoke `run_forex_live_daily.bat` / `run_forex_live_exits.bat` via `run_hidden.vbs` (silent, no console window), logging to `data/forex_live_scheduler.log` — a separate log from SIM's much noisier `forex_scheduler.log`, so a LIVE failure is never masked by SIM's own activity. Keepalive logs to `data/saxo_live_keepalive.log`.
 

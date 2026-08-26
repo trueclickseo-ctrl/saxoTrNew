@@ -587,7 +587,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
              f"{LM}{BD}■ ML{W}  ML signals   "
              f"\033[38;5;135m{BD}■ CNN-LSTM{W}  deep learning   "
              f"\033[38;5;214m{BD}■ LBO{W}  day trade")
-    L.append(f"  {DM}Scheduler: every 30min 06:00-22:00 PKT (scan)  |  14:00 PKT (exit check)  |  "
+    L.append(f"  {DM}Scheduler: every 30min 06:00-03:00 PKT (scan)  |  14:00 PKT (exit check)  |  "
              f"Mon 03:00 PKT weekly + session gap windows (gap fill)  |  "
              f"149 pairs: 34 core + 32 scandi + 83 exotic (SIM-only)  |  Max slots 149 (28 for day-trade LBO){W}")
     L.append(HR)
