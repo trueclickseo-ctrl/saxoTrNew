@@ -317,13 +317,20 @@ pointer/summary so this doc stays a complete map of every scheduled task.
 |---|---|---|---|
 | `ATOS Forex LIVE Daily Run` | every 45 min, 06:00-03:00 PKT | `run_forex_live_daily.bat` → `runner.py --account live --strategy donchian,ema,rsi --live` | **Moved from 9 fixed times/day 2026-08-25**, window extended 22:00→03:00 PKT 2026-08-26. Handles both entry scanning and exit checking (stop-loss/TP/time-stop) every run. |
 | `ATOS Forex LIVE Exit Check` | 14:00 PKT, daily | `run_forex_live_exits.bat` → `runner.py --account live --exits-only --live` | Backstop only — Daily Run above already checks exits every 45 min. |
-| `ATOS Saxo LIVE Token Keepalive` | every 15 min, all day | `run_saxo_live_keepalive.bat` → `saxo_live_token_keepalive.py` | **Added 2026-08-25.** Keeps the LIVE refresh-token chain alive between real trading runs — see the 2026-08-25 findings above for why this was necessary. |
+| `ATOS Forex LIVE EUR Daily Run` | every 45 min, 06:00-03:00 PKT | `run_forex_live_eur_daily.bat` → `runner.py --account live_eur --strategy rsi --live` | **Added 2026-08-26.** Second real-money account (EUR sub-account) — rsi only, 83 EXOTIC pairs only. Own confirmation gate (`SAXO_LIVE_EUR_CONFIRMED`). |
+| `ATOS Forex LIVE EUR Exit Check` | 14:00 PKT, daily | `run_forex_live_eur_exits.bat` → `runner.py --account live_eur --exits-only --live` | Backstop only — EUR Daily Run above already checks exits every 45 min. |
+| `ATOS Saxo LIVE Token Keepalive` | every 15 min, all day | `run_saxo_live_keepalive.bat` → `saxo_live_token_keepalive.py` | **Added 2026-08-25.** Keeps the LIVE refresh-token chain alive between real trading runs — shared by both accounts (same OAuth login) — see the 2026-08-25 findings above for why this was necessary. |
 
 Real money, separate Saxo login/app/state/lock/capital-cap from SIM in
-every respect. Hard rails enforced in code (never just convention): only
-`donchian`/`ema`/`rsi` allowed, only the 34 `CORE_SYMBOLS` pairs, requires
-`SAXO_LIVE_CONFIRMED=1` set separately from `--live` itself. **First real
-trade placed 2026-08-25, 23:08 PKT** — see the 2026-08-25 findings above.
+every respect. Hard rails enforced in code (never just convention): SEK
+account allows only `donchian`/`ema`/`rsi` on the 34 `CORE_SYMBOLS` pairs;
+EUR account allows only `rsi` on the 83 `EXOTIC_SYMBOLS` pairs. Each
+requires its own confirmation var (`SAXO_LIVE_CONFIRMED` / `SAXO_LIVE_EUR_
+CONFIRMED`) set separately from `--live` itself. **First real trade placed
+2026-08-25, 23:08 PKT** (SEK account) — see the 2026-08-25 findings above.
+Full EUR-account detail, including two findings about how Saxo pools
+margin/balance AND positions/orders across all 3 sub-accounts under this
+Client, in [forex_live_account.md](forex_live_account.md).
 
 ---
 

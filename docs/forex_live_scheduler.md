@@ -4,13 +4,17 @@ Everything that runs automatically for the real-money LIVE account: what fires w
 
 ---
 
-## The three LIVE-specific Windows Scheduled Tasks
+## The five LIVE-specific Windows Scheduled Tasks
+
+Covers both real-money accounts under this Saxo login — the SEK account (donchian/ema/rsi, 34 core pairs) and the EUR account (rsi only, 83 exotic pairs, added 2026-08-26). They share the token keepalive task (same OAuth login) but have entirely separate confirmation gates, state, and P&L.
 
 | Task | Trigger(s) | Command | Places real orders? |
 |---|---|---|---|
-| **ATOS Forex LIVE Daily Run** | every 45 min, `06:00-03:00` PKT | `python forex\runner.py --account live --strategy donchian,ema,rsi --live` | Yes — the only task that can open a new position. Also checks exits (stop-loss/TP/time-stop) every run. |
-| **ATOS Forex LIVE Exit Check** | 1x/day: `14:00` | `python forex\runner.py --account live --strategy donchian,ema,rsi --exits-only --live` | Manages existing positions only — never opens new ones. Backstop only; Daily Run above already checks exits every 45 min. |
-| **ATOS Saxo LIVE Token Keepalive** | every 15 min, all day | `python saxo_live_token_keepalive.py` | No — read-only token refresh, no trading logic at all. |
+| **ATOS Forex LIVE Daily Run** | every 45 min, `06:00-03:00` PKT | `python forex\runner.py --account live --strategy donchian,ema,rsi --live` | Yes — the only SEK-account task that can open a new position. Also checks exits every run. |
+| **ATOS Forex LIVE Exit Check** | 1x/day: `14:00` | `python forex\runner.py --account live --strategy donchian,ema,rsi --exits-only --live` | SEK account. Manages existing positions only. Backstop only. |
+| **ATOS Forex LIVE EUR Daily Run** | every 45 min, `06:00-03:00` PKT | `python forex\runner.py --account live_eur --strategy rsi --live` | Yes — the only EUR-account task that can open a new position. Also checks exits every run. Requires `SAXO_LIVE_EUR_CONFIRMED=1` (separate from the SEK account's gate). |
+| **ATOS Forex LIVE EUR Exit Check** | 1x/day: `14:00` | `python forex\runner.py --account live_eur --strategy rsi --exits-only --live` | EUR account. Manages existing positions only. Backstop only. |
+| **ATOS Saxo LIVE Token Keepalive** | every 15 min, all day | `python saxo_live_token_keepalive.py` | No — read-only token refresh, no trading logic. Shared by both accounts (same OAuth login — `saxo_auth._cfg()` normalizes `"live_eur"` to `"live"`). |
 
 **Moved from 9 fixed times/day to every 45 min, 2026-08-25** — explicit user request for tighter checking. `forex/runner.py`'s `run_daily()` (what Daily Run calls) already handles both new-entry scanning and exit checking together every time it runs, so this one task alone covers "scan for new trades and exit on stop-loss/profit target."
 
@@ -18,7 +22,9 @@ Everything that runs automatically for the real-money LIVE account: what fires w
 
 Daily Run/Exit Check invoke `run_forex_live_daily.bat` / `run_forex_live_exits.bat` via `run_hidden.vbs` (silent, no console window), logging to `data/forex_live_scheduler.log` — a separate log from SIM's much noisier `forex_scheduler.log`, so a LIVE failure is never masked by SIM's own activity. Keepalive logs to `data/saxo_live_keepalive.log`.
 
-**Registration scripts**: `setup_scheduler_live.ps1` (Daily Run + Exit Check) and `setup_saxo_live_keepalive.ps1` (Keepalive) — both run as Administrator; safe to re-run any time the schedule needs to change (`-Force`/`Register-ScheduledTask -Force` cleanly replaces the existing triggers).
+**Registration scripts**: `setup_scheduler_live.ps1` (SEK Daily Run + Exit Check), `setup_scheduler_live_eur.ps1` (EUR Daily Run + Exit Check, added 2026-08-26), and `setup_saxo_live_keepalive.ps1` (Keepalive, shared) — all run as Administrator; safe to re-run any time the schedule needs to change (`-Force`/`Register-ScheduledTask -Force` cleanly replaces the existing triggers).
+
+EUR Daily Run/Exit Check invoke `run_forex_live_eur_daily.bat` / `run_forex_live_eur_exits.bat`, logging to `data/forex_live_eur_scheduler.log` — its own log, separate from both SIM's `forex_scheduler.log` and the SEK account's `forex_live_scheduler.log`.
 
 ---
 
@@ -55,6 +61,8 @@ Verified in code: `SESSION_PAIRS["asian"]` (14) + `SESSION_PAIRS["london"]` (20)
 5. **Cross-process lock** — `proc_lock.FOREX_LIVE_LOCK`, entirely separate from SIM's `FOREX_LOCK`, so a LIVE run never contends with SIM's `intraday_monitor.py` (which re-acquires the SIM lock every minute).
 6. **Post-run reconciliation + auto-fix** — `safeguard_live.run_safeguard_live()` (its own file, `housekeeping_live.py`/`safeguard_live.py` — never SIM's `housekeeping.py`/`safeguard.py`) runs after every LIVE invocation: places a protective stop on any naked position found, resolves state mismatches, then re-fetches and verifies each fix before reporting it. See [forex_live_account.md](forex_live_account.md)'s "Housekeeping & safeguard" section for the full architecture.
 7. **Portfolio heat / margin caps** — 6% combined open risk, 50% margin utilization — shared reasoning with SIM but computed against LIVE's own equity/positions only.
+
+**EUR account note**: the same 7 gates apply, substituting `{rsi}` for the strategy allowlist, `EXOTIC_SYMBOLS` for the pair filter, `SAXO_LIVE_EUR_CONFIRMED` for the confirmation var, and `safeguard_live_eur.py`/`housekeeping_live_eur.py` for the post-run fix pass. One caveat the SEK account doesn't have: Saxo pools margin/balance AND positions/orders across all 3 sub-accounts under this Client (confirmed empirically, see [forex_live_account.md](forex_live_account.md)'s EUR section) — the 500 EUR cap and the housekeeping tier-filtering are both code-level compensations for that, not something Saxo enforces on its own.
 
 ---
 

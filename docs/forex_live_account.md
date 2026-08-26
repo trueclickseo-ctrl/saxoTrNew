@@ -1,6 +1,11 @@
 # Forex LIVE Account — Real Money
 
-**Status**: live, fully armed (`SAXO_LIVE_CONFIRMED=1` set, scheduled tasks registered) as of 2026-08-25. **First real trade placed 2026-08-25, 23:08 PKT**: `donchian` opened EURNOK short (1,000 @ 10.86975, stop 10.98368, TP 10.52803) and GBPUSD long (1,000 @ 1.36466, stop 1.35165, TP 1.39047) — both bracket orders verified correct against Saxo's own web trader, `housekeeping_live`/`safeguard_live` confirmed clean immediately after.
+**Status**: TWO real-money accounts now live under the same Saxo login.
+
+1. **SEK account** (`--account live`) — fully armed (`SAXO_LIVE_CONFIRMED=1` set, scheduled tasks registered) since 2026-08-25. **First real trade placed 2026-08-25, 23:08 PKT**: `donchian` opened EURNOK short (1,000 @ 10.86975, stop 10.98368, TP 10.52803) and GBPUSD long (1,000 @ 1.36466, stop 1.35165, TP 1.39047) — both bracket orders verified correct against Saxo's own web trader, `housekeeping_live`/`safeguard_live` confirmed clean immediately after.
+2. **EUR account** (`--account live_eur`) — fully armed (`SAXO_LIVE_EUR_CONFIRMED=1` set, scheduled tasks registered) since 2026-08-26. RSI Pullback only, on the 83 EXOTIC pairs only, sized off a 500 EUR code-level cap. See "Second real-money account: EUR sub-account" below for the full design and two important findings about how Saxo's API behaves for this multi-currency Client.
+
+The rest of this document describes the SEK account in depth; the EUR account section below cross-references it rather than repeating shared concepts.
 
 **See also**: [forex_live_strategies.md](forex_live_strategies.md) (entry/exit rules for each of the 3 strategies, in depth) and [forex_live_scheduler.md](forex_live_scheduler.md) (every scheduled task, exact trigger times, SIM-conflict history).
 
@@ -138,6 +143,49 @@ What's reused from SIM's `housekeeping.py`: only generic, account-agnostic build
 | 16 | (SIM, not LIVE, but same-day and same root cause class) An unrelated schedule-conflict-avoidance fix silently deleted SIM's "ATOS Forex Intraday Scan" every-30-min repetition, and `scheduler_watchdog.py` never had a registry entry for that task at all, so nothing alerted for ~2.5h of zero SIM scans | High (SIM signal-detection gap, not LIVE) | Fixed — trigger restored, watchdog registry gap closed, plus 2 real false-positive bugs found and fixed in the watchdog's own new checks along the way |
 
 None of these caused a real financial loss — all were caught by direct questioning/verification/testing, either before the first live trade (1-13) or the same day it happened (14-16).
+
+---
+
+## Second real-money account: EUR sub-account (added 2026-08-26)
+
+**Why this exists**: user wanted to test RSI Pullback, and ONLY RSI Pullback, on the 83 EXOTIC pairs with real money — a focused single-strategy/single-tier experiment, deliberately NOT an addition to the SEK account's existing CORE coverage (that would just duplicate RSI's already-running core signals in a second account). Uses the EUR sub-account under the same Saxo LIVE login that has always controlled 3 sub-accounts (SEK/EUR/USD, see finding #1 in the table above) — the EUR one had simply never been used for trading before this.
+
+**Module**: `forex/runner.py --account live_eur` (same codebase, same `set_account_env()` mechanism as the SEK account)
+**Account**: Saxo LIVE, sub-account `1076635INET`, EUR-denominated
+**Strategy**: exactly 1 — `rsi` (`LIVE_EUR_ALLOWED_STRATEGIES = {"rsi"}`, hard-restricted in code)
+**Universe**: exactly the 83 `EXOTIC_SYMBOLS` pairs — no core, no scandi (hard-filtered in code)
+**Sizing cap**: 500 EUR (`atos.capital_config.forex_live_eur_risk_equity_eur()`) — of the 900 EUR actually sitting in that sub-account, only 500 is used as the sizing base
+**Separate from both SIM and the SEK account**: own state/orders files (`forex_live_eur_*.json`), own pnl_tracker module (`forex_live_eur`), own strategy-learner weights, own signal-filter/ML training data, own confirmation gate (`SAXO_LIVE_EUR_CONFIRMED`, independent of the SEK account's `SAXO_LIVE_CONFIRMED`). Shares the SEK account's Saxo LOGIN/OAuth token (see finding below) but nothing else.
+
+### Two critical findings about this Client's Saxo API behavior
+
+Both discovered empirically while building this account — worth knowing before extending Saxo API access here further:
+
+1. **Margin/balance is pooled across all 3 sub-accounts, not per-account.** `/port/v1/balances/me` returns the exact same pooled, SEK-denominated Client-Group total (~15,786 SEK) regardless of whether it's queried scoped by this account's own AccountKey, by ClientKey, or unscoped. There is no broker-enforced wall keeping this experiment's risk at exactly 500 EUR — only the code-level `_risk_equity()` cap provides that discipline (the same protection model the SEK account's own 6,000 SEK cap already relies on). `forex_live_eur_dashboard.py` deliberately does NOT label this pooled figure as "this account's equity" — doing so would be a real money-figure error on a real-money dashboard.
+2. **Positions/orders are ALSO pooled.** `/port/v1/positions/me` and `/port/v1/orders/me` return the SEK account's real positions even when explicitly filtered by the EUR account's own AccountKey — confirmed by inspecting the returned `PositionBase.AccountId` on each row. `housekeeping_live_eur.py`'s `fetch_live_snapshot()` compensates by filtering the raw snapshot down to `EXOTIC_SYMBOLS`-tier UICs immediately after fetch, before any reconciliation logic runs — this is the ONLY thing preventing every one of the SEK account's real, already-tracked-elsewhere positions from showing up as false "fully untracked" alerts in the EUR account's own housekeeping.
+
+### Scheduling
+
+Two Windows Scheduled Tasks, registered via `setup_scheduler_live_eur.ps1` (run once, Administrator):
+
+- **`ATOS Forex LIVE EUR Daily Run`** — every 45 min, 06:00-03:00 PKT (same window as the SEK account, correct from day one — see the SEK account's own scheduling section above for why 03:00 not 22:00). Runs `run_forex_live_eur_daily.bat` → `python forex\runner.py --account live_eur --strategy rsi --live`.
+- **`ATOS Forex LIVE EUR Exit Check`** — once daily at 14:00, backstop only (Daily Run already checks exits every 45 min). Runs `run_forex_live_eur_exits.bat`.
+
+Both tasks have `WakeToRun` enabled and no battery restriction from creation (matching the fix applied to the SEK account's tasks the same day, after tracing a real multi-hour token-keepalive gap to a laptop sleep/standby event). Logs to `data/forex_live_eur_scheduler.log`. Both registered in `scheduler_watchdog.py`'s `WINDOWS_TASKS` and `INTRADAY_REPEATING_TASKS`.
+
+Uses the SAME `saxo_live_token_keepalive.py` task as the SEK account — no separate keepalive needed, since `saxo_auth._cfg()` normalizes `"live_eur"` to `"live"` (same OAuth login/token, only the trading sub-account AccountKey differs).
+
+### Housekeeping & safeguard
+
+`housekeeping_live_eur.py` / `safeguard_live_eur.py` — same relationship and design as the SEK account's `housekeeping_live.py`/`safeguard_live.py` (see that section above), built proactively before this account's first real trade. The only structural difference is the positions/orders pooling workaround described above. `forex/runner.py`'s post-run hook dispatches to `safeguard_live_eur.run_safeguard_live_eur()` when `ACCOUNT_ENV == "live_eur"` — a dedicated branch, never falls through to SIM's `safeguard.py` or the SEK account's `safeguard_live.py`.
+
+### Dashboard
+
+`forex_live_eur_dashboard.py` — thinner than the SEK account's dashboard since this account is EUR-denominated, the same currency basis SIM's own dashboard uses. Reuses `forex_dashboard.py`'s `_eur_per_unit()`/`_fx_conversion_instruments()`/`_positions_section()`/`_strategy_breakdown_table()` directly rather than rebuilding SEK-style triangulation. Shows the 500 EUR sizing cap prominently and the pooled balance figure honestly labelled as pooled (see finding #1 above).
+
+### Testing
+
+Verified end-to-end against the real Saxo LIVE API (read-only + dry-run only, `--live` never invoked by Claude — see the safety-rail note above): `--account live_eur --info` returns real quotes for exactly 83 pairs; `--account live_eur --strategy donchian` correctly hard-errors; a full dry run correctly resolves the EUR sub-account's own distinct AccountKey and sizes at 500 (capped from the pooled ~15,786 raw figure); `housekeeping_live_eur.py`/`safeguard_live_eur.py` both run clean with zero false positives against the real account (which held 5 real SEK positions at the time — proving the tier-filtering fix works). Full regression suite green: `test_2026_08_25_live_forex_account.py` 61/61 (grew to cover both accounts), `test_housekeeping.py` 34/34, `test_2026_08_25_live_housekeeping_safeguard.py` 26/26, `saxo_client_engine_black_box_test.py` 29/29.
 
 ---
 
