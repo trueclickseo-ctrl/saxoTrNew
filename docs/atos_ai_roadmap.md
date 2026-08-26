@@ -4,6 +4,20 @@ Planning discussion held 2026-08-26. **Not started yet** — explicit user decis
 
 ---
 
+## ✅ RESOLVED — the actual v1 scope (2026-08-26, final)
+
+The three open conflicts flagged during planning are now settled. This is the real Friday starting point — everything else in this document is the roadmap, not the sprint:
+
+> **v1 = a single consolidated agent, delivering Signal Scoring (with market regime as a code-computed input feature, not its own LLM call or agent), sizing decisions limited to a bounded multiplier only — no dynamic SL/TP adjustment yet.**
+
+**1. Single agent, not six.** The 6-agent + Supervisor design (see "Multi-agent architecture" below) is the *target* architecture, not the v1 build — deliberately deferred, not abandoned. Reasoning: each extra agent is another LLM call, meaning more latency, more cost, and more places the pipeline can silently fail or disagree with itself; six sets of prompts/weighting logic can't be validated against real trade outcomes until there's live/backtest data to tune against — that's guessing at 6x the behavior instead of 1x; and a single structured JSON response can hold "regime, signal quality, news risk, portfolio exposure" as sections of one output, getting the same decision quality without the orchestration overhead. Split into separate agents later, and only once there's evidence a specific piece (e.g. news analysis) needs its own tuning loop separate from the rest — that's a refactor triggered by evidence, not a default starting posture.
+
+**2. Regime detection and Signal Scoring were never actually competing phases — it's a sequencing question, not a choice.** Regime is an *input* to signal scoring, not a rival to it. Build the regime classification first, but as a cheap deterministic/statistical calculation in code (ADX, ATR, moving-average slope, volatility bands) — explicitly **not** an LLM call and not its own agent. Feed that regime label into the AI Trade Score as one of its ~10 factors. So: **Phase 1 is Signal Scoring**, with regime as a code-computed input feature built in the same phase, not two separate phases.
+
+**3. v1 sizing is multiplier-only — no dynamic SL/TP adjustment.** A position-size multiplier is bounded and reversible: worst case the AI says 0.3x and the trade is just smaller — it can never increase risk beyond what the Risk Engine already caps. Dynamic SL/TP adjustment is a materially different failure mode: it changes the actual risk-per-trade math the Risk Engine already validated, so a wrong widened stop ahead of news is a loss the deterministic system never originally sanctioned. SL/TP adjustment moves to **Phase 6 (Position Management)**, after the multiplier-only version has run in shadow mode long enough to trust the model's judgment on these specific instruments.
+
+---
+
 ## Full feature wishlist (user's list, 2026-08-26)
 
 | # | AI Feature | What it does | Priority (user) |
@@ -308,7 +322,7 @@ Three candidate roles for the very first version, deliberately narrow:
 
 **User's own choice for v1: Signal filter + Position sizing advisor.** Risk overlay comes later.
 
-**Open question, not yet resolved** (from the same discussion, worth settling explicitly on Friday): does "position sizing" in v1 mean *only* a size multiplier on the existing fixed stop/TP, or does it also extend to adjusting SL/TP dynamically (e.g. widening a stop ahead of a known news event)? The scope answer changes how much of the existing deterministic risk logic gets touched — decide this before writing code, don't let it default silently.
+**✅ RESOLVED, see "RESOLVED — the actual v1 scope" at the top of this document.** Multiplier only — no dynamic SL/TP in v1. That moves to Phase 6 (Position Management) once the multiplier version is proven in shadow mode.
 
 ### Trade proposal schema (concrete, ready to use as a starting point)
 
@@ -342,9 +356,9 @@ And the structured decision the agent returns:
 ```
 `action` is one of `APPROVE` / `REJECT` / `MODIFY`. On `APPROVE`, ATOS sends the order with the adjusted size/risk; on `REJECT`, ATOS logs the reason and places nothing; on `MODIFY`, ATOS applies the changes then places the order. This maps directly onto this codebase's existing pattern of a strategy signal dict flowing into `_run_entries()` — the AI step would sit between signal generation and `saxo_order.place_with_stop()`, not replace either.
 
-### Genuine architectural tension: single agent vs. the 6-agent design (flag for Friday, don't silently resolve)
+### Single agent vs. the 6-agent design — ✅ RESOLVED
 
-The second contribution (previous section of this doc) recommended a 6-agent + Supervisor design from day one. This third contribution recommends the opposite starting point: **a single "Trading Copilot" agent** (reads the trade proposal, checks market context, decides approve/size/skip, produces a short explanation for logging) — "don't start [with multi-agent] — start with one agent and a clean JSON interface." The multi-agent split (Analyst / Decision / Risk / Execution agents) is explicitly framed as a *later* evolution once the single-agent version is proven, not a v1 target. **These are contradictory starting points from the same planning discussion — resolve explicitly on Friday rather than defaulting to either.**
+**Single agent for v1.** See "RESOLVED — the actual v1 scope" at the top of this document for the full reasoning (latency/cost/failure-surface of 6 LLM calls, can't validate 6 sets of prompts without real data to tune against, one structured JSON response can hold all the same sections). The 6-agent + Supervisor design below stays the *target* architecture — split out a piece into its own agent later, only once there's evidence it needs a separate tuning loop (e.g. news analysis proves it needs different iteration speed than the rest).
 
 ### Autonomy levels — recommended staging
 
@@ -612,13 +626,21 @@ Then news/sentiment (#14/#15) and strategy discovery (#19) after those ten.
 
 **A separate, more concrete v1 scope decision exists too** (see "Third contribution" section above): user chose **Signal filter + Position sizing advisor** as the actual v1 mandate — narrower than any of the ranked feature lists below, and framed around agent *role* (approve/reject, resize) rather than feature *category*. This may be the real starting point regardless of which feature-priority ordering below is chosen — worth reconciling all of these into one plan on Friday rather than picking a list in isolation.
 
-**A THIRD sequence, from the same 2026-08-26 discussion, puts Signal Scoring before Regime Detection** — flagging this honestly rather than silently picking one: "Phase 1 — AI Signal Scoring... this is the safest starting point," then Phase 2 Market Regime, Phase 3 AI Position Sizing, Phase 4 Portfolio Intelligence, Phase 5 News Intelligence, Phase 6 AI Position Management, Phase 7 Learning System, Phase 8 AI Supervisor (combining everything into one decision engine). This reverses #1/#2's order relative to the "ATOS v1 AI" list two paragraphs up. **Resolve this on Friday before writing code** — both orderings are defensible (regime-first because everything else can condition on it; scoring-first because it's the single safest, smallest-blast-radius change to ship into the existing pipeline) but they're genuinely different sequences, not the same list phrased differently.
+**Signal Scoring vs. Regime Detection ordering — ✅ RESOLVED, and it turned out not to be a real conflict.** Regime is an *input feature* to signal scoring, not a competing phase: build the regime classification first, but as a cheap deterministic/statistical calculation in code (ADX, ATR, MA slope, volatility bands) — not an LLM call, not its own agent — then feed that label into the AI Trade Score as one of its factors. **Phase 1 is Signal Scoring, with regime computed as part of the same phase**, not two sequential phases. See "RESOLVED — the actual v1 scope" at the top of this document.
 
 **Testing discipline**: every item tested on SIM first, same standing rule already applied to every strategy/pair change in this codebase (see `feedback_no_core_logic_changes` memory) — nothing here touches either LIVE account until proven on SIM, and per the governance principles above, no model goes live without walk-forward validation and paper trading first regardless of backtest results.
 
 ---
 
 ## Task list — starting Friday 2026-08-28, one at a time
+
+**Actual v1 sprint (resolved 2026-08-26 — this is what Friday starts with):**
+- [ ] Regime classifier as a plain code function (ADX/ATR/MA-slope/vol-bands → a regime label) — no LLM, no agent, just a feature
+- [ ] Single consolidated agent, one structured JSON call, combining Signal Scoring (0-100, regime as one input factor) + Position Sizing (bounded multiplier only, no SL/TP adjustment)
+- [ ] Shadow mode first: agent evaluates every real SIM signal, logs its decision next to the actual outcome, influences nothing — run for a few weeks before trusting it with anything real
+- [ ] Only after shadow mode looks good: Level 2 semi-autonomous (agent can skip/resize within the existing fixed risk limits) — still SIM only, still both accounts' history before LIVE
+
+**Everything below this line is the roadmap for later phases, not the Friday sprint:**
 
 - [ ] #1 Market Regime AI (trend/range/high-vol/low-vol classifier from existing ATR/ADX data — feeds nearly everything below)
 - [ ] #4 Trade Quality / Probability Model (expected-value framing: win probability × reward − loss probability × risk)
