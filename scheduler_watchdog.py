@@ -111,6 +111,11 @@ WINDOWS_TASKS = {
     # surviving real task now.
     "Forex Gap London":       ("ATOS Forex Gap London Fixed", "forex_scheduler.log",   20, 78),
     "Forex Gap NewYork":      ("ATOS Forex Gap NewYork",      "forex_scheduler.log",   20, 78),
+    # Added 2026-08-26: closes a real coverage gap -- the Tokyo gap
+    # session (00:00-01:30 UTC / 05:00-06:30 PKT, Tue-Fri) had no
+    # dedicated task at all and fell almost entirely inside the regular
+    # scan schedule's own dead zone. See fix_gap_tokyo_coverage.ps1.
+    "Forex Gap Tokyo":        ("ATOS Forex Gap Tokyo",        "forex_scheduler.log",   20, 78),
     "Forex Gap Monday Early": ("ATOS Forex Gap Monday Early", "forex_scheduler.log",   20, 174),
     "Forex Gap Fill":         ("ATOS Forex Gap Fill",         "forex_scheduler.log",   20, 174),
     # max_first_run_wait tightened 30h -> 2h 2026-08-25: these 3 moved from

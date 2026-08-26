@@ -236,6 +236,7 @@ see §6.
 | `ATOS Forex Gap Monday Early` | Mon 03:00 PKT | same `run_forex_daily.bat` | Same "all except LBO" run — timed so `gap` catches the Sun 22:00 UTC weekly-gap window (see §1b). |
 | `ATOS Forex Gap London` | weekdays 12:00 PKT (07:00 UTC) | same `run_forex_daily.bat` | Same "all except LBO" run, timed for `gap`'s london-session window. |
 | `ATOS Forex Gap NewYork` | weekdays 17:00 PKT (12:00 UTC) | same `run_forex_daily.bat` | Same "all except LBO" run, timed for `gap`'s newyork-session window. |
+| `ATOS Forex Gap Tokyo` | weekdays 05:00 PKT (00:00 UTC) | same `run_forex_daily.bat` | **Added 2026-08-26** — the Tokyo gap window (00:00-01:30 UTC, Tue-Fri; Monday's is subsumed by the weekly window) previously had NO dedicated task and fell almost entirely inside the Intraday Scan's own 03:00-06:00 PKT dead zone, so most Tokyo gap opportunities were silently missed. This closes that gap. Verified in code: `_detect_gap_session()` correctly resolves to `"tokyo"` Tue-Fri and `"weekly"` on Monday at this exact time, so firing it daily (including Monday) is safe. |
 | `ATOS Forex Gap Fill` | **Mon 03:00 PKT** (= Sun 22:00 UTC) | `run_forex_gap.bat` → `runner.py --strategy gap --live` | The one task that calls `gap` directly. **Retimed 2026-08-21** — was Sun 22:00 PKT (17:00 UTC), 5 hours before the weekly gap window actually opens; now correctly fires right when it does. |
 | `ATOS Forex London Run` | 18:00 PKT (13:00 UTC), daily | `run_forex_london.bat` → `runner.py --live` | "All except LBO" run over the **full 117-pair universe** — widened from the London-session-only 20-pair set on 2026-08-20 (no `--session` flag, defaults to `all`). |
 | `ATOS Forex Exit Check` | 14:00 PKT (09:00 UTC), daily | `run_forex_exits.bat` → `runner.py --exits-only --live` | Stop/time-stop checks only, **all 11 strategies including LBO** (safe — never opens new positions). |
@@ -246,21 +247,23 @@ was deleted 2026-08-21 — no longer in this list or in the watchdog registry.
 
 **Net effect**: the "all except LBO" combo (ema, rsi, donchian, bb, pullback,
 gap, supertrend, zscore, ml, cnn_lstm) gets invoked at minimum 06:20, every
-30 min 06:00-22:00 (Intraday Scan), Mon 03:00, weekdays 12:00, weekdays
-17:00, and 18:00 PKT. Existing open positions and currency exposure limits
-prevent literal re-entry into an already-held symbol.
+30 min 06:00-03:00 (Intraday Scan), Mon 03:00, weekdays 05:00, weekdays
+12:00, weekdays 17:00, and 18:00 PKT. Existing open positions and currency
+exposure limits prevent literal re-entry into an already-held symbol.
 
 ### 1b. `gap` strategy's own session self-gating (independent of the table above)
 
 `gap` only acts if `_detect_gap_session()` (forex/runner.py) says the
 current UTC hour is inside one of:
-- **weekly**: Sun 22:00 UTC → Mon 06:00 UTC
-- **tokyo**: Mon(skip)-Fri 00:00-01:30 UTC
-- **london**: Mon-Fri 07:00-08:30 UTC
-- **newyork**: Mon-Fri 12:00-13:30 UTC
+- **weekly**: Sun 22:00 UTC → Mon 06:00 UTC — dedicated task: Gap Monday Early / Gap Fill (both 03:00 PKT)
+- **tokyo**: Mon(skip, subsumed by weekly)-Fri 00:00-01:30 UTC — dedicated task: Gap Tokyo (05:00 PKT), **added 2026-08-26**, previously uncovered
+- **london**: Mon-Fri 07:00-08:30 UTC — dedicated task: Gap London (12:00 PKT)
+- **newyork**: Mon-Fri 12:00-13:30 UTC — dedicated task: Gap NewYork (17:00 PKT)
 
 Outside those windows, `gap` logs "not in a gap session window" and does
-nothing, no matter how often the surrounding task fires.
+nothing, no matter how often the surrounding task fires. All 4 sessions now
+have a dedicated task firing at (or very near) the start of their window,
+in addition to whatever regular scans happen to overlap it.
 
 ### 1c. London Breakout (LBO) — separate day-trading book, separate schedule
 
@@ -291,9 +294,11 @@ The main forex universe expanded to 117 pairs on 2026-08-21 (see
 expanded — the added EM/exotic pairs' wider spreads don't suit LBO's tight
 2:1 RR day-trade structure. Session logic (independent of any `--session`
 flag): London entries 07:00-10:00 UTC (break of the 00:00-07:00 UTC Asian
-range), NY entries 13:00-15:00 UTC (break of the 09:00-13:00 UTC
-London-morning range). All positions force-closed by 20:00 UTC — no
-overnight holds.
+range), NY entries 13:00-15:00 UTC (break of the 09:00-12:00 UTC
+London-morning range, `LONDON_RANGE_END` in `forex/strategy_london_
+breakout.py` — checked 1h after that range closes, not at the instant it
+does). All positions force-closed by 20:00 UTC (`SESSION_CLOSE` in the
+same file) — no overnight holds.
 
 ### 1d. CNN-LSTM — trained once, never retrained, near-inert
 

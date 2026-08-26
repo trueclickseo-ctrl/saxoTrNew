@@ -1,6 +1,8 @@
 @echo off
 REM London Breakout — NY Open (18:00 PKT / 13:00 UTC)
-REM Trades break of London morning range (09:00-13:00 UTC)
+REM Trades break of London morning range (09:00-12:00 UTC, LONDON_RANGE_END in
+REM forex/strategy_london_breakout.py) — checked 1h after that range closes to
+REM see if price actually broke out, not at the instant it closes.
 REM
 REM Do NOT redirect output here or wrap this in a second run_hidden.vbs call.
 REM The old double-wrap (Task Scheduler -> vbs -> this .bat -> vbs #2 -> python)
