@@ -187,27 +187,45 @@ def _query_task_info(task_name: str) -> dict | None:
         f"[PSCustomObject]@{{LastRunTime=$i.LastRunTime; NextRunTime=$i.NextRunTime; "
         f"LastTaskResult=$i.LastTaskResult; State=$t.State.ToString()}} | ConvertTo-Json -Compress"
     )
-    try:
-        out = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
-            capture_output=True, text=True, timeout=30,
-            # CREATE_NO_WINDOW: without this, every one of these per-task
-            # subprocess calls pops its own visible console window on
-            # Windows, even though scheduler_watchdog.py itself runs
-            # invisibly (pythonw via run_hidden.vbs) -- the parent process
-            # having no window doesn't stop a CHILD process from getting
-            # its own. Found 2026-08-26: with 20 tasks in WINDOWS_TASKS
-            # (13 of them forex/LBO-named, checked again by the separate
-            # "ATOS Forex Watchdog" --only-forex task), each watchdog run
-            # was popping 13-20 empty PowerShell windows in rapid
-            # succession -- purely cosmetic (each closes itself instantly),
-            # but visually disruptive. subprocess.CREATE_NO_WINDOW only
-            # exists on Windows, which this entire module already targets
-            # exclusively (Task Scheduler, schtasks, PowerShell).
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        ).stdout.strip()
-    except Exception as exc:
-        return {"error": f"powershell query failed: {exc}"}
+    # Retry once on a transient PowerShell/WMI stall before reporting a
+    # failure. Confirmed live 2026-08-26: "ATOS Daily Chart" alerted with
+    # "timed out after -3474.9370000000017 seconds" -- a negative timeout
+    # is not something subprocess.run() was ever asked for (timeout=30 is
+    # a fixed literal below); CPython's Popen.wait() recomputes the
+    # *remaining* time on each poll and raises TimeoutExpired with that
+    # recomputed (occasionally negative, if the system clock jumps forward
+    # mid-wait -- e.g. a sleep/resume or large NTP correction) value
+    # instead of the original 30. The task itself was healthy the whole
+    # time (LastTaskResult 0, fresh log) -- only this one query call
+    # glitched. A single retry costs nothing on the transient case and
+    # avoids a spurious alert email over a one-off environmental blip.
+    last_exc: Exception | None = None
+    for attempt in range(2):
+        try:
+            out = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
+                capture_output=True, text=True, timeout=30,
+                # CREATE_NO_WINDOW: without this, every one of these per-task
+                # subprocess calls pops its own visible console window on
+                # Windows, even though scheduler_watchdog.py itself runs
+                # invisibly (pythonw via run_hidden.vbs) -- the parent process
+                # having no window doesn't stop a CHILD process from getting
+                # its own. Found 2026-08-26: with 20 tasks in WINDOWS_TASKS
+                # (13 of them forex/LBO-named, checked again by the separate
+                # "ATOS Forex Watchdog" --only-forex task), each watchdog run
+                # was popping 13-20 empty PowerShell windows in rapid
+                # succession -- purely cosmetic (each closes itself instantly),
+                # but visually disruptive. subprocess.CREATE_NO_WINDOW only
+                # exists on Windows, which this entire module already targets
+                # exclusively (Task Scheduler, schtasks, PowerShell).
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            ).stdout.strip()
+            last_exc = None
+            break
+        except Exception as exc:
+            last_exc = exc
+    if last_exc is not None:
+        return {"error": f"powershell query failed after retry: {last_exc}"}
 
     if not out or out == "NOTFOUND":
         return None
