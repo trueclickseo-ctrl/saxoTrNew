@@ -34,9 +34,19 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 
 import price_service
+import pnl_tracker
 import forex.runner as runner
 from forex.universe import PAIRS as _UNIVERSE_PAIRS, CORE_SYMBOLS
 import forex_dashboard as fd   # reuse its rendering helpers + colors
+
+# 5 of the 34 CORE pairs are NOK/SEK/DKK crosses (paired against EUR/USD only
+# -- distinct from the 32-pair dedicated SCANDI_SYMBOLS tier, which is SIM-
+# only and never reaches this LIVE account). Added 2026-08-26 at explicit
+# user request: watch these specifically as real LIVE trades accumulate --
+# decide after the first ~10 closed trades whether to keep them in CORE or
+# pull them, the same review process already applied to SCANDI/EXOTIC on SIM.
+SCANDI_CORE_PAIRS = {"EURNOK", "EURSEK", "USDNOK", "USDSEK", "USDDKK"}
+SCANDI_REVIEW_TRADE_COUNT = 10
 
 _UNIVERSE_BY_SYMBOL = {p["symbol"]: p for p in _UNIVERSE_PAIRS}
 REFRESH_SECONDS = 60
@@ -294,6 +304,53 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
 
     L.append(f"  {fd.DM}Realized/Today P&L above is computed the same way as SIM's dashboard "
              f"but in SEK, via pnl_tracker module='forex_live' (fully separate ledger from SIM's 'forex').{fd.W}")
+    L.append("")
+
+    # ── Per-pair performance -- every CORE pair with at least one closed
+    # LIVE trade, not just a strategy-level aggregate. Scandi-cross core
+    # pairs (EURNOK/EURSEK/USDNOK/USDSEK/USDDKK) are marked with a flag and
+    # tallied separately so their progress toward the 10-trade review
+    # checkpoint is visible at a glance instead of requiring a manual count.
+    pair_stats = pnl_tracker.get_pair_summary("forex_live")
+    L.append(f"  {fd.BD}PER-PAIR PERFORMANCE{fd.W}  {fd.DM}(every CORE pair with a closed LIVE trade){fd.W}")
+    L.append("")
+    if pair_stats:
+        L.append(
+            f"  {fd.DM}{'Pair':<9}  {'Closed':>6}  {'Open':>4}  {'W/L':>7}  "
+            f"{'WR%':>6}  {'PF':>6}  {'Total P&L (SEK)':>16}  {'Best':>10}  {'Worst':>10}{fd.W}"
+        )
+        L.append(HR)
+        scandi_trades = scandi_wins = 0
+        scandi_pnl = 0.0
+        for r in pair_stats:
+            is_scandi = r["symbol"] in SCANDI_CORE_PAIRS
+            flag = f"{fd.YL}⚑{fd.W}" if is_scandi else " "
+            pc = fd.GR if r["total_pnl"] >= 0 else fd.RD
+            pf_s = f"{r['profit_factor']:.2f}" if r["profit_factor"] is not None else "∞" if r["losses"] == 0 else "—"
+            L.append(
+                f"  {flag} {fd.BD}{r['symbol']:<7}{fd.W}  {r['trades']:>6}  {r['open']:>4}  "
+                f"{r['wins']}W/{r['losses']}L{'':>1}  {r['win_rate']:>5.1f}%  {pf_s:>6}  "
+                f"{pc}{r['total_pnl']:>+16,.0f}{fd.W}  {fd.GR}{r['best']:>+10,.0f}{fd.W}  {fd.RD}{r['worst']:>+10,.0f}{fd.W}"
+            )
+            if is_scandi:
+                scandi_trades += r["trades"]
+                scandi_wins   += r["wins"]
+                scandi_pnl    += r["total_pnl"]
+        L.append(HR)
+        remaining = max(0, SCANDI_REVIEW_TRADE_COUNT - scandi_trades)
+        sc = fd.GR if scandi_pnl >= 0 else fd.RD
+        status = (f"{fd.YL}{fd.BD}review checkpoint reached — decide keep/remove{fd.W}" if remaining == 0
+                  else f"{fd.DM}{remaining} more to go{fd.W}")
+        L.append(
+            f"  {fd.YL}⚑{fd.W} {fd.BD}SCANDI-CORE{fd.W}  {fd.DM}(EURNOK/EURSEK/USDNOK/USDSEK/USDDKK){fd.W}  "
+            f"{scandi_trades}/{SCANDI_REVIEW_TRADE_COUNT} closed trades toward review  |  "
+            f"{scandi_wins}W/{scandi_trades - scandi_wins}L  |  {sc}{scandi_pnl:>+,.0f} SEK{fd.W}  |  {status}"
+        )
+    else:
+        L.append(f"  {fd.DM}No closed LIVE trades yet on any pair.{fd.W}")
+    L.append(HR)
+    L.append("")
+
     if not once:
         L.append(f"  {fd.DM}Refreshes every {interval}s  |  Ctrl+C to exit{fd.W}")
     L.append("")

@@ -77,19 +77,27 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 # -> live.logonvalidation.net) but have not been exercised against a real
 # Saxo LIVE app yet -- verify on the LIVE app's own portal page before
 # relying on this for the first real login (see module docstring).
+# Endpoint URLs and token file paths are genuinely static -- fine at module
+# level. app_key/app_secret are NOT: they were originally read here too
+# (os.environ.get(...) evaluated once at import time), which meant a
+# long-lived process could never notice SAXO_LIVE_APP_KEY being unset,
+# changed, or set for the first time after that process started -- it kept
+# using whatever value existed at import forever. Found 2026-08-26 via a
+# test that unsets the env var and expects _cfg("live") to raise: it
+# didn't, because the cached value from import time was still there. Moved
+# into _cfg() below so every call reads the CURRENT environment, not a
+# frozen snapshot -- matters most for exactly the kind of long-running
+# process this session already found once today (an 8-hour-old stray
+# python.exe from a much earlier, unrelated incident).
 _ENV_CONFIG = {
     "sim": {
         "auth_endpoint": "https://sim.logonvalidation.net/authorize",
         "token_endpoint": "https://sim.logonvalidation.net/token",
-        "app_key": os.environ.get("SAXO_APP_KEY", "60d308f45fc34cc2913ae5f3692a94ba"),
-        "app_secret": os.environ.get("SAXO_APP_SECRET"),   # unset for SIM's PKCE app
         "token_file": os.path.join(_HERE, "saxo_token.json"),
     },
     "live": {
         "auth_endpoint": "https://live.logonvalidation.net/authorize",
         "token_endpoint": "https://live.logonvalidation.net/token",
-        "app_key": os.environ.get("SAXO_LIVE_APP_KEY"),
-        "app_secret": os.environ.get("SAXO_LIVE_APP_SECRET"),
         "token_file": os.path.join(_HERE, "saxo_token_live.json"),
     },
 }
@@ -98,14 +106,20 @@ _ENV_CONFIG = {
 def _cfg(env: str) -> dict:
     if env not in _ENV_CONFIG:
         raise ValueError(f"Unknown Saxo env {env!r} -- expected 'sim' or 'live'.")
-    cfg = _ENV_CONFIG[env]
-    if env == "live" and not cfg["app_key"]:
-        raise RuntimeError(
-            "SAXO_LIVE_APP_KEY is not set. Register a separate LIVE app on "
-            "https://www.developer.saxo, then set SAXO_LIVE_APP_KEY (and "
-            "SAXO_LIVE_APP_SECRET, only if that app page shows a client "
-            "secret) before logging in to LIVE."
-        )
+    cfg = dict(_ENV_CONFIG[env])
+    if env == "sim":
+        cfg["app_key"]    = os.environ.get("SAXO_APP_KEY", "60d308f45fc34cc2913ae5f3692a94ba")
+        cfg["app_secret"] = os.environ.get("SAXO_APP_SECRET")   # unset for SIM's PKCE app
+    else:
+        cfg["app_key"]    = os.environ.get("SAXO_LIVE_APP_KEY")
+        cfg["app_secret"] = os.environ.get("SAXO_LIVE_APP_SECRET")
+        if not cfg["app_key"]:
+            raise RuntimeError(
+                "SAXO_LIVE_APP_KEY is not set. Register a separate LIVE app on "
+                "https://www.developer.saxo, then set SAXO_LIVE_APP_KEY (and "
+                "SAXO_LIVE_APP_SECRET, only if that app page shows a client "
+                "secret) before logging in to LIVE."
+            )
     return cfg
 
 
@@ -115,7 +129,7 @@ REDIRECT_URL = os.environ.get("SAXO_REDIRECT_URL", "http://localhost/redirect")
 # support existed, in case anything imports these constants directly.
 AUTHORIZATION_ENDPOINT = _ENV_CONFIG["sim"]["auth_endpoint"]
 TOKEN_ENDPOINT = _ENV_CONFIG["sim"]["token_endpoint"]
-APP_KEY = _ENV_CONFIG["sim"]["app_key"]
+APP_KEY = os.environ.get("SAXO_APP_KEY", "60d308f45fc34cc2913ae5f3692a94ba")
 TOKEN_FILE = _ENV_CONFIG["sim"]["token_file"]
 
 
