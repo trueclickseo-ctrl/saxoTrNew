@@ -18,6 +18,20 @@ The three open conflicts flagged during planning are now settled. This is the re
 
 ---
 
+## The long-term vision: an always-on oversight agent (user's notes, 2026-08-26)
+
+Not a change to the v1 scope above — this is the *reason* the roadmap has the later phases it does, stated as one coherent goal rather than a feature list:
+
+> Find a stronger signal scanner that identifies the best pairs to trade using AI, and an agent that runs continuously — checking every log, every trade, analyzing losing and winning trades, and reporting back with the reasoning behind each decision it makes.
+
+Mapped onto what's already planned, this isn't new scope, it's the connective purpose behind items already on the roadmap:
+- **"Stronger signal scanner, best pairs"** → #2 AI Signal Scoring plus the "rank ALL opportunities" extension (both already in the v1 scope above) and, later, #3 AI Strategy Selector.
+- **"Runs continuously, checks everything, analyzes wins/losses, reports with reasoning"** → #16 Open Position AI / Trade Management, #18 AI Trading Journal, and the Learning Agent from the 6-agent design (all later-phase, not v1).
+
+**Scope of "makes decisions by self," made explicit rather than assumed**: this means the agent autonomously *analyzes and produces recommendations with reasoning* — exactly what the Trading Journal and Learning Agent already do (a trade closes, the agent explains why it won or lost; a pattern emerges across trades, the agent surfaces it). It does **not** mean the agent executes or resizes real orders without the governance already locked in above: the Risk Engine stays a hard gate, and how much the agent's *analysis* is allowed to actually *do* to a live position is still governed by the autonomy-level framework (Shadow mode → Level 1 Advisory → Level 2 Semi-autonomous, the current ceiling → Level 3 Fully autonomous, explicitly much later). An agent that reasons continuously and reports every decision it *would* make is squarely in scope now; an agent that acts on those decisions beyond the Level 2 ceiling is not, until the ceiling itself is deliberately raised.
+
+---
+
 ## Full feature wishlist (user's list, 2026-08-26)
 
 | # | AI Feature | What it does | Priority (user) |
