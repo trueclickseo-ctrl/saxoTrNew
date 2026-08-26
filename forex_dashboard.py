@@ -557,7 +557,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     live, price_src = price_service.fetch_prices(instruments, token=token)
     position_costs   = _fetch_position_costs(token)
 
-    W_TOTAL = 108
+    W_TOTAL = 139  # widened 2026-08-26 for the new "X/149 trading now" header segment
     HR      = f"  {DM}{'─' * W_TOTAL}{W}"
 
     L = []
@@ -565,8 +565,9 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     # ── Header ────────────────────────────────────────────────────
     L.append(f"  {BD}{CY}╔{'═'*W_TOTAL}╗{W}")
     src_tag = "SAXO LIVE" if price_src == "saxo" else "n/a (token expired)"
+    pairs_trading = len({p["symbol"] for p in positions})
     L.append(f"  {BD}{CY}║{'  FOREX QUANT DASHBOARD':^{W_TOTAL}}║{W}")
-    L.append(f"  {BD}{CY}║{f'  11 Strategies  |  149 FX Pairs (34 core + 32 scandi + 83 exotic)  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
+    L.append(f"  {BD}{CY}║{f'  11 Strategies  |  149 FX Pairs (34 core + 32 scandi + 83 exotic)  |  {pairs_trading}/149 trading now  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
     L.append(f"  {BD}{CY}╚{'═'*W_TOTAL}╝{W}")
     L.append("")
 
