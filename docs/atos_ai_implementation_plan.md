@@ -69,9 +69,10 @@ Locked scope this plan implements (from the roadmap doc, do not re-litigate): on
 **Test gate:**
 - `test_ai_trading_copilot.py`: mocked-LLM-response tests — valid response parses correctly; malformed JSON → HOLD, no exception; timeout → HOLD, no exception; response with a non-null `adjusted_stop_loss` → rejected/ignored (v1 must not honor a field outside its locked scope, even if the model tries to use it).
 - Resilience drill: deliberately point the agent at an unreachable endpoint for a full SIM run, confirm the entry loop completes exactly as if AI were disabled (this is the "AI unavailable must degrade safely" principle, tested for real, not just asserted in the doc).
-- Evidence accumulation: this sprint's *exit* criterion is not a fixed day count — per the roadmap's locked evidence-gate rule, wait for a real sample of shadow decisions (aim for the same order of magnitude as the roadmap's "M live-approved trades" language, reviewed via `ai_shadow_report.py`) spanning at least one visibly volatile or adverse stretch, not just a calm week, before moving to Sprint 4.
+- Evidence accumulation: this sprint's *exit* criterion is not a fixed day count — per the roadmap's locked evidence-gate rule, wait for a real sample of shadow decisions (aim for the same order of magnitude as the roadmap's "M live-approved trades" language) spanning at least one visibly volatile or adverse stretch, not just a calm week, before moving to Sprint 4.
+- **Who decides "volatile enough":** `ai_shadow_report.py`'s job is to *surface candidates*, not to rule on this itself — e.g. flag the N days in the window with the largest realized drawdown, biggest single-day ATR spike, or most simultaneous stop-outs across pairs, and hand that list to a human. **The call on whether the window genuinely includes a qualifying adverse stretch is the user's, made explicitly when reviewing the report — not an automated threshold the script applies on its own.** This is the one subjective judgment call in an otherwise numeric gate, and it needs to stay visibly a decision, not get quietly absorbed into the script's pass/fail output.
 
-**Exit criteria:** resilience drill passes, shadow report shows the agent isn't systematically worse than a coin flip on approve/reject quality, and the sample includes at least one rough patch, not only calm days.
+**Exit criteria:** resilience drill passes, shadow report shows the agent isn't systematically worse than a coin flip on approve/reject quality, and the user has explicitly confirmed the sample includes a real rough patch, not only calm days — this confirmation happens in conversation, not inside the script.
 
 ---
 
@@ -80,7 +81,7 @@ Locked scope this plan implements (from the roadmap doc, do not re-litigate): on
 **Goal:** the first point where the agent's decision has a *real* effect — on SIM only.
 
 **Build:**
-- Modify the sizing step at [forex/runner.py:1695-1712](../forex/runner.py): when `ai_enabled_for(ACCOUNT_ENV)` and `shadow_mode` is `false`, multiply the already-computed `qty` by the agent's `size_multiplier` (clamped to a sane bounded range, e.g. `[0.25, 1.0]` — v1 only ever *reduces* size, it doesn't amplify beyond the Risk Engine's existing cap, matching the Trade Constitution's "AI may resize, never exceed risk"). On `action: REJECT`, `continue` the loop before placing the order — same `continue` pattern already used for every other skip reason in that loop (spread, currency exposure, opposing position, etc.), so a rejected trade produces the exact same log/skip shape the loop already produces for other skip reasons.
+- Modify the sizing step at [forex/runner.py:1695-1712](../forex/runner.py): when `ai_enabled_for(ACCOUNT_ENV)` and `shadow_mode` is `false`, multiply the already-computed `qty` by the agent's `size_multiplier`, clamped to `[FLOOR, 1.0]` — the upper bound of `1.0` is a fixed engineering decision (v1 only ever *reduces* size, never amplifies beyond what the Risk Engine already sized, matching the Trade Constitution's "AI may resize, never exceed risk"), but **`FLOOR` is not yet decided and must not ship as an unexamined placeholder** — it's a business call, not an engineering one, and there's no existing "minimum risk multiplier" concept in this codebase to derive it from (`min_units` on each pair is an absolute-units floor, a different thing). Bring this to Friday explicitly: candidates are something like `0.25` (conservative, multiplier can only halve-then-half-again), `0.1` (agent can nearly zero out size without fully rejecting), or reusing the existing per-pair `min_units` as a hard floor regardless of what the multiplier computes to. Whichever value is picked, write it into `ai/config.py` as a named constant with the reasoning in a comment, not a bare number in the sizing hook. On `action: REJECT`, `continue` the loop before placing the order — same `continue` pattern already used for every other skip reason in that loop (spread, currency exposure, opposing position, etc.), so a rejected trade produces the exact same log/skip shape the loop already produces for other skip reasons.
 - This is strictly additive to the existing skip-reason chain at [forex/runner.py:1673-1692](../forex/runner.py) — it does not replace or reorder any existing deterministic check, it runs after all of them.
 
 **Test gate:**
@@ -88,7 +89,7 @@ Locked scope this plan implements (from the roadmap doc, do not re-litigate): on
 - A/B run on SIM: the methodology already in the roadmap doc — Version A (AI off) vs Version B (AI on, Level 2) — compared on WR/PF/expectancy/drawdown over a real SIM window, using the exact same evidence-gate discipline as Sprint 3 (must include a volatile stretch, not just a quiet one).
 - Kill-switch drill: flip `enabled_sim` to `false` mid-run (or delete `config/ai.json`), confirm the very next cycle reverts to pre-AI behavior with no restart needed if the config is read fresh each cycle (or documents clearly that a restart is required, if it's cached at process start — either is fine, but it must be true and stated, not assumed).
 
-**Exit criteria:** the same evidence bar as Sprint 3's, now measured on realized sizing decisions rather than shadow ones — Version B doesn't harm risk-adjusted return relative to Version A, through at least one adverse stretch. This is Level 2, on SIM, and it is the ceiling for this plan.
+**Exit criteria:** the same evidence bar as Sprint 3's — including the same rule that "adverse stretch qualified" is a user judgment call made in review, not a script threshold — now measured on realized sizing decisions rather than shadow ones: Version B doesn't harm risk-adjusted return relative to Version A, through a stretch the user has explicitly agreed counts. This is Level 2, on SIM, and it is the ceiling for this plan.
 
 ---
 
@@ -112,3 +113,8 @@ Everything from the roadmap doc's later-phase list — dynamic SL/TP, the 6-agen
 | 3 | Agent, shadow mode | No (log-only) | Resilience drill + evidence sample incl. a volatile stretch |
 | 4 | Agent wired into SIM sizing | **Yes — SIM only** | A/B evidence bar cleared, kill-switch verified |
 | 5 | Review checkpoint | — | Separate written decision before anything further |
+
+## Open items for Friday (not blockers, but not to skip past)
+
+1. **Sprint 4's multiplier floor (`FLOOR` in `[FLOOR, 1.0]`)** is deliberately left undecided in this doc — it's a business call (risk tolerance), not derivable from existing code. Pick a value Friday, not by default.
+2. **Who rules a review window "volatile enough" to satisfy the evidence gate (Sprints 3 & 4)** — decided to be the user, explicitly, in conversation, each time — not a threshold `ai_shadow_report.py` applies automatically. Confirm this Friday so it doesn't quietly become the script's call by default once it exists.
