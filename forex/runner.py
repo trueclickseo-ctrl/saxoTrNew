@@ -152,6 +152,32 @@ SESSION_PAIRS = {
 # blocking. Reconsider re-enabling a real limit before trading live capital.
 MAX_CURRENCY_EXPOSURE = 999
 
+# 2026-08-26/27: the "reconsider before live" comment above was written on
+# 2026-08-21 -- this is that reconsideration, triggered by a real incident:
+# LIVE-SEK's donchian strategy opened AUDCHF Buy and CHFAUD Sell within hours
+# of each other. Both are the exact same directional bet (long AUD, short
+# CHF) -- confirmed by decomposing each into base/quote exposure, not by
+# ticker name (the CHFAUD side was mislabeled "CADCHF" in forex/universe.py
+# at the time, a separate bug fixed the same day -- see
+# test_2026_08_26_chfaud_uic_mismatch.py). MAX_CURRENCY_EXPOSURE being
+# unlimited (999) let it through uncontested; the user closed the duplicate
+# leg manually once found. 1 is deliberately tight -- each currency may be
+# net long or short by at most one position's worth on a LIVE account small
+# enough (500-6,000 SEK/EUR) that concentrated risk matters far more than
+# breadth of diversification right now. This does mean LIVE can't hold e.g.
+# both GBPUSD and AUDUSD long simultaneously (both push USD short by 1,
+# totalling 2) -- an intentional trade-off, not an oversight; revisit only
+# as a separate, deliberate decision once the account has grown.
+LIVE_MAX_CURRENCY_EXPOSURE = 1
+
+
+def _max_currency_exposure() -> int:
+    """SIM stays unlimited (explicit 2026-08-21 user request, for full
+    signal-testing breadth); both real-money accounts get the real cap."""
+    if ACCOUNT_ENV in ("live", "live_eur"):
+        return LIVE_MAX_CURRENCY_EXPOSURE
+    return MAX_CURRENCY_EXPOSURE
+
 # Reject a signal if the pair's live spread is wider than this % of price —
 # a proxy for "this pair's home market is currently illiquid" without needing
 # a per-currency trading-hours table (which several EM/exotic currencies don't
@@ -1103,8 +1129,9 @@ def _currency_ok(sym: str, direction: str, exposure: dict) -> bool:
     else:
         new_base  = exposure.get(base,  0) - 1
         new_quote = exposure.get(quote, 0) + 1
-    return (abs(new_base)  <= MAX_CURRENCY_EXPOSURE and
-            abs(new_quote) <= MAX_CURRENCY_EXPOSURE)
+    limit = _max_currency_exposure()
+    return (abs(new_base)  <= limit and
+            abs(new_quote) <= limit)
 
 
 def _opposing_strategy_holds(sym: str, direction: str, positions: dict) -> str | None:
@@ -1754,7 +1781,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
 
         if not _currency_ok(sym, direction, exposure):
             logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] "
-                        f"— currency exposure limit (max {MAX_CURRENCY_EXPOSURE})")
+                        f"— currency exposure limit (max {_max_currency_exposure()})")
             continue
         opposing = _opposing_strategy_holds(sym, direction, positions)
         if opposing is not None:
@@ -2551,12 +2578,13 @@ if __name__ == "__main__":
             # ASCII only — Windows' default console codepage (cp1252) can't
             # encode ▲/▼/±, which crashed this whole --status call with an
             # unhandled UnicodeEncodeError on a plain (non-UTF-8) console.
-            print(f"\nCurrency exposure (limit: +/-{MAX_CURRENCY_EXPOSURE}):")
+            limit = _max_currency_exposure()
+            print(f"\nCurrency exposure (limit: +/-{limit}):")
             for ccy, net in sorted(exposure.items(), key=lambda x: abs(x[1]), reverse=True):
                 if net == 0:
                     continue
                 bar   = ("+" * abs(net)) if net > 0 else ("-" * abs(net))
-                warn  = "  <- AT LIMIT" if abs(net) >= MAX_CURRENCY_EXPOSURE else ""
+                warn  = "  <- AT LIMIT" if abs(net) >= limit else ""
                 print(f"  {ccy}  {net:+d}  {bar}{warn}")
         sys.exit(0)
 
