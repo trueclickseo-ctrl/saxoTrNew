@@ -56,7 +56,7 @@ import saxo_order
 import pandas as pd
 import saxo_auth
 
-from forex.universe import PAIRS, ASSET_TYPE, get_pair, price_decimals as get_price_decimals, CORE_SYMBOLS
+from forex.universe import PAIRS, ASSET_TYPE, get_pair, price_decimals as get_price_decimals, CORE_SYMBOLS, EXOTIC_SYMBOLS
 import forex.strategy             as strat_ema
 import forex.strategy_rsi         as strat_rsi
 import forex.strategy_donchian    as strat_donchian
@@ -186,11 +186,21 @@ ACCOUNT_ENV = "sim"
 # documented here, so a mistaken invocation can't slip past it.
 LIVE_ALLOWED_STRATEGIES = {"donchian", "ema", "rsi"}
 
+# 2026-08-26: a SECOND, genuinely separate real-money account -- the EUR
+# sub-account under the same Saxo LIVE login (see _account()'s Currency
+# matching), isolated from the SEK account above with its own capital cap.
+# Explicit user request: test RSI Pullback, and ONLY RSI Pullback, on the
+# 83 EXOTIC pairs -- a focused single-strategy/single-tier experiment, not
+# an addition to the SEK account's existing CORE coverage (that would just
+# duplicate RSI's already-running core signals in a second account).
+LIVE_EUR_ALLOWED_STRATEGIES = {"rsi"}
+
 
 def set_account_env(env: str) -> None:
     """Switches every Saxo-facing constant in this module to the given
-    account ("sim" default, "live" for the real-money account). Must be
-    called exactly once, before any request/state-file access, from
+    account ("sim" default, "live" for the real-money SEK account,
+    "live_eur" for the real-money EUR sub-account added 2026-08-26). Must
+    be called exactly once, before any request/state-file access, from
     main()'s CLI dispatch -- never mid-run."""
     global BASE_URL, STATE_FILE, ORDERS_FILE, PEAK_EQUITY_FILE, ACCOUNT_ENV
     if env == "sim":
@@ -203,32 +213,53 @@ def set_account_env(env: str) -> None:
         STATE_FILE       = os.path.join(DATA_DIR, "forex_live_state.json")
         ORDERS_FILE      = os.path.join(DATA_DIR, "forex_live_orders.json")
         PEAK_EQUITY_FILE = os.path.join(DATA_DIR, "forex_live_peak_equity.json")
+    elif env == "live_eur":
+        # Same Saxo LIVE gateway/login/token as "live" -- it's the SAME
+        # OAuth app and account holder, just a different sub-account
+        # (Currency=="EUR" instead of "SEK", resolved in _account()).
+        # Genuinely separate state/orders/equity files so this experiment
+        # can never read or write the SEK account's tracking, and a crash
+        # in one can't corrupt the other's local state.
+        BASE_URL         = "https://gateway.saxobank.com/openapi"
+        STATE_FILE       = os.path.join(DATA_DIR, "forex_live_eur_state.json")
+        ORDERS_FILE      = os.path.join(DATA_DIR, "forex_live_eur_orders.json")
+        PEAK_EQUITY_FILE = os.path.join(DATA_DIR, "forex_live_eur_peak_equity.json")
     else:
-        raise ValueError(f"Unknown account env {env!r} -- expected 'sim' or 'live'.")
+        raise ValueError(f"Unknown account env {env!r} -- expected 'sim', 'live', or 'live_eur'.")
     ACCOUNT_ENV = env
 
 
 def _pnl_module() -> str:
     """pnl_tracker module name for the CURRENT account -- "forex_live" under
-    LIVE, "forex" under SIM (unchanged). Deliberately NOT added to
+    the SEK LIVE account, "forex_live_eur" under the EUR LIVE account
+    (2026-08-26), "forex" under SIM (unchanged). Deliberately NOT added to
     pnl_tracker.MODULES: that tuple drives get_summary()'s no-args grand
-    total, which sums every module together -- adding forex_live there
-    would silently blend real SEK P&L into the same total as SIM's demo
+    total, which sums every module together -- adding either LIVE module
+    there would silently blend real P&L into the same total as SIM's demo
     EUR/etf/futures credit. Every pnl_tracker function used here already
     takes `module` as a plain string with no validation against MODULES,
-    so calling it with "forex_live" explicitly works with zero pnl_tracker
-    changes, and it simply never appears in anything that doesn't ask for
-    it by name."""
-    return "forex_live" if ACCOUNT_ENV == "live" else "forex"
+    so calling it with these names explicitly works with zero pnl_tracker
+    changes, and neither ever appears in anything that doesn't ask for it
+    by name."""
+    if ACCOUNT_ENV == "live":
+        return "forex_live"
+    if ACCOUNT_ENV == "live_eur":
+        return "forex_live_eur"
+    return "forex"
 
 
 def _filter_pairs_for_account(pairs: list) -> list:
-    """Under the LIVE account, every pair scan is restricted to
-    CORE_SYMBOLS (34 pairs) -- no exotic pairs ever reach a live signal,
-    regardless of which strategy or session filter is also applied."""
-    if ACCOUNT_ENV != "live":
-        return pairs
-    return [p for p in pairs if p["symbol"] in CORE_SYMBOLS]
+    """Under the SEK LIVE account, restricted to CORE_SYMBOLS (34 pairs) --
+    no exotic pairs ever reach a live signal there. Under the EUR LIVE
+    account (2026-08-26), restricted the other way: EXOTIC_SYMBOLS (83
+    pairs) only -- that account exists specifically to test rsi on exotic,
+    nothing else, so it never even sees the core pairs the SEK account
+    already trades."""
+    if ACCOUNT_ENV == "live":
+        return [p for p in pairs if p["symbol"] in CORE_SYMBOLS]
+    if ACCOUNT_ENV == "live_eur":
+        return [p for p in pairs if p["symbol"] in EXOTIC_SYMBOLS]
+    return pairs
 
 
 # ── Portfolio risk limits ─────────────────────────────────────────────────────
@@ -519,8 +550,12 @@ def _risk_equity(raw_equity: float) -> float:
     """
     try:
         import atos.capital_config as _CAP
-        cap = (_CAP.forex_live_risk_equity_sek() if ACCOUNT_ENV == "live"
-               else _CAP.forex_risk_equity_eur())
+        if ACCOUNT_ENV == "live":
+            cap = _CAP.forex_live_risk_equity_sek()
+        elif ACCOUNT_ENV == "live_eur":
+            cap = _CAP.forex_live_eur_risk_equity_eur()
+        else:
+            cap = _CAP.forex_risk_equity_eur()
     except Exception as exc:
         logger.warning(f"Could not read forex risk equity cap: {exc}")
         return raw_equity
@@ -547,7 +582,7 @@ def _account() -> tuple[float, str]:
         info = _get("/port/v1/accounts/me")
         data = info.get("Data", info)
         accounts = data if isinstance(data, list) and data else ([data] if isinstance(data, dict) else [])
-        expected_ccy = {"live": "SEK"}.get(ACCOUNT_ENV)
+        expected_ccy = {"live": "SEK", "live_eur": "EUR"}.get(ACCOUNT_ENV)
         acct = None
         if expected_ccy:
             acct = next((a for a in accounts if isinstance(a, dict) and a.get("Currency") == expected_ccy), None)
@@ -2285,11 +2320,15 @@ if __name__ == "__main__":
                          "comma-separated list (e.g. donchian,ema,rsi). Choices: "
                          "ema, rsi, donchian, bb, pullback, gap, supertrend, "
                          "zscore, ml, cnn_lstm, london_breakout")
-    ap.add_argument("--account", default="sim", choices=["sim", "live"],
+    ap.add_argument("--account", default="sim", choices=["sim", "live", "live_eur"],
                     help="Which Saxo account to run against (default: sim). "
-                         "'live' is the real-money account -- restricted to "
+                         "'live' is the real-money SEK account -- restricted to "
                          "LIVE_ALLOWED_STRATEGIES and CORE_SYMBOLS only, and "
-                         "requires SAXO_LIVE_CONFIRMED=1 to place real orders.")
+                         "requires SAXO_LIVE_CONFIRMED=1 to place real orders. "
+                         "'live_eur' is the real-money EUR sub-account (added "
+                         "2026-08-26) -- restricted to LIVE_EUR_ALLOWED_STRATEGIES "
+                         "(rsi only) and EXOTIC_SYMBOLS only, requires "
+                         "SAXO_LIVE_EUR_CONFIRMED=1 to place real orders.")
     ap.add_argument("--status",   action="store_true",
                     help="Print open positions and exit")
     ap.add_argument("--scan",     action="store_true",
@@ -2335,11 +2374,35 @@ if __name__ == "__main__":
             )
         requested_strategies = effective_strats
 
+    if args.account == "live_eur":
+        # ── Hard rails for the EUR sub-account experiment (2026-08-26) ────
+        # Same two-gate pattern as the SEK account above, but with its OWN
+        # confirmation env var (SAXO_LIVE_EUR_CONFIRMED, not SAXO_LIVE_
+        # CONFIRMED) -- deliberately separate so already having the SEK
+        # account armed can never accidentally arm this one too. Each
+        # real-money account needs its own explicit opt-in.
+        effective_strats = requested_strategies or sorted(LIVE_EUR_ALLOWED_STRATEGIES)
+        not_allowed = [s for s in effective_strats if s not in LIVE_EUR_ALLOWED_STRATEGIES]
+        if not_allowed:
+            ap.error(f"--account live_eur only allows {sorted(LIVE_EUR_ALLOWED_STRATEGIES)} -- "
+                     f"got {not_allowed}. This is a hard restriction on the "
+                     "real-money EUR account, not a default.")
+        if args.live and os.environ.get("SAXO_LIVE_EUR_CONFIRMED") != "1":
+            ap.error(
+                "--account live_eur --live requires SAXO_LIVE_EUR_CONFIRMED=1 in "
+                "the environment as an explicit second confirmation before any "
+                "real order can be placed. This is deliberate -- set it only "
+                "on the machine/task you actually want placing real orders."
+            )
+        requested_strategies = effective_strats
+
     if args.info:
         info_pairs = _filter_pairs_for_account(PAIRS)
-        print(f"\nAccount: {ACCOUNT_ENV.upper()}"
-              + ("  (CORE pairs only -- Uics must be re-verified for LIVE, "
-                 "never assume SIM's numbers carry over)" if ACCOUNT_ENV == "live" else ""))
+        _info_note = {
+            "live":     "  (CORE pairs only -- Uics must be re-verified for LIVE, never assume SIM's numbers carry over)",
+            "live_eur": "  (EXOTIC pairs only -- Uics must be re-verified for LIVE, never assume SIM's numbers carry over)",
+        }.get(ACCOUNT_ENV, "")
+        print(f"\nAccount: {ACCOUNT_ENV.upper()}{_info_note}")
         print(f"\n{'Pair':<10} {'UIC':>6}  {'Bid':>10} {'Ask':>10}  Description")
         print("  " + "-" * 58)
         for pair in info_pairs:

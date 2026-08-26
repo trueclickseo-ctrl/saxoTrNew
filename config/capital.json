@@ -79,6 +79,22 @@
     "forex_live": {
       "enabled": true,
       "risk_equity_sek": 6000
+    },
+
+    "_forex_live_eur_comment": [
+      "2026-08-26: a SECOND real-money Saxo account -- the EUR sub-account under",
+      "the same LIVE login as forex_live above (see forex/runner.py _account()'s",
+      "Currency=='EUR' matching), genuinely separate state file",
+      "(data/forex_live_eur_state.json). Explicit user request: test RSI Pullback,",
+      "and ONLY RSI Pullback, on the 83 EXOTIC pairs -- isolated from the SEK",
+      "account's existing donchian/ema/rsi-on-CORE trading. The sub-account holds",
+      "900 EUR; user explicitly wants only 500 EUR of it used for sizing, not the",
+      "full balance. Enforced in forex/runner.py's LIVE_EUR_ALLOWED_STRATEGIES /",
+      "_filter_pairs_for_account(), not just here."
+    ],
+    "forex_live_eur": {
+      "enabled": true,
+      "risk_equity_eur": 500
     }
 
   }

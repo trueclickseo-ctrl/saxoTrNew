@@ -1317,6 +1317,15 @@ def get_tier(symbol: str) -> str:
     return "exotic"
 
 
+# Named constant for the 83-pair EXOTIC tier -- previously only ever computed
+# ad-hoc inline (e.g. forex_dashboard.py's `{p["symbol"] for p in PAIRS} -
+# CORE_SYMBOLS - SCANDI_SYMBOLS`). Added 2026-08-26 alongside forex/runner.py
+# needing a real, importable set to grant RSI Pullback LIVE access to this
+# tier (explicit user test) without duplicating the same set-difference
+# expression in a second file.
+EXOTIC_SYMBOLS = {p["symbol"] for p in PAIRS} - CORE_SYMBOLS - SCANDI_SYMBOLS
+
+
 # Lookup helpers
 _BY_SYMBOL = {p["symbol"]: p for p in PAIRS}
 _BY_UIC    = {p["uic"]:    p for p in PAIRS}

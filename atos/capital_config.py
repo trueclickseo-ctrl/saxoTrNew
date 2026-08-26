@@ -153,6 +153,21 @@ def forex_live_risk_equity_sek() -> float:
         return 6_000.0
 
 
+def forex_live_eur_risk_equity_eur() -> float:
+    """Equity base (EUR) that the real-money LIVE EUR sub-account sizes
+    RISK_PCT of per trade -- a genuinely separate cap from both SIM's
+    forex_risk_equity_eur() and the SEK LIVE account's forex_live_risk_
+    equity_sek(). Added 2026-08-26: explicit user request to test RSI
+    Pullback on the 83 EXOTIC pairs using only 500 of the 900 EUR
+    actually sitting in that sub-account -- isolated capital, isolated
+    risk, deliberately not mixed with the SEK account's existing trading.
+    """
+    try:
+        return float(_load()["strategies"]["forex_live_eur"]["risk_equity_eur"])
+    except Exception:
+        return 500.0
+
+
 def forex_lbo_capital_eur() -> float:
     """Dedicated day-trading capital (EUR) for the London Breakout book.
 

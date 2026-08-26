@@ -104,8 +104,17 @@ _ENV_CONFIG = {
 
 
 def _cfg(env: str) -> dict:
+    # "live_eur" (added 2026-08-26, forex/runner.py's EUR sub-account
+    # experiment) is the SAME Saxo LIVE login/app/OAuth token as "live" --
+    # only the trading sub-account (AccountKey) differs, resolved entirely
+    # in forex/runner.py's _account(), never here. Normalizing to "live"
+    # means one shared token file/refresh chain for both, not a second
+    # duplicate login -- there's only ever one real LIVE authentication.
+    if env == "live_eur":
+        env = "live"
     if env not in _ENV_CONFIG:
-        raise ValueError(f"Unknown Saxo env {env!r} -- expected 'sim' or 'live'.")
+        raise ValueError(f"Unknown Saxo env {env!r} -- expected 'sim' or 'live' "
+                         "(or 'live_eur', normalized to 'live').")
     cfg = dict(_ENV_CONFIG[env])
     if env == "sim":
         cfg["app_key"]    = os.environ.get("SAXO_APP_KEY", "60d308f45fc34cc2913ae5f3692a94ba")
