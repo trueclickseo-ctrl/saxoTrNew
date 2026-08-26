@@ -260,9 +260,28 @@ class FuturesAdapter(BaseAdapter):
         import futures.runner as r
         return r
 
+    # load()/save() read+write futures_state.json DIRECTLY rather than going
+    # through futures.runner._load_state()/_save_state() -- importing that
+    # module at all runs its top-level logging setup, which opens a
+    # logging.FileHandler on logs/futures_{today}.log. Found live 2026-08-26:
+    # reconcile_module("futures") is called from EVERY module's post-run
+    # safeguard pass (forex/etf/stocks) plus the standalone Safeguard task,
+    # so many separate processes were each importing futures.runner just to
+    # read a JSON file -- and a single stray long-running python process that
+    # had that FileHandler open (from an interactive session, never a normal
+    # pythonw/Task-Scheduler run) made EVERY one of those imports fail with
+    # "PermissionError: [Errno 13] Permission denied", crashing this
+    # module's reconciliation on every single run all day. Reading the state
+    # file directly (same shape ETFAdapter already uses) needs no logging
+    # setup at all, so it can't collide with anything holding that log file
+    # open. _import()/futures.runner is still used by replace_stop() below,
+    # which genuinely needs the authenticated Saxo client.
     def load(self) -> list[LocalPosition]:
-        r = self._import()
-        state = r._load_state()
+        import json
+        if not os.path.exists(FUTURES_STATE):
+            return []
+        with open(FUTURES_STATE) as f:
+            state = json.load(f)
         out = []
         for key, v in state.get("positions", {}).items():
             symbol = key.split(":", 1)[1] if ":" in key else key
@@ -275,19 +294,25 @@ class FuturesAdapter(BaseAdapter):
         return out
 
     def save(self, positions: list[LocalPosition], removed_keys: list[str]) -> None:
-        r = self._import()
-        state = r._load_state()
+        import json
+        if not os.path.exists(FUTURES_STATE):
+            return
+        with open(FUTURES_STATE) as f:
+            state = json.load(f)
         for key in removed_keys:
-            state["positions"].pop(key, None)
+            state.get("positions", {}).pop(key, None)
         for lp in positions:
-            entry = state["positions"].get(lp.key)
+            entry = state.get("positions", {}).get(lp.key)
             if entry is not None:
                 entry["quantity"] = lp.quantity
                 if lp.stop_order_id:
                     entry["stop_order_id"] = lp.stop_order_id
                 if lp.stop_price:
                     entry["stop_price"] = lp.stop_price
-        r._save_state(state)
+        tmp = FUTURES_STATE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(state, f, indent=2, default=str)
+        os.replace(tmp, FUTURES_STATE)
 
     def replace_stop(self, pos: LocalPosition, new_quantity: int, price: float) -> str | None:
         r = self._import()

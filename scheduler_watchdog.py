@@ -67,6 +67,15 @@ TASK_NEVER_RUN = 267011
 # but it WILL alert again after this window if still unresolved.
 REALERT_AFTER_HOURS = 4
 
+# Positive "still alive" confirmation email cadence -- separate concern from
+# REALERT_AFTER_HOURS above (which only throttles failure alerts). Added
+# 2026-08-26 at the user's explicit request: they had no email confirming
+# LIVE forex (or SIM ETF/Futures/Stocks) actually ran successfully, only
+# ever silence-when-fine or an alert-on-failure. 4h matches the existing
+# realert cadence -- frequent enough to notice a multi-hour outage, not so
+# frequent it's just a second alert stream.
+HEARTBEAT_EVERY_HOURS = 4
+
 # ── Registry: Windows Task Scheduler-backed tasks ────────────────────────────
 # name              -> (task_name_in_windows, log_file, grace_minutes, max_first_run_wait_hours)
 # grace_minutes: how long after LastRunTime the log is allowed to lag before
@@ -344,8 +353,14 @@ def _remediation(task_name: str) -> str:
 
 
 def _check_windows_task(name: str, task_name: str, log_file: str, grace_min: int,
-                        max_first_run_wait_hours: int = 30) -> str | None:
-    """Return a failure description (with a manual-fire remediation command), or None if healthy."""
+                        max_first_run_wait_hours: int = 30, info_out: dict | None = None) -> str | None:
+    """Return a failure description (with a manual-fire remediation command), or None if healthy.
+
+    info_out, if given, gets this task's raw _query_task_info() result stashed
+    under `name` whenever the query itself succeeded -- lets main() build the
+    periodic "still alive" heartbeat email (see _send_heartbeat) from the same
+    query this function already had to make, instead of re-querying Task
+    Scheduler a second time just to report status the caller already has."""
     if log_file == "engine_TODAY.log":
         today = datetime.now().strftime("%Y-%m-%d")
         log_file = f"engine_{today}.log"
@@ -358,6 +373,8 @@ def _check_windows_task(name: str, task_name: str, log_file: str, grace_min: int
         return f"task '{task_name}' not found in Windows Task Scheduler (was it renamed or removed?)"
     if "error" in info:
         return f"could not query '{task_name}': {info['error']}"
+    if info_out is not None:
+        info_out[name] = info
 
     last_run = info["last_run"]
     next_run = info.get("next_run")
@@ -545,6 +562,58 @@ check data/*.log and Task Scheduler directly for detail</div>
             print(f"  - {f}", file=sys.stderr)
 
 
+def _send_heartbeat(task_info: dict, unhealthy: list[str], label: str = "Scheduler Watchdog") -> None:
+    """Positive "still alive" confirmation -- separate from _send_alert, which
+    only ever fires on failure. Added 2026-08-26: the user has no way to tell
+    "silence because everything's fine" apart from "silence because an alert
+    got swallowed somewhere" -- explicitly asked for confirmation that LIVE
+    forex (and SIM ETF/Futures/Stocks) actually ran, not just failure alerts.
+    Sent on a fixed cadence (HEARTBEAT_EVERY_HOURS, tracked per state file so
+    the main and --only-forex watchdogs each keep their own schedule) rather
+    than every 30-min run, which would just be a second flavor of spam."""
+    if not os.path.exists(EMAIL_CFG):
+        return
+    with open(EMAIL_CFG) as f:
+        cfg = json.load(f)
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M PKT")
+    rows = ""
+    for name, info in sorted(task_info.items()):
+        ok = name not in unhealthy
+        color = "#2ea043" if ok else "#da3633"
+        status = "OK" if ok else "UNHEALTHY (see last alert)"
+        last_run_s = f"{info['last_run']:%Y-%m-%d %H:%M}" if info.get("last_run") else "never"
+        rows += (f"<li style='margin:4px 0'><span style='color:{color};font-weight:bold'>{status}</span>"
+                 f" &mdash; {name}  (last ran {last_run_s})</li>")
+
+    html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="font-family:-apple-system,sans-serif;background:#0d1117;color:#e6edf3;padding:20px">
+<div style="max-width:640px;margin:0 auto;background:#161b22;border-radius:10px;
+            border-top:3px solid #2ea043;padding:20px 24px">
+<h2 style="color:#3fb950;margin:0 0 12px">✓ {label} Heartbeat</h2>
+<div style="color:#8b949e;font-size:12px;margin-bottom:14px">{now} — {len(task_info)} task(s) checked,
+{len(unhealthy)} unhealthy</div>
+<ul style="padding-left:8px;font-size:13px;list-style:none">{rows}</ul>
+<hr style="border:none;border-top:1px solid #21262d;margin:16px 0">
+<div style="color:#484f58;font-size:11px">ATOS {label} · periodic confirmation the scans are actually
+running (not just silence-means-fine) · sent every {HEARTBEAT_EVERY_HOURS}h</div>
+</div></body></html>"""
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = f"[ATOS] {label} — heartbeat, {len(task_info) - len(unhealthy)}/{len(task_info)} healthy"
+        msg["From"]    = f"ATOS {label} <{cfg['sender_email']}>"
+        msg["To"]      = cfg["recipient_email"]
+        msg.attach(MIMEText(html, "html"))
+        with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as s:
+            s.starttls()
+            s.login(cfg["sender_email"], cfg["sender_password"])
+            s.sendmail(cfg["sender_email"], cfg["recipient_email"], msg.as_string())
+        print(f"[{label}] heartbeat email sent ({len(task_info) - len(unhealthy)}/{len(task_info)} healthy)")
+    except Exception as exc:
+        print(f"[{label}] HEARTBEAT EMAIL FAILED to send: {exc}", file=sys.stderr)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Verify scheduled trading tasks actually ran")
     ap.add_argument("--verbose", action="store_true", help="print status for every task, not just failures")
@@ -569,10 +638,11 @@ def main() -> None:
     alerted_at     = state.get("alerted_at", {})
     failures       = []   # new alerts to actually send this run
     unhealthy      = []   # every currently-failing task, regardless of dedup
+    task_info      = {}   # name -> raw _query_task_info() result, for the heartbeat email
     now_iso        = datetime.now().isoformat()
 
     for name, (task_name, log_file, grace, max_wait) in tasks.items():
-        result = _check_windows_task(name, task_name, log_file, grace, max_wait)
+        result = _check_windows_task(name, task_name, log_file, grace, max_wait, info_out=task_info)
         if args.verbose:
             print(f"[{'FAIL' if result else 'ok  '}] {name}: {result or 'healthy'}")
         if result:
@@ -600,10 +670,6 @@ def main() -> None:
             else:
                 alerted_at.pop(name, None)
 
-    state["alerted_at"]  = alerted_at
-    state["last_check"]  = now_iso
-    _save_state(state, state_file)
-
     label = "Forex Watchdog" if args.only_forex else "Scheduler Watchdog"
     if failures:
         _send_alert(failures, label)
@@ -613,6 +679,20 @@ def main() -> None:
                   f"within the last {REALERT_AFTER_HOURS}h, not re-sending: {', '.join(unhealthy)}")
     elif args.verbose:
         print(f"[{label}] all {len(tasks) + (0 if args.only_forex else len(CLAUDE_TASKS))} tasks healthy at {now_iso}")
+
+    # Heartbeat: positive confirmation the scans actually ran, independent of
+    # whether anything failed -- see _send_heartbeat's docstring. Due when
+    # never sent before, or HEARTBEAT_EVERY_HOURS have passed since the last one.
+    last_heartbeat = state.get("last_heartbeat")
+    heartbeat_due = (last_heartbeat is None or
+                     (datetime.now() - datetime.fromisoformat(last_heartbeat)) >= timedelta(hours=HEARTBEAT_EVERY_HOURS))
+    if heartbeat_due and task_info:
+        _send_heartbeat(task_info, unhealthy, label)
+        state["last_heartbeat"] = now_iso
+
+    state["alerted_at"]  = alerted_at
+    state["last_check"]  = now_iso
+    _save_state(state, state_file)
 
 
 if __name__ == "__main__":

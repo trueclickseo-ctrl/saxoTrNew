@@ -41,10 +41,12 @@ something to do.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import smtplib
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -71,6 +73,36 @@ DEFAULT_STOP_PCT = {
     "CfdOnStock":      0.08,
 }
 _DEFAULT_FALLBACK_PCT = 0.03
+
+# Alert dedup: some findings (e.g. a naked position safeguard genuinely
+# cannot fix, like a SIM-quote-restricted instrument with no price to base a
+# stop on) recur identically on every single run of every module that calls
+# run_safeguard() -- multiple times an hour across forex/futures/etf/stocks.
+# Found live 2026-08-26: one stuck ZC orphan (no CurrentPrice available under
+# Saxo SIM's standing quote restriction for that instrument, same class as
+# SI) meant _send_safeguard_email() fired on every run indefinitely, drowning
+# out genuinely new findings. Same REALERT_AFTER_HOURS convention as
+# scheduler_watchdog.py -- suppress re-emailing the SAME (category, module,
+# symbol, action, fixed) fingerprint within this window, but always email
+# immediately the first time a finding appears or its fixed status changes.
+REALERT_AFTER_HOURS = 4
+_ALERT_STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "safeguard_alert_state.json")
+
+
+def _load_alert_state() -> dict:
+    try:
+        with open(_ALERT_STATE_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_alert_state(state: dict) -> None:
+    os.makedirs(os.path.dirname(_ALERT_STATE_PATH), exist_ok=True)
+    tmp = _ALERT_STATE_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2)
+    os.replace(tmp, _ALERT_STATE_PATH)
 
 
 @dataclass
@@ -254,8 +286,33 @@ def run_safeguard(modules: list[str] | None = None) -> list[FixOutcome]:
         logger.info(f"[safeguard] {'FIXED' if o.fixed else 'NOT FIXED'} "
                     f"{o.category}/{o.module}/{o.symbol} ({o.action}): {o.detail}")
 
-    _send_safeguard_email(outcomes)
+    to_email = _dedup_for_email(outcomes)
+    if to_email:
+        _send_safeguard_email(to_email)
+    else:
+        logger.info(f"[safeguard] {len(outcomes)} outcome(s), all already reported "
+                    f"within the last {REALERT_AFTER_HOURS}h — not re-emailing")
     return outcomes
+
+
+def _dedup_for_email(outcomes: list[FixOutcome]) -> list[FixOutcome]:
+    """Drop outcomes already emailed recently with the same fixed status —
+    see REALERT_AFTER_HOURS above. A finding that's new, or whose fixed
+    status flipped since last time, is always kept."""
+    state = _load_alert_state()
+    now = datetime.now()
+    to_email = []
+    for o in outcomes:
+        key = f"{o.category}|{o.module}|{o.symbol}|{o.action}"
+        prev = state.get(key)
+        if prev and prev.get("fixed") == o.fixed:
+            last = datetime.fromisoformat(prev["at"])
+            if now - last < timedelta(hours=REALERT_AFTER_HOURS):
+                continue  # unchanged and recently reported — suppress
+        to_email.append(o)
+        state[key] = {"fixed": o.fixed, "at": now.isoformat()}
+    _save_alert_state(state)
+    return to_email
 
 
 # ── Email ───────────────────────────────────────────────────────────────
