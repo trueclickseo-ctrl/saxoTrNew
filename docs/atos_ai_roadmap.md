@@ -40,6 +40,50 @@ These came out of the 2026-08-26 discussion and should gate every AI feature bui
 3. **AI proposes, the backtester verifies — never AI proposes straight to LIVE.** A model finding ("ORB performs best when ATR percentile > 63 AND ADX > 24") is a hypothesis to backtest, not an instruction to trade on. This mirrors the standing rule already in this codebase (see `feedback_no_core_logic_changes` memory) and the `cnn_lstm` lesson below.
 4. **Every item ships to SIM first, on both accounts' worth of history, before it's allowed to influence a LIVE order.** No exceptions, regardless of how confident a model looks in backtest.
 5. **Model promotion needs to pass predefined statistical and risk gates**, not just "look better once." A candidate model replaces the current one only after clearing walk-forward validation and paper trading, evaluated head-to-head against what's already running — see item #20 (AI Model Evolution) for the full pipeline.
+6. **The system must degrade safely if the AI is unavailable.** If an LLM API is down or a model fails to load, ATOS keeps running — either skip new entries or fall back to the deterministic strategy alone. The trading system is never *dependent* on an AI service being reachable.
+
+### The single most important architectural change (user's framing, 2026-08-26)
+
+Current shape: **"If it finds a signal → place order."** That's `AI → Saxo → BUY` in one hop — too simplistic and too risky to build AI into directly.
+
+Target shape: **"If it finds a signal → create a candidate → AI evaluates the candidate → ATOS Risk Engine validates → execute only if approved."** This single change is what turns ATOS from a rule-based bot into a hybrid quantitative + AI decision system, and it's the one to get right before any individual AI feature matters. Concretely:
+
+```
+Every 45 min                          Every 45 min (target shape)
+     ↓                                       ↓
+   Scan                              Market Scanner
+     ↓                                       ↓
+  Signal                            Strategy Engine
+     ↓                                       ↓
+  Order                            Candidate Signals
+                                             ↓
+                                        AI Agent
+                                             ↓
+                                        AI Score
+                                             ↓
+                                     Portfolio Risk
+                                             ↓
+                                   ATOS Risk Engine
+                                             ↓
+                                   APPROVE / REJECT
+                                             ↓
+                                        Execution
+                                             ↓
+                                          Saxo
+                                             ↓
+                                  SL + Profit Secure
+```
+The 45-min cadence itself doesn't need to change on day one — this is purely about inserting a candidate/evaluation step before execution, not a scheduling change. Later, cadence can become adaptive: normal market → scan every 45 min, high volatility → scan every 10 min, an open position → monitor continuously, major news → re-evaluate immediately, a stop/profit event → trigger an AI re-evaluation. Saxo's OpenAPI supports WebSocket streaming for quotes/positions/orders/balances, which is what would make continuous/event-driven monitoring practical instead of polling on a timer — not implemented anywhere in this codebase yet, worth verifying the exact streaming contract against Saxo's real docs before building on it.
+
+### The AI "Trade Constitution" — hard rules, not suggestions
+
+Expands governance principle #2 above into an explicit, enumerable rule set every agent must respect:
+
+**AI MUST NEVER:** exceed ATOS's maximum configured risk · bypass the stop-loss · bypass portfolio risk checks · trade outside the allowed instrument/pair list for that account · increase a position for emotional/"revenge trade" reasons · override the emergency kill switch · place an order directly (only ATOS's execution layer talks to Saxo).
+
+**AI MAY:** approve · reject · rank opportunities against each other · reduce position size · suggest an entry timing adjustment · suggest a stop adjustment · suggest a partial/full exit · classify the market regime · analyze news/sentiment · analyze historical performance.
+
+Flow: `AI recommendation → ATOS validates → Risk Engine validates → Execution Engine → Saxo`. Every arrow is a real, separate checkpoint — never collapsed into one step.
 
 ### The overall architecture (target shape, not built yet)
 
@@ -93,6 +137,161 @@ These came out of the 2026-08-26 discussion and should gate every AI feature bui
 
 Note on data plumbing: Saxo's streaming architecture (WebSocket subscriptions for quotes/positions/orders/balances) is well suited to this once built — ATOS could receive live updates rather than polling the REST API repeatedly, which several of these features (especially Open Position AI and Anomaly Detection) would benefit from running continuously. Not implemented anywhere in this codebase yet — everything today is poll-based (`_get`/`_fetch_history` on a schedule).
 
+### Alternate view of the same idea: the 5-layer stack (user's framing, 2026-08-26)
+
+Same principle as the diagram above, drawn as explicit layers with the AI's own internal responsibilities broken out:
+
+```
+┌─────────────────────────────┐
+│        AI TRADE AGENT       │
+│                             │
+│  Market Regime              │
+│  Signal Quality             │
+│  News/Sentiment             │
+│  Risk Assessment            │
+│  Trade Ranking              │
+│  Position Management        │
+└──────────────┬──────────────┘
+               │
+       AI Decision: BUY / SELL / SKIP + confidence
+               │
+               ▼
+┌────────────────────────────────────┐
+│        ATOS DECISION ENGINE        │
+│  Signal validation                 │
+│  Strategy confirmation             │
+│  Position sizing                   │
+│  Portfolio exposure                │
+│  Risk limits                       │
+└────────────────┬───────────────────┘
+                 │
+                 ▼
+┌────────────────────────────────────┐
+│          ATOS EXECUTION            │
+│  Order creation                    │
+│  Stop Loss                         │
+│  Take Profit                       │
+│  Profit Secure / Trailing          │
+│  Order monitoring                  │
+└────────────────┬───────────────────┘
+                 │
+                 ▼
+        ┌──────────────────┐
+        │   SAXO OPEN API  │
+        │      SIM/LIVE    │
+        └──────────────────┘
+```
+The key property both diagrams share: the AI's output is a *decision with a confidence score*, not an order — the Decision Engine and Risk Engine are separate, deterministic checkpoints the AI's output must pass through before anything reaches Saxo.
+
+### Hybrid AI brain — don't rely on one AI technique for everything
+
+Explicit recommendation: don't build `ATOS → single LLM call → BUY/SELL` as the core intelligence. Different techniques are good at different sub-problems:
+
+```
+                 AI BRAIN
+                    │
+        ┌───────────┼────────────┐
+        │           │            │
+        ▼           ▼            ▼
+    ML Model     LLM Agent    Statistical
+    Scoring      Reasoning     Models
+        │           │            │
+        └───────────┼────────────┘
+                    ▼
+              AI Decision
+                    │
+                    ▼
+              ATOS Risk Engine
+                    │
+                    ▼
+                 Saxo
+```
+- **ML models** (XGBoost/LightGBM/Random Forest/PyTorch/scikit-learn) — probability, classification, signal scoring, regime detection, expected return, volatility, trade-outcome prediction. Numerical prediction problems.
+- **LLM** — interpreting news, explaining a decision in plain language, synthesizing multiple structured signals into one narrative, spotting an unusual situation a rule wouldn't catch, generating trade reasoning, conversing with the user (e.g. the AI Trading Journal).
+- **Statistical models** — volatility, correlations, drawdown, expected value, portfolio exposure, risk — the things that are genuinely just math, not prediction.
+
+Tooling note: since ATOS is already Python, keep the whole AI layer in Python too — local ML (scikit-learn/XGBoost/PyTorch etc.) for the numerical side, a local LLM (this codebase has prior experience with local coding models) for news/explanation/reasoning where keeping inference on-machine matters, and a cloud LLM only where the extra reasoning quality is worth the external dependency — governed by principle #6 above (AI unavailable must never mean ATOS stops trading safely).
+
+### Multi-agent architecture — 6 agents + 1 supervisor
+
+Rather than one monolithic "AI trader," decompose into named agents with clear inputs/outputs:
+
+1. **Market Analyst** — "what is happening in the market?" Outputs: regime, trend, volatility, momentum, liquidity, macro context.
+2. **Signal Analyst** — "is ATOS's signal actually good?" Outputs: signal score, expected probability, expected R, confidence.
+3. **News Agent** — "is there anything that could invalidate this setup?" Outputs: news risk, event risk, sentiment, potential volatility.
+4. **Portfolio Risk Agent** — "does this make sense with everything already open?" Outputs: correlation, exposure, concentration, risk, recommended size.
+5. **Trade Manager** — for open positions: KEEP / TIGHTEN STOP / TAKE PROFIT / PARTIAL EXIT / EXIT.
+6. **Learning Agent** — after every trade: prediction vs. actual, signal quality, AI confidence, strategy performance, regime, mistakes. This is the feedback loop.
+
+```
+                 AI SUPERVISOR
+                       │
+        ┌──────────────┼──────────────┐
+        ▼              ▼              ▼
+ Market Agent    Signal Agent    News Agent
+        │              │              │
+        └──────────────┼──────────────┘
+                       ▼
+                Portfolio Agent
+                       │
+                       ▼
+                  FINAL DECISION
+                       │
+                       ▼
+                  ATOS RISK ENGINE
+                       │
+                       ▼
+                    SAXO
+```
+The Supervisor's job is to combine structured outputs from the other agents, not to "think" independently — it's a merge/aggregation step, not its own source of judgment.
+
+### Trade memory — what to log for the learning loop to actually work
+
+For the Learning Agent (and #18 AI Trading Journal, and #19 Strategy Discovery) to be useful, every trade needs a rich record, not just entry/exit price: trade ID, instrument, strategy, direction, entry, stop, target, market regime at entry, indicator values, AI score, AI decision, position size, news conditions at entry, result, MAE (max adverse excursion), MFE (max favorable excursion), exit reason, R-multiple. After enough trades accumulate (the user's benchmark: ~1,000), this becomes a real dataset an AI can mine for patterns like "ORB works 09:00-11:00 with ADX>25 and above-average volume, but poorly on low-volatility Friday afternoons." `pnl_tracker`/`trade_logger` already capture the trade-outcome half of this; the regime/indicator/AI-score half doesn't exist yet and would need adding alongside whichever AI feature first needs it (naturally, Market Regime Detection first).
+
+### Proposed code layout (once building starts)
+
+```
+ATOS/
+├── atos/
+├── strategies/
+├── risk/
+├── execution/
+├── broker/
+├── market/
+├── ai/
+│   ├── agent/
+│   ├── models/
+│   ├── features/
+│   ├── regime/
+│   ├── scoring/
+│   ├── news/
+│   ├── portfolio/
+│   ├── trade_manager/
+│   └── supervisor/
+├── data/
+├── backtest/
+├── reports/
+└── tests/
+```
+Doesn't need to match this codebase's actual current layout exactly (this repo's real structure is flatter — `forex/`, `futures/`, `atos/`, top-level dashboards/schedulers) — captured here as the *shape* of separation to aim for (an `ai/` package with its own agent/model/feature/regime/scoring/news/portfolio/trade_manager/supervisor submodules) rather than a literal directory-for-directory migration plan.
+
+### Validating the AI (expands the existing "AI proposes, backtester verifies" principle)
+
+Before any AI-influenced decision reaches LIVE, run a real A/B comparison, not just "does the new version look good":
+
+- **Version A**: ATOS without AI (current, exactly as it runs today)
+- **Version B**: ATOS + AI (candidate)
+- **Compare**: net return, Sharpe, Sortino, max drawdown, profit factor, win rate, average R, expectancy, number of trades, false-signal rate, risk-adjusted return.
+
+The AI has to earn its place — a higher return alone isn't sufficient justification, and a flat-or-lower return isn't automatically disqualifying either:
+- If `ATOS = +32%` and `ATOS+AI = +27%` → the AI made the system worse. Reject.
+- If `ATOS = +32%` and `ATOS+AI = +34%` but max drawdown drops from 18% to 9% → the AI may be extremely valuable even without a dramatic return improvement, because it materially reduced risk for a similar/better outcome.
+
+### Saxo capabilities referenced in this discussion (verify against real Saxo OpenAPI docs before relying on them)
+
+Three specific capabilities were mentioned as available on Saxo's platform, not yet verified against this codebase's actual `saxo_client.py`/API usage: **order precheck** (an endpoint that returns estimated trading costs without actually placing the order — would let ATOS validate a candidate order before submission), **trailing-stop order type** support (relevant to AI Take-Profit/Stop-Loss Intelligence and Trade Manager's "TIGHTEN STOP" action), and **WebSocket streaming** for quotes/positions/orders/balances (already noted above). None of these are used anywhere in this codebase today — confirm the exact endpoint/contract against Saxo's live OpenAPI reference before designing a feature around any of them.
+
 ---
 
 ## Detailed feature specs (worked examples, user's notes 2026-08-26)
@@ -125,6 +324,19 @@ Market regime          91
 AI SCORE               89/100
 ```
 Bands: 90–100 Excellent · 80–89 Strong · 70–79 Acceptable · 60–69 Weak · <60 Reject.
+
+**Extension worth building alongside this (user's notes, 2026-08-26): rank ALL simultaneous opportunities against each other, don't just score each one in isolation.** If a scan finds 7 candidate signals across different instruments but there's only risk budget for 3, the useful question isn't "does each pass the bar" — it's "which 3 have the best risk-adjusted opportunity right now":
+```
+AI OPPORTUNITY RANKING
+1. XAUUSD     91/100   ███████████████████
+2. EURUSD     87/100   █████████████████
+3. SP500      82/100   ████████████████
+4. USDJPY     77/100   ███████████████
+5. AAPL       71/100   █████████████
+6. GBPUSD     64/100   ███████████
+7. NASDAQ     58/100   █████████
+```
+This turns the scoring layer into a portfolio-wide allocation decision, not just a per-trade pass/fail gate — relevant to both #2 (this item) and #17 (Portfolio Optimization) below.
 
 ### 3. 🤖 AI Strategy Selector
 Given the current regime, recommends which of the available strategies should be active rather than running all of them uniformly:
@@ -311,6 +523,8 @@ Periodically evaluate "current model vs candidate model" and only promote the ca
 Then news/sentiment (#14/#15) and strategy discovery (#19) after those ten.
 
 **Claude's earlier quick-start suggestion** (Market Regime → AI Trading Journal → Trade Management/Exit Optimization) agrees with the user's list on item #1 and includes #10/#16 earlier than the user's ordering — worth revisiting on Friday whether to interleave the Trading Journal earlier since it's the cheapest of all ten to ship (no model training needed, pure summarization over existing logged data), while the others build up real feature/scoring infrastructure in sequence.
+
+**A THIRD sequence, from the same 2026-08-26 discussion, puts Signal Scoring before Regime Detection** — flagging this honestly rather than silently picking one: "Phase 1 — AI Signal Scoring... this is the safest starting point," then Phase 2 Market Regime, Phase 3 AI Position Sizing, Phase 4 Portfolio Intelligence, Phase 5 News Intelligence, Phase 6 AI Position Management, Phase 7 Learning System, Phase 8 AI Supervisor (combining everything into one decision engine). This reverses #1/#2's order relative to the "ATOS v1 AI" list two paragraphs up. **Resolve this on Friday before writing code** — both orderings are defensible (regime-first because everything else can condition on it; scoring-first because it's the single safest, smallest-blast-radius change to ship into the existing pipeline) but they're genuinely different sequences, not the same list phrased differently.
 
 **Testing discipline**: every item tested on SIM first, same standing rule already applied to every strategy/pair change in this codebase (see `feedback_no_core_logic_changes` memory) — nothing here touches either LIVE account until proven on SIM, and per the governance principles above, no model goes live without walk-forward validation and paper trading first regardless of backtest results.
 
