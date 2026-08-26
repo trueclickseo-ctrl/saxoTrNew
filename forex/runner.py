@@ -907,6 +907,61 @@ def _live_price(uic: int, account_key: str) -> float | None:
         return None
 
 
+# 2026-08-26: minimum expected-edge-to-cost ratio a signal must clear before
+# it's allowed to open a position. Root-caused the live_eur account's first
+# closed trade (EURPLN, RSI Pullback): confirmed live via Saxo's own
+# /trade/v1/infoprices Commissions field that Saxo charges a FLAT ~5.15 EUR
+# round-trip commission per 1,000-unit FX trade -- the SAME ~5.15 EUR
+# regardless of pair (EURUSD, GBPUSD, EURPLN, USDTRY, EURHUF all converted to
+# within a few cents of each other). This is NOT an exotic-pair problem --
+# it's a position-size-vs-flat-cost problem on ANY pair whose position is
+# floored at the 1,000-unit minimum. That trade's target implied ~223 pips
+# needed just to break even and only captured 167 -- a real, right-direction
+# trade that was still a guaranteed-thin-or-negative bet before it opened,
+# because nothing checked whether the position's own economics could clear
+# this flat cost. 3x is deliberately conservative -- it isn't tuned yet,
+# see docs/atos_ai_implementation_plan.md-style backtest-before-trust
+# discipline: validate against SIM history before this gates anything LIVE.
+MIN_EDGE_TO_COST_RATIO = 3.0
+
+
+_COMMISSION_CACHE: dict[tuple[int, float], float] = {}
+
+
+def _round_trip_cost_quote_ccy(uic: int, qty: float, account_key: str) -> float | None:
+    """Live-quoted, position-size-aware estimate of this trade's total round-
+    trip commission, in the pair's own quote currency -- straight from
+    Saxo's own /trade/v1/infoprices Commissions field (CostBuy/CostSell,
+    each already an entry-or-exit-side figure for this exact Amount), not a
+    guessed/hardcoded number. Returns None if the lookup fails -- callers
+    must treat that as "unknown," never silently assume zero cost.
+
+    Cached per (uic, qty) for the lifetime of this process (same pattern as
+    _QUOTE_RATE_CACHE above) -- unlike price, Saxo's commission schedule
+    doesn't move intra-run, so re-querying it for every candidate signal on
+    the same pair/size within one scan is pure wasted latency, not freshness.
+    """
+    cache_key = (uic, qty)
+    if cache_key in _COMMISSION_CACHE:
+        return _COMMISSION_CACHE[cache_key]
+    try:
+        params = {"Uic": uic, "AssetType": ASSET_TYPE, "Amount": qty,
+                  "FieldGroups": "Commissions"}
+        if account_key:
+            params["AccountKey"] = account_key
+        resp = _get("/trade/v1/infoprices", params)
+        comm = resp.get("Commissions", {})
+        cost_buy = comm.get("CostBuy")
+        if cost_buy is None:
+            return None
+        cost = float(cost_buy) * 2   # one side each for entry + exit
+        _COMMISSION_CACHE[cache_key] = cost
+        return cost
+    except Exception as exc:
+        logger.warning(f"Commission lookup failed for UIC {uic}: {exc}")
+        return None
+
+
 # ── State ─────────────────────────────────────────────────────────────────────
 
 def _load_state() -> dict:
@@ -1750,6 +1805,22 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         # its own stop distance, so it's protected on both sides at the
         # broker from the moment it's opened (see DEFAULT_TP_RR docstring).
         tp = _resolve_tp_price(sig, direction)
+
+        # Cost-clearance gate (2026-08-26): skip trades whose own target
+        # can't plausibly clear Saxo's real round-trip commission by a
+        # healthy margin -- see MIN_EDGE_TO_COST_RATIO's docstring for the
+        # incident this closes. A None cost (lookup failed) does NOT block
+        # the entry -- treat "unknown" as "don't block", same as the spread
+        # check above, rather than let a transient API hiccup halt trading.
+        expected_target_profit = abs(tp - sig["close"]) * qty
+        round_trip_cost = _round_trip_cost_quote_ccy(uic, qty, akey)
+        if round_trip_cost is not None and expected_target_profit < round_trip_cost * MIN_EDGE_TO_COST_RATIO:
+            logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] "
+                        f"— target profit {expected_target_profit:.2f} doesn't clear "
+                        f"{MIN_EDGE_TO_COST_RATIO}x round-trip cost ({round_trip_cost:.2f}) "
+                        f"at {qty:,} units — too small to be worth the fixed commission")
+            continue
+
         if dry_run:
             logger.info(f"  [DRY] {direction:<4} {qty:,}x {sym}[{tag}] "
                         f"({strat_name})  @ {sig['close']:.5f}  "
