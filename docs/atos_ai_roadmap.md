@@ -294,6 +294,92 @@ Three specific capabilities were mentioned as available on Saxo's platform, not 
 
 ---
 
+## Third contribution: concrete v1 scope, autonomy levels, rollout plan (2026-08-26)
+
+### v1 mandate — pick a narrow role, don't hand the agent everything at once
+
+Three candidate roles for the very first version, deliberately narrow:
+
+| Role | Label | What it does |
+|---|---|---|
+| Signal filter | Approve / reject | Reviews each signal ATOS's strategies find and decides trade-or-skip using broader context (regime, news, volatility) |
+| Position sizing advisor | Size / reduce | ATOS says BUY; the agent suggests how much to risk (e.g. scale down in high volatility) |
+| Risk overlay | Tighten / relax risk | Adjusts stop-loss distance, take-profit logic, or declares "no new trades" in stressed markets |
+
+**User's own choice for v1: Signal filter + Position sizing advisor.** Risk overlay comes later.
+
+**Open question, not yet resolved** (from the same discussion, worth settling explicitly on Friday): does "position sizing" in v1 mean *only* a size multiplier on the existing fixed stop/TP, or does it also extend to adjusting SL/TP dynamically (e.g. widening a stop ahead of a known news event)? The scope answer changes how much of the existing deterministic risk logic gets touched — decide this before writing code, don't let it default silently.
+
+### Trade proposal schema (concrete, ready to use as a starting point)
+
+The shape ATOS's scan would emit instead of going straight to Saxo:
+```json
+{
+  "symbol": "EURUSD",
+  "side": "BUY",
+  "entry_price": 1.0850,
+  "stop_loss": 1.0820,
+  "take_profit": 1.0910,
+  "timeframe": "M15",
+  "strategy_name": "MA_CROSS",
+  "signal_strength": 0.78,
+  "account_equity": 25000,
+  "open_positions": [
+    {"symbol": "EURUSD", "side": "SELL", "size": 0.5}
+  ],
+  "volatility_atr": 0.0009
+}
+```
+And the structured decision the agent returns:
+```json
+{
+  "action": "APPROVE",
+  "size_multiplier": 0.7,
+  "adjusted_stop_loss": null,
+  "adjusted_take_profit": null,
+  "comment": "Trend is up, volatility moderate, but existing short EURUSD position suggests reducing size."
+}
+```
+`action` is one of `APPROVE` / `REJECT` / `MODIFY`. On `APPROVE`, ATOS sends the order with the adjusted size/risk; on `REJECT`, ATOS logs the reason and places nothing; on `MODIFY`, ATOS applies the changes then places the order. This maps directly onto this codebase's existing pattern of a strategy signal dict flowing into `_run_entries()` — the AI step would sit between signal generation and `saxo_order.place_with_stop()`, not replace either.
+
+### Genuine architectural tension: single agent vs. the 6-agent design (flag for Friday, don't silently resolve)
+
+The second contribution (previous section of this doc) recommended a 6-agent + Supervisor design from day one. This third contribution recommends the opposite starting point: **a single "Trading Copilot" agent** (reads the trade proposal, checks market context, decides approve/size/skip, produces a short explanation for logging) — "don't start [with multi-agent] — start with one agent and a clean JSON interface." The multi-agent split (Analyst / Decision / Risk / Execution agents) is explicitly framed as a *later* evolution once the single-agent version is proven, not a v1 target. **These are contradictory starting points from the same planning discussion — resolve explicitly on Friday rather than defaulting to either.**
+
+### Autonomy levels — recommended staging
+
+1. **Shadow mode** (precedes all 3 levels below): the agent evaluates every real signal but influences nothing — ATOS trades exactly as it does today, the agent's decision is only logged next to the actual outcome. Run for a few weeks; compare "what would the agent have done" against what actually happened before trusting it with anything real.
+2. **Level 1 — Advisory only**: agent gives a recommendation, a human approves or rejects manually. No automatic effect on order flow.
+3. **Level 2 — Semi-autonomous** (recommended starting point once shadow mode looks good): the agent can skip or resize a trade automatically, but can never exceed the fixed risk limits already enforced in code. This is the level actually being recommended for "v1 active," not shadow mode itself.
+4. **Level 3 — Fully autonomous** (explicitly much later, after strong testing): agent could also pause a strategy or change its own parameters. Not in scope for any near-term work.
+
+### Implementation shape referenced (not yet decided)
+
+A microservice pattern was proposed: a small separate Python/FastAPI (or Node) service exposing a single `/evaluate_trade` endpoint that ATOS calls once per candidate signal, which internally calls the LLM and returns the structured decision JSON above. This is a real architectural choice to make deliberately — a separate service vs. an in-process function call inside `forex/runner.py` — rather than something to default into. Given the 45-minute (or faster, event-driven) cadence isn't latency-sensitive, either shape is timing-wise fine; the tradeoff is operational (a service to deploy/monitor/keep alive vs. one more Python import) not a performance one. A draft system-prompt starting point was also provided:
+```
+You are a trading decision AI.
+You NEVER place orders.
+You ONLY evaluate trade proposals from the ATOS quant bot.
+
+Your job:
+- Approve or reject trades
+- Adjust position size
+- Adjust SL/TP if needed
+- Consider volatility, trend, sentiment, open positions, risk limits
+
+Output ONLY valid JSON:
+{
+  "action": "APPROVE | REJECT | MODIFY",
+  "size_multiplier": number,
+  "adjusted_stop_loss": number or null,
+  "adjusted_take_profit": number or null,
+  "comment": "short explanation"
+}
+```
+Tool-use/function-calling (Claude's native capability) was suggested as the mechanism for the context-gathering step specifically — giving the agent tool access to a news/search API, current open positions, and recent trade history, rather than stuffing all of that into the prompt statically every call.
+
+---
+
 ## Detailed feature specs (worked examples, user's notes 2026-08-26)
 
 ### 1. 🧠 Market Regime Detection
@@ -523,6 +609,8 @@ Periodically evaluate "current model vs candidate model" and only promote the ca
 Then news/sentiment (#14/#15) and strategy discovery (#19) after those ten.
 
 **Claude's earlier quick-start suggestion** (Market Regime → AI Trading Journal → Trade Management/Exit Optimization) agrees with the user's list on item #1 and includes #10/#16 earlier than the user's ordering — worth revisiting on Friday whether to interleave the Trading Journal earlier since it's the cheapest of all ten to ship (no model training needed, pure summarization over existing logged data), while the others build up real feature/scoring infrastructure in sequence.
+
+**A separate, more concrete v1 scope decision exists too** (see "Third contribution" section above): user chose **Signal filter + Position sizing advisor** as the actual v1 mandate — narrower than any of the ranked feature lists below, and framed around agent *role* (approve/reject, resize) rather than feature *category*. This may be the real starting point regardless of which feature-priority ordering below is chosen — worth reconciling all of these into one plan on Friday rather than picking a list in isolation.
 
 **A THIRD sequence, from the same 2026-08-26 discussion, puts Signal Scoring before Regime Detection** — flagging this honestly rather than silently picking one: "Phase 1 — AI Signal Scoring... this is the safest starting point," then Phase 2 Market Regime, Phase 3 AI Position Sizing, Phase 4 Portfolio Intelligence, Phase 5 News Intelligence, Phase 6 AI Position Management, Phase 7 Learning System, Phase 8 AI Supervisor (combining everything into one decision engine). This reverses #1/#2's order relative to the "ATOS v1 AI" list two paragraphs up. **Resolve this on Friday before writing code** — both orderings are defensible (regime-first because everything else can condition on it; scoring-first because it's the single safest, smallest-blast-radius change to ship into the existing pipeline) but they're genuinely different sequences, not the same list phrased differently.
 
