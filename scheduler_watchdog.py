@@ -105,7 +105,11 @@ WINDOWS_TASKS = {
     "Forex Daily Run":        ("ATOS Forex Daily Run",        "forex_scheduler.log",   20, 30),
     "Forex Exit Check":       ("ATOS Forex Exit Check",       "forex_scheduler.log",   20, 30),
     "Forex London Run":       ("ATOS Forex London Run",       "forex_scheduler.log",   20, 30),
-    "Forex Gap London":       ("ATOS Forex Gap London",       "forex_scheduler.log",   20, 78),
+    # task_name repointed 2026-08-26: "ATOS Forex Gap London" was a disabled,
+    # superseded duplicate of "ATOS Forex Gap London Fixed" -- deleted during
+    # the same-day scheduled-task cleanup. This registry entry watches the
+    # surviving real task now.
+    "Forex Gap London":       ("ATOS Forex Gap London Fixed", "forex_scheduler.log",   20, 78),
     "Forex Gap NewYork":      ("ATOS Forex Gap NewYork",      "forex_scheduler.log",   20, 78),
     "Forex Gap Monday Early": ("ATOS Forex Gap Monday Early", "forex_scheduler.log",   20, 174),
     "Forex Gap Fill":         ("ATOS Forex Gap Fill",         "forex_scheduler.log",   20, 174),
