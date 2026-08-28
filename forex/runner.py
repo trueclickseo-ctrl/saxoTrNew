@@ -377,26 +377,35 @@ def _pnl_module() -> str:
 
 def _filter_pairs_for_account(pairs: list) -> list:
     """2026-08-28 two-account LIVE design: SEK LIVE (bb) and EUR LIVE (rsi)
-    both trade the SAME full 17-pair HIGH_VOLUME_SYMBOLS universe (narrowed
+    both traded the SAME full 17-pair HIGH_VOLUME_SYMBOLS universe (narrowed
     from all 34 CORE_SYMBOLS on 2026-08-27) -- explicit user decision, "I
     want to test both strategies BB and RSI ... on 17 Pairs". No exotic
-    pairs on either LIVE account any longer.
+    pairs on either LIVE account.
 
-    Sharing the same 17 pairs across two accounts is only safe because of a
-    same-day finding: Saxo's pooled /port/v1/positions/me and
-    /port/v1/orders/me responses carry a genuine per-record AccountKey
-    (verified live), so housekeeping_live.py/housekeeping_live_eur.py can
-    attribute each pooled position/order to the correct account directly,
-    instead of relying on non-overlapping pair sets to infer ownership.
-    See housekeeping_live.py's fetch_live_snapshot() docstring for the full
-    history (including an earlier HIGH_VOLUME_GROUP_A/B 9+8 pair-split, and
-    a brief "EUR gets zero pairs" pause, both superseded same-day before
-    being committed).
+    Sharing pairs across two accounts is only safe because of a same-day
+    finding: Saxo's pooled /port/v1/positions/me and /port/v1/orders/me
+    responses carry a genuine per-record AccountKey (verified live), so
+    housekeeping_live.py/housekeeping_live_eur.py can attribute each pooled
+    position/order to the correct account directly, instead of relying on
+    non-overlapping pair sets to infer ownership. See housekeeping_live.py's
+    fetch_live_snapshot() docstring for the full history (including an
+    earlier HIGH_VOLUME_GROUP_A/B 9+8 pair-split, and a brief "EUR gets zero
+    pairs" pause, both superseded same-day before being committed).
 
-    Future scope (not yet -- explicit user note): ema and donchian may be
-    added on this same 17-pair pool later, following the same AccountKey-
-    disambiguation pattern rather than another pair split."""
-    if ACCOUNT_ENV in ("live", "live_eur"):
+    2026-08-28 (later, same day): EUR LIVE (rsi) expanded 17 -> all 49
+    CORE_SYMBOLS pairs (HIGH_VOLUME_SYMBOLS + CORE_STANDARD_SYMBOLS),
+    explicit user request ("add these pairs too only for RSI") --
+    RSI-only, SEK LIVE (bb) deliberately stays at the original 17
+    (bb wasn't part of this request, and its tasks are Disabled anyway,
+    see forex_live_trading_halted_lifted_2026-08-28.md). Verified with
+    real live Saxo ATR/cost before this change: 17/49 CORE pairs clear
+    both the risk gate and cost gate at the current 1,350 EUR cap /
+    0.75% risk -- the other 32 candidate pairs are still scanned every
+    cycle (so they trade automatically once conditions/capital change)
+    but won't place an order until they naturally clear both gates."""
+    if ACCOUNT_ENV == "live_eur":
+        return [p for p in pairs if p["symbol"] in CORE_SYMBOLS]
+    if ACCOUNT_ENV == "live":
         return [p for p in pairs if p["symbol"] in HIGH_VOLUME_SYMBOLS]
     return pairs
 

@@ -243,24 +243,49 @@ _run("forex/runner: _filter_pairs_for_account() under LIVE returns exactly the 1
      test_filter_pairs_for_account_high_volume_only_under_live)
 
 
-def test_filter_pairs_for_account_high_volume_under_live_eur_too():
+def test_filter_pairs_for_account_expanded_to_core_under_live_eur():
+    # 2026-08-28 (later, same day): expanded 17 -> 49 -- explicit user
+    # request ("add these pairs too only for RSI") to add CORE_STANDARD_
+    # SYMBOLS (the other 32) on top of the original 17 HIGH_VOLUME_SYMBOLS,
+    # RSI-only. SEK LIVE (bb) deliberately stays at the original 17 --
+    # this expansion was scoped to EUR/rsi only.
     import forex.runner as r
     r.set_account_env("live_eur")
     try:
         filtered = r._filter_pairs_for_account(r.PAIRS)
-        assert len(filtered) == len(r.HIGH_VOLUME_SYMBOLS) == 17, (
-            "2026-08-28: explicit user decision -- 'I want to test both "
-            "strategies BB and RSI ... on 17 Pairs' -- EUR LIVE (rsi) now "
-            "trades the SAME 17-pair HIGH_VOLUME_SYMBOLS universe as SEK "
-            "LIVE (bb), no exotic pairs live any longer. Safe because "
-            "housekeeping_live_eur.py attributes pooled positions/orders "
-            "by their own AccountKey field, not by pair-tier membership"
+        assert len(filtered) == len(r.CORE_SYMBOLS) == 49, (
+            "expected EUR LIVE (rsi) to scan all 49 CORE_SYMBOLS pairs "
+            "(17 HIGH_VOLUME + 32 CORE_STANDARD), got a different count -- "
+            "safe because housekeeping_live_eur.py attributes pooled "
+            "positions/orders by their own AccountKey field, not pair-tier"
         )
-        assert all(p["symbol"] in r.HIGH_VOLUME_SYMBOLS for p in filtered)
+        assert all(p["symbol"] in r.CORE_SYMBOLS for p in filtered)
+        exotic_examples = {"EURTRY", "USDZAR", "EURSGD"}
+        assert not any(p["symbol"] in exotic_examples for p in filtered), (
+            "an exotic pair reached the live_eur-filtered pair list"
+        )
     finally:
         r.set_account_env("sim")
-_run("forex/runner: _filter_pairs_for_account() under LIVE_EUR returns the same 17 HIGH_VOLUME pairs as LIVE",
-     test_filter_pairs_for_account_high_volume_under_live_eur_too)
+_run("forex/runner: _filter_pairs_for_account() under LIVE_EUR returns all 49 CORE pairs (expanded from 17, RSI-only)",
+     test_filter_pairs_for_account_expanded_to_core_under_live_eur)
+
+
+def test_filter_pairs_for_account_live_sek_stays_at_high_volume():
+    # SEK LIVE (bb) was deliberately NOT part of the 2026-08-28 CORE
+    # expansion -- bb's tasks are Disabled anyway (see forex_live_trading_
+    # halted_lifted_2026-08-28.md) and the expansion request was RSI-only.
+    import forex.runner as r
+    r.set_account_env("live")
+    try:
+        filtered = r._filter_pairs_for_account(r.PAIRS)
+        assert len(filtered) == len(r.HIGH_VOLUME_SYMBOLS) == 17, (
+            "SEK LIVE (bb) must stay at the original 17 HIGH_VOLUME pairs -- "
+            "the CORE expansion was scoped to EUR/rsi only"
+        )
+    finally:
+        r.set_account_env("sim")
+_run("forex/runner: _filter_pairs_for_account() under LIVE (SEK/bb) still returns only the 17 HIGH_VOLUME pairs",
+     test_filter_pairs_for_account_live_sek_stays_at_high_volume)
 
 
 def test_housekeeping_live_eur_filters_by_account_key():
