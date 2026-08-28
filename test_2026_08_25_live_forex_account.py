@@ -933,23 +933,44 @@ _run("forex_live_dashboard.py labels every P&L figure in SEK, never EUR",
 section("14. Sanity -- current live account state is internally consistent")
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_core_symbols_count_is_34():
+def test_core_symbols_count_is_49():
+    # 2026-08-28: grew 34 -> 49 when the Saxo /ref/v1/currencypairs
+    # cross-check added 15 new pairs to CORE_SYMBOLS (all fiat G10/G7
+    # reversed-direction or EUR/USD-vs-MXN crosses -- see
+    # test_2026_08_28_saxo_currencypairs_crosscheck.py).
     from forex.universe import CORE_SYMBOLS
-    assert len(CORE_SYMBOLS) == 34, f"expected exactly 34 core pairs, got {len(CORE_SYMBOLS)}"
-_run("forex.universe: CORE_SYMBOLS is exactly 34 pairs",
-     test_core_symbols_count_is_34)
+    assert len(CORE_SYMBOLS) == 49, f"expected exactly 49 core pairs, got {len(CORE_SYMBOLS)}"
+_run("forex.universe: CORE_SYMBOLS is exactly 49 pairs (grew from 34)",
+     test_core_symbols_count_is_49)
 
 
-def test_asian_and_london_sessions_exactly_cover_core_symbols():
+def test_asian_and_london_sessions_are_a_legacy_core_subset():
+    # SESSION_PAIRS (asian=14/london=20=34) predates the 2026-08-28
+    # currencypairs addition and was never updated to include the 15 new
+    # CORE pairs. Confirmed this is NOT a live gap: every active scheduled
+    # .bat (run_forex_daily.bat, run_forex_london.bat, run_forex_live_*.bat)
+    # either omits --session (defaults to "all") or explicitly documents
+    # "Session: ALL -- full pair universe" -- --session asian/london is
+    # unreferenced by any real scheduled task today (grep confirmed the
+    # only --session usages left are in a stale worktree and this file's
+    # docstring examples). So SESSION_PAIRS is legacy/inert code, not a
+    # silently-broken live filter -- this test just documents that fact
+    # instead of asserting a full-coverage partition that was never
+    # true after today's growth and isn't required while it's unused.
     import forex.runner as r
     from forex.universe import CORE_SYMBOLS
     asian  = r.SESSION_PAIRS["asian"]
     london = r.SESSION_PAIRS["london"]
     assert len(asian) == 14 and len(london) == 20
     assert not (asian & london), "asian and london session pair sets must not overlap"
-    assert (asian | london) == CORE_SYMBOLS, "asian + london session pairs must exactly equal all 34 CORE_SYMBOLS"
-_run("forex.runner: SESSION_PAIRS['asian'] (14) + ['london'] (20) exactly equal all 34 CORE_SYMBOLS, no gaps/overlap",
-     test_asian_and_london_sessions_exactly_cover_core_symbols)
+    assert (asian | london) <= CORE_SYMBOLS, "asian + london session pairs must still be a subset of CORE_SYMBOLS"
+    missing = CORE_SYMBOLS - (asian | london)
+    assert len(missing) == 15, (
+        f"expected exactly the 15 pairs added 2026-08-28 to be uncovered by the "
+        f"legacy session split, got {len(missing)}: {missing}"
+    )
+_run("forex.runner: SESSION_PAIRS['asian']+['london'] are a legacy 34-pair subset of the now-49-pair CORE_SYMBOLS (unused by any live scheduler -- confirmed no functional gap)",
+     test_asian_and_london_sessions_are_a_legacy_core_subset)
 
 
 def test_risk_pct_identical_across_both_live_strategies():

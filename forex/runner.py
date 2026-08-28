@@ -96,6 +96,11 @@ STRATEGIES = {
     "cnn_lstm":        strat_cnn_lstm,
     "london_breakout": strat_lbo,
 }
+_SWING_SLOTS = len(PAIRS)   # 2026-08-28 fix: was hardcoded 117 (stale since the
+                            # SCANDI tier alone brought the real universe to 149,
+                            # before today's 35-pair currencypairs addition brought
+                            # it to 184) -- computed live now so this can't silently
+                            # under-cap strategies below the real universe size again.
 SLOTS_PER_STRATEGY = {
     # ema/donchian/bb/supertrend/zscore/ml/cnn_lstm previously capped at 4-20
     # slots — a legacy holdover from a smaller pair universe with no risk
@@ -105,15 +110,17 @@ SLOTS_PER_STRATEGY = {
     # slot count. Raised to 34 (2026-08-20), then to 117 (2026-08-21) when the
     # universe was expanded to the full major+EM/exotic set for SIM testing —
     # so every swing strategy can take a position in every pair it signals on.
-    "ema": 117, "rsi": 117, "donchian": 117, "bb": 117,
-    "pullback": 117, "gap": 117,
-    "supertrend": 117, "zscore": 117, "ml": 117, "cnn_lstm": 117,
+    "ema": _SWING_SLOTS, "rsi": _SWING_SLOTS, "donchian": _SWING_SLOTS, "bb": _SWING_SLOTS,
+    "pullback": _SWING_SLOTS, "gap": _SWING_SLOTS,
+    "supertrend": _SWING_SLOTS, "zscore": _SWING_SLOTS, "ml": _SWING_SLOTS, "cnn_lstm": _SWING_SLOTS,
     "london_breakout": 28,  # universe expanded to 28 pairs 2026-08-20. Slots raised
                              # 10 -> 28 (2026-08-21, one slot per pair) so a multi-pair
                              # breakout day is never capped below what the pair list can
                              # offer. Max concurrent exposure: 28 x 1.5% = 42% of the LBO
                              # book if every slot fills (was 15% at 10 slots) — a real
                              # risk increase, done at the user's explicit request.
+                             # NOT tied to _SWING_SLOTS -- LBO trades its own fixed
+                             # 28-pair subset regardless of the broader universe size.
 }
 
 # Day-trade strategies run independently of the swing book's heat budget.

@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from datetime import datetime
 
 import forex.runner as r
-from forex.universe import PAIRS
+from forex.universe import PAIRS, get_group
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -54,7 +54,8 @@ for row in closed_rows:
     gross_eur = gross_quote * rate
     cost_eur = cost_quote * rate if cost_quote is not None else None
     net_eur = gross_eur - cost_eur if cost_eur is not None else None
-    trades.append({"strategy": row["strategy"], "symbol": sym, "direction": direction,
+    trades.append({"strategy": row["strategy"], "symbol": sym, "group": get_group(sym),
+                    "direction": direction,
                     "quantity": qty, "entry": entry, "exit": exitp, "status": "closed",
                     "exit_reason": row["exit_reason"], "gross_pnl_eur": round(gross_eur, 2),
                     "commission_eur": round(cost_eur, 2) if cost_eur is not None else None,
@@ -80,7 +81,8 @@ for key, pos in state.get("positions", {}).items():
     gross_eur = gross_quote * rate
     cost_eur = cost_quote * rate if cost_quote is not None else None
     net_eur = gross_eur - cost_eur if cost_eur is not None else None
-    trades.append({"strategy": strat, "symbol": sym, "direction": direction, "quantity": qty,
+    trades.append({"strategy": strat, "symbol": sym, "group": get_group(sym),
+                    "direction": direction, "quantity": qty,
                     "entry": entry, "exit": live_px, "status": "open",
                     "exit_reason": "OPEN (unrealized)", "gross_pnl_eur": round(gross_eur, 2),
                     "commission_eur": round(cost_eur, 2) if cost_eur is not None else None,

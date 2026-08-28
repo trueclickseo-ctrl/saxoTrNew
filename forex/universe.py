@@ -1260,6 +1260,69 @@ PAIRS = [
     {"symbol": "DKKSGD", "description": "Danish Krone / Singapore Dollar", "base": "DKK", "quote": "SGD", "uic": 9443,  "yf_ticker": "DKKSGD=X", "pip_size": 0.001,  "min_units": 1_000},
     {"symbol": "DKKPLN", "description": "Danish Krone / Polish Zloty",     "base": "DKK", "quote": "PLN", "uic": 21294, "yf_ticker": "DKKPLN=X", "pip_size": 0.001,  "min_units": 1_000},
     {"symbol": "SGDSEK", "description": "Singapore Dollar / Swedish Krone", "base": "SGD", "quote": "SEK", "uic": 40953, "yf_ticker": "SGDSEK=X", "pip_size": 0.001, "min_units": 1_000},
+
+    # ── 2026-08-28: 35 pairs added after cross-checking Saxo's real
+    # /ref/v1/currencypairs endpoint against our existing 149-pair universe
+    # -- explicit user request ("get all supported currency pairs from
+    # saxo... check which one we do not have... add the missing one").
+    # Saxo reported 186 total supported pairs; we had all 149 of ours
+    # confirmed still valid (zero pairs we hold that Saxo no longer
+    # supports) plus 37 genuinely missing. 2 of those 37 (XAUUSD/XAGUSD)
+    # were skipped -- explicit user decision -- because they share the
+    # EXACT SAME Uics (8176/8178) as futures/universe.py's GC/SI markets,
+    # which would let forex and futures both trade the identical broker
+    # position with no way to tell which module opened it (same risk
+    # class as the 2026-08-26 CADCHF/CHFAUD incident). Every field below
+    # (uic, pip_size via Format.OrderDecimals, min_units via
+    # MinimumTradeSize) pulled live from /ref/v1/instruments/details, not
+    # guessed -- see [[saxo_api_verification]].
+    #
+    # 18 reversed/new fiat-fiat crosses (15 join CORE_SYMBOLS below since
+    # both currencies are G7/G10 or match the existing EUR/USD-vs-NOK/SEK/
+    # DKK carve-out; 3 join SCANDI_SYMBOLS since they're a non-EUR/USD G10
+    # currency vs NOK):
+    {"symbol": "AUDEUR", "description": "Australian Dollar / Euro", "base": "AUD", "quote": "EUR", "uic": 5124, "yf_ticker": "AUDEUR=X", "pip_size": 0.001, "min_units": 1_000},
+    {"symbol": "AUDGBP", "description": "Australian Dollar / British Pound", "base": "AUD", "quote": "GBP", "uic": 3115, "yf_ticker": "AUDGBP=X", "pip_size": 0.001, "min_units": 1_000},
+    {"symbol": "CADCHF", "description": "Canadian Dollar / Swiss Franc", "base": "CAD", "quote": "CHF", "uic": 5, "yf_ticker": "CADCHF=X", "pip_size": 0.001, "min_units": 1_000},
+    {"symbol": "CADEUR", "description": "Canadian Dollar / Euro", "base": "CAD", "quote": "EUR", "uic": 3943, "yf_ticker": "CADEUR=X", "pip_size": 0.001, "min_units": 1_000},
+    {"symbol": "CADUSD", "description": "Canadian Dollar / US Dollar", "base": "CAD", "quote": "USD", "uic": 3946, "yf_ticker": "CADUSD=X", "pip_size": 0.001, "min_units": 1_000},
+    {"symbol": "CHFUSD", "description": "Swiss Franc / US Dollar", "base": "CHF", "quote": "USD", "uic": 17746, "yf_ticker": "CHFUSD=X", "pip_size": 0.001, "min_units": 1_000},
+    {"symbol": "GBPEUR", "description": "British Pound / Euro", "base": "GBP", "quote": "EUR", "uic": 3942, "yf_ticker": "GBPEUR=X", "pip_size": 0.001, "min_units": 1_000},
+    {"symbol": "JPYEUR", "description": "Japanese Yen / Euro", "base": "JPY", "quote": "EUR", "uic": 3940, "yf_ticker": "JPYEUR=X", "pip_size": 0.00001, "min_units": 100_000},
+    {"symbol": "JPYUSD", "description": "Japanese Yen / US Dollar", "base": "JPY", "quote": "USD", "uic": 3849, "yf_ticker": "JPYUSD=X", "pip_size": 0.00001, "min_units": 100_000},
+    {"symbol": "MXNUSD", "description": "Mexican Peso / US Dollar", "base": "MXN", "quote": "USD", "uic": 17761, "yf_ticker": "MXNUSD=X", "pip_size": 0.00001, "min_units": 10_000},
+    {"symbol": "NOKUSD", "description": "Norwegian Krone / US Dollar", "base": "NOK", "quote": "USD", "uic": 17764, "yf_ticker": "NOKUSD=X", "pip_size": 0.00001, "min_units": 10_000},
+    {"symbol": "NZDAUD", "description": "New Zealand Dollar / Australian Dollar", "base": "NZD", "quote": "AUD", "uic": 3939, "yf_ticker": "NZDAUD=X", "pip_size": 0.001, "min_units": 1_000},
+    {"symbol": "NZDEUR", "description": "New Zealand Dollar / Euro", "base": "NZD", "quote": "EUR", "uic": 35, "yf_ticker": "NZDEUR=X", "pip_size": 0.001, "min_units": 1_000},
+    {"symbol": "NZDGBP", "description": "New Zealand Dollar / British Pound", "base": "NZD", "quote": "GBP", "uic": 4014, "yf_ticker": "NZDGBP=X", "pip_size": 0.001, "min_units": 1_000},
+    {"symbol": "USDAUD", "description": "US Dollar / Australian Dollar", "base": "USD", "quote": "AUD", "uic": 22413, "yf_ticker": "USDAUD=X", "pip_size": 0.001, "min_units": 1_000},
+    {"symbol": "CHFNOK", "description": "Swiss Franc / Norwegian Krone", "base": "CHF", "quote": "NOK", "uic": 9, "yf_ticker": "CHFNOK=X", "pip_size": 0.001, "min_units": 1_000},
+    {"symbol": "JPYNOK", "description": "Japanese Yen / Norwegian Krone", "base": "JPY", "quote": "NOK", "uic": 3077, "yf_ticker": "JPYNOK=X", "pip_size": 0.0001, "min_units": 10_000},
+    {"symbol": "NOKJPY", "description": "Norwegian Krone / Japanese Yen", "base": "NOK", "quote": "JPY", "uic": 46, "yf_ticker": "NOKJPY=X", "pip_size": 0.01, "min_units": 10_000},
+
+    # 17 precious-metal spot pairs (Gold/Silver/Platinum vs various
+    # currencies) -- a new dedicated METALS_SYMBOLS tier below, not folded
+    # into any fiat-currency tier (CORE/SCANDI/EXOTIC's 4 regions are all
+    # defined by fiat-currency liquidity/correlation, which doesn't apply
+    # to a commodity spot price). XAUUSD/XAGUSD deliberately excluded, see
+    # comment above.
+    {"symbol": "XAGAUD", "description": "Silver / Australian Dollar", "base": "XAG", "quote": "AUD", "uic": 20770, "yf_ticker": "XAGAUD=X", "pip_size": 0.1, "min_units": 10},
+    {"symbol": "XAGCNH", "description": "Silver / Offshore Chinese Renminbi", "base": "XAG", "quote": "CNH", "uic": 11701065, "yf_ticker": "XAGCNH=X", "pip_size": 0.001, "min_units": 10},
+    {"symbol": "XAGEUR", "description": "Silver / Euro", "base": "XAG", "quote": "EUR", "uic": 19846, "yf_ticker": "XAGEUR=X", "pip_size": 0.001, "min_units": 10},
+    {"symbol": "XAGHKD", "description": "Silver / Hong Kong Dollar", "base": "XAG", "quote": "HKD", "uic": 22562, "yf_ticker": "XAGHKD=X", "pip_size": 0.001, "min_units": 10},
+    {"symbol": "XAGJPY", "description": "Silver / Japanese Yen", "base": "XAG", "quote": "JPY", "uic": 19847, "yf_ticker": "XAGJPY=X", "pip_size": 0.1, "min_units": 10},
+    {"symbol": "XAUAUD", "description": "Gold / Australian Dollar", "base": "XAU", "quote": "AUD", "uic": 19910, "yf_ticker": "XAUAUD=X", "pip_size": 0.1, "min_units": 1},
+    {"symbol": "XAUCHF", "description": "Gold / Swiss Franc", "base": "XAU", "quote": "CHF", "uic": 155945, "yf_ticker": "XAUCHF=X", "pip_size": 0.1, "min_units": 1},
+    {"symbol": "XAUCNH", "description": "Gold / Offshore Chinese Renminbi", "base": "XAU", "quote": "CNH", "uic": 719823, "yf_ticker": "XAUCNH=X", "pip_size": 0.1, "min_units": 1},
+    {"symbol": "XAUEUR", "description": "Gold / Euro", "base": "XAU", "quote": "EUR", "uic": 17190, "yf_ticker": "XAUEUR=X", "pip_size": 0.1, "min_units": 1},
+    {"symbol": "XAUGBP", "description": "Gold / British Pound", "base": "XAU", "quote": "GBP", "uic": 38936, "yf_ticker": "XAUGBP=X", "pip_size": 0.1, "min_units": 1},
+    {"symbol": "XAUHKD", "description": "Gold / Hong Kong Dollar", "base": "XAU", "quote": "HKD", "uic": 22563, "yf_ticker": "XAUHKD=X", "pip_size": 0.1, "min_units": 1},
+    {"symbol": "XAUJPY", "description": "Gold / Japanese Yen", "base": "XAU", "quote": "JPY", "uic": 19719, "yf_ticker": "XAUJPY=X", "pip_size": 10, "min_units": 1},
+    {"symbol": "XAUTHB", "description": "Gold / Thai Baht", "base": "XAU", "quote": "THB", "uic": 53684, "yf_ticker": "XAUTHB=X", "pip_size": 10, "min_units": 1},
+    {"symbol": "XAUTRY", "description": "Gold / Turkish Lira", "base": "XAU", "quote": "TRY", "uic": 57359, "yf_ticker": "XAUTRY=X", "pip_size": 0.1, "min_units": 1},
+    {"symbol": "XAUXAG", "description": "Gold / Silver", "base": "XAU", "quote": "XAG", "uic": 195179, "yf_ticker": "XAUXAG=X", "pip_size": 0.1, "min_units": 1},
+    {"symbol": "XPTUSD", "description": "Platinum / US Dollar", "base": "XPT", "quote": "USD", "uic": 107830, "yf_ticker": "XPTUSD=X", "pip_size": 0.1, "min_units": 1},
+    {"symbol": "XPTZAR", "description": "Platinum / South African Rand", "base": "XPT", "quote": "ZAR", "uic": 458692, "yf_ticker": "XPTZAR=X", "pip_size": 10, "min_units": 1},
 ]
 
 ASSET_TYPE = "FxSpot"
@@ -1287,6 +1350,15 @@ CORE_SYMBOLS = {
     "NZDJPY", "NZDCAD", "NZDCHF",
     "CHFJPY", "CHFAUD",
     "EURNOK", "EURSEK", "USDNOK", "USDSEK", "USDDKK", "USDMXN",
+    # 2026-08-28 additions (see the PAIRS comment above for the full
+    # currencypairs-cross-check story) -- reversed/new G7/G10-G10 crosses,
+    # or the USD/EUR-vs-NOK/SEK/DKK carve-out's own reverse (NOKUSD
+    # mirrors the already-CORE USDNOK). All join CORE_STANDARD_SYMBOLS
+    # below (CORE_SYMBOLS - HIGH_VOLUME_SYMBOLS), not HIGH_VOLUME_SYMBOLS
+    # itself -- a reversed pair isn't assumed to carry the same real
+    # market liquidity as its hand-curated canonical direction.
+    "AUDEUR", "AUDGBP", "CADCHF", "CADEUR", "CADUSD", "CHFUSD", "GBPEUR",
+    "JPYEUR", "JPYUSD", "MXNUSD", "NOKUSD", "NZDAUD", "NZDEUR", "NZDGBP", "USDAUD",
 }
 
 SCANDI_SYMBOLS = {
@@ -1294,6 +1366,9 @@ SCANDI_SYMBOLS = {
     "CADNOK", "NOKDKK", "SEKNOK", "JPYDKK", "NZDSEK", "CADSEK", "NZDNOK", "TRYDKK",
     "CHFDKK", "AUDSEK", "DKKZAR", "EURDKK", "SEKPLN", "NZDDKK", "DKKJPY", "NOKCZK",
     "PLNDKK", "AUDDKK", "DKKHUF", "DKKCZK", "PLNSEK", "DKKSGD", "DKKPLN", "SGDSEK",
+    # 2026-08-28 additions (see the PAIRS comment above) -- non-EUR/USD G10
+    # currency vs NOK, matching every other SCANDI pair's own pattern.
+    "CHFNOK", "JPYNOK", "NOKJPY",
 }
 
 # HIGH_VOLUME_SYMBOLS — added 2026-08-26, explicit user request after
@@ -1333,13 +1408,30 @@ CORE_STANDARD_SYMBOLS = CORE_SYMBOLS - HIGH_VOLUME_SYMBOLS
 assert not (CORE_STANDARD_SYMBOLS & HIGH_VOLUME_SYMBOLS), "the two CORE halves must never overlap"
 assert (CORE_STANDARD_SYMBOLS | HIGH_VOLUME_SYMBOLS) == CORE_SYMBOLS, "the two halves must exactly partition CORE_SYMBOLS"
 
-# EXOTIC_SYMBOLS -- the 83-pair SIM-only remainder (everything not CORE or
-# SCANDI). Previously only ever computed ad-hoc (forex_dashboard.py's own
+# METALS_SYMBOLS -- added 2026-08-28 alongside the currencypairs cross-check
+# (see the PAIRS comment above): 17 precious-metal spot pairs (Gold/Silver/
+# Platinum vs various currencies). Deliberately its OWN tier, not folded
+# into CORE/SCANDI/EXOTIC's fiat-currency system -- CORE/SCANDI are defined
+# by G7/G10 or NOK/SEK/DKK fiat liquidity, and EXOTIC's 4 regional groups
+# are defined by EM fiat currency (see that split's own comment below) --
+# none of that classification logic is meaningful for a commodity spot
+# price, and several of these pairs (XAUEUR/XAUGBP/XAUCHF/XAUJPY/XAUAUD/
+# XAGEUR/XAGAUD/XAGJPY/XAUXAG/XPTUSD) don't even have an EM-currency leg to
+# classify by. XAUUSD/XAGUSD deliberately excluded (see PAIRS comment) --
+# already covered by futures/universe.py's GC/SI at the identical Uic.
+METALS_SYMBOLS = {
+    "XAGAUD", "XAGCNH", "XAGEUR", "XAGHKD", "XAGJPY",
+    "XAUAUD", "XAUCHF", "XAUCNH", "XAUEUR", "XAUGBP", "XAUHKD", "XAUJPY",
+    "XAUTHB", "XAUTRY", "XAUXAG", "XPTUSD", "XPTZAR",
+}
+
+# EXOTIC_SYMBOLS -- the SIM-only remainder (everything not CORE, SCANDI, or
+# METALS). Previously only ever computed ad-hoc (forex_dashboard.py's own
 # `{p["symbol"] for p in PAIRS} - CORE_SYMBOLS - SCANDI_SYMBOLS` local),
 # materialized here as a real constant 2026-08-28 so the four regional
 # sub-groups below (and anything else) can import and partition it
 # directly instead of recomputing the same set expression repeatedly.
-EXOTIC_SYMBOLS = {p["symbol"] for p in PAIRS} - CORE_SYMBOLS - SCANDI_SYMBOLS
+EXOTIC_SYMBOLS = {p["symbol"] for p in PAIRS} - CORE_SYMBOLS - SCANDI_SYMBOLS - METALS_SYMBOLS
 
 # EXOTIC regional/thematic split -- added 2026-08-28, explicit user request
 # ("divide this large [83] into smaller, more meaningful groups... so we
@@ -1425,22 +1517,42 @@ del _i, _g1, _g2
 
 
 def get_tier(symbol: str) -> str:
-    """'core' (live-trading candidate, 34 pairs), 'scandi' (SIM-only NOK/SEK/DKK
-    crosses, 32 pairs), or 'exotic' (SIM-only, everything else, 83 pairs)."""
+    """'core' (live-trading candidate), 'scandi' (SIM-only NOK/SEK/DKK
+    crosses), 'metals' (SIM-only precious-metal spot pairs, added
+    2026-08-28), or 'exotic' (SIM-only, everything else)."""
     if symbol in CORE_SYMBOLS:
         return "core"
     if symbol in SCANDI_SYMBOLS:
         return "scandi"
+    if symbol in METALS_SYMBOLS:
+        return "metals"
     return "exotic"
 
 
-# Named constant for the 83-pair EXOTIC tier -- previously only ever computed
-# ad-hoc inline (e.g. forex_dashboard.py's `{p["symbol"] for p in PAIRS} -
-# CORE_SYMBOLS - SCANDI_SYMBOLS`). Added 2026-08-26 alongside forex/runner.py
-# needing a real, importable set to grant RSI Pullback LIVE access to this
-# tier (explicit user test) without duplicating the same set-difference
-# expression in a second file.
-EXOTIC_SYMBOLS = {p["symbol"] for p in PAIRS} - CORE_SYMBOLS - SCANDI_SYMBOLS
+def get_group(symbol: str) -> str:
+    """The exact 'Forex Grouping' name forex_dashboard.py's section titles
+    use for this pair -- single source of truth so any other consumer
+    (2026-08-28: reports/_gather_daily_sim_data.py's per-group performance
+    tracking) never has to re-derive or paraphrase these names. One of:
+    'High Volume', 'Core Standard', 'Scandi', 'Metals', 'Exotic Asia',
+    'Exotic Europe', 'Exotic High-Yield/Carry', 'Exotic Latam/Mideast'."""
+    if symbol in HIGH_VOLUME_SYMBOLS:
+        return "High Volume"
+    if symbol in CORE_STANDARD_SYMBOLS:
+        return "Core Standard"
+    if symbol in SCANDI_SYMBOLS:
+        return "Scandi"
+    if symbol in METALS_SYMBOLS:
+        return "Metals"
+    if symbol in EXOTIC_ASIA_SYMBOLS:
+        return "Exotic Asia"
+    if symbol in EXOTIC_EUROPE_SYMBOLS:
+        return "Exotic Europe"
+    if symbol in EXOTIC_CARRY_SYMBOLS:
+        return "Exotic High-Yield/Carry"
+    if symbol in EXOTIC_LATAM_MIDEAST_SYMBOLS:
+        return "Exotic Latam/Mideast"
+    raise ValueError(f"{symbol!r} doesn't belong to any Forex Grouping tier -- universe partition is broken")
 
 
 # Lookup helpers

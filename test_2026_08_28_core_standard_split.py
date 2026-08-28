@@ -45,11 +45,15 @@ def section(title):
 section("1. forex.universe.CORE_STANDARD_SYMBOLS -- exact partition with HIGH_VOLUME_SYMBOLS")
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_core_standard_is_exactly_17_pairs():
+def test_core_standard_is_exactly_32_pairs():
+    # 2026-08-28 (same day, later): grew 17 -> 32 when the Saxo
+    # /ref/v1/currencypairs cross-check added 15 new pairs to CORE_SYMBOLS
+    # (all landing in CORE_STANDARD, none in the hand-curated
+    # HIGH_VOLUME_SYMBOLS) -- see test_2026_08_28_saxo_currencypairs_crosscheck.py.
     from forex.universe import CORE_STANDARD_SYMBOLS
-    assert len(CORE_STANDARD_SYMBOLS) == 17, f"expected exactly 17 pairs, got {len(CORE_STANDARD_SYMBOLS)}"
-_run("forex.universe: CORE_STANDARD_SYMBOLS is exactly 17 pairs",
-     test_core_standard_is_exactly_17_pairs)
+    assert len(CORE_STANDARD_SYMBOLS) == 32, f"expected exactly 32 pairs, got {len(CORE_STANDARD_SYMBOLS)}"
+_run("forex.universe: CORE_STANDARD_SYMBOLS is exactly 32 pairs (grew from 17)",
+     test_core_standard_is_exactly_32_pairs)
 
 
 def test_core_standard_and_high_volume_never_overlap():
@@ -64,10 +68,10 @@ _run("forex.universe: CORE_STANDARD_SYMBOLS and HIGH_VOLUME_SYMBOLS never overla
 def test_core_standard_plus_high_volume_exactly_equals_core():
     from forex.universe import CORE_STANDARD_SYMBOLS, HIGH_VOLUME_SYMBOLS, CORE_SYMBOLS
     assert (CORE_STANDARD_SYMBOLS | HIGH_VOLUME_SYMBOLS) == CORE_SYMBOLS, (
-        "CORE_STANDARD_SYMBOLS + HIGH_VOLUME_SYMBOLS must exactly equal all 34 CORE_SYMBOLS, no gaps"
+        "CORE_STANDARD_SYMBOLS + HIGH_VOLUME_SYMBOLS must exactly equal all of CORE_SYMBOLS, no gaps"
     )
-    assert len(CORE_SYMBOLS) == 34
-_run("forex.universe: CORE_STANDARD_SYMBOLS + HIGH_VOLUME_SYMBOLS exactly partition CORE_SYMBOLS (17+17=34)",
+    assert len(CORE_SYMBOLS) == 49, f"expected CORE_SYMBOLS grown to 49 (34+15), got {len(CORE_SYMBOLS)}"
+_run("forex.universe: CORE_STANDARD_SYMBOLS + HIGH_VOLUME_SYMBOLS exactly partition CORE_SYMBOLS (32+17=49)",
      test_core_standard_plus_high_volume_exactly_equals_core)
 
 

@@ -907,7 +907,8 @@ _forex_universe_uics_cache: set[int] | None = None
 
 
 def _forex_universe_uics() -> set[int]:
-    """Every uic in forex's full configured pair universe (117 pairs),
+    """Every uic in forex's full configured pair universe (the real count
+    grows over time -- forex.universe.PAIRS, not a fixed literal here),
     not just ones a strategy currently happens to hold. Disambiguating an
     untracked FxSpot uic against only CURRENTLY-TRACKED forex positions
     (as this used to do) is wrong by construction for exactly the

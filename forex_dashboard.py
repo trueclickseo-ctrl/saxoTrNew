@@ -24,8 +24,8 @@ sys.path.insert(0, BASE_DIR)
 import price_service
 from forex.universe import (
     PAIRS as _UNIVERSE_PAIRS, CORE_SYMBOLS, SCANDI_SYMBOLS, HIGH_VOLUME_SYMBOLS,
-    CORE_STANDARD_SYMBOLS, EXOTIC_ASIA_SYMBOLS, EXOTIC_EUROPE_SYMBOLS,
-    EXOTIC_CARRY_SYMBOLS, EXOTIC_LATAM_MIDEAST_SYMBOLS,
+    CORE_STANDARD_SYMBOLS, METALS_SYMBOLS, EXOTIC_SYMBOLS, EXOTIC_ASIA_SYMBOLS,
+    EXOTIC_EUROPE_SYMBOLS, EXOTIC_CARRY_SYMBOLS, EXOTIC_LATAM_MIDEAST_SYMBOLS,
 )
 
 _UNIVERSE_BY_SYMBOL = {p["symbol"]: p for p in _UNIVERSE_PAIRS}
@@ -265,7 +265,7 @@ STRAT_LABELS_ALL = {
 
 def _strategy_breakdown_table(title: str, positions: list, live: dict,
                                symbols: set | None = None,
-                               universe_size: int = 149,
+                               universe_size: int | None = None,
                                exclude: set = frozenset(),
                                color: str = CY,
                                total_label: str | None = None,
@@ -273,13 +273,15 @@ def _strategy_breakdown_table(title: str, positions: list, live: dict,
                                currency_label: str = "EUR") -> list:
     """One STRATEGY BREAKDOWN table, optionally scoped to a pair subset.
 
-    `symbols=None` -> the original all-149-pairs view. Passing
-    forex.universe.CORE_SYMBOLS (34 pairs), SCANDI_SYMBOLS (32 pairs), or
-    the 83-pair exotic remainder restricts realized/today/unrealized stats
-    AND the active-position count to that subset -- this is what lets the
-    dashboard answer "is the 34-pair core universe actually better than the
-    full 149?" directly, per-strategy, instead of only as one blended
-    all-pairs number.
+    `symbols=None` -> the full-universe blended view (call with
+    universe_size=len(forex.universe.PAIRS) for that case -- no longer
+    defaulted to a hardcoded literal here, see the 2026-08-28 fix note in
+    _render()). Passing forex.universe.CORE_SYMBOLS, SCANDI_SYMBOLS,
+    METALS_SYMBOLS, or the exotic remainder/regions restricts realized/
+    today/unrealized stats AND the active-position count to that subset --
+    this is what lets the dashboard answer "is this tier actually better
+    than the full universe?" directly, per-strategy, instead of only as
+    one blended all-pairs number.
 
     `exclude` drops strategies that structurally never trade in this scope
     (e.g. london_breakout from the exotic-only table -- it only ever trades
@@ -561,7 +563,13 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     live, price_src = price_service.fetch_prices(instruments, token=token)
     position_costs   = _fetch_position_costs(token)
 
-    W_TOTAL = 139  # widened 2026-08-26 for the new "X/149 trading now" header segment
+    # 2026-08-28 fix: total/tier pair counts below are now computed from
+    # the real universe.py sets rather than hardcoded literals -- the same
+    # class of staleness bug found and fixed in futures_dashboard.py the
+    # same day (a hardcoded "149"/"34 core" etc. silently drifting out of
+    # sync the next time the universe changes).
+    _total_pairs = len(_UNIVERSE_PAIRS)
+    W_TOTAL = 139  # widened 2026-08-26 for the "X/{total} trading now" header segment
     HR      = f"  {DM}{'─' * W_TOTAL}{W}"
 
     L = []
@@ -571,7 +579,14 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     src_tag = "SAXO LIVE" if price_src == "saxo" else "n/a (token expired)"
     pairs_trading = len({p["symbol"] for p in positions})
     L.append(f"  {BD}{CY}║{'  FOREX QUANT DASHBOARD':^{W_TOTAL}}║{W}")
-    L.append(f"  {BD}{CY}║{f'  11 Strategies  |  149 FX Pairs (34 core + 32 scandi + 83 exotic)  |  {pairs_trading}/149 trading now  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
+    L.append(f"  {BD}{CY}║{f'  11 Strategies  |  {_total_pairs} FX Pairs  |  {pairs_trading}/{_total_pairs} trading now  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
+    # 2026-08-28: 2nd row added -- uses the EXACT Forex Grouping tier names
+    # (not a coarser "core"/"exotic" paraphrase) per explicit user request,
+    # so this line can be copy-referenced directly when configuring ATOS
+    # LIVE later. Split onto its own row (rather than appended to row 1)
+    # because the combined string overflows W_TOTAL=139 and breaks box
+    # alignment; each row individually fits.
+    L.append(f"  {BD}{CY}║{f'  Forex Grouping:  {len(HIGH_VOLUME_SYMBOLS)} High Volume + {len(CORE_STANDARD_SYMBOLS)} Core Standard + {len(SCANDI_SYMBOLS)} Scandi + {len(METALS_SYMBOLS)} Metals + {len(EXOTIC_SYMBOLS)} Exotic':^{W_TOTAL}}║{W}")
     L.append(f"  {BD}{CY}╚{'═'*W_TOTAL}╝{W}")
     L.append("")
 
@@ -593,9 +608,11 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
              f"\033[38;5;214m{BD}■ LBO{W}  day trade")
     L.append(f"  {DM}Scheduler: every 30min 06:00-03:00 PKT (scan)  |  14:00 PKT (exit check)  |  "
              f"Mon 03:00 PKT weekly + session gap windows (gap fill)  |  "
-             f"149 pairs: 17 high volume + 17 core standard + 32 scandi + "
-             f"83 exotic (30 asia + 25 europe + 17 carry + 11 latam/mideast, SIM-only)  |  "
-             f"Max slots 149 (28 for day-trade LBO){W}")
+             f"{_total_pairs} pairs: {len(HIGH_VOLUME_SYMBOLS)} high volume + {len(CORE_STANDARD_SYMBOLS)} core standard + "
+             f"{len(SCANDI_SYMBOLS)} scandi + {len(METALS_SYMBOLS)} metals + "
+             f"{len(EXOTIC_SYMBOLS)} exotic ({len(EXOTIC_ASIA_SYMBOLS)} asia + {len(EXOTIC_EUROPE_SYMBOLS)} europe + "
+             f"{len(EXOTIC_CARRY_SYMBOLS)} carry + {len(EXOTIC_LATAM_MIDEAST_SYMBOLS)} latam/mideast, SIM-only)  |  "
+             f"Max slots {_total_pairs} (28 for day-trade LBO){W}")
     L.append(HR)
     L.append("")
 
@@ -607,7 +624,11 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     # standalone CORE section (see below) -- GR reused below for EXOTIC ASIA.
     SCANDI_COLOR, ALLTIER_COLOR = MG, CY
     HIGH_VOLUME_COLOR = WH
-    CORE_STANDARD_COLOR = BL
+    # 2026-08-28: was BL (standard blue) -- user-reported "blue on blue"
+    # readability problem (terminal background/theme made it near-invisible).
+    # Replaced with a 256-color warm gold/tan, unclaimed by any other
+    # tier/strategy color in this file (confirmed via grep before picking it).
+    CORE_STANDARD_COLOR = "\033[38;5;178m"
     # EXOTIC regional sub-colors (2026-08-28) -- standard 8-color ANSI is
     # already fully spoken for by the tiers above, so these use 256-color
     # codes (same technique the strategy legend already uses for CNN-LSTM/
@@ -644,19 +665,36 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.extend(high_volume_lines)
 
     # CORE STANDARD — added 2026-08-28, HIGH VOLUME's exact complement
-    # (34 = 17 + 17, an exact partition, not a new tier) -- explicit user
+    # (an exact partition of CORE_SYMBOLS, not a new tier) -- explicit user
     # request for a matching "high volume vs the rest" split so each
     # half's own performance is visible on its own. Its P&L/cost also now
     # feeds the TOTAL sum directly, same reasoning as HIGH VOLUME above.
+    # 2026-08-28: CORE_SYMBOLS grew from 34 to 49 (currencypairs cross-
+    # check added 15 new CORE pairs, all joining CORE_STANDARD, none
+    # joining the hand-curated HIGH_VOLUME_SYMBOLS) -- CORE_STANDARD is
+    # now 32 pairs, not the original 17, computed live below so this
+    # can't go stale again.
     core_standard_lines, core_standard_pnl, core_standard_cost, core_standard_costs_eur = _positions_section(
-        "OPEN POSITIONS — CORE STANDARD (17 pairs, the other half of former CORE)",
+        f"OPEN POSITIONS — CORE STANDARD ({len(CORE_STANDARD_SYMBOLS)} pairs, the other half of former CORE)",
         core_standard_positions, live, position_costs, W_TOTAL, HR, color=CORE_STANDARD_COLOR)
     L.extend(core_standard_lines)
 
     scandi_lines, scandi_pnl, scandi_cost, scandi_costs_eur = _positions_section(
-        "OPEN POSITIONS — SCANDI (32 pairs, SIM-only, NOK/SEK/DKK crosses)",
+        f"OPEN POSITIONS — SCANDI ({len(SCANDI_SYMBOLS)} pairs, SIM-only, NOK/SEK/DKK crosses)",
         scandi_positions, live, position_costs, W_TOTAL, HR, color=SCANDI_COLOR)
     L.extend(scandi_lines)
+
+    # METALS — added 2026-08-28, explicit user request ("get all supported
+    # currency pairs from saxo... add in the relevant groups"). 17
+    # precious-metal spot pairs, its own tier -- see
+    # forex/universe.py's METALS_SYMBOLS comment for why it isn't folded
+    # into CORE/SCANDI/EXOTIC's fiat-currency system.
+    METALS_COLOR = "\033[38;5;220m"
+    metals_positions = [p for p in positions if p["symbol"] in METALS_SYMBOLS]
+    metals_lines, metals_pnl, metals_cost, metals_costs_eur = _positions_section(
+        f"OPEN POSITIONS — METALS ({len(METALS_SYMBOLS)} pairs, Gold/Silver/Platinum spot)",
+        metals_positions, live, position_costs, W_TOTAL, HR, color=METALS_COLOR)
+    L.extend(metals_lines)
 
     # EXOTIC regional split — added 2026-08-28 alongside the blended
     # 83-pair EXOTIC section, then that blended section was REMOVED the
@@ -688,11 +726,11 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         exotic_latam_mideast_positions, live, position_costs, W_TOTAL, HR, color=EXOTIC_LATAM_MIDEAST_COLOR)
     L.extend(exotic_lm_lines)
 
-    total_pnl       = (high_volume_pnl + core_standard_pnl + scandi_pnl
+    total_pnl       = (high_volume_pnl + core_standard_pnl + scandi_pnl + metals_pnl
                        + exotic_asia_pnl + exotic_europe_pnl + exotic_carry_pnl + exotic_lm_pnl)
-    total_cost      = (high_volume_cost + core_standard_cost + scandi_cost
+    total_cost      = (high_volume_cost + core_standard_cost + scandi_cost + metals_cost
                        + exotic_asia_cost + exotic_europe_cost + exotic_carry_cost + exotic_lm_cost)
-    total_costs_eur = (high_volume_costs_eur + core_standard_costs_eur + scandi_costs_eur
+    total_costs_eur = (high_volume_costs_eur + core_standard_costs_eur + scandi_costs_eur + metals_costs_eur
                        + exotic_asia_costs_eur + exotic_europe_costs_eur + exotic_carry_costs_eur + exotic_lm_costs_eur)
     tc   = GR if total_pnl >= 0 else RD
     tpct = (total_pnl / total_cost * 100) if total_cost > 0 else 0
@@ -716,9 +754,10 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     # ("which pairs work") from this one ("which strategies work"); see
     # pnl_dashboard.py or the Strategy Overlap Tracker artifact for that.
     #
-    # 2026-08-25: split into CORE (34) / SCANDI (32) / EXOTIC (83) /
-    # ALL (149, reference) so the live-vs-SIM-only universe decision can be
-    # made per strategy, not just from one blended 149-pair number. SCANDI
+    # 2026-08-25: split into CORE / SCANDI / EXOTIC / ALL (blended
+    # reference, universe_size computed live -- see the 2026-08-28 fix
+    # note above) so the live-vs-SIM-only universe decision can be made
+    # per strategy, not just from one blended all-pairs number. SCANDI
     # added same day as its own tier so its SIM track record (32 new
     # NOK/SEK/DKK crosses) can be judged on its own before folding any of
     # it into CORE or writing it off, exactly the same way EXOTIC's track
@@ -739,21 +778,37 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         color=HIGH_VOLUME_COLOR, total_label="HIGH VOL TOTAL"))
 
     # CORE STANDARD — added 2026-08-28, HIGH VOLUME's exact complement
-    # within CORE (17 + 17 = 34, an exact partition) -- shown directly
-    # beside HIGH VOLUME above so the two halves' track records can be
-    # compared side by side, the actual question this split exists to
-    # answer ("does liquidity actually predict which CORE pairs perform").
-    # Same LBO inclusion as CORE/HIGH VOLUME (LBO's own 28-pair majors/
-    # crosses subset genuinely overlaps both CORE halves).
+    # within CORE (an exact partition) -- shown directly beside HIGH
+    # VOLUME above so the two halves' track records can be compared side
+    # by side, the actual question this split exists to answer ("does
+    # liquidity actually predict which CORE pairs perform"). Same LBO
+    # inclusion as CORE/HIGH VOLUME (LBO's own 28-pair majors/crosses
+    # subset genuinely overlaps both CORE halves). Grew from 17 to 32
+    # pairs the same day this comment was last touched (currencypairs
+    # cross-check added 15 new CORE pairs, all landing here).
     L.extend(_strategy_breakdown_table(
-        "STRATEGY BREAKDOWN — CORE STANDARD (17 pairs, subset of CORE, the other half)",
-        positions, live, symbols=CORE_STANDARD_SYMBOLS, universe_size=17,
+        f"STRATEGY BREAKDOWN — CORE STANDARD ({len(CORE_STANDARD_SYMBOLS)} pairs, subset of CORE, the other half)",
+        positions, live, symbols=CORE_STANDARD_SYMBOLS, universe_size=len(CORE_STANDARD_SYMBOLS),
         color=CORE_STANDARD_COLOR, total_label="CORE STD TOTAL"))
 
+    # 2026-08-28: grew from 32 to 35 pairs (currencypairs cross-check
+    # added 3 new non-EUR/USD-vs-NOK crosses) -- computed live below.
     L.extend(_strategy_breakdown_table(
-        "STRATEGY BREAKDOWN — SCANDI (32 pairs, SIM-only, excl. LBO)",
-        positions, live, symbols=SCANDI_SYMBOLS, universe_size=32,
+        f"STRATEGY BREAKDOWN — SCANDI ({len(SCANDI_SYMBOLS)} pairs, SIM-only, excl. LBO)",
+        positions, live, symbols=SCANDI_SYMBOLS, universe_size=len(SCANDI_SYMBOLS),
         exclude={"london_breakout"}, color=SCANDI_COLOR, total_label="SCANDI TOTAL"))
+
+    # METALS — added 2026-08-28, explicit user request ("get all supported
+    # currency pairs from saxo... add in the relevant groups"). 17
+    # precious-metal spot pairs (Gold/Silver/Platinum vs various
+    # currencies), deliberately its own tier rather than folded into
+    # CORE/SCANDI/EXOTIC's fiat-currency system -- see
+    # forex/universe.py's METALS_SYMBOLS comment for why. Excludes LBO
+    # (structurally never trades these) same as SCANDI/EXOTIC above.
+    L.extend(_strategy_breakdown_table(
+        f"STRATEGY BREAKDOWN — METALS ({len(METALS_SYMBOLS)} pairs, Gold/Silver/Platinum spot, excl. LBO)",
+        positions, live, symbols=METALS_SYMBOLS, universe_size=len(METALS_SYMBOLS),
+        exclude={"london_breakout"}, color=METALS_COLOR, total_label="METALS TOTAL"))
 
     # EXOTIC regional split — added 2026-08-28 (replacing the blended
     # 83-pair EXOTIC section removed the same day, explicit user
@@ -785,8 +840,8 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         exclude={"london_breakout"}, color=EXOTIC_LATAM_MIDEAST_COLOR, total_label="EXOTIC LATAM/MIDEAST TOTAL"))
 
     L.extend(_strategy_breakdown_table(
-        "STRATEGY BREAKDOWN — ALL 149 PAIRS (blended reference)",
-        positions, live, symbols=None, universe_size=149,
+        f"STRATEGY BREAKDOWN — ALL {_total_pairs} PAIRS (blended reference)",
+        positions, live, symbols=None, universe_size=_total_pairs,
         color=ALLTIER_COLOR, total_label="ALL TOTAL"))
 
     # ── Footer ────────────────────────────────────────────────────
