@@ -17,11 +17,12 @@
     },
 
     "us_reversion": {
+      "_max_slots_comment": "6 -> 10, 2026-08-28: explicit user request ('extend up to 10, if we got more signals we buy more'). max_universe_pct (10%) would derive ~38-41 slots off the current 385-407 ticker universe -- reversion_max_slots() in atos/capital_config.py caps that, so this is the real ceiling. Each slot shrinks a bit (~1/10 of the sleeve vs ~1/6) but stays well above 1-share-per-slot territory.",
       "enabled": true,
       "allocation_pct": 0.50,
       "max_universe_pct": 0.10,
       "min_slots": 2,
-      "max_slots": 6,
+      "max_slots": 10,
       "stop_pct": 0.04,
       "max_hold_days": 10,
       "sleeve_dd_cap": 0.10,

@@ -33,10 +33,10 @@ from datetime import datetime, date
 
 
 class _Tee:
-    """Write to both the original stdout and a log file simultaneously."""
-    def __init__(self, log_path: str):
-        self._term = sys.stdout
-        self._file = open(log_path, "a", encoding="utf-8", buffering=1)
+    """Write to both an original stream (stdout or stderr) and a shared log file."""
+    def __init__(self, term, log_file):
+        self._term = term
+        self._file = log_file
 
     def write(self, data):
         self._term.write(data)
@@ -46,17 +46,29 @@ class _Tee:
         self._term.flush()
         self._file.flush()
 
-    def close(self):
-        sys.stdout = self._term
-        self._file.close()
-
 
 def _setup_logging():
-    """Redirect stdout → both terminal and data/engine_YYYY-MM-DD.log."""
+    """Redirect stdout AND stderr -> both terminal and data/engine_YYYY-MM-DD.log.
+
+    2026-08-28: found live -- only stdout was ever redirected here, so any
+    real error reported via Python's `logging` module (e.g. saxo_order.py's
+    `logger.error(...)` on a rejected order, which falls through to
+    logging's stderr-only "handler of last resort" since nothing in this
+    module's import chain ever calls logging.basicConfig()) was silently
+    discarded — never landed in data/engine_*.log, never visible anywhere,
+    including when the scheduled task runs with no console window at all.
+    Confirmed live: US Reversion's PYPL buy was REJECTED 4 separate times
+    today with only "no position opened, no DB row recorded" in the log —
+    the actual Saxo API error code/message existed only on the invisible
+    stderr stream. Both streams now share one file handle so nothing is
+    lost, and interleave in the order they were actually written.
+    """
     log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, f"engine_{date.today():%Y-%m-%d}.log")
-    sys.stdout = _Tee(log_path)
+    log_file = open(log_path, "a", encoding="utf-8", buffering=1)
+    sys.stdout = _Tee(sys.stdout, log_file)
+    sys.stderr = _Tee(sys.stderr, log_file)
     return log_path
 
 import pandas as pd
@@ -1334,6 +1346,7 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
         print(f"  [US momentum] instrument_map load failed: {e}"); return
 
     us_open = {t["ticker"]: t for t in open_trades if t.get("market_group") == "US Equities"}
+    tag = "[US momentum DRY-RUN]" if dry_run else "[US momentum]"
 
     # ── Reconcile DB open positions against the real Saxo account ─────────────
     # A DB row can go stale (e.g. a sell attempted against a position that had
@@ -1364,7 +1377,6 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
             print(f"  {tag} RECONCILE skipped — could not fetch Saxo positions: {e}")
 
     tgt = USM.compute_targets(feat_data, US_TICKERS)   # US names only — not the whole universe
-    tag = "[US momentum DRY-RUN]" if dry_run else "[US momentum]"
     print(f"  {tag} risk_off={tgt['risk_off']} | {tgt.get('reason')} | targets={tgt['targets']}")
     fx_usd = _rate_to_sek("USD")
 
