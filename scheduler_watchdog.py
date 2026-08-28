@@ -45,6 +45,7 @@ import os
 import smtplib
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -357,6 +358,25 @@ INTRADAY_REPEATING_TASKS = {
     "Stocks Daily Run", "ETF Daily Run", "Futures Daily Run", "Intraday Monitor",
 }
 
+# Tasks the watchdog is allowed to auto-restart (Start-ScheduledTask) the
+# moment it detects one has gone stale -- added 2026-08-28 after the SIM
+# "Forex Intraday Scan" outage recurred a SECOND time the same day (Task
+# Scheduler's trigger just stopped re-arming it, no error logged anywhere)
+# and had to be manually restarted twice by hand. Explicit user request:
+# "if it fails the watchdog checks and report to safeguard and safeguard
+# fix this error and send confirmation email. it should not stop."
+#
+# Deliberately SIM-only: restarting a task whose name contains "LIVE"
+# would place a real order autonomously -- functionally identical to me
+# placing a live trade myself, which is a standing hard "no" (see the
+# forex/runner.py LIVE_TRADING_HALTED history and every "run manually
+# now" / "open the Live trade" request that was declined this session).
+# Start-ScheduledTask on a LIVE-named task is refused even if it somehow
+# ends up in INTRADAY_REPEATING_TASKS in the future -- this filter is a
+# blanket name check, not a hand-picked list, specifically so a future
+# addition can't accidentally become auto-restartable.
+AUTO_FIX_ELIGIBLE = {n for n in INTRADAY_REPEATING_TASKS if "LIVE" not in n}
+
 
 def _log_content_failure(log_file: str) -> str | None:
     """Return a description if the log's own content indicates a no-op/crash
@@ -382,15 +402,58 @@ def _remediation(task_name: str) -> str:
     return f"Run manually: Start-ScheduledTask -TaskName \"{task_name}\""
 
 
+def _attempt_auto_fix(task_name: str) -> tuple[bool, str]:
+    """Try Start-ScheduledTask once and report whether it actually took.
+
+    Only ever called (from _check_windows_task below) for a task in
+    AUTO_FIX_ELIGIBLE (SIM-only, "LIVE"-named tasks are hard-excluded) and
+    only for the "hasn't fired recently enough" staleness failure -- never
+    for a genuine result-code error or a Disabled task (Start-ScheduledTask
+    can't start a disabled task at all -- that needs a human to re-enable
+    it, e.g. the LIVE EUR quota situation). A blind restart is only safe
+    when the task is already Ready/enabled and just isn't re-arming.
+    """
+    try:
+        subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+             f"Start-ScheduledTask -TaskName '{task_name}'"],
+            capture_output=True, text=True, timeout=30,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except Exception as exc:
+        return False, f"Start-ScheduledTask itself failed to execute: {exc}"
+
+    # Give Task Scheduler a moment to actually transition the task state,
+    # then confirm it's really running rather than trusting a silent
+    # success from the command above (schtasks/Start-ScheduledTask has
+    # returned "success" text before while nothing functionally changed —
+    # see the 2026-08-28 ERROR_NOT_ENOUGH_QUOTA incident).
+    time.sleep(5)
+    info = _query_task_info(task_name)
+    if info is None or "error" in info:
+        return False, "could not re-query task state after restart attempt"
+    state = info.get("state", "?")
+    if state == "Running":
+        return True, "confirmed Running after Start-ScheduledTask"
+    return False, f"restart command sent but task state is '{state}', not 'Running' — needs a manual check"
+
+
 def _check_windows_task(name: str, task_name: str, log_file: str, grace_min: int,
-                        max_first_run_wait_hours: int = 30, info_out: dict | None = None) -> str | None:
+                        max_first_run_wait_hours: int = 30, info_out: dict | None = None,
+                        auto_fixed_out: list | None = None) -> str | None:
     """Return a failure description (with a manual-fire remediation command), or None if healthy.
 
     info_out, if given, gets this task's raw _query_task_info() result stashed
     under `name` whenever the query itself succeeded -- lets main() build the
     periodic "still alive" heartbeat email (see _send_heartbeat) from the same
     query this function already had to make, instead of re-querying Task
-    Scheduler a second time just to report status the caller already has."""
+    Scheduler a second time just to report status the caller already has.
+
+    auto_fixed_out, if given, collects a human-readable line whenever a
+    staleness failure on a task in AUTO_FIX_ELIGIBLE gets auto-restarted
+    and confirmed running -- see _attempt_auto_fix. When that happens this
+    function returns None (treated as healthy this pass) instead of the
+    failure string, since the task is verified running again."""
     if log_file == "engine_TODAY.log":
         today = datetime.now().strftime("%Y-%m-%d")
         log_file = f"engine_{today}.log"
@@ -492,24 +555,47 @@ def _check_windows_task(name: str, task_name: str, log_file: str, grace_min: int
         # NextRunTime claims. The softer, NextRunTime-aware check below
         # still applies to the more ambiguous 3x-grace-to-10h zone, where a
         # genuine overnight dormant window is still a plausible explanation.
+        stale_msg = None
         if now - last_run > timedelta(hours=10):
             mins_ago = (now - last_run).total_seconds() / 60
-            return (f"'{task_name}' hasn't fired since {last_run:%Y-%m-%d %H:%M} "
+            stale_msg = (f"'{task_name}' hasn't fired since {last_run:%Y-%m-%d %H:%M} "
                     f"({mins_ago:.0f} min ago, {mins_ago/60:.1f}h) -- past the 10h hard ceiling no "
                     f"member of INTRADAY_REPEATING_TASKS has a legitimate dormant window anywhere "
                     f"close to, so this is flagged regardless of how healthy NextRunTime looks (a "
                     f"repeating trigger's NextRunTime reflects the SCHEDULE, not whether occurrences "
                     f"actually fired -- it can look perfectly fine while every intraday slot today "
                     f"silently failed). {_remediation(task_name)}")
-        next_run_looks_healthy = next_run and next_run - now <= timedelta(hours=12)
-        if not next_run_looks_healthy:
-            mins_ago = (now - last_run).total_seconds() / 60
-            next_desc = f"{next_run:%Y-%m-%d %H:%M}" if next_run else "none scheduled"
-            return (f"'{task_name}' hasn't fired since {last_run:%Y-%m-%d %H:%M} "
+        else:
+            next_run_looks_healthy = next_run and next_run - now <= timedelta(hours=12)
+            if not next_run_looks_healthy:
+                mins_ago = (now - last_run).total_seconds() / 60
+                next_desc = f"{next_run:%Y-%m-%d %H:%M}" if next_run else "none scheduled"
+                stale_msg = (f"'{task_name}' hasn't fired since {last_run:%Y-%m-%d %H:%M} "
                     f"({mins_ago:.0f} min ago) -- its own {grace_min}-min grace window implies it's "
                     f"supposed to repeat far more often than that, and its NextRunTime ({next_desc}) "
                     f"doesn't look like a healthy near-term occurrence either. Its trigger may have "
                     f"been silently replaced or disabled. {_remediation(task_name)}")
+
+        if stale_msg:
+            # 2026-08-28: auto-restart the SIM-only subset instead of just
+            # alerting and waiting for a human -- see AUTO_FIX_ELIGIBLE and
+            # _attempt_auto_fix's docstrings for the full rationale/safety
+            # boundary (never a "LIVE"-named task).
+            if name in AUTO_FIX_ELIGIBLE:
+                fixed, detail = _attempt_auto_fix(task_name)
+                if fixed:
+                    if auto_fixed_out is not None:
+                        mins_ago = (now - last_run).total_seconds() / 60
+                        auto_fixed_out.append(
+                            f"'{task_name}' had gone silent since {last_run:%Y-%m-%d %H:%M} "
+                            f"({mins_ago:.0f} min ago) -- Task Scheduler's trigger stopped "
+                            f"re-arming it (same failure class as the 2026-08-28 SIM Forex "
+                            f"Intraday Scan outage). Auto-restarted via Start-ScheduledTask "
+                            f"and confirmed it's running again. No human action needed."
+                        )
+                    return None  # verified running again -- healthy this pass
+                stale_msg = stale_msg + f" [AUTO-FIX ATTEMPTED AND DID NOT CONFIRM: {detail} — needs a human]"
+            return stale_msg
 
     if result not in (0, TASK_NEVER_RUN):
         # A non-zero/unrecognized result code can be transient — Task Scheduler
@@ -631,6 +717,50 @@ check data/*.log and Task Scheduler directly for detail</div>
             print(f"  - {f}", file=sys.stderr)
 
 
+def _send_autofix_confirmation(fixed: list[str], label: str = "Scheduler Watchdog") -> None:
+    """Distinct email sent whenever this run auto-restarted and confirmed at
+    least one stuck task -- kept separate from _send_alert (failure, human
+    action needed) and _send_heartbeat (periodic "still fine") so this one
+    specific outcome ("it broke, but the watchdog already fixed it") is
+    unambiguous at a glance. Explicit user request 2026-08-28: "if it fails
+    the watchdog checks and report to safeguard and safeguard fix this
+    error and send an confirmation email. it should not stop.\""""
+    if not os.path.exists(EMAIL_CFG):
+        return
+    with open(EMAIL_CFG) as f:
+        cfg = json.load(f)
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M PKT")
+    rows = "".join(f"<li style='margin:6px 0'>{f}</li>" for f in fixed)
+    html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="font-family:-apple-system,sans-serif;background:#0d1117;color:#e6edf3;padding:20px">
+<div style="max-width:640px;margin:0 auto;background:#161b22;border-radius:10px;
+            border-top:3px solid #d29922;padding:20px 24px">
+<h2 style="color:#e3b341;margin:0 0 12px">&#128295; {label} — Auto-Fixed</h2>
+<div style="color:#8b949e;font-size:12px;margin-bottom:14px">{now} — {len(fixed)} task(s) went stale and were automatically restarted</div>
+<ul style="padding-left:18px;font-size:13px">{rows}</ul>
+<hr style="border:none;border-top:1px solid #21262d;margin:16px 0">
+<div style="color:#484f58;font-size:11px">ATOS {label} · SIM-only auto-restart (never a LIVE-named task) ·
+scanning continued without you having to step in</div>
+</div></body></html>"""
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = f"[ATOS] {label} — auto-fixed {len(fixed)} task(s)"
+        msg["From"]    = f"ATOS {label} <{cfg['sender_email']}>"
+        msg["To"]      = cfg["recipient_email"]
+        msg.attach(MIMEText(html, "html"))
+        with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as s:
+            s.starttls()
+            s.login(cfg["sender_email"], cfg["sender_password"])
+            s.sendmail(cfg["sender_email"], cfg["recipient_email"], msg.as_string())
+        print(f"[{label}] auto-fix confirmation email sent for {len(fixed)} task(s)")
+    except Exception as exc:
+        print(f"[{label}] AUTO-FIX CONFIRMATION EMAIL FAILED to send: {exc}", file=sys.stderr)
+        for f in fixed:
+            print(f"  - {f}", file=sys.stderr)
+
+
 def _send_heartbeat(task_info: dict, unhealthy: list[str], label: str = "Scheduler Watchdog") -> None:
     """Positive "still alive" confirmation -- separate from _send_alert, which
     only ever fires on failure. Added 2026-08-26: the user has no way to tell
@@ -708,10 +838,12 @@ def main() -> None:
     failures       = []   # new alerts to actually send this run
     unhealthy      = []   # every currently-failing task, regardless of dedup
     task_info      = {}   # name -> raw _query_task_info() result, for the heartbeat email
+    auto_fixed     = []   # tasks this run auto-restarted and confirmed running again
     now_iso        = datetime.now().isoformat()
 
     for name, (task_name, log_file, grace, max_wait) in tasks.items():
-        result = _check_windows_task(name, task_name, log_file, grace, max_wait, info_out=task_info)
+        result = _check_windows_task(name, task_name, log_file, grace, max_wait,
+                                      info_out=task_info, auto_fixed_out=auto_fixed)
         if args.verbose:
             print(f"[{'FAIL' if result else 'ok  '}] {name}: {result or 'healthy'}")
         if result:
@@ -748,6 +880,12 @@ def main() -> None:
                   f"within the last {REALERT_AFTER_HOURS}h, not re-sending: {', '.join(unhealthy)}")
     elif args.verbose:
         print(f"[{label}] all {len(tasks) + (0 if args.only_forex else len(CLAUDE_TASKS))} tasks healthy at {now_iso}")
+
+    if auto_fixed:
+        _send_autofix_confirmation(auto_fixed, label)
+        if args.verbose:
+            for f in auto_fixed:
+                print(f"[{label}] AUTO-FIXED: {f}")
 
     # Heartbeat: positive confirmation the scans actually ran, independent of
     # whether anything failed -- see _send_heartbeat's docstring. Due when
