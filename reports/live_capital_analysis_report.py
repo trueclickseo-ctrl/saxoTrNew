@@ -11,8 +11,10 @@ Three sheets:
     coverage counts, at-a-glance verdict on open positions.
   - "34-Cell Minimum Account Size"   -- 17 HIGH_VOLUME_SYMBOLS pairs x
     rsi/bb, sorted by the real minimum EUR-equivalent equity needed for
-    BOTH the risk gate (naturally clears 1,000 units at 0.25% risk) and
-    the cost gate (target profit >= 3x real round-trip cost) to pass.
+    BOTH the risk gate (naturally clears 1,000 units at LIVE's current
+    RISK_PCT -- 0.75% as of 2026-08-28, read live from forex.runner.
+    LIVE_RISK_PCT_OVERRIDE, not hardcoded) and the cost gate (target
+    profit >= 3x real round-trip cost) to pass.
   - "Open LIVE Positions"            -- every currently-open position on
     either real-money account, including legacy positions outside the
     current 17-pair universe, with real cost economics: what it needed
@@ -46,6 +48,7 @@ if not os.path.exists(_cache_path):
 with open(_cache_path) as f:
     data = json.load(f)
 cells, positions = data["cells"], data["positions"]
+risk_pct = data.get("risk_pct", 0.0025)
 
 HEADER_FILL = PatternFill("solid", fgColor="1F2937")
 HEADER_FONT = Font(color="FFFFFF", bold=True)
@@ -75,7 +78,7 @@ ws_c.title = "34-Cell Minimum Account Size"
 ws_c["A1"] = f"ATOS Forex LIVE -- 34-Cell Minimum Account Size Analysis -- {NOW} PKT"
 ws_c["A1"].font = Font(bold=True, size=13)
 ws_c.merge_cells("A1:I1")
-ws_c["A2"] = ("At 0.25% risk (RISK_PCT), never forcing a trade below 1,000 units, and requiring "
+ws_c["A2"] = (f"At {risk_pct*100:.2f}% risk (LIVE's current RISK_PCT), never forcing a trade below 1,000 units, and requiring "
               "target profit >= 3x real round-trip cost (MIN_EDGE_TO_COST_RATIO). "
               "\"Min EUR (both gates)\" is the real minimum account equity, EUR-equivalent, needed "
               "for this pair+strategy to ever be tradeable under the current LIVE rules.")
@@ -156,7 +159,8 @@ ws_s.merge_cells("A1:D1")
 
 cheapest = sorted_cells[0]
 most_expensive = sorted_cells[-1]
-thresholds = [500, 900, 1000, 1500, 2000, 3000, 4000, 5000, 6500]
+CURRENT_CAP_EUR = 1350  # forex_live_eur's configured cap, config/capital.json -- marked in the table below
+thresholds = sorted(set([500, 900, 1000, CURRENT_CAP_EUR, 1500, 2000, 3000, 4000, 5000, 6500]))
 coverage = {t: sum(1 for c in cells if c["eq_eur_both_gates"] <= t) for t in thresholds}
 
 r0 = 3
@@ -165,12 +169,17 @@ ws_s.cell(row=r0, column=2, value=f"{cheapest['symbol']} / {cheapest['strategy']
 r0 += 1
 ws_s.cell(row=r0, column=1, value="Most expensive cell (both gates)").font = BOLD
 ws_s.cell(row=r0, column=2, value=f"{most_expensive['symbol']} / {most_expensive['strategy'].upper()} -- EUR {most_expensive['eq_eur_both_gates']:,.0f}")
-r0 += 2
+r0 += 1
+ws_s.cell(row=r0, column=1, value=f"(all figures below at {risk_pct*100:.2f}% risk -- LIVE's current RISK_PCT)").font = Font(italic=True, color="666666")
+r0 += 1
 ws_s.cell(row=r0, column=1, value="Capital level").font = BOLD
 ws_s.cell(row=r0, column=2, value="Cells tradeable / 34").font = BOLD
 r0 += 1
 for t in thresholds:
-    ws_s.cell(row=r0, column=1, value=f"EUR {t:,}")
+    label = f"EUR {t:,}" + ("  <- current configured cap" if t == CURRENT_CAP_EUR else "")
+    ws_s.cell(row=r0, column=1, value=label)
+    if t == CURRENT_CAP_EUR:
+        ws_s.cell(row=r0, column=1).font = BOLD
     ws_s.cell(row=r0, column=2, value=f"{coverage[t]} / 34")
     if coverage[t] == 0:
         ws_s.cell(row=r0, column=2).font = Font(color="B91C1C")

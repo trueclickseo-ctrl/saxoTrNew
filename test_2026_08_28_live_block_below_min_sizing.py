@@ -123,37 +123,93 @@ _run("forex/runner.py has an explicit skip when size_position() returns 0 (not p
 
 
 # ═══════════════════════════════════════════════════════════════════════
-section("3. Sanity -- current LIVE pilot capital genuinely can't clear the threshold")
+section("3. Sanity -- LIVE pilot capital unlocks SOME cells, not all (2026-08-28 raise)")
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_current_live_caps_block_every_high_volume_pair():
-    # Documents the real, verified consequence of this change at today's
-    # capital levels -- if this ever starts passing (i.e. some pair/
-    # strategy combo naturally clears 1,000 units), that's a sign capital
-    # or RISK_PCT has grown enough that this is worth re-visiting with
-    # the user, not a test to "fix" by loosening.
+def test_live_caps_reflect_the_2026_08_28_pooled_balance_raise():
+    # 2026-08-28: confirmed live via Saxo's own /port/v1/balances/me that
+    # the SEK/EUR/USD sub-accounts share ONE real pooled cash balance
+    # (~15,770 SEK that day) -- there was never a separate 6,000 SEK +
+    # 500 EUR, both were artificial software slices of the same real
+    # total. Explicit user decision (AskUserQuestion): raise both caps to
+    # reflect that real pool (15,000 SEK / 1,350 EUR, both strategies
+    # sharing it), paired with LIVE_RISK_PCT_OVERRIDE=0.75%.
     import atos.capital_config as cc
-    import forex.strategy_rsi as rsi_mod
-    import forex.strategy_bb as bb_mod
     sek_cap = cc.forex_live_risk_equity_sek()
     eur_cap = cc.forex_live_eur_risk_equity_eur()
-    assert sek_cap <= 10_000, f"expected the SEK pilot cap to still be small (~6,000), got {sek_cap}"
-    assert eur_cap <= 1_000, f"expected the EUR pilot cap to still be small (~500), got {eur_cap}"
-    # A representative wide-stop pair (~0.0044 EURUSD-scale ATR, rsi's
-    # 1.5x multiplier) at the SEK cap converted at a plausible ~10 SEK/EUR
-    # rate -- comfortably above any real ATR seen on the 17 HIGH_VOLUME
-    # pairs (confirmed live 2026-08-28, max raw_units was ~288 of 1,000
-    # needed, EURGBP/rsi at the SEK cap).
-    eq_quote_plausible_upper_bound = (sek_cap / 8.0)  # generous SEK/EUR floor
-    qty = rsi_mod.size_position(eq_quote_plausible_upper_bound, 0.0027, 1000,
-                                 risk_pct=0.0025, block_below_min=True)
-    assert qty == 0, (
-        f"expected the SEK cap to still be far below what's needed to clear 1,000 units "
-        f"on a representative pair, got qty={qty} -- if this now passes, capital has "
-        f"genuinely grown enough to revisit this with the user"
+    assert sek_cap == 15_000.0, f"expected the 2026-08-28 15,000 SEK cap, got {sek_cap}"
+    assert eur_cap == 1_350.0, f"expected the 2026-08-28 1,350 EUR cap, got {eur_cap}"
+_run("atos.capital_config: LIVE caps reflect the 2026-08-28 pooled-balance raise (15,000 SEK / 1,350 EUR)",
+     test_live_caps_reflect_the_2026_08_28_pooled_balance_raise)
+
+
+def test_some_but_not_all_cells_clear_both_gates_at_new_caps():
+    # This is the actual point of the 2026-08-28 raise: unlock SOME of the
+    # 34 (17 HIGH_VOLUME_SYMBOLS pairs x rsi/bb) cells, not all of them --
+    # a deliberate moderate step (0.75% risk, not 1.00%'s 28/34). Uses
+    # real live Saxo ATR/cost, so the exact count drifts day to day as
+    # market conditions move (11/34 confirmed the day this was written) --
+    # asserting a loose range here, not an exact count, so normal ATR
+    # movement doesn't make this test flaky. If this ever shows 0/34
+    # (the raise stopped working) or 34/34 (capital/risk grew enough for
+    # full coverage), that's worth a fresh conversation with the user,
+    # not a silent "fix" to this test.
+    import math
+    import forex.runner as r
+    from forex.strategy import _atr
+    from forex.universe import get_pair, HIGH_VOLUME_SYMBOLS
+    import forex.strategy_rsi as rsi_mod
+    import forex.strategy_bb as bb_mod
+    import atos.capital_config as cc
+
+    r.set_account_env("sim")
+    sek_cap = cc.forex_live_risk_equity_sek()
+    risk_pct = 0.0075
+    tp_rr = r.DEFAULT_TP_RR
+    min_ratio = r.MIN_EDGE_TO_COST_RATIO
+    strat_mult = {"rsi": (1.5, rsi_mod), "bb": (2.0, bb_mod)}
+
+    both_pass = 0
+    total = 0
+    for sym in sorted(HIGH_VOLUME_SYMBOLS):
+        pinfo = get_pair(sym)
+        quote = sym[3:6]
+        uic = pinfo["uic"]
+        min_units = pinfo["min_units"]
+        df = r._fetch_history(uic, count=60)
+        if df is None or len(df) < 20:
+            continue
+        atr = float(_atr(df["High"], df["Low"], df["Close"]).iloc[-1])
+        sek_rate = r._sek_per_unit(quote)
+        if not sek_rate:
+            continue
+        eq_sek_quote = sek_cap / sek_rate
+        cost_quote = r._round_trip_cost_quote_ccy(uic, 1000, None)
+        if cost_quote is None:
+            continue
+        for strat_name, (mult, mod) in strat_mult.items():
+            total += 1
+            qty = mod.size_position(eq_sek_quote, atr, min_units, risk_pct=risk_pct, block_below_min=True)
+            if qty <= 0:
+                continue
+            stop_dist = mult * atr
+            target_dist = stop_dist * tp_rr
+            needed_qty = max(min_units, math.ceil((min_ratio * cost_quote) / target_dist / min_units) * min_units)
+            if qty >= needed_qty:
+                both_pass += 1
+
+    assert total >= 30, f"expected to successfully evaluate most of the 34 cells, only got {total}"
+    assert both_pass > 0, (
+        f"expected at least 1/{total} cells to clear both gates at the new caps -- "
+        f"if this is 0, the 2026-08-28 capital raise isn't achieving its purpose, worth a fresh look"
     )
-_run("current LIVE pilot capital (SEK ~6,000 / EUR ~500) still can't naturally clear 1,000 units on a representative pair",
-     test_current_live_caps_block_every_high_volume_pair)
+    assert both_pass < total, (
+        f"expected LESS than all {total} cells to clear -- this was a deliberate moderate raise "
+        f"(0.75% risk, not 1.00%), not meant for full 34/34 coverage; if this is now {total}/{total}, "
+        f"capital/risk has grown enough to revisit the decision with the user"
+    )
+_run("Some (not all) of the 34 cells clear both gates at the new 15,000 SEK / 0.75% risk setting (real live data)",
+     test_some_but_not_all_cells_clear_both_gates_at_new_caps)
 
 
 print(f"\n{BOLD}{'='*70}{RESET}")

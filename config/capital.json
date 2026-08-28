@@ -71,30 +71,48 @@
       "the SIM account above -- different broker account, different Saxo app",
       "registration, different state file (data/forex_live_state.json). The account",
       "itself is opened/funded in SEK, so risk_equity_sek is a direct figure, no",
-      "EUR conversion needed (unlike forex/futures SIM above). Restricted by",
-      "explicit user decision to exactly 3 strategies (donchian/ema/rsi) and the",
-      "34 CORE_SYMBOLS pairs only -- enforced in forex/runner.py's",
-      "LIVE_ALLOWED_STRATEGIES / _filter_pairs_for_account(), not just here."
+      "EUR conversion needed (unlike forex/futures SIM above).",
+      "2026-08-28: raised 6,000 -> 15,000 SEK, explicit user decision (via",
+      "AskUserQuestion: 'One unified cap, both strategies share it'), after",
+      "confirming live via Saxo's own /port/v1/balances/me that the SEK/EUR/USD",
+      "sub-accounts are NOT separately funded at all -- querying ANY of the 3",
+      "AccountKeys returns the identical pooled CashBalance (~15,770 SEK that day),",
+      "always reported in SEK. There was never really '6,000 SEK here, 500 EUR",
+      "there' as two separate pots -- both were always artificial software slices",
+      "of the SAME one real balance. 15,000 (not the exact 15,770) leaves a small",
+      "buffer since the real balance drifts with margin/P&L day to day. Paired",
+      "with forex_live_eur's risk_equity_eur below (~equivalent amount, same real",
+      "pool) and LIVE_RISK_PCT_OVERRIDE=0.75% (forex/runner.py) -- together these",
+      "unlock 14 of the 34 (17 HIGH_VOLUME_SYMBOLS pairs x rsi/bb) cells that",
+      "clear both the risk gate and the cost gate. IMPORTANT KNOWN GAP: each",
+      "account's own portfolio heat cap (_heat_allows_entry()) only sees ITS OWN",
+      "open positions (separate state files) -- it has no visibility into the",
+      "other account's exposure against this same shared real pool, so real",
+      "aggregate risk can exceed what either account's own 6% heat check shows.",
+      "Restricted by explicit user decision to exactly bb (see forex/runner.py's",
+      "LIVE_ALLOWED_STRATEGIES) on the 17 HIGH_VOLUME_SYMBOLS pairs only."
     ],
     "forex_live": {
       "enabled": true,
-      "risk_equity_sek": 6000
+      "risk_equity_sek": 15000
     },
 
     "_forex_live_eur_comment": [
       "2026-08-26: a SECOND real-money Saxo account -- the EUR sub-account under",
       "the same LIVE login as forex_live above (see forex/runner.py _account()'s",
       "Currency=='EUR' matching), genuinely separate state file",
-      "(data/forex_live_eur_state.json). Explicit user request: test RSI Pullback,",
-      "and ONLY RSI Pullback, on the 83 EXOTIC pairs -- isolated from the SEK",
-      "account's existing donchian/ema/rsi-on-CORE trading. The sub-account holds",
-      "900 EUR; user explicitly wants only 500 EUR of it used for sizing, not the",
-      "full balance. Enforced in forex/runner.py's LIVE_EUR_ALLOWED_STRATEGIES /",
-      "_filter_pairs_for_account(), not just here."
+      "(data/forex_live_eur_state.json).",
+      "2026-08-28: raised 500 -> 1,350 EUR (~= 15,000 SEK at the live rate that",
+      "day) -- see forex_live's comment above for the full rationale (there is no",
+      "real separate EUR balance; Saxo pools all 3 sub-accounts into one real cash",
+      "balance, confirmed live). Restricted by explicit user decision to exactly",
+      "rsi (see forex/runner.py's LIVE_EUR_ALLOWED_STRATEGIES) on the same 17",
+      "HIGH_VOLUME_SYMBOLS pairs as the SEK account (no more exotic pairs live,",
+      "since the 2026-08-28 two-account redesign)."
     ],
     "forex_live_eur": {
       "enabled": true,
-      "risk_equity_eur": 500
+      "risk_equity_eur": 1350
     }
 
   }

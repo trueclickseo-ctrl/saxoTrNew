@@ -39,7 +39,11 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 
 r.set_account_env("sim")  # market-data-only calls -- same real Saxo quotes, no order placement
-RISK_PCT = 0.0025
+# 2026-08-28 (later same day): use the ACTUAL currently-configured LIVE risk
+# (0.75% as of this decision), not the original 0.25% exploratory baseline --
+# this report should reflect what LIVE really does today, not a hypothetical.
+# Falls back to 0.0025 if the override is ever cleared back to None.
+RISK_PCT = r.LIVE_RISK_PCT_OVERRIDE if r.LIVE_RISK_PCT_OVERRIDE is not None else 0.0025
 TP_RR = r.DEFAULT_TP_RR
 MIN_RATIO = r.MIN_EDGE_TO_COST_RATIO
 STRAT_MULT = {"rsi": 1.5, "bb": 2.0, "donchian": 2.0}  # ATR_STOP_MULT per strategy
@@ -133,7 +137,7 @@ for account_label, state_file in [("live (SEK)", "forex_live_state.json"),
         })
 print(f"Open LIVE positions: {len(positions)} gathered")
 
-out = {"cells": cells, "positions": positions}
+out = {"cells": cells, "positions": positions, "risk_pct": RISK_PCT}
 out_path = os.path.join(BASE_DIR, ".devtools", "_live_capital_analysis.json")
 os.makedirs(os.path.dirname(out_path), exist_ok=True)
 with open(out_path, "w") as f:

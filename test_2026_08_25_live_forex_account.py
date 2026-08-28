@@ -487,12 +487,18 @@ section("6. atos/capital_config.py — forex_live has its own SEK-denominated ca
 # ═══════════════════════════════════════════════════════════════════════
 
 def test_forex_live_capital_cap_is_sek_and_separate_from_sim():
+    # 2026-08-28: raised 6,000 -> 15,000 SEK -- confirmed live via Saxo's own
+    # /port/v1/balances/me that the SEK/EUR/USD sub-accounts share ONE real
+    # pooled cash balance (~15,770 SEK that day), not three separate pots;
+    # explicit user decision (AskUserQuestion) to size against that real
+    # total rather than the old artificial 6,000 SEK slice. See
+    # config/capital.json's forex_live comment for the full rationale.
     import atos.capital_config as cap
     live_cap = cap.forex_live_risk_equity_sek()
     sim_cap  = cap.forex_risk_equity_eur()
-    assert live_cap == 6000.0, f"expected the confirmed 6,000 SEK opening balance, got {live_cap}"
+    assert live_cap == 15000.0, f"expected the 2026-08-28 15,000 SEK cap, got {live_cap}"
     assert live_cap != sim_cap, "LIVE's cap must be a separate config value from SIM's, not accidentally shared"
-_run("atos.capital_config: forex_live_risk_equity_sek() returns 6,000 SEK, independent of SIM's EUR cap",
+_run("atos.capital_config: forex_live_risk_equity_sek() returns 15,000 SEK, independent of SIM's EUR cap",
      test_forex_live_capital_cap_is_sek_and_separate_from_sim)
 
 
@@ -1190,11 +1196,11 @@ def test_risk_equity_under_live_env():
     import forex.runner as r
     r.set_account_env("live")
     try:
-        capped = r._risk_equity(1_000_000.0)   # a broker balance far above the 6,000 SEK cap
-        assert capped == 6000.0, f"expected LIVE's 6,000 SEK cap to bind, got {capped}"
+        capped = r._risk_equity(1_000_000.0)   # a broker balance far above the 15,000 SEK cap
+        assert capped == 15000.0, f"expected LIVE's 2026-08-28 15,000 SEK cap to bind, got {capped}"
     finally:
         r.set_account_env("sim")
-_run("forex/runner: _risk_equity() under LIVE caps at the 6,000 SEK configured capital (was untested)",
+_run("forex/runner: _risk_equity() under LIVE caps at the 15,000 SEK configured capital (was untested)",
      test_risk_equity_under_live_env)
 
 
