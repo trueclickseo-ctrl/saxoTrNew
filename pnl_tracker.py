@@ -631,18 +631,31 @@ def get_strategy_summary(module: str = "forex", symbols: set | None = None) -> l
             SELECT strategy, COUNT(*) AS n FROM trades
              WHERE module=? AND status='open'{sym_filter} GROUP BY strategy
         """, params).fetchall()}
+        # 2026-08-28: which symbol(s) each strategy actually traded --
+        # futures_dashboard's STRATEGY BREAKDOWN showed strategy-level P&L
+        # with no indication of which market it came from (e.g. "MACD 2
+        # 0W/0L") -- same DISTINCT-symbol pattern already used by
+        # get_strategy_summary_since() below, just also computed for the
+        # all-time view.
+        symbols_by_strategy: dict = {}
+        for row in c.execute(f"""
+            SELECT DISTINCT strategy, symbol FROM trades
+             WHERE module=? AND status='closed'{sym_filter}
+        """, params).fetchall():
+            symbols_by_strategy.setdefault(row["strategy"], []).append(row["symbol"])
 
     result = []
     for r in rows:
         n  = r["n"] or 0
         gp = r["gross_profit"] or 0.0
         gl = abs(r["gross_loss"] or 0.0)
+        strat = r["strategy"] or "—"
         result.append({
-            "strategy":      r["strategy"] or "—",
+            "strategy":      strat,
             "trades":        n,
             "wins":          r["wins"]   or 0,
             "losses":        r["losses"] or 0,
-            "open":          open_counts.get(r["strategy"], 0),
+            "open":          open_counts.get(strat, 0),
             "win_rate":      round((r["wins"] or 0) / n * 100, 1) if n else 0.0,
             "total_pnl":     round(r["total_pnl"] or 0.0, 2),
             "profit_factor": round(gp / gl, 2) if gl > 0 else None,
@@ -650,6 +663,7 @@ def get_strategy_summary(module: str = "forex", symbols: set | None = None) -> l
             "gross_loss":    round(gl, 2),
             "best":          round(r["best"]  or 0.0, 2),
             "worst":         round(r["worst"] or 0.0, 2),
+            "symbols":       sorted(symbols_by_strategy.get(strat, [])),
         })
     return result
 

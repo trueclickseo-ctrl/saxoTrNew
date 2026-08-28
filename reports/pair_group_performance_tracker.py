@@ -9,7 +9,7 @@ keep that sheet with you... Track the performance of Strategies Group
 Wise and Track the Performance of Pairs wise... Important do this
 everyday when the trading is close."
 
-Two sheets, both built from the same trade-level data as
+Five sheets, all built from the same trade-level data as
 reports/daily_sim_report.py:
   - "Per-Group Performance"  -- one row per Forex Grouping tier (the
     EXACT names forex_dashboard.py uses: High Volume, Core Standard,
@@ -20,6 +20,12 @@ reports/daily_sim_report.py:
     including pairs with zero trades so far -- explicitly listed as
     "NO DATA" rather than silently absent, so a newly-added pair's
     coverage gap is visible, not invisible).
+  - "Daily/Weekly/Monthly Performance" (added 2026-08-28, explicit user
+    request -- "Important do this everyday when the trading is close...
+    keep track daily, weekly, monthly") -- one row per calendar day / ISO
+    week / month that has at least one CLOSED trade, oldest first. Only
+    closed trades are bucketed (an open position has no "when this
+    happened" close date yet) -- see reports/_perf_common.py.
 
 Same two-phase split as daily_sim_report.py/live_readiness_report.py
 (forex.runner transitively imports torch, not installed on whichever
@@ -40,6 +46,8 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.formatting.rule import CellIsRule
 from datetime import datetime
+from _perf_common import (parse_close_date, day_key, week_key, month_key,
+                           sorted_distinct_period_keys, write_metric_formulas, METRIC_HEADERS)
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -99,13 +107,16 @@ wb = openpyxl.Workbook()
 ws = wb.active
 ws.title = "Trade Detail"
 style_header(ws, ["Strategy", "Pair", "Group", "Direction", "Units", "Status",
-                   "Gross P&L (EUR)", "Commission (EUR)", "Net P&L (EUR)", "Net Result"])
+                   "Gross P&L (EUR)", "Commission (EUR)", "Net P&L (EUR)", "Net Result",
+                   "Close Date", "Week", "Month"])
 row = 2
 for t in usable:
     net = t["net_pnl_eur"]
     net_result = "WIN" if net > 0 else "LOSS"
+    d = parse_close_date(t.get("timestamp_close"))
     vals = [t["strategy"], t["symbol"], t["group"], t["direction"], t["quantity"], t["status"],
-            t["gross_pnl_eur"], t["commission_eur"], net, net_result]
+            t["gross_pnl_eur"], t["commission_eur"], net, net_result,
+            day_key(d) if d else "", week_key(d) if d else "", month_key(d) if d else ""]
     for i, v in enumerate(vals, 1):
         c = ws.cell(row=row, column=i, value=v)
         c.border = BORDER
@@ -113,7 +124,7 @@ for t in usable:
             c.fill = GREEN_FILL if net_result == "WIN" else RED_FILL
     row += 1
 LAST_ROW = row - 1
-for i, w in enumerate([12, 9, 24, 10, 10, 8, 14, 14, 12, 10], 1):
+for i, w in enumerate([12, 9, 24, 10, 10, 8, 14, 14, 12, 10, 12, 10, 10], 1):
     ws.column_dimensions[get_column_letter(i)].width = w
 ws.freeze_panes = "A2"
 ws.sheet_state = "hidden"
@@ -209,6 +220,45 @@ for i, w in enumerate([10, 24, 9, 11, 8, 15, 15, 14, 13], 1):
     ws_p.column_dimensions[get_column_letter(i)].width = w
 ws_p.freeze_panes = "A4"
 ws_p.auto_filter.ref = f"A3:I{LAST_PAIR_ROW}"
+
+# ============================================================
+# Sheets 3-5: Daily / Weekly / Monthly Performance (2026-08-28)
+# ============================================================
+TIME_HEADERS = ["Period"] + METRIC_HEADERS
+TIME_COL_WIDTHS = [14, 9, 11, 8, 15, 15, 14, 13]
+
+
+def build_time_sheet(title, td_col_letter, key_fn):
+    keys = sorted_distinct_period_keys(usable, key_fn)
+    ws_t = wb.create_sheet(title)
+    ws_t["A1"] = f"ATOS Forex -- {title} -- last updated {NOW} PKT"
+    ws_t["A1"].font = Font(bold=True, size=13)
+    ws_t.merge_cells("A1:H1")
+    style_header(ws_t, TIME_HEADERS, row=3)
+    if not keys:
+        ws_t.cell(row=4, column=1, value="No closed trades with a known close date yet.").font = Font(italic=True, color="999999")
+        for i, w in enumerate(TIME_COL_WIDTHS, 1):
+            ws_t.column_dimensions[get_column_letter(i)].width = w
+        return
+    r = 4
+    for key in keys:
+        ws_t.cell(row=r, column=1, value=key).font = BOLD
+        crit = f"{TD}!${td_col_letter}$2:${td_col_letter}${LAST_ROW},\"{key}\""
+        write_metric_formulas(ws_t, r, crit, TD, LAST_ROW, start_col=2)
+        for c in range(1, 9):
+            ws_t.cell(row=r, column=c).border = BORDER
+        r += 1
+    last_row_t = r - 1
+    ws_t.conditional_formatting.add(f"G4:G{last_row_t}", CellIsRule(operator="lessThan", formula=["0"], fill=RED_FILL))
+    ws_t.conditional_formatting.add(f"G4:G{last_row_t}", CellIsRule(operator="greaterThanOrEqual", formula=["0"], fill=GREEN_FILL))
+    for i, w in enumerate(TIME_COL_WIDTHS, 1):
+        ws_t.column_dimensions[get_column_letter(i)].width = w
+    ws_t.freeze_panes = "A4"
+
+
+build_time_sheet("Daily Performance", "K", day_key)
+build_time_sheet("Weekly Performance", "L", week_key)
+build_time_sheet("Monthly Performance", "M", month_key)
 
 out_path = os.path.join(DATA_DIR, "forex_performance_tracker.xlsx")
 wb.save(out_path)

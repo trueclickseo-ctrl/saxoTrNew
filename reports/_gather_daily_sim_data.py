@@ -59,7 +59,8 @@ for row in closed_rows:
                     "quantity": qty, "entry": entry, "exit": exitp, "status": "closed",
                     "exit_reason": row["exit_reason"], "gross_pnl_eur": round(gross_eur, 2),
                     "commission_eur": round(cost_eur, 2) if cost_eur is not None else None,
-                    "net_pnl_eur": round(net_eur, 2) if net_eur is not None else None})
+                    "net_pnl_eur": round(net_eur, 2) if net_eur is not None else None,
+                    "timestamp_close": row["timestamp_close"]})
 
 with open(os.path.join(DATA_DIR, "forex_state.json")) as f:
     state = json.load(f)

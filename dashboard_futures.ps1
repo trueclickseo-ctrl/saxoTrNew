@@ -174,8 +174,8 @@ function Draw-Dashboard {
         $todayByStrat = @{}
         foreach ($t in $statsToday) { $todayByStrat[$t.strategy] = $t }
 
-        Write-Host ("  {0,-10} {1,7} {2,8} {3,7} {4,7} {5,14} {6,14}" -f `
-            "Strategy","Closed","W/L","WR%","PF","All-Time P&L","Today") -ForegroundColor DarkGray
+        Write-Host ("  {0,-10} {1,7} {2,8} {3,7} {4,7} {5,14} {6,14}  {7}" -f `
+            "Strategy","Closed","W/L","WR%","PF","All-Time P&L","Today","Markets") -ForegroundColor DarkGray
         Write-Host "  $("-" * 72)" -ForegroundColor DarkGray
 
         foreach ($s in ($stats | Sort-Object -Property total_pnl -Descending)) {
@@ -187,12 +187,18 @@ function Draw-Dashboard {
             $todayEntry = $todayByStrat[$s.strategy]
             $todayStr  = if ($todayEntry) { "{0:+0.00;-0.00}" -f [double]$todayEntry.total_pnl } else { "-" }
             $todayC    = if ($todayEntry -and [double]$todayEntry.total_pnl -lt 0) { "Red" } elseif ($todayEntry) { "Green" } else { "DarkGray" }
+            # 2026-08-28: which market(s) this strategy's closed trades were
+            # actually on -- was entirely missing before (e.g. "MACD 2
+            # 0W/0L 0.0% - +0.00 -" gave no way to tell which of the 13
+            # futures markets those 2 trades were even in).
+            $markets = if ($s.symbols -and @($s.symbols).Count -gt 0) { (@($s.symbols) -join ", ") } else { "-" }
 
             Write-Host ("  {0,-10} " -f $s.strategy.ToUpper()) -NoNewline -ForegroundColor $stratC
             $wl = "{0}W/{1}L" -f $s.wins, $s.losses
             Write-Host ("{0,7} {1,7} {2,7} {3,7} " -f $s.trades, $wl, $wr, $pf) -NoNewline -ForegroundColor White
             Write-Host ("{0,14}" -f $pnl) -NoNewline -ForegroundColor $pnlC
-            Write-Host ("{0,14}" -f $todayStr) -ForegroundColor $todayC
+            Write-Host ("{0,14}" -f $todayStr) -NoNewline -ForegroundColor $todayC
+            Write-Host ("  {0}" -f $markets) -ForegroundColor DarkGray
         }
     }
     NL
