@@ -193,11 +193,21 @@ def _max_currency_exposure() -> int:
 # execution confirms spreads/fills/costs match assumptions, scale toward
 # the intended risk"). The mechanism is built (size_position() in bb/rsi/
 # pullback all accept an optional risk_pct override now) -- the actual
-# number below is a placeholder pending that decision, deliberately an
-# obviously-wrong sentinel (None means "no override, use SIM's 0.25%")
-# rather than a guessed real value. Do not treat None here as "decided
-# not to reduce it" -- it means the question hasn't been answered yet.
-LIVE_RISK_PCT_OVERRIDE: float | None = None
+# 2026-08-28: reversed from the 2026-08-27 plan above -- real per-cell
+# analysis (17 HIGH_VOLUME_SYMBOLS pairs x rsi/bb, real Saxo ATR/cost)
+# showed 0.25% (and even 0.50%) clears the risk gate AND the cost gate
+# together on 0/34 cells at any realistic LIVE capital level (up to a
+# combined ~1,441 EUR account -- 900 EUR + 6,000 SEK at the live
+# EUR/SEK rate). 0.75% clears 14/34; 1.00% clears 28/34. Explicit user
+# decision (via AskUserQuestion, presented with the real per-risk-level
+# cell counts): 0.75%, LARGER than SIM's 0.25%, not smaller as
+# originally planned -- deliberately overriding the 2026-08-27 "start
+# smaller" intent now that the real cost-viability math is known. Paired
+# same-day with re-enabling the portfolio heat cap (see
+# _heat_allows_entry()) for LIVE/LIVE_EUR, since a bigger RISK_PCT
+# without that gate reintroduces exactly the correlated-position risk
+# the heat cap exists to catch.
+LIVE_RISK_PCT_OVERRIDE: float | None = 0.0075
 
 
 def _live_risk_pct() -> float | None:
@@ -1339,10 +1349,24 @@ def _heat_allows_entry(positions: dict, equity: float) -> bool:
     entries, I want to test fully all strategies" — while the SIM account is
     scanning the expanded 117-pair universe. Heat is still computed and
     logged every run (telemetry, and still shown via `--status`) so real risk
-    is visible; it just no longer gates entries. PORTFOLIO_HEAT_LIMIT and this
-    gate should be reinstated before trading live capital."""
+    is visible; it just no longer gates entries for SIM.
+
+    2026-08-28: RE-ENABLED for LIVE/LIVE_EUR only, explicit user decision
+    (via AskUserQuestion), same discussion that raised LIVE_RISK_PCT_OVERRIDE
+    to 0.75% -- a real correlated-position concern was raised (many
+    simultaneous positions across different currencies, each individually
+    small, summing to meaningful aggregate risk) that LIVE_MAX_CURRENCY_
+    EXPOSURE=1 doesn't fully cover (it caps exposure PER currency, not the
+    portfolio-wide aggregate). This gate's own docstring already said it
+    "should be reinstated before trading live capital" -- that reinstatement
+    never actually happened until now. SIM stays disabled, unchanged, for
+    the original 2026-08-21 full-testing-breadth reason."""
     heat = _portfolio_heat_pct(positions, equity)
     if heat >= PORTFOLIO_HEAT_LIMIT:
+        if ACCOUNT_ENV in ("live", "live_eur"):
+            logger.info(f"  [HEAT] Portfolio heat {heat:.1%} >= {PORTFOLIO_HEAT_LIMIT:.0%} "
+                        f"— blocking new entries (LIVE)")
+            return False
         logger.info(f"  [HEAT] Portfolio heat {heat:.1%} >= {PORTFOLIO_HEAT_LIMIT:.0%} "
                     f"(limit disabled for SIM testing — NOT blocking)")
     return True
