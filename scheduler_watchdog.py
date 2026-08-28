@@ -462,6 +462,45 @@ def _check_windows_task(name: str, task_name: str, log_file: str, grace_min: int
     # exactly what "-Once" (never recurs) produced when this was actually
     # broken: a blank NextRunTime, not just a next-day one.
     if name in INTRADAY_REPEATING_TASKS and now - last_run > timedelta(minutes=grace_min * 3):
+        # 2026-08-28: found live that "NextRunTime looks near-term" is NOT
+        # sufficient to prove a repeating trigger is actually healthy --
+        # Windows computes NextRunTime purely from the trigger's own
+        # CalendarTrigger+Repetition schedule DEFINITION, regardless of
+        # whether the intermediate occurrences in an ACTIVE window actually
+        # fired. Confirmed on "ATOS Forex Intraday Scan": it silently
+        # stopped firing after its 06:28 completion (every 06:35/07:05/.../
+        # 19:35 occurrence skipped, ~27 missed), yet NextRunTime kept
+        # showing "in a few minutes" the entire time -- because Windows
+        # just calculates the next slot in the pattern, it doesn't know or
+        # care that every prior slot today was silently skipped. This check
+        # reported "healthy" for 13+ hours as a result -- a real, unnoticed
+        # gap in the exact mechanism the 2026-08-25 fix (see the comment
+        # block above) was built to close, just a different failure shape
+        # than that day's (a dropped trigger) -- this one keeps the
+        # trigger's repetition intact but the process itself stops
+        # advancing (crash, hang, or an external block) partway through an
+        # active day.
+        #
+        # Fix: an unconditional hard ceiling. No task in
+        # INTRADAY_REPEATING_TASKS has a legitimate dormant window anywhere
+        # close to 10h (Forex Intraday Scan/LIVE Daily Run's own repeating
+        # window only goes quiet ~03:00-06:05, ~3h; Stocks/ETF/Futures
+        # Daily Run and Saxo LIVE Token Keepalive have no dormant window at
+        # all; Intraday Monitor's is the longest at ~6h) -- so a last_run
+        # this stale is NEVER explainable by a real overnight gap for any
+        # current member of this set, and gets flagged regardless of what
+        # NextRunTime claims. The softer, NextRunTime-aware check below
+        # still applies to the more ambiguous 3x-grace-to-10h zone, where a
+        # genuine overnight dormant window is still a plausible explanation.
+        if now - last_run > timedelta(hours=10):
+            mins_ago = (now - last_run).total_seconds() / 60
+            return (f"'{task_name}' hasn't fired since {last_run:%Y-%m-%d %H:%M} "
+                    f"({mins_ago:.0f} min ago, {mins_ago/60:.1f}h) -- past the 10h hard ceiling no "
+                    f"member of INTRADAY_REPEATING_TASKS has a legitimate dormant window anywhere "
+                    f"close to, so this is flagged regardless of how healthy NextRunTime looks (a "
+                    f"repeating trigger's NextRunTime reflects the SCHEDULE, not whether occurrences "
+                    f"actually fired -- it can look perfectly fine while every intraday slot today "
+                    f"silently failed). {_remediation(task_name)}")
         next_run_looks_healthy = next_run and next_run - now <= timedelta(hours=12)
         if not next_run_looks_healthy:
             mins_ago = (now - last_run).total_seconds() / 60
