@@ -2,10 +2,11 @@
 forex_live_dashboard.py  —  Live (real-money) Forex positions dashboard
 ------------------------------------------------------------------------
 Same idea as forex_dashboard.py, but for the real-money Saxo LIVE account
-(2026-08-25) instead of SIM: 3 strategies (donchian/ema/rsi), 34 core
-pairs only, SEK-denominated equity (6,000 SEK opening balance) instead of
-SIM's EUR demo credit. No core/exotic split needed here -- the live
-account is 100% core by construction.
+(2026-08-25) instead of SIM: 3 strategies (bb/rsi/pullback, changed
+2026-08-27 from donchian/ema/rsi), 17 HIGH_VOLUME pairs only (narrowed
+2026-08-27 from all 34 CORE_SYMBOLS), SEK-denominated equity (6,000 SEK
+opening balance) instead of SIM's EUR demo credit. No core/exotic split
+needed here -- the live account is 100% core by construction.
 
 Deliberately thin: reuses forex_dashboard.py's _positions_section() /
 _strategy_breakdown_table() / _section_header() rendering helpers
@@ -232,10 +233,16 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     )
     L.append(HR)
     if positions:
-        strat_order = ["donchian", "ema", "rsi"]
+        # 2026-08-27: LIVE_ALLOWED_STRATEGIES changed {donchian,ema,rsi} ->
+        # {bb,rsi,pullback} -- current allowlist listed first, but
+        # donchian/ema still appended if either has a real open position
+        # (existing positions from before the change keep trading out
+        # normally; they must never just vanish from this dashboard).
         grouped: dict = {}
         for p in positions:
             grouped.setdefault(p["strategy"], []).append(p)
+        _current_live = ("bb", "rsi", "pullback")
+        strat_order = list(_current_live) + sorted(s for s in grouped if s not in _current_live)
         first_group = True
         for strat in strat_order:
             grp = grouped.get(strat, [])

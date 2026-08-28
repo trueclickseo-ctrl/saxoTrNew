@@ -65,7 +65,9 @@ STRATEGY_NAMES = {
     # with or derived from SIM's 117-pair history. User explicitly requested
     # LIVE never share SIM's files/state. Starts neutral (1.0x every
     # strategy) until LIVE accumulates its own closed-trade history.
-    "forex_live": ["donchian", "ema", "rsi"],
+    # 2026-08-27: {donchian, ema, rsi} -> {bb, rsi, pullback}, matching
+    # forex/runner.py's LIVE_ALLOWED_STRATEGIES change.
+    "forex_live": ["bb", "rsi", "pullback"],
 }
 
 

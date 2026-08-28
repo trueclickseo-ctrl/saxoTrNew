@@ -218,21 +218,26 @@ _run("forex/runner: set_account_env('live') redirects BASE_URL/STATE_FILE/ORDERS
      test_set_account_env_live_redirects_everything)
 
 
-def test_filter_pairs_for_account_core_only_under_live():
+def test_filter_pairs_for_account_high_volume_only_under_live():
     import forex.runner as r
     r.set_account_env("live")
     try:
         filtered = r._filter_pairs_for_account(r.PAIRS)
-        assert len(filtered) == len(r.CORE_SYMBOLS) == 34
-        assert all(p["symbol"] in r.CORE_SYMBOLS for p in filtered)
+        assert len(filtered) == len(r.HIGH_VOLUME_SYMBOLS) == 17, (
+            "2026-08-27: narrowed from all 34 CORE_SYMBOLS to the 17-pair "
+            "HIGH_VOLUME_SYMBOLS subset -- explicit user decision to start "
+            "narrower and expand deliberately later")
+        assert all(p["symbol"] in r.HIGH_VOLUME_SYMBOLS for p in filtered)
+        assert all(p["symbol"] in r.CORE_SYMBOLS for p in filtered), (
+            "HIGH_VOLUME_SYMBOLS must still be a subset of CORE_SYMBOLS")
         exotic_examples = {"EURTRY", "USDZAR", "EURSGD"}
         assert not any(p["symbol"] in exotic_examples for p in filtered), (
             "an exotic pair reached the live-filtered pair list"
         )
     finally:
         r.set_account_env("sim")
-_run("forex/runner: _filter_pairs_for_account() under LIVE returns exactly the 34 CORE pairs, no exotic",
-     test_filter_pairs_for_account_core_only_under_live)
+_run("forex/runner: _filter_pairs_for_account() under LIVE returns exactly the 17 HIGH_VOLUME pairs, no exotic",
+     test_filter_pairs_for_account_high_volume_only_under_live)
 
 
 def test_filter_pairs_for_account_noop_under_sim():
@@ -246,15 +251,15 @@ _run("forex/runner: _filter_pairs_for_account() is a no-op under SIM (all pairs 
      test_filter_pairs_for_account_noop_under_sim)
 
 
-def test_live_allowed_strategies_is_exactly_three():
+def test_live_allowed_strategies_is_exactly_bb_rsi_pullback():
     import forex.runner as r
-    assert r.LIVE_ALLOWED_STRATEGIES == {"donchian", "ema", "rsi"}, (
-        "the live-account strategy allowlist drifted from the explicit user "
-        "decision (donchian/ema/rsi only) -- this must be a deliberate change, "
-        "not an accident"
+    assert r.LIVE_ALLOWED_STRATEGIES == {"bb", "rsi", "pullback"}, (
+        "2026-08-27: changed from {donchian, ema, rsi} to {bb, rsi} then "
+        "explicitly reversed to also include pullback -- this must be a "
+        "deliberate change, not an accident"
     )
-_run("forex/runner: LIVE_ALLOWED_STRATEGIES is exactly {donchian, ema, rsi}, matching the explicit decision",
-     test_live_allowed_strategies_is_exactly_three)
+_run("forex/runner: LIVE_ALLOWED_STRATEGIES is exactly {bb, rsi, pullback}, matching the 2026-08-27 decision",
+     test_live_allowed_strategies_is_exactly_bb_rsi_pullback)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -296,17 +301,21 @@ _run("forex/runner CLI: --account live --live refuses to run without SAXO_LIVE_C
 def test_cli_accepts_comma_separated_allowed_strategies_dry_run():
     # 2026-08-26: the cost-clearance gate (_round_trip_cost_quote_ccy) added a
     # real live Saxo commission lookup per candidate signal reaching that
-    # point in the entry loop -- a real 34-pair x 3-strategy scan now
+    # point in the entry loop -- a real multi-pair x multi-strategy scan now
     # legitimately takes longer than this call's old 60s budget. Not a hang,
     # same "more real work per pair" reasoning as the SIM test's 400s below.
+    # 2026-08-27: strategy list and pair count both changed -- {bb, rsi,
+    # pullback} replaced {donchian, ema, rsi}, and LIVE narrowed from 34
+    # CORE_SYMBOLS to the 17-pair HIGH_VOLUME_SYMBOLS subset (explicit
+    # user decisions).
     import forex.universe as _u
-    proc = _run_cli(["--account", "live", "--strategy", "donchian,ema,rsi"], timeout=150)
+    proc = _run_cli(["--account", "live", "--strategy", "bb,rsi,pullback"], timeout=150)
     assert proc.returncode == 0, f"expected a clean dry-run exit(0), got {proc.returncode}: {proc.stderr}"
     n = len(_u.PAIRS)
-    assert f"34 of {n}" in proc.stdout or f"34 of {n}" in proc.stderr, (
-        f"the dry-run log should report scanning 34 (CORE) of {n} total pairs"
+    assert f"17 of {n}" in proc.stdout or f"17 of {n}" in proc.stderr, (
+        f"the dry-run log should report scanning 17 (HIGH_VOLUME) of {n} total pairs"
     )
-_run("forex/runner CLI: --account live --strategy donchian,ema,rsi dry-runs cleanly and scans only the 34 core pairs",
+_run("forex/runner CLI: --account live --strategy bb,rsi,pullback dry-runs cleanly and scans only the 17 high-volume pairs",
      test_cli_accepts_comma_separated_allowed_strategies_dry_run)
 
 
@@ -676,12 +685,12 @@ section("10. strategy_learner.py -- LIVE has its own, fully separate learning st
 
 def test_forex_live_has_its_own_strategy_names_entry():
     import strategy_learner
-    assert strategy_learner.STRATEGY_NAMES.get("forex_live") == ["donchian", "ema", "rsi"], (
-        "forex_live must have its own STRATEGY_NAMES entry (exactly the 3 approved "
-        "strategies) -- without it, get_weights('forex_live') silently defaults to "
-        "an empty list"
+    assert strategy_learner.STRATEGY_NAMES.get("forex_live") == ["bb", "rsi", "pullback"], (
+        "forex_live must have its own STRATEGY_NAMES entry (exactly the approved "
+        "strategies, 2026-08-27: bb/rsi/pullback) -- without it, get_weights"
+        "('forex_live') silently defaults to an empty list"
     )
-_run("strategy_learner: STRATEGY_NAMES['forex_live'] == ['donchian','ema','rsi']",
+_run("strategy_learner: STRATEGY_NAMES['forex_live'] == ['bb','rsi','pullback']",
      test_forex_live_has_its_own_strategy_names_entry)
 
 
@@ -701,7 +710,7 @@ def test_forex_live_get_weights_starts_neutral():
     weights = strategy_learner.get_weights("forex_live")
     # A module with no saved weights file yet must default to neutral 1.0x
     # for each of its own strategies -- never inherit or reuse SIM's values.
-    for strat in ("donchian", "ema", "rsi"):
+    for strat in ("bb", "rsi", "pullback"):
         assert weights.get(strat) == 1.0 or strat in weights, f"expected a weight entry for {strat}"
 _run("strategy_learner: get_weights('forex_live') returns its own neutral defaults, independent of SIM's learned weights",
      test_forex_live_get_weights_starts_neutral)
@@ -819,18 +828,23 @@ _run("forex_live_dashboard.py --once runs cleanly via a real subprocess, no exce
 
 
 def test_live_dashboard_shows_exactly_3_strategies():
+    # 2026-08-27: approved set changed {donchian,ema,rsi} -> {bb,rsi,pullback}.
+    # "pullback"'s own display label is literally "EMA Pullback ★" (not to
+    # be confused with the removed "ema" strategy's "EMA Trend" label) --
+    # see forex_dashboard.py's STRAT_LABELS_ALL.
     proc = subprocess.run(
         [sys.executable, "forex_live_dashboard.py", "--once"],
         cwd=BASE_DIR, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
     )
     out = proc.stdout
-    for label in ("Donchian Break", "EMA Trend", "RSI Pullback"):
+    for label in ("BB Reversion", "RSI Pullback", "EMA Pullback"):
         assert label in out, f"expected '{label}' in the live dashboard's strategy breakdown"
-    # None of the other 8 SIM-only strategies should ever appear
-    for label in ("Gap Fill", "BB Reversion", "SuperTrend", "Z-Score Rev",
-                  "ML Signals", "CNN-LSTM", "LBO Day Trade", "EMA Pullback"):
-        assert label not in out, f"'{label}' must NOT appear on the live dashboard -- only 3 strategies are approved for LIVE"
-_run("forex_live_dashboard.py shows exactly the 3 approved strategies, none of the other 8",
+    # None of the other SIM-only strategies (including the just-removed
+    # donchian/ema) should ever appear
+    for label in ("Donchian Break", "EMA Trend", "Gap Fill", "SuperTrend",
+                  "Z-Score Rev", "ML Signals", "CNN-LSTM", "LBO Day Trade"):
+        assert label not in out, f"'{label}' must NOT appear on the live dashboard -- only bb/rsi/pullback are approved for LIVE"
+_run("forex_live_dashboard.py shows exactly the 3 approved strategies (bb/rsi/pullback), none of the others",
      test_live_dashboard_shows_exactly_3_strategies)
 
 
@@ -870,14 +884,14 @@ _run("forex.runner: SESSION_PAIRS['asian'] (14) + ['london'] (20) exactly equal 
 
 
 def test_risk_pct_identical_across_all_3_live_strategies():
-    import forex.strategy_donchian as donchian
+    import forex.strategy_bb as bb
     import forex.strategy_rsi as rsi
-    import forex.strategy as ema
-    assert donchian.RISK_PCT == rsi.RISK_PCT == ema.RISK_PCT == 0.0025, (
-        f"expected RISK_PCT=0.0025 uniformly across donchian/rsi/ema, got "
-        f"{donchian.RISK_PCT}/{rsi.RISK_PCT}/{ema.RISK_PCT}"
+    import forex.strategy_pullback as pullback
+    assert bb.RISK_PCT == rsi.RISK_PCT == pullback.RISK_PCT == 0.0025, (
+        f"expected RISK_PCT=0.0025 uniformly across bb/rsi/pullback, got "
+        f"{bb.RISK_PCT}/{rsi.RISK_PCT}/{pullback.RISK_PCT}"
     )
-_run("All 3 live strategies (donchian/ema/rsi) share the identical documented RISK_PCT=0.25%",
+_run("All 3 live strategies (bb/rsi/pullback) share the identical documented RISK_PCT=0.25%",
      test_risk_pct_identical_across_all_3_live_strategies)
 
 

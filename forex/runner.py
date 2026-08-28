@@ -56,7 +56,7 @@ import saxo_order
 import pandas as pd
 import saxo_auth
 
-from forex.universe import PAIRS, ASSET_TYPE, get_pair, price_decimals as get_price_decimals, CORE_SYMBOLS, EXOTIC_SYMBOLS
+from forex.universe import PAIRS, ASSET_TYPE, get_pair, price_decimals as get_price_decimals, CORE_SYMBOLS, EXOTIC_SYMBOLS, HIGH_VOLUME_SYMBOLS
 import forex.strategy             as strat_ema
 import forex.strategy_rsi         as strat_rsi
 import forex.strategy_donchian    as strat_donchian
@@ -206,12 +206,29 @@ CHART_BARS  = 340   # enough for ML strategy: EMA(200) + 126 lookback + 14 buffe
 
 ACCOUNT_ENV = "sim"
 
-# 2026-08-25: the real-money LIVE account is restricted to exactly these 3
+# 2026-08-25: the real-money LIVE account is restricted to exactly these
 # strategies (explicit user decision, not a technical limitation) and to
 # CORE_SYMBOLS only (no exotic pairs) -- enforced in set_account_env() /
 # _filter_pairs_for_account() / the CLI dispatch in main(), not just
 # documented here, so a mistaken invocation can't slip past it.
-LIVE_ALLOWED_STRATEGIES = {"donchian", "ema", "rsi"}
+#
+# 2026-08-27: changed from {donchian, ema, rsi} -- explicit user decision
+# during the forward-SIM "no-touch" observation period. This is a
+# strategy-selection change, not one of the frozen items from that period
+# (the cost gate ratio, the exposure cap, the donchian A/B/C stop logic,
+# and the observation-card schema are what stay untouched -- which
+# strategies are allowed on LIVE was never on that list). Has zero live
+# effect while LIVE_TRADING_HALTED stays True -- this just makes sure the
+# right allowlist is in place for whenever it lifts.
+#
+# Went through two steps same day: first {bb, rsi} ("remove donchian and
+# ema... NO PULLBACK for now"), then explicitly reversed to also include
+# "pullback" ("add RSI PULLBACK both and BB" -> clarified via question to
+# mean re-including the separate pullback strategy, not just confirming
+# bb+rsi). Recorded both steps so a future read of this history isn't
+# confused by the apparent contradiction -- it's a real, deliberate
+# reversal within the same conversation, not a stale comment.
+LIVE_ALLOWED_STRATEGIES = {"bb", "rsi", "pullback"}
 
 # 2026-08-26: a SECOND, genuinely separate real-money account -- the EUR
 # sub-account under the same Saxo LIVE login (see _account()'s Currency
@@ -288,14 +305,17 @@ def _pnl_module() -> str:
 
 
 def _filter_pairs_for_account(pairs: list) -> list:
-    """Under the SEK LIVE account, restricted to CORE_SYMBOLS (34 pairs) --
-    no exotic pairs ever reach a live signal there. Under the EUR LIVE
-    account (2026-08-26), restricted the other way: EXOTIC_SYMBOLS (83
-    pairs) only -- that account exists specifically to test rsi on exotic,
-    nothing else, so it never even sees the core pairs the SEK account
-    already trades."""
+    """Under the SEK LIVE account, restricted to HIGH_VOLUME_SYMBOLS (17
+    pairs -- majors + liquid crosses, a curated subset of CORE_SYMBOLS's
+    34). Narrowed from the full 34 on 2026-08-27, explicit user decision
+    ("instead of 34 pairs we will trade only HIGH VOLUME... after will add
+    more") -- start narrower, expand deliberately later rather than the
+    other direction. Under the EUR LIVE account (2026-08-26), restricted
+    the other way: EXOTIC_SYMBOLS (83 pairs) only -- that account exists
+    specifically to test rsi on exotic, nothing else, so it never even
+    sees the core pairs the SEK account already trades."""
     if ACCOUNT_ENV == "live":
-        return [p for p in pairs if p["symbol"] in CORE_SYMBOLS]
+        return [p for p in pairs if p["symbol"] in HIGH_VOLUME_SYMBOLS]
     if ACCOUNT_ENV == "live_eur":
         return [p for p in pairs if p["symbol"] in EXOTIC_SYMBOLS]
     return pairs
@@ -2606,7 +2626,7 @@ if __name__ == "__main__":
     ap.add_argument("--account", default="sim", choices=["sim", "live", "live_eur"],
                     help="Which Saxo account to run against (default: sim). "
                          "'live' is the real-money SEK account -- restricted to "
-                         "LIVE_ALLOWED_STRATEGIES and CORE_SYMBOLS only, and "
+                         "LIVE_ALLOWED_STRATEGIES and HIGH_VOLUME_SYMBOLS only, and "
                          "requires SAXO_LIVE_CONFIRMED=1 to place real orders. "
                          "'live_eur' is the real-money EUR sub-account (added "
                          "2026-08-26) -- restricted to LIVE_EUR_ALLOWED_STRATEGIES "
