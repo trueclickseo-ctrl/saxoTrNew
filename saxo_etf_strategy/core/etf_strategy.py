@@ -293,37 +293,24 @@ class DualMAStrategy(_BaseStrategy):
     Buy when 20-day MA > 100-day MA; rank by crossover strength.
     Using a fixed universe (not full-universe scan) keeps run time under 60s.
     """
-    # Originally the top 50 US ETFs by AUM (broad market, sectors, bonds,
-    # commodities, factors); expanded 2026-08-28 to ~100 -- explicit user
-    # request ("expand the universe of ETF and raise the cap up to 50 or
-    # 100") after the sector_rotation strategy's own 11-symbol universe was
-    # found to be the actual reason ETF SIM's position cap couldn't
-    # meaningfully go above 11. New additions: more US sub-sectors, broad
-    # international/regional, more fixed income, more commodities, factor/
-    # style, and dividend/income names -- same "no leveraged/inverse"
-    # quality bar MomentumScanStrategy already enforces elsewhere in this
-    # file, just curated up front here instead of filtered at runtime.
+    # 2026-08-28 (later same day): narrowed from a 101-symbol AUM-curated
+    # list down to a real, DATA-VERIFIED top 20 -- explicit user request
+    # ("limit ETF till TOP 20, which are in high volume and most traded
+    # ETF"). Ranking basis: pulled real 20-trading-day Volume + Close bars
+    # from Saxo's own /chart/v3/charts for all 101 prior candidates and
+    # ranked by average daily dollar TURNOVER (Volume x Close), not AUM
+    # and not a guessed/recalled "most popular ETFs" list -- e.g. SOXX
+    # ranks above LQD here despite lower share volume because its higher
+    # price gives it more dollar turnover; EWY (South Korea) makes the cut
+    # on real data despite not being a typically-assumed "top ETF" pick.
+    # 2 of the prior 101 (DBB, CPER) weren't resolvable via this ranking
+    # pass's symbol lookup and were excluded from the ranking entirely
+    # (neither would have placed top-20 regardless, both are small
+    # single-commodity funds). Re-run this ranking periodically if the
+    # universe needs revisiting -- turnover ranks shift over time.
     UNIVERSE = [
-        # Original 50 (broad market, US sectors, bonds, commodities, factors)
-        "SPY", "QQQ", "IWM", "EFA", "EEM", "VTI", "AGG", "LQD", "TLT", "GLD",
-        "SHY", "HYG", "XLK", "XLV", "XLF", "XLE", "XLI", "XLY", "XLP", "XLU",
-        "XLRE", "XLB", "SMH", "XHB", "XBI", "IBB", "KWEB", "ARKG", "ARKK", "ARKF",
-        "VWO", "VEA", "BND", "VNQ", "GDX", "GDXJ", "SLV", "IAU", "USO", "UNG",
-        "DIA", "MDY", "IJR", "IEMG", "SPYV", "SPYG", "VTV", "VUG", "VO", "VB",
-        # 2026-08-28 additions -- US sub-sectors
-        "XOP", "KRE", "XRT", "ITA", "XME", "JETS", "TAN", "ICLN", "SOXX", "IYR",
-        "HACK", "ROBO", "LIT",
-        # 2026-08-28 additions -- international/regional
-        "EWJ", "EWZ", "EWU", "EWG", "EWC", "EWA", "INDA", "FXI", "ASHR", "EWY",
-        "EWT", "EIDO", "VXUS", "IEFA", "ACWI",
-        # 2026-08-28 additions -- fixed income
-        "TIP", "MUB", "EMB", "BNDX", "JNK",
-        # 2026-08-28 additions -- commodities
-        "DBA", "DBB", "PPLT", "CPER", "PDBC",
-        # 2026-08-28 additions -- factor/style
-        "MTUM", "QUAL", "USMV", "VLUE", "SIZE",
-        # 2026-08-28 additions -- dividend/income and broad-market
-        "VYM", "SCHD", "SPHD", "DVY", "BIL", "SHV", "RSP", "MGK",
+        "SPY", "QQQ", "IWM", "GLD", "SMH", "SOXX", "LQD", "EWY", "TLT", "GDX",
+        "HYG", "DIA", "XLF", "XLE", "XLV", "XBI", "RSP", "XLK", "VTI", "EEM",
     ]
 
     def generate_signals(self, universe: List[dict]) -> List[ETFSignal]:

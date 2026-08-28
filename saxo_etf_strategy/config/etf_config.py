@@ -46,18 +46,21 @@ class ETFStrategyConfig:
     lookback_days_fast: int = 20
     lookback_days_slow: int = 100
     min_avg_daily_turnover_usd: float = 1_000_000  # dual_ma liquidity filter
-    max_candidates_per_run: int = 100              # top-N for rotation strategies — widened
+    max_candidates_per_run: int = 20               # top-N for rotation strategies — widened
                                                     # 2026-08-24 (3->10), 2026-08-28 (10->11
-                                                    # under sector_rotation, the hard ceiling
-                                                    # for its 11-symbol universe), then
-                                                    # 2026-08-28 again (11->100) after
+                                                    # under sector_rotation, then 11->100 after
                                                     # switching to dual_ma's ~101-symbol
-                                                    # universe -- explicit user request ("50
-                                                    # or 100"), matches the universe almost
-                                                    # exactly rather than an arbitrary number;
-                                                    # etf_executor.process_signals() weights
-                                                    # capital by rank so #1 still gets more
-                                                    # than #100, not an equal split
+                                                    # universe), then narrowed back 2026-08-28
+                                                    # (later same day) 100->20 -- explicit user
+                                                    # request ("limit ETF till TOP 20 which are
+                                                    # in high volume and most traded"). Now
+                                                    # matches DualMAStrategy.UNIVERSE's own
+                                                    # 20-symbol size (see that list's comment
+                                                    # for the real-data ranking this replaced
+                                                    # the 101-symbol AUM-curated list with) --
+                                                    # etf_executor.process_signals() still
+                                                    # weights capital by rank so #1 gets more
+                                                    # than #20, not an equal split.
     rebalance_frequency_hours: int = 24
 
 
@@ -67,22 +70,20 @@ class ETFRiskConfig:
     # (same SIM account as shares — capital is separated in code, not at broker level)
     etf_account_key: str = ""
 
-    # Conservative: 15% of account balance, 100 positions max, 8% SL / 20% TP.
-    # max_positions widened 3->10->11->100 alongside max_candidates_per_run
-    # above (see that field's comment for the full history) -- same 15%
-    # total budget now spread rank-weighted across up to 100 names instead
-    # of 11, so each individual position is naturally much smaller (keeps
-    # margin/cash headroom free) while still giving the top-ranked pick
-    # more capital than the bottom-ranked one. In practice dual_ma will
-    # rarely have 100 simultaneous BUY-crossover candidates -- this cap is
-    # sized to the universe (101 symbols), not a number expected to bind
-    # every run.
+    # Conservative: 15% of account balance, 20 positions max, 8% SL / 20% TP.
+    # max_positions: 3->10->11->100->20 -- see max_candidates_per_run's
+    # comment in ETFStrategyConfig above for the full history; narrowed
+    # back down 2026-08-28 alongside it (same 20-symbol TOP-20-by-volume
+    # universe). Same 15% total budget, now spread rank-weighted across up
+    # to 20 names -- each position is meaningfully larger than the
+    # 100-name-split era while still giving the top-ranked pick more
+    # capital than the bottom-ranked one.
     total_allocation_pct_of_account: float = 0.15
-    max_positions: int = 100
+    max_positions: int = 20
     max_position_pct: float = 0.03   # ceiling per name; rank-1's weighted share
-                                      # (now a small fraction of the 15% budget
-                                      # split across up to 100 names) stays
-                                      # comfortably under this
+                                      # (a larger fraction of the 15% budget now
+                                      # that it's split across only 20 names,
+                                      # not 100) stays comfortably under this
     stop_loss_pct: float = 0.08
     take_profit_pct: float = 0.20
 
