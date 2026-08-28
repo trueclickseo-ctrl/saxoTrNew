@@ -271,20 +271,25 @@ def should_exit(position: dict, df: pd.DataFrame,
 
 
 def size_position(account_equity: float, atr: float,
-                  min_units: int = LOT_ROUND) -> int:
+                  min_units: int = LOT_ROUND, block_below_min: bool = False) -> int:
     """Calculate position size in base-currency units.
 
     Risk exactly RISK_PCT of equity. Stop distance = ATR_STOP_MULT * ATR.
     Rounded DOWN to nearest min_units (Saxo micro-lot = 1,000).
-    Minimum returned: min_units (never returns 0).
+    Minimum returned: min_units (never returns 0), UNLESS block_below_min
+    is True, in which case 0 is returned instead of flooring up -- see
+    forex/strategy_rsi.py's size_position() docstring for the full
+    rationale (2026-08-28, explicit user decision, LIVE/LIVE_EUR only).
     """
     risk_amount   = account_equity * RISK_PCT
     stop_distance = ATR_STOP_MULT * atr
     if stop_distance <= 0:
-        return min_units
+        return 0 if block_below_min else min_units
     raw   = risk_amount / stop_distance
     units = int(raw // min_units) * min_units
-    return max(units, min_units)
+    if units < min_units:
+        return 0 if block_below_min else min_units
+    return units
 
 
 def trailing_stop_update(current_stop: float, current_price: float,

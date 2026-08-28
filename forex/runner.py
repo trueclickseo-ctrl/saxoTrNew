@@ -1990,6 +1990,19 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         rp_kw     = {"risk_pct": sig["risk_pct_override"]} if "risk_pct_override" in sig else {}
         if "risk_pct" not in rp_kw and _live_risk_pct() is not None:
             rp_kw["risk_pct"] = _live_risk_pct()
+        # 2026-08-28, explicit user decision: LIVE/LIVE_EUR skip a trade
+        # entirely (size_position() returns 0) rather than force it up to
+        # the 1,000-unit floor when the account's own risk budget doesn't
+        # naturally justify that size. Confirmed via real computation that
+        # at current pilot capital (6,000 SEK / 500 EUR, even the EUR
+        # account's full 900 EUR balance), 0/34 (pair x strategy)
+        # combinations on the 17-pair HIGH_VOLUME_SYMBOLS universe
+        # naturally clear 1,000 units -- this is a deliberate, accepted
+        # near-total-halt tradeoff, not an oversight. SIM keeps the
+        # historical floor-up behavior (its ~945,000 EUR demo credit
+        # clears 1,000 units for most pairs anyway).
+        if ACCOUNT_ENV in ("live", "live_eur"):
+            rp_kw["block_below_min"] = True
         if "units" in sig:
             qty = sig["units"]   # london_breakout pre-computes sizing from SEK capital
         else:
@@ -2007,6 +2020,11 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 continue
             qty = strat_mod.size_position(eq_quote, sig["atr"],
                                           pair_info["min_units"], **rp_kw)
+            if qty <= 0:
+                logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] — risk budget "
+                            f"doesn't naturally justify even the {pair_info['min_units']:,.0f}-unit "
+                            f"minimum at current capital; not forcing an oversized trade")
+                continue
 
         # london_breakout/gap provide their own session-range-based target;
         # every other strategy gets a broker-side TP at DEFAULT_TP_RR times

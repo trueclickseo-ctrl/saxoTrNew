@@ -160,16 +160,32 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
 
 
 def size_position(account_equity: float, atr: float,
-                  min_units: float = 1_000, risk_pct: float | None = None) -> int:
+                  min_units: float = 1_000, risk_pct: float | None = None,
+                  block_below_min: bool = False) -> int:
     """risk_pct: override this module's own RISK_PCT (e.g. a smaller LIVE-
     pilot risk than SIM uses) -- defaults to RISK_PCT, so every existing
-    caller (SIM) is unaffected. See forex/runner.py's _live_risk_pct()."""
+    caller (SIM) is unaffected. See forex/runner.py's _live_risk_pct().
+
+    block_below_min (2026-08-28, explicit user decision): when True,
+    returns 0 instead of flooring UP to min_units if the risk-appropriate
+    raw size doesn't naturally reach it. Historical behavior (default
+    False, still used by SIM) always floors up -- forcing every signal
+    into at least a min_units-sized trade regardless of whether the
+    account's own risk budget actually justified that size. At LIVE's
+    tiny pilot capital (6,000 SEK / 500 EUR), raw size never naturally
+    reaches 1,000 units for any of the 17 HIGH_VOLUME_SYMBOLS pairs --
+    confirmed 0/34 (pair x strategy) combinations clear it even at the
+    EUR account's full 900 EUR balance -- so LIVE/LIVE_EUR pass True
+    here to skip a trade entirely rather than force an oversized one."""
     risk_amount   = account_equity * (risk_pct if risk_pct is not None else RISK_PCT)
     stop_distance = ATR_STOP_MULT * atr
     if stop_distance <= 0:
-        return int(min_units)
-    raw = risk_amount / stop_distance
-    return max(int(min_units), int(raw / min_units) * int(min_units))
+        return 0 if block_below_min else int(min_units)
+    raw     = risk_amount / stop_distance
+    floored = int(raw / min_units) * int(min_units)
+    if floored < min_units:
+        return 0 if block_below_min else int(min_units)
+    return floored
 
 
 def trailing_stop_update(current_stop: float, current_price: float,

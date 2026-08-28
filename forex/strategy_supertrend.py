@@ -165,13 +165,19 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
     return False, ""
 
 
-def size_position(account_equity: float, atr: float, min_units: float = 1_000) -> int:
+def size_position(account_equity: float, atr: float, min_units: float = 1_000,
+                  block_below_min: bool = False) -> int:
+    """block_below_min: see forex/strategy_rsi.py's size_position()
+    docstring (2026-08-28, explicit user decision, LIVE/LIVE_EUR only)."""
     risk_amount   = account_equity * RISK_PCT
     stop_distance = ATR_STOP_MULT * atr
     if stop_distance <= 0:
-        return int(min_units)
-    raw = risk_amount / stop_distance
-    return max(int(min_units), int(raw / min_units) * int(min_units))
+        return 0 if block_below_min else int(min_units)
+    raw     = risk_amount / stop_distance
+    floored = int(raw / min_units) * int(min_units)
+    if floored < min_units:
+        return 0 if block_below_min else int(min_units)
+    return floored
 
 
 def scan_summary(market_data: dict) -> list:

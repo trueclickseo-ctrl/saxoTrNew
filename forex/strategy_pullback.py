@@ -251,19 +251,25 @@ def should_exit(position: dict, df: pd.DataFrame,
 
 
 def size_position(account_equity: float, atr: float,
-                  min_units: int = LOT_ROUND, risk_pct: float | None = None) -> int:
+                  min_units: int = LOT_ROUND, risk_pct: float | None = None,
+                  block_below_min: bool = False) -> int:
     """1% equity risk, ATR-based stop. Rounded to nearest micro-lot.
 
     risk_pct: override this module's own RISK_PCT (e.g. a smaller LIVE-
     pilot risk than SIM uses) -- defaults to RISK_PCT, so every existing
-    caller (SIM) is unaffected. See forex/runner.py's _live_risk_pct()."""
+    caller (SIM) is unaffected. See forex/runner.py's _live_risk_pct().
+
+    block_below_min: see forex/strategy_rsi.py's size_position()
+    docstring (2026-08-28, explicit user decision, LIVE/LIVE_EUR only)."""
     risk_amount   = account_equity * (risk_pct if risk_pct is not None else RISK_PCT)
     stop_distance = ATR_STOP_MULT * atr
     if stop_distance <= 0:
-        return min_units
+        return 0 if block_below_min else min_units
     raw   = risk_amount / stop_distance
     units = int(raw // min_units) * min_units
-    return max(units, min_units)
+    if units < min_units:
+        return 0 if block_below_min else min_units
+    return units
 
 
 def scan_summary(market_data: dict) -> list:
