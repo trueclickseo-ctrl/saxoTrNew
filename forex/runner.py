@@ -1986,13 +1986,6 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             qty = strat_mod.size_position(eq_quote, sig["atr"],
                                           pair_info["min_units"], **rp_kw)
 
-        tag    = "LONG" if direction == "Buy" else "SHORT"
-        detail = (f"rsi={sig['rsi']:.1f}" if "rsi" in sig
-                  else f"range={sig.get('range_pips', 0):.0f}p" if "range_pips" in sig
-                  else f"breakout={sig.get('breakout_level', 0):.5f}" if "breakout_level" in sig
-                  else f"adx={sig.get('adx', 0):.1f}")
-        stop_oid = None; tp_oid = None
-        agree_tag = f"  agree={agrees}/{len(STRATEGIES)}{ml_info}"
         # london_breakout/gap provide their own session-range-based target;
         # every other strategy gets a broker-side TP at DEFAULT_TP_RR times
         # its own stop distance, so it's protected on both sides at the
@@ -2005,6 +1998,16 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         # incident this closes. A None cost (lookup failed) does NOT block
         # the entry -- treat "unknown" as "don't block", same as the spread
         # check above, rather than let a transient API hiccup halt trading.
+        #
+        # 2026-08-28: deliberately placed immediately after qty/tp (the two
+        # unavoidable inputs the real per-quantity commission quote needs --
+        # Saxo's round-trip cost genuinely depends on order size, so "cost
+        # viability" can't be checked with literally zero quantity in hand)
+        # and BEFORE every other per-trade step below (labels, order-spec
+        # building) -- explicit user priority order: cost viability first,
+        # stop-based quantity second (the qty above), risk scaling third.
+        # A cost-nonviable signal is skipped as early as structurally
+        # possible, before any of that other work runs for nothing.
         #
         # 2026-08-27: forward-SIM observation phase -- log every signal that
         # reaches this point (PASS or BLOCKED), not just skip counts, so a
@@ -2032,6 +2035,17 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                         f"{MIN_EDGE_TO_COST_RATIO}x round-trip cost ({round_trip_cost:.2f}) "
                         f"at {qty:,} units — too small to be worth the fixed commission")
             continue
+
+        # Everything below only runs for a cost-cleared signal -- labels/
+        # order-spec building deferred until after the gate above, not
+        # computed for a trade that's about to be skipped anyway.
+        tag    = "LONG" if direction == "Buy" else "SHORT"
+        detail = (f"rsi={sig['rsi']:.1f}" if "rsi" in sig
+                  else f"range={sig.get('range_pips', 0):.0f}p" if "range_pips" in sig
+                  else f"breakout={sig.get('breakout_level', 0):.5f}" if "breakout_level" in sig
+                  else f"adx={sig.get('adx', 0):.1f}")
+        stop_oid = None; tp_oid = None
+        agree_tag = f"  agree={agrees}/{len(STRATEGIES)}{ml_info}"
 
         if dry_run:
             logger.info(f"  [DRY] {direction:<4} {qty:,}x {sym}[{tag}] "
