@@ -1317,6 +1317,22 @@ HIGH_VOLUME_SYMBOLS = {
     "EURAUD", "EURCAD", "GBPCHF", "GBPCAD", "GBPAUD",
 }
 
+# CORE_STANDARD_SYMBOLS -- added 2026-08-28, the exact complement of
+# HIGH_VOLUME_SYMBOLS within CORE_SYMBOLS (34 = 17 + 17, an exact
+# partition, not just "everything else"). Same "curated subset, not a new
+# mutually-exclusive tier like SCANDI/EXOTIC" framing as HIGH_VOLUME_SYMBOLS
+# above -- every symbol here also reports get_tier()=='core'. Named to read
+# as HIGH_VOLUME_SYMBOLS's direct counterpart: the CORE pairs that did NOT
+# make the "genuinely highest-liquidity" cut -- mostly AUD/NZD crosses,
+# 3 JPY crosses (CAD/CHF/NZD-JPY), the 5 Scandi-adjacent core pairs
+# (EURNOK/EURSEK/USDDKK/USDNOK/USDSEK), and USDMXN. Explicit user request:
+# give the dashboard a matching HIGH_VOLUME-vs-"the rest of CORE" split so
+# each half's own performance is visible on its own, not blended into
+# CORE's single 34-pair number.
+CORE_STANDARD_SYMBOLS = CORE_SYMBOLS - HIGH_VOLUME_SYMBOLS
+assert not (CORE_STANDARD_SYMBOLS & HIGH_VOLUME_SYMBOLS), "the two CORE halves must never overlap"
+assert (CORE_STANDARD_SYMBOLS | HIGH_VOLUME_SYMBOLS) == CORE_SYMBOLS, "the two halves must exactly partition CORE_SYMBOLS"
+
 # 2026-08-28 two-account LIVE design (final): SEK LIVE (bb) and EUR LIVE
 # (rsi) both trade this SAME entire 17-pair HIGH_VOLUME_SYMBOLS set --
 # explicit user decision ("I want to test both strategies BB and RSI ...

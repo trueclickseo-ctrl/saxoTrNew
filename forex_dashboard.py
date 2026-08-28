@@ -22,7 +22,7 @@ FOREX_STATE_PATH    = os.path.join(BASE_DIR, "data", "forex_state.json")
 
 sys.path.insert(0, BASE_DIR)
 import price_service
-from forex.universe import PAIRS as _UNIVERSE_PAIRS, CORE_SYMBOLS, SCANDI_SYMBOLS, HIGH_VOLUME_SYMBOLS
+from forex.universe import PAIRS as _UNIVERSE_PAIRS, CORE_SYMBOLS, SCANDI_SYMBOLS, HIGH_VOLUME_SYMBOLS, CORE_STANDARD_SYMBOLS
 
 _UNIVERSE_BY_SYMBOL = {p["symbol"]: p for p in _UNIVERSE_PAIRS}
 
@@ -589,46 +589,56 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
              f"\033[38;5;214m{BD}■ LBO{W}  day trade")
     L.append(f"  {DM}Scheduler: every 30min 06:00-03:00 PKT (scan)  |  14:00 PKT (exit check)  |  "
              f"Mon 03:00 PKT weekly + session gap windows (gap fill)  |  "
-             f"149 pairs: 34 core + 32 scandi + 83 exotic (SIM-only)  |  Max slots 149 (28 for day-trade LBO){W}")
+             f"149 pairs: 17 high volume + 17 core standard + 32 scandi + 83 exotic (SIM-only)  |  "
+             f"Max slots 149 (28 for day-trade LBO){W}")
     L.append(HR)
     L.append("")
 
-    # ── Tier colors — used for every CORE/SCANDI/EXOTIC/ALL section box
-    # below, so the same color always means the same tier no matter which
-    # table it's attached to (2026-08-25, explicit "clear separation"
-    # request; SCANDI color added same day when that tier was introduced):
-    CORE_COLOR, SCANDI_COLOR, EXOTIC_COLOR, ALLTIER_COLOR = GR, MG, YL, CY
+    # ── Tier colors — used for every HIGH VOLUME/CORE STANDARD/SCANDI/
+    # EXOTIC/ALL section box below, so the same color always means the same
+    # tier no matter which table it's attached to (2026-08-25, explicit
+    # "clear separation" request; SCANDI color added same day when that
+    # tier was introduced). CORE_COLOR retired 2026-08-28 along with the
+    # standalone CORE section (see below).
+    SCANDI_COLOR, EXOTIC_COLOR, ALLTIER_COLOR = MG, YL, CY
     HIGH_VOLUME_COLOR = WH
+    CORE_STANDARD_COLOR = BL
 
     exotic_symbols      = {p["symbol"] for p in _UNIVERSE_PAIRS} - CORE_SYMBOLS - SCANDI_SYMBOLS
-    core_positions      = [p for p in positions if p["symbol"] in CORE_SYMBOLS]
     high_volume_positions = [p for p in positions if p["symbol"] in HIGH_VOLUME_SYMBOLS]
+    core_standard_positions = [p for p in positions if p["symbol"] in CORE_STANDARD_SYMBOLS]
     scandi_positions    = [p for p in positions if p["symbol"] in SCANDI_SYMBOLS]
     exotic_positions    = [p for p in positions if p["symbol"] in exotic_symbols]
     open_count          = len(positions)
 
-    # ── Positions tables — CORE (34) first, then SCANDI (32), then EXOTIC
-    # (83), 2026-08-25. CORE leads because it's the actionable half of the
-    # live-vs-SIM-only decision this whole split exists for; SCANDI and
-    # EXOTIC (both SIM-only) follow as reference. Boxed/colored headers
-    # (_section_header) replace the old plain bold title lines for
-    # unambiguous visual separation between tiers.
-    core_lines, core_pnl, core_cost, core_costs_eur = _positions_section(
-        "OPEN POSITIONS — CORE (34 pairs, live-trading candidates)",
-        core_positions, live, position_costs, W_TOTAL, HR, color=CORE_COLOR)
-    L.extend(core_lines)
-
-    # HIGH VOLUME — added 2026-08-26, a CURATED SUBSET of CORE (7 G7 majors
-    # + 10 major crosses), not a new partition -- every pair here already
-    # counts inside CORE above, so its P&L/cost is deliberately excluded
-    # from the TOTAL sum below to avoid double-counting. Exists to let
+    # ── Positions tables — HIGH VOLUME (17) + CORE STANDARD (17) first
+    # (2026-08-28: the standalone CORE (34) section was removed -- explicit
+    # user instruction, since HIGH VOLUME + CORE STANDARD already exactly
+    # partition it, 17+17=34, and showing all three was redundant), then
+    # SCANDI (32), then EXOTIC (83). Boxed/colored headers (_section_header)
+    # give unambiguous visual separation between tiers.
+    #
+    # HIGH VOLUME — added 2026-08-26, a CURATED SUBSET of what used to be
+    # shown as CORE (7 G7 majors + 10 major crosses) -- exists to let
     # strategies be judged specifically on the highest-liquidity pairs,
-    # separate from CORE's broader mix (which also includes the Scandi-
-    # adjacent EUR/USD-vs-NOK/SEK/DKK/MXN pairs).
-    high_volume_lines, _hv_pnl, _hv_cost, _hv_costs_eur = _positions_section(
-        "OPEN POSITIONS — HIGH VOLUME (17 pairs, subset of CORE, majors + liquid crosses)",
+    # separate from CORE STANDARD's remaining mix (which also includes the
+    # Scandi-adjacent EUR/USD-vs-NOK/SEK/DKK/MXN pairs). Its P&L/cost now
+    # feeds the TOTAL sum directly (previously excluded there, back when
+    # CORE's own sum already counted it).
+    high_volume_lines, high_volume_pnl, high_volume_cost, high_volume_costs_eur = _positions_section(
+        "OPEN POSITIONS — HIGH VOLUME (17 pairs, majors + liquid crosses)",
         high_volume_positions, live, position_costs, W_TOTAL, HR, color=HIGH_VOLUME_COLOR)
     L.extend(high_volume_lines)
+
+    # CORE STANDARD — added 2026-08-28, HIGH VOLUME's exact complement
+    # (34 = 17 + 17, an exact partition, not a new tier) -- explicit user
+    # request for a matching "high volume vs the rest" split so each
+    # half's own performance is visible on its own. Its P&L/cost also now
+    # feeds the TOTAL sum directly, same reasoning as HIGH VOLUME above.
+    core_standard_lines, core_standard_pnl, core_standard_cost, core_standard_costs_eur = _positions_section(
+        "OPEN POSITIONS — CORE STANDARD (17 pairs, the other half of former CORE)",
+        core_standard_positions, live, position_costs, W_TOTAL, HR, color=CORE_STANDARD_COLOR)
+    L.extend(core_standard_lines)
 
     scandi_lines, scandi_pnl, scandi_cost, scandi_costs_eur = _positions_section(
         "OPEN POSITIONS — SCANDI (32 pairs, SIM-only, NOK/SEK/DKK crosses)",
@@ -640,9 +650,9 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         exotic_positions, live, position_costs, W_TOTAL, HR, color=EXOTIC_COLOR)
     L.extend(exotic_lines)
 
-    total_pnl       = core_pnl + scandi_pnl + exotic_pnl
-    total_cost      = core_cost + scandi_cost + exotic_cost
-    total_costs_eur = core_costs_eur + scandi_costs_eur + exotic_costs_eur
+    total_pnl       = high_volume_pnl + core_standard_pnl + scandi_pnl + exotic_pnl
+    total_cost      = high_volume_cost + core_standard_cost + scandi_cost + exotic_cost
+    total_costs_eur = high_volume_costs_eur + core_standard_costs_eur + scandi_costs_eur + exotic_costs_eur
     tc   = GR if total_pnl >= 0 else RD
     tpct = (total_pnl / total_cost * 100) if total_cost > 0 else 0
     net_pnl = total_pnl + total_costs_eur
@@ -667,25 +677,37 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     #
     # 2026-08-25: split into CORE (34) / SCANDI (32) / EXOTIC (83) /
     # ALL (149, reference) so the live-vs-SIM-only universe decision can be
-    # made per strategy, not just from one blended 149-pair number — CORE
-    # leads (same reason as the positions tables above), ALL trails as a
-    # reference total only. SCANDI added same day as its own tier so its
-    # SIM track record (32 new NOK/SEK/DKK crosses) can be judged on its
-    # own before folding any of it into CORE or writing it off, exactly
-    # the same way EXOTIC's track record already gets judged separately.
-    L.extend(_strategy_breakdown_table(
-        "STRATEGY BREAKDOWN — CORE (34 pairs, live-trading candidates)",
-        positions, live, symbols=CORE_SYMBOLS, universe_size=34,
-        color=CORE_COLOR, total_label="CORE TOTAL"))
-
-    # HIGH VOLUME — added 2026-08-26, curated CORE subset (7 G7 majors + 10
-    # major crosses), same LBO inclusion as CORE (LBO trades its own
-    # 28-pair majors/crosses subset, genuinely overlaps here, unlike
-    # SCANDI/EXOTIC below where LBO structurally never trades).
+    # made per strategy, not just from one blended 149-pair number. SCANDI
+    # added same day as its own tier so its SIM track record (32 new
+    # NOK/SEK/DKK crosses) can be judged on its own before folding any of
+    # it into CORE or writing it off, exactly the same way EXOTIC's track
+    # record already gets judged separately.
+    #
+    # 2026-08-28: the standalone CORE (34) breakdown was removed here too
+    # (explicit user instruction) -- HIGH VOLUME + CORE STANDARD below
+    # already exactly partition it (17+17=34), so showing all three was
+    # redundant. HIGH VOLUME now leads (same reason CORE used to: the
+    # actionable half of the live-vs-SIM-only decision this whole split
+    # exists for), same LBO inclusion as the old CORE section (LBO trades
+    # its own 28-pair majors/crosses subset, genuinely overlaps both CORE
+    # halves, unlike SCANDI/EXOTIC below where LBO structurally never
+    # trades).
     L.extend(_strategy_breakdown_table(
         "STRATEGY BREAKDOWN — HIGH VOLUME (17 pairs, subset of CORE, majors + liquid crosses)",
         positions, live, symbols=HIGH_VOLUME_SYMBOLS, universe_size=17,
         color=HIGH_VOLUME_COLOR, total_label="HIGH VOL TOTAL"))
+
+    # CORE STANDARD — added 2026-08-28, HIGH VOLUME's exact complement
+    # within CORE (17 + 17 = 34, an exact partition) -- shown directly
+    # beside HIGH VOLUME above so the two halves' track records can be
+    # compared side by side, the actual question this split exists to
+    # answer ("does liquidity actually predict which CORE pairs perform").
+    # Same LBO inclusion as CORE/HIGH VOLUME (LBO's own 28-pair majors/
+    # crosses subset genuinely overlaps both CORE halves).
+    L.extend(_strategy_breakdown_table(
+        "STRATEGY BREAKDOWN — CORE STANDARD (17 pairs, subset of CORE, the other half)",
+        positions, live, symbols=CORE_STANDARD_SYMBOLS, universe_size=17,
+        color=CORE_STANDARD_COLOR, total_label="CORE STD TOTAL"))
 
     L.extend(_strategy_breakdown_table(
         "STRATEGY BREAKDOWN — SCANDI (32 pairs, SIM-only, excl. LBO)",
