@@ -61,6 +61,21 @@ sys.path.insert(0, BASE_DIR)
 if sys.stdout.encoding != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
 
+# Enable VT colours for ANSI colour codes -- without this, plain
+# PowerShell/cmd.exe consoles print the raw escape sequences literally
+# (e.g. "<-[92m") instead of rendering colour, since Windows consoles
+# don't interpret ANSI/VT100 sequences by default. Same fix as
+# forex_dashboard.py's own VT-colours block.
+try:
+    import ctypes as _ct
+    _k32 = _ct.windll.kernel32
+    _h   = _k32.GetStdHandle(-11)
+    _m   = _ct.c_ulong()
+    _k32.GetConsoleMode(_h, _ct.byref(_m))
+    _k32.SetConsoleMode(_h, _m.value | 0x4)
+except Exception:
+    pass
+
 import pnl_tracker
 from forex.universe import HIGH_VOLUME_SYMBOLS
 
