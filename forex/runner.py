@@ -1353,10 +1353,20 @@ def _heat_allows_entry(positions: dict, equity: float) -> bool:
 # stocks) from ever getting a turn -- not just forex's own swing book.
 # Per explicit user direction: reserve real margin headroom for every
 # strategy, always, not just the one that happens to be scanning first.
-# Unlike _heat_allows_entry, this is NOT disabled and applies to every
-# strategy including day-trade ones (LBO) -- running out of real broker
-# margin isn't a soft risk-budget choice, it's a hard wall regardless of
-# which internal "book" a position is nominally assigned to.
+# Applies to every strategy including day-trade ones (LBO) -- running out of
+# real broker margin isn't a soft risk-budget choice, it's a hard wall
+# regardless of which internal "book" a position is nominally assigned to.
+#
+# 2026-08-28: SIM-only exemption, same reasoning and same precedent as
+# _heat_allows_entry()'s 2026-08-21 disable and the loss-limit/drawdown
+# gates' 2026-08-24 disable -- explicit user request ("test all strategies,
+# no blocking") after SIM's own accumulated positions pushed simulated
+# margin utilization to 52%+ for hours, blocking forex AND futures SIM
+# entries. LIVE/LIVE_EUR are UNCHANGED and keep the real, hard-blocking
+# gate -- this account's margin is real money, the "reserve headroom"
+# reasoning above still fully applies there. Still computed/logged for SIM
+# so real (simulated) margin pressure stays visible, same telemetry-not-
+# gate pattern as every other disabled-for-SIM check in this file.
 MAX_MARGIN_UTILIZATION_PCT = 50.0   # leave HALF the margin pool for other strategies/modules
 _MARGIN_CACHE_TTL_SECONDS  = 20     # avoid hammering balances/me once per signal
 _margin_cache: dict = {"utilization": None, "checked_at": 0.0}
@@ -1367,7 +1377,9 @@ def _margin_allows_entry() -> bool:
     MAX_MARGIN_UTILIZATION_PCT. Cached briefly so a strategy placing many
     entries in one run doesn't re-fetch balances/me for every signal.
     Fails OPEN (returns True) if the check itself can't be made -- a
-    lookup failure shouldn't silently freeze all trading."""
+    lookup failure shouldn't silently freeze all trading. SIM-only: logs
+    but never blocks (see this section's 2026-08-28 comment); LIVE/LIVE_EUR
+    keep the real hard block."""
     now = time.time()
     if _margin_cache["utilization"] is not None and \
        now - _margin_cache["checked_at"] < _MARGIN_CACHE_TTL_SECONDS:
@@ -1385,9 +1397,12 @@ def _margin_allows_entry() -> bool:
         _margin_cache["checked_at"]  = now
 
     if util >= MAX_MARGIN_UTILIZATION_PCT:
-        logger.warning(f"  [MARGIN] utilization {util:.1f}% >= {MAX_MARGIN_UTILIZATION_PCT:.0f}% "
-                        f"— blocking new entries to preserve room for every strategy")
-        return False
+        if ACCOUNT_ENV in ("live", "live_eur"):
+            logger.warning(f"  [MARGIN] utilization {util:.1f}% >= {MAX_MARGIN_UTILIZATION_PCT:.0f}% "
+                            f"— blocking new entries to preserve room for every strategy")
+            return False
+        logger.info(f"  [MARGIN] utilization {util:.1f}% >= {MAX_MARGIN_UTILIZATION_PCT:.0f}% "
+                    f"(limit disabled for SIM testing — NOT blocking)")
     return True
 
 

@@ -615,15 +615,21 @@ def _portfolio_heat_pct(positions: dict, market_data: dict, universe: dict,
 
 def _heat_allows_entry(positions: dict, market_data: dict, universe: dict,
                        equity: float) -> bool:
-    """Return False if adding another position would breach the heat limit."""
+    """Disabled 2026-08-28 -- explicit user request ("test all strategies,
+    no blocking"), same reasoning and exact precedent as forex/runner.py's
+    _heat_allows_entry() (disabled there 2026-08-21). futures/runner.py's
+    BASE_URL is always Saxo's SIM/demo gateway (no separate live-account
+    mode exists for futures at all, unlike forex's --account live/live_eur)
+    -- so there is no LIVE side to keep this gated for; if futures ever
+    gets a real-money mode, this must become conditional the same way
+    forex's margin gate below is. Heat is still computed and logged every
+    run so real risk stays visible; it just no longer gates entries."""
     heat = _portfolio_heat_pct(positions, market_data, universe, equity)
     if heat >= PORTFOLIO_HEAT_LIMIT:
-        logger.warning(
-            f"⚠  PORTFOLIO HEAT: {heat*100:.1f}% of equity at risk "
-            f"(limit {PORTFOLIO_HEAT_LIMIT*100:.0f}%). Blocking new entries."
+        logger.info(
+            f"  [HEAT] Portfolio heat {heat*100:.1f}% >= {PORTFOLIO_HEAT_LIMIT*100:.0f}% "
+            f"(limit disabled for SIM testing — NOT blocking)"
         )
-        return False
-    logger.debug(f"Portfolio heat: {heat*100:.1f}% / {PORTFOLIO_HEAT_LIMIT*100:.0f}%")
     return True
 
 
@@ -635,6 +641,13 @@ def _heat_allows_entry(positions: dict, market_data: dict, universe: dict,
 # which would have blocked futures (and every other module) from trading
 # too, regardless of futures' own heat looking fine. Per explicit user
 # direction: reserve real margin headroom for every strategy/module, always.
+#
+# 2026-08-28: disabled here too (log-only), same reasoning/precedent as the
+# heat gate above -- futures has no live-account mode at all (BASE_URL is
+# always .../sim/openapi), so unlike forex's margin gate (which keeps a real
+# hard block for --account live/live_eur), there is no live side to protect
+# here. If futures ever gets a real-money mode, reinstate a hard block for
+# it specifically, mirroring forex/runner.py's ACCOUNT_ENV-conditional gate.
 MAX_MARGIN_UTILIZATION_PCT = 50.0
 _MARGIN_CACHE_TTL_SECONDS  = 20
 _margin_cache: dict = {"utilization": None, "checked_at": 0.0}
@@ -643,7 +656,9 @@ _margin_cache: dict = {"utilization": None, "checked_at": 0.0}
 def _margin_allows_entry() -> bool:
     """True if Saxo's own live margin utilization is still below
     MAX_MARGIN_UTILIZATION_PCT. Cached briefly to avoid hammering
-    balances/me once per signal. Fails OPEN if the check itself fails."""
+    balances/me once per signal. Fails OPEN if the check itself fails.
+    Disabled 2026-08-28 (SIM-only account, see this section's comment) --
+    logs but never blocks."""
     now = time.time()
     if _margin_cache["utilization"] is not None and \
        now - _margin_cache["checked_at"] < _MARGIN_CACHE_TTL_SECONDS:
@@ -661,9 +676,8 @@ def _margin_allows_entry() -> bool:
         _margin_cache["checked_at"]  = now
 
     if util >= MAX_MARGIN_UTILIZATION_PCT:
-        logger.warning(f"  [MARGIN] utilization {util:.1f}% >= {MAX_MARGIN_UTILIZATION_PCT:.0f}% "
-                        f"— blocking new entries to preserve room for every strategy")
-        return False
+        logger.info(f"  [MARGIN] utilization {util:.1f}% >= {MAX_MARGIN_UTILIZATION_PCT:.0f}% "
+                    f"(limit disabled for SIM testing — NOT blocking)")
     return True
 
 

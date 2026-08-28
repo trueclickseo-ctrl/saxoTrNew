@@ -1623,16 +1623,44 @@ def _mock_get_factory(utilization):
     return _mock_get
 
 
-def test_forex_margin_gate_blocks_above_threshold():
+def test_forex_margin_gate_blocks_above_threshold_on_live():
+    # 2026-08-28: SIM-only exemption added (see forex/runner.py's
+    # _margin_allows_entry() 2026-08-28 comment) -- this gate only still
+    # hard-blocks for live/live_eur now, matching the loss-limit/drawdown/
+    # heat gates' existing SIM exemption precedent. Verify the LIVE side
+    # specifically, since SIM's own behavior is covered by the test below.
     import forex.runner as runner
     runner._margin_cache["utilization"] = None
     runner._margin_cache["checked_at"] = 0.0
     orig_get = runner._get
+    runner.set_account_env("live")
     try:
         runner._get = _mock_get_factory(75.0)
         assert runner._margin_allows_entry() is False, (
-            "must block new entries when Saxo's real margin utilization (75%) "
-            "is above MAX_MARGIN_UTILIZATION_PCT"
+            "must still block new LIVE entries when Saxo's real margin "
+            "utilization (75%) is above MAX_MARGIN_UTILIZATION_PCT"
+        )
+    finally:
+        runner._get = orig_get
+        runner._margin_cache["utilization"] = None
+        runner.set_account_env("sim")
+
+
+def test_forex_margin_gate_logs_but_does_not_block_sim_above_threshold():
+    # 2026-08-28: explicit user request ("test all strategies, no
+    # blocking") after SIM's own accumulated positions pushed simulated
+    # margin utilization to 52%+ for hours, blocking forex AND futures SIM
+    # entries. SIM now only logs, never blocks -- LIVE/LIVE_EUR are
+    # unchanged (see the test above).
+    import forex.runner as runner
+    runner._margin_cache["utilization"] = None
+    runner._margin_cache["checked_at"] = 0.0
+    orig_get = runner._get
+    assert runner.ACCOUNT_ENV == "sim", "this test assumes the module's default env (sim)"
+    try:
+        runner._get = _mock_get_factory(75.0)
+        assert runner._margin_allows_entry() is True, (
+            "SIM must never block new entries on margin utilization, only log it"
         )
     finally:
         runner._get = orig_get
@@ -1673,14 +1701,22 @@ def test_forex_margin_gate_fails_open_on_lookup_error():
         runner._margin_cache["utilization"] = None
 
 
-def test_futures_margin_gate_blocks_above_threshold():
+def test_futures_margin_gate_logs_but_does_not_block():
+    # 2026-08-28: disabled (log-only) -- futures has no live-account mode
+    # at all (BASE_URL is always .../sim/openapi, see
+    # futures/runner.py's 2026-08-28 comment on this gate), unlike forex
+    # which keeps a real hard block for --account live/live_eur. Explicit
+    # user request ("test all strategies, no blocking") after the shared
+    # Saxo margin pool sat above 50% for hours, blocking futures SIM too.
     import futures.runner as runner
     runner._margin_cache["utilization"] = None
     runner._margin_cache["checked_at"] = 0.0
     orig_get = runner._get
     try:
         runner._get = _mock_get_factory(80.0)
-        assert runner._margin_allows_entry() is False
+        assert runner._margin_allows_entry() is True, (
+            "futures must never block new entries on margin utilization, only log it"
+        )
     finally:
         runner._get = orig_get
         runner._margin_cache["utilization"] = None
@@ -1710,7 +1746,8 @@ def test_margin_gate_wired_into_futures_entry_loop():
     )
 
 
-_run("forex: margin gate blocks entries above 50% real Saxo utilization", test_forex_margin_gate_blocks_above_threshold)
+_run("forex: margin gate still blocks LIVE entries above 50% real Saxo utilization", test_forex_margin_gate_blocks_above_threshold_on_live)
+_run("forex: margin gate logs but never blocks SIM above threshold", test_forex_margin_gate_logs_but_does_not_block_sim_above_threshold)
 _run("forex: margin gate allows entries below threshold", test_forex_margin_gate_allows_below_threshold)
 _run("forex: margin gate fails open (doesn't freeze trading) on lookup error", test_forex_margin_gate_fails_open_on_lookup_error)
 
@@ -1777,7 +1814,7 @@ _run("signal_filter: forcing self-agreement doesn't defeat a real min_agreement>
      test_consensus_still_blocks_when_firing_strategy_omitted_and_min_agreement_raised)
 _run("forex/runner.py: _run_entries wires firing_strategy through to signal_filter.evaluate",
      test_runner_passes_firing_strategy_into_evaluate)
-_run("futures: margin gate blocks entries above threshold", test_futures_margin_gate_blocks_above_threshold)
+_run("futures: margin gate logs but never blocks (SIM-only account, disabled 2026-08-28)", test_futures_margin_gate_logs_but_does_not_block)
 _run("forex: margin gate applies to every strategy, LBO included (not just swing)", test_margin_gate_wired_into_forex_entry_loop_for_every_strategy)
 _run("futures: margin gate wired into the entry loop", test_margin_gate_wired_into_futures_entry_loop)
 
