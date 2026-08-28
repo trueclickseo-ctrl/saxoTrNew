@@ -235,12 +235,29 @@ def _strategy_stats() -> tuple[list, list]:
         return [], []
 
 
+def _strategy_symbol_stats() -> tuple[list, list]:
+    """Per (strategy, symbol) P&L/WR/PF breakdown. Added 2026-08-28 --
+    the "Markets" column added to _strategy_stats() the same day only
+    lists WHICH symbols a strategy traded (e.g. "GC, NQ, ZC"), with no
+    indication of how each one individually performed -- user reported
+    "still i can not see the Symbol" even after that column existed,
+    meaning a comma-joined list wasn't what was actually wanted here.
+    This gives dashboard_futures.ps1 real per-symbol rows to render."""
+    try:
+        all_time = pnl_tracker.get_strategy_symbol_summary("futures")
+        today    = pnl_tracker.get_strategy_symbol_summary("futures", since=date.today().isoformat())
+        return all_time, today
+    except Exception:
+        return [], []
+
+
 def main():
     equity    = _account()
     positions = _positions()
     trades    = _recent_trades()
     health    = _log_health()
     strategy_stats, strategy_stats_today = _strategy_stats()
+    strategy_symbol_stats, strategy_symbol_stats_today = _strategy_symbol_stats()
     total_slots = 30
     open_slots  = total_slots - len(positions)
 
@@ -253,6 +270,8 @@ def main():
         "health":      health,
         "strategy_stats":       strategy_stats,
         "strategy_stats_today": strategy_stats_today,
+        "strategy_symbol_stats":       strategy_symbol_stats,
+        "strategy_symbol_stats_today": strategy_symbol_stats_today,
         "as_of":       datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     print(json.dumps(out, ensure_ascii=False))

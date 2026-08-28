@@ -417,7 +417,20 @@ when the next scheduled cycle happens to run.
 | `ATOS PnL Sync` | 23:00 PKT, daily | `run_pnl_sync.bat` → `pnl_tracker.py --sync` | Syncs open/closed trades from all module state files into `data/pnl_ledger.db`. **Was actually configured as a weekly Sunday-only trigger since creation (2026-08-19) — never fired even once, silently freezing stock P&L data at 2026-08-14. Fixed to real daily 2026-08-21 and backfilled.** |
 | `ATOS Scheduler Watchdog` | every 30 min | `python scheduler_watchdog.py` | See §6. |
 | `ATOS Daily Chart` | 23:15 PKT, daily | `run_daily_chart.bat` → `daily_chart.py` | **Added 2026-08-21.** Generates a 2-panel per-strategy P&L chart (cumulative + today's) for EACH of the 4 modules **separately** — stock/etf/futures/forex each get their own independent chart file, never combined — from `data/pnl_ledger.db`. Fires 15 min after `ATOS PnL Sync` so every module's data is fully synced first. Saves `data/charts/{module}_strategy_YYYY-MM-DD.png` (permanent daily record) and `data/charts/{module}_strategy_latest.png` (always-current), then emails all of today's charts as inline attachments via `config/email.json` (one section per module in the email body). Skips a module gracefully (chart and email) if it has no closed trades yet — ETF/futures did on the day this was added, will start appearing automatically once they have their first closed trade. |
+| `ATOS Forex Performance Tracker` | 23:45 PKT, daily | `run_forex_performance_tracker.bat` → `reports\_gather_daily_sim_data.py` then `py -3.12 reports\pair_group_performance_tracker.py` | **Added 2026-08-28.** Rebuilds `data/forex_performance_tracker.xlsx` in place (Per-Group, Per-Pair, Daily, Weekly, Monthly Performance sheets — PF/WR%/Net P&L, live COUNTIF/SUMIF formulas over a hidden Trade Detail sheet). Two-phase (forex needs live EUR re-pricing across many quote currencies, needs `forex.runner`/torch; the openpyxl build step runs under `py -3.12`, which doesn't have torch). |
+| `ATOS Futures Performance Tracker` | 23:50 PKT, daily | `run_futures_performance_tracker.bat` → `py -3.12 reports\module_performance_tracker.py futures Futures USD` | **Added 2026-08-28.** Rebuilds `data/futures_performance_tracker.xlsx` (Per-Strategy, Per-Symbol, Daily, Weekly, Monthly). Single-phase — reads `data/pnl_ledger.db` directly (already stores real dealt `realized_pnl`/`commission` per closed trade, no live re-pricing needed). |
+| `ATOS ETF Performance Tracker` | 23:55 PKT, daily | `run_etf_performance_tracker.bat` → `py -3.12 reports\module_performance_tracker.py etf ETF USD` | **Added 2026-08-28.** Same as Futures above, module `etf`. |
+| `ATOS Stocks Performance Tracker` | 00:00 PKT, daily | `run_stocks_performance_tracker.bat` → `py -3.12 reports\module_performance_tracker.py stock Stocks SEK` | **Added 2026-08-28.** Same as Futures above, module `stock` (pnl_ledger.db's real module name — the workbook is `data/stock_performance_tracker.xlsx`, singular). |
 | ~~`ATOS Dashboard Start`~~ | ~~18:30 PKT~~ | ~~missing path~~ | Same missing-path problem as Daily Scan. **Was claimed disabled since 2026-08-20 but actually never was** (found live 2026-08-22, still `State: Ready`). Fixed the same day via `schtasks /Change /TN "ATOS Dashboard Start" /DISABLE` after PowerShell's `Disable-ScheduledTask` was denied for lack of admin rights — confirmed disabled. |
+
+All 4 Performance Tracker tasks are read-only analytics (never touch a live
+signal, gate, stop, or order) and are deliberately **not** registered in
+`scheduler_watchdog.py` — same category as `ATOS Housekeeping`/`ATOS
+Safeguard`/`ATOS Daily Summary`, none of which are watchdog-monitored
+either; a missed run just means stale numbers until the next one, not a
+trading gap. Staggered 5 min apart, starting 15 min after `ATOS Daily
+Summary` (23:30 PKT), so each module's `pnl_ledger.db` data is settled
+before its tracker reads it.
 
 ---
 

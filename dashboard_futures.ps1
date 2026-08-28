@@ -165,18 +165,28 @@ function Draw-Dashboard {
     # Found while investigating a real ZC stop-loss that was correctly
     # closed+emailed by intraday_monitor.py but showed nowhere else.
     Write-Host "  STRATEGY BREAKDOWN  (all-time realized, Today = today only)" -ForegroundColor Cyan
-    Write-Host "  $("-" * 72)" -ForegroundColor DarkGray
+    Write-Host "  $("-" * 88)" -ForegroundColor DarkGray
     $stats      = @($d.strategy_stats)
     $statsToday = @($d.strategy_stats_today)
+    # 2026-08-28: real per-(strategy,symbol) rows, added after the
+    # comma-joined "Markets" list (GC, NQ, ZC) still wasn't what was
+    # wanted -- "still i can not see the Symbol" -- that list names which
+    # markets were traded but gives no per-market stats at all (e.g. no
+    # way to tell GC alone drove the whole +3463 while NQ/ZC were flat or
+    # losing). symStats below has one real row per strategy+symbol combo.
+    $symStats      = @($d.strategy_symbol_stats)
+    $symStatsToday = @($d.strategy_symbol_stats_today)
     if ($stats.Count -eq 0) {
         Write-Host "  No closed futures trades yet." -ForegroundColor DarkGray
     } else {
         $todayByStrat = @{}
         foreach ($t in $statsToday) { $todayByStrat[$t.strategy] = $t }
+        $symTodayByKey = @{}
+        foreach ($t in $symStatsToday) { $symTodayByKey["$($t.strategy)|$($t.symbol)"] = $t }
 
-        Write-Host ("  {0,-10} {1,7} {2,8} {3,7} {4,7} {5,14} {6,14}  {7}" -f `
-            "Strategy","Closed","W/L","WR%","PF","All-Time P&L","Today","Markets") -ForegroundColor DarkGray
-        Write-Host "  $("-" * 72)" -ForegroundColor DarkGray
+        Write-Host ("  {0,-10} {1,8} {2,7} {3,8} {4,7} {5,7} {6,14} {7,14}" -f `
+            "Strategy","Symbol","Closed","W/L","WR%","PF","All-Time P&L","Today") -ForegroundColor DarkGray
+        Write-Host "  $("-" * 88)" -ForegroundColor DarkGray
 
         foreach ($s in ($stats | Sort-Object -Property total_pnl -Descending)) {
             $wr    = "{0:N1}%" -f $s.win_rate
@@ -187,18 +197,45 @@ function Draw-Dashboard {
             $todayEntry = $todayByStrat[$s.strategy]
             $todayStr  = if ($todayEntry) { "{0:+0.00;-0.00}" -f [double]$todayEntry.total_pnl } else { "-" }
             $todayC    = if ($todayEntry -and [double]$todayEntry.total_pnl -lt 0) { "Red" } elseif ($todayEntry) { "Green" } else { "DarkGray" }
-            # 2026-08-28: which market(s) this strategy's closed trades were
-            # actually on -- was entirely missing before (e.g. "MACD 2
-            # 0W/0L 0.0% - +0.00 -" gave no way to tell which of the 13
-            # futures markets those 2 trades were even in).
-            $markets = if ($s.symbols -and @($s.symbols).Count -gt 0) { (@($s.symbols) -join ", ") } else { "-" }
 
-            Write-Host ("  {0,-10} " -f $s.strategy.ToUpper()) -NoNewline -ForegroundColor $stratC
+            # Strategy-level total row (Symbol column blank -- this row is
+            # the sum across every symbol below it).
+            Write-Host ("  {0,-10} {1,8} " -f $s.strategy.ToUpper(), "") -NoNewline -ForegroundColor $stratC
             $wl = "{0}W/{1}L" -f $s.wins, $s.losses
-            Write-Host ("{0,7} {1,7} {2,7} {3,7} " -f $s.trades, $wl, $wr, $pf) -NoNewline -ForegroundColor White
+            Write-Host ("{0,7} {1,8} {2,7} {3,7} " -f $s.trades, $wl, $wr, $pf) -NoNewline -ForegroundColor White
             Write-Host ("{0,14}" -f $pnl) -NoNewline -ForegroundColor $pnlC
-            Write-Host ("{0,14}" -f $todayStr) -NoNewline -ForegroundColor $todayC
-            Write-Host ("  {0}" -f $markets) -ForegroundColor DarkGray
+            Write-Host ("{0,14}" -f $todayStr) -ForegroundColor $todayC
+
+            # Per-symbol sub-rows, indented, sorted by that symbol's own
+            # all-time P&L descending -- the actual "which market did
+            # this" answer.
+            $symRows = @($symStats | Where-Object { $_.strategy -eq $s.strategy } | Sort-Object -Property total_pnl -Descending)
+            foreach ($sym in $symRows) {
+                Write-Host ("  {0,-10} {1,8} " -f "", $sym.symbol) -NoNewline -ForegroundColor DarkGray
+                if ($sym.unresolved) {
+                    # A closed trade whose real P&L was never confirmed
+                    # (documented broker-side ambiguity, e.g. futures id 60
+                    # CL -- see pnl_tracker.get_strategy_symbol_summary's
+                    # docstring). Shown as "P&L UNKNOWN" instead of a
+                    # misleading "+0.00", which would read as a real,
+                    # known-flat trade.
+                    Write-Host ("{0,7} {1,8} {2,7} {3,7} " -f $sym.trades, "-", "-", "-") -NoNewline -ForegroundColor DarkGray
+                    Write-Host ("{0,14}" -f "P&L UNKNOWN") -ForegroundColor DarkGray
+                    continue
+                }
+                $symWr   = "{0:N1}%" -f $sym.win_rate
+                $symPf   = if ($null -ne $sym.profit_factor) { "{0:N2}" -f $sym.profit_factor } else { "-" }
+                $symPnl  = "{0:+0.00;-0.00}" -f [double]$sym.total_pnl
+                $symPnlC = if ([double]$sym.total_pnl -ge 0) { "Green" } else { "Red" }
+                $symToday = $symTodayByKey["$($sym.strategy)|$($sym.symbol)"]
+                $symTodayStr = if ($symToday -and -not $symToday.unresolved) { "{0:+0.00;-0.00}" -f [double]$symToday.total_pnl } elseif ($symToday) { "?" } else { "-" }
+                $symTodayC   = if ($symToday -and -not $symToday.unresolved -and [double]$symToday.total_pnl -lt 0) { "Red" } elseif ($symToday -and -not $symToday.unresolved) { "Green" } else { "DarkGray" }
+                $symWl = "{0}W/{1}L" -f $sym.wins, $sym.losses
+
+                Write-Host ("{0,7} {1,8} {2,7} {3,7} " -f $sym.trades, $symWl, $symWr, $symPf) -NoNewline -ForegroundColor DarkGray
+                Write-Host ("{0,14}" -f $symPnl) -NoNewline -ForegroundColor $symPnlC
+                Write-Host ("{0,14}" -f $symTodayStr) -ForegroundColor $symTodayC
+            }
         }
     }
     NL

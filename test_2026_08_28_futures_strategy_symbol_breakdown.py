@@ -1,5 +1,5 @@
 """
-Regression tests -- 2026-08-28 futures dashboard "Markets" column.
+Regression tests -- 2026-08-28 futures dashboard per-symbol breakdown.
 
 Explicit user complaint: "in Futures Dashboard I can see the strategy
 name but no the symbol which is sold or bought, there is missing
@@ -7,11 +7,18 @@ information" -- pasted the STRATEGY BREAKDOWN table (Strategy/Closed/
 W-L/WR%/PF/All-Time P&L/Today) with no indication of which of the 13
 futures markets each strategy's trades were actually on.
 
-pnl_tracker.get_strategy_summary() (all-time) previously had no
-"symbols" field at all -- only its _since() sibling (used for daily
-digests) computed the DISTINCT-symbol breakdown. Added the same query
-to the all-time function and a new "Markets" column to
-dashboard_futures.ps1's STRATEGY BREAKDOWN table.
+First attempt (same day): added get_strategy_summary()'s "symbols"
+field + a comma-joined "Markets" column ("DONCHIAN ... GC, NQ, ZC").
+User reported "still i can not see the Symbol" even after that --  a
+comma list names which markets were traded but gives no per-market
+stats, so it wasn't actually answering the question. Superseded by
+pnl_tracker.get_strategy_symbol_summary() (real per-(strategy,symbol)
+rows) + indented per-symbol sub-rows under each strategy in
+dashboard_futures.ps1's STRATEGY BREAKDOWN, each with its own
+Closed/W-L/WR%/PF/All-Time P&L/Today. The old get_strategy_summary()
+"symbols" field / "Markets" column tests below still apply -- that
+field wasn't removed, just no longer the dashboard's primary answer to
+"which symbol."
 """
 
 import os
@@ -82,21 +89,58 @@ _run("pnl_tracker.get_strategy_summary('forex') still has every pre-existing key
 
 
 # ═══════════════════════════════════════════════════════════════════════
-section("2. Blackbox -- dashboard_futures.ps1 shows a Markets column")
+section("2. pnl_tracker.get_strategy_symbol_summary() -- real per-symbol rows")
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_powershell_dashboard_shows_markets_column():
+def test_get_strategy_symbol_summary_returns_real_rows():
+    import pnl_tracker
+    rows = pnl_tracker.get_strategy_symbol_summary("futures")
+    assert rows, "expected at least one (strategy, symbol) row for futures"
+    donchian_syms = {r["symbol"] for r in rows if r["strategy"] == "donchian"}
+    assert donchian_syms == {"GC", "NQ", "ZC"}, f"expected donchian's real symbols, got {donchian_syms}"
+_run("pnl_tracker.get_strategy_symbol_summary('futures') returns real per-symbol rows",
+     test_get_strategy_symbol_summary_returns_real_rows)
+
+
+def test_unresolved_symbol_row_is_flagged_not_fabricated_zero():
+    # futures id 60 (macd/CL) has realized_pnl=NULL -- a documented,
+    # deliberately-unresolved broker ambiguity. Its (strategy, symbol) row
+    # must be flagged 'unresolved': True with total_pnl=None, not silently
+    # folded in as a real "+0.00" (which pnl_tracker's SQL SUM()/CASE-WHEN
+    # would otherwise produce, since NULL contributes 0 to a SUM).
+    import pnl_tracker
+    rows = {(r["strategy"], r["symbol"]): r for r in pnl_tracker.get_strategy_symbol_summary("futures")}
+    cl_row = rows.get(("macd", "CL"))
+    assert cl_row is not None, "expected a (macd, CL) row"
+    assert cl_row["unresolved"] is True, f"expected CL's row to be flagged unresolved, got {cl_row}"
+    assert cl_row["total_pnl"] is None, f"expected CL's total_pnl to be None (unknown), got {cl_row['total_pnl']}"
+    zb_row = rows.get(("macd", "ZB"))
+    assert zb_row is not None and zb_row["unresolved"] is False, (
+        "ZB has a real (documented) $0.0 P&L -- must NOT be flagged unresolved"
+    )
+_run("get_strategy_symbol_summary() flags a NULL-P&L row as 'unresolved', doesn't fabricate a '+0.00'",
+     test_unresolved_symbol_row_is_flagged_not_fabricated_zero)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+section("3. Blackbox -- dashboard_futures.ps1 shows a real Symbol breakdown")
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_powershell_dashboard_shows_symbol_breakdown():
     proc = subprocess.run(
         ["powershell", "-File", os.path.join(BASE_DIR, "dashboard_futures.ps1"), "-Once"],
         cwd=BASE_DIR, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90,
     )
     out = proc.stdout
-    assert "Markets" in out, "expected a 'Markets' column header in STRATEGY BREAKDOWN"
-    assert "GC" in out or "NQ" in out or "ZC" in out, (
-        "expected at least one real market ticker to appear in the STRATEGY BREAKDOWN rows"
+    assert "Symbol" in out, "expected a 'Symbol' column header in STRATEGY BREAKDOWN"
+    assert "GC" in out and "NQ" in out and "ZC" in out, (
+        "expected donchian's real per-symbol rows (GC/NQ/ZC) to appear in STRATEGY BREAKDOWN"
     )
-_run("dashboard_futures.ps1 -Once shows a 'Markets' column with real ticker(s) in STRATEGY BREAKDOWN",
-     test_powershell_dashboard_shows_markets_column)
+    assert "P&L UNKNOWN" in out, (
+        "expected macd/CL's row to show 'P&L UNKNOWN', not a fabricated '+0.00'"
+    )
+_run("dashboard_futures.ps1 -Once shows real per-symbol rows under each strategy, with CL correctly marked P&L UNKNOWN",
+     test_powershell_dashboard_shows_symbol_breakdown)
 
 
 print(f"\n{BOLD}{'='*70}{RESET}")

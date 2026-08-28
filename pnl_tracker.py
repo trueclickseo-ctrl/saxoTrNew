@@ -734,6 +734,72 @@ def get_strategy_summary_since(module: str, since: str, symbols: set | None = No
     return result
 
 
+def get_strategy_symbol_summary(module: str, since: str | None = None) -> list[dict]:
+    """
+    Per (strategy, symbol) P&L breakdown within a module -- one row per
+    combination that has at least one closed trade, sorted by strategy
+    then total_pnl descending. Added 2026-08-28: futures_dashboard's
+    STRATEGY BREAKDOWN's new "Markets" column (get_strategy_summary's
+    "symbols" field) only lists WHICH symbols a strategy traded, with no
+    per-symbol stats -- e.g. "DONCHIAN ... GC, NQ, ZC" gives no way to
+    tell that GC alone was the big winner and the others were flat/
+    losing. This gives the real per-symbol breakdown the "Markets"
+    column couldn't.
+
+    `since`, if given (a "YYYY-MM-DD" date string), restricts to trades
+    closed on or after that date -- for a "Today" column, same as
+    get_strategy_summary_since().
+    """
+    since_filter = ""
+    params: tuple = (module,)
+    if since:
+        since_filter = " AND timestamp_close >= ?"
+        params = (module, since)
+
+    with _conn() as c:
+        rows = c.execute(f"""
+            SELECT strategy, symbol,
+                   COUNT(*)                                                     AS n,
+                   SUM(realized_pnl)                                            AS total_pnl,
+                   SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END)           AS wins,
+                   SUM(CASE WHEN realized_pnl < 0 THEN 1 ELSE 0 END)           AS losses,
+                   SUM(CASE WHEN realized_pnl > 0 THEN realized_pnl ELSE 0 END) AS gross_profit,
+                   SUM(CASE WHEN realized_pnl < 0 THEN realized_pnl ELSE 0 END) AS gross_loss,
+                   SUM(CASE WHEN realized_pnl IS NULL THEN 1 ELSE 0 END)       AS unresolved
+              FROM trades
+             WHERE module=? AND status='closed'{since_filter}
+             GROUP BY strategy, symbol
+             ORDER BY strategy, total_pnl DESC
+        """, params).fetchall()
+
+    result = []
+    for r in rows:
+        n  = r["n"] or 0
+        gp = r["gross_profit"] or 0.0
+        gl = abs(r["gross_loss"] or 0.0)
+        unresolved = r["unresolved"] or 0
+        # A closed trade can have realized_pnl=NULL (documented broker-side
+        # ambiguity -- see pnl_tracker's own "MACD's 2 historical non-trades
+        # remain honestly recorded" test). SQL SUM()/CASE-WHEN silently
+        # treat NULL as "contributes 0" -- without this flag a fully-
+        # unresolved (strategy,symbol) combo would render as a real "+0.00"
+        # trade instead of "we don't actually know its P&L", which is a
+        # meaningfully different (and misleading) claim.
+        all_unresolved = n > 0 and unresolved == n
+        result.append({
+            "strategy":      r["strategy"] or "—",
+            "symbol":        r["symbol"] or "—",
+            "trades":        n,
+            "wins":          r["wins"]   or 0,
+            "losses":        r["losses"] or 0,
+            "win_rate":      round((r["wins"] or 0) / n * 100, 1) if n else 0.0,
+            "total_pnl":     None if all_unresolved else round(r["total_pnl"] or 0.0, 2),
+            "profit_factor": None if all_unresolved else (round(gp / gl, 2) if gl > 0 else None),
+            "unresolved":    all_unresolved,
+        })
+    return result
+
+
 def get_pair_summary(module: str = "forex") -> list[dict]:
     """
     Per-symbol (currency pair / ticker) P&L breakdown within a module.
