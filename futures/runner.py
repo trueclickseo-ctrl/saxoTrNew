@@ -970,6 +970,24 @@ def _run_strategy_entries(strat_name: str, strat_mod, positions: dict,
                 logger.warning(f"[{strat_name}] SKIP {sym}: 400 order size {qty} exceeds broker max — reduce sizing")
                 continue
             raise
+        if oid is None:
+            # 2026-08-28: found live -- a REJECTED entry order (Saxo returns
+            # an error, saxo_order._place_entry_then_stop() catches it and
+            # returns (None, None) per its own documented contract:
+            # "Callers MUST check for a None entry_oid and skip recording a
+            # position — nothing was actually opened at the broker") was
+            # falling through to the code below unconditionally -- logging
+            # "Buy None: 3x GC[LONG]...", emailing a trade-opened alert, and
+            # writing a phantom position to local state for a trade that
+            # never existed at the broker. forex/runner.py already handles
+            # this correctly (see its entry_oid is None check) -- futures
+            # never had the equivalent check. The phantom state entry was
+            # self-correcting (housekeeping's orphan-detection removed it
+            # within the same run cycle), but the misleading "trade opened"
+            # email and log line were real and confusing on their own.
+            logger.warning(f"[{strat_name}] SKIP {sym}[{direction}] "
+                            f"— entry order rejected, no position opened")
+            continue
         tp_info = f"  tp_order={tp_oid}" if tp_oid else ""
         logger.info(f"[{strat_name}] {direction} {oid}: "
                     f"{qty}x {sym}[{tag}] @ ~{sig['close']:.4f}  stop={sig['stop_price']:.4f}  "
