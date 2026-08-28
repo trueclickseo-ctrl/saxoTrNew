@@ -36,6 +36,7 @@ import saxo_auth
 import proc_lock
 import trade_logger
 import pnl_tracker
+import forex.universe as _fx_universe
 
 # ── Logging ────────────────────────────────────────────────────────────────
 _LOG_DIR  = os.path.join(_ROOT, "logs")
@@ -132,6 +133,96 @@ def _saxo_positions_by_uic() -> dict:
     except Exception as exc:
         logger.warning(f"Could not fetch Saxo positions: {exc}")
     return result
+
+
+# ── Real (cost-netted, currency-converted) P&L for a forex close ───────────
+# 2026-08-28 fix: _check_forex()'s close-logging used to call
+# pnl_tracker.log_close("forex", ...) with no fx_rate_to_base and no cost
+# override, so it fell through to log_close()'s default raw*qty computation
+# -- unconverted quote-currency P&L (a JPY pair's raw number treated as if
+# it were EUR) with zero Saxo cost netting. Confirmed empirically: ~15% of
+# all SIM forex closed trades in the ledger went through this exact path
+# (their exit_reason matches this module's own "STOP-LOSS hit @.../
+# TAKE-PROFIT hit @..." wording). forex/runner.py's own should_exit()-driven
+# closes never had this problem -- they already call
+# _position_net_pnl_quote_ccy() + _eur_per_unit() before logging (see that
+# function's docstring in forex/runner.py). These two helpers are that same
+# logic, reimplemented locally against THIS module's own _get()/_fx_price()
+# rather than importing all of forex/runner.py into an every-1-minute
+# script -- intraday_monitor.py is SIM-only regardless (see FOREX_STATE
+# above), matching forex.runner's own default ACCOUNT_ENV.
+
+_EUR_RATE_CACHE: dict[str, float] = {}
+
+
+def _position_net_pnl_quote_ccy(uic: int, qty: float, direction: str,
+                                entry_price: float) -> float | None:
+    """Authoritative NET realized P&L in the position's own QUOTE currency
+    -- straight mirror of forex/runner.py's function of the same name (see
+    that docstring for why ProfitLossOnTrade + TradeCostsTotal, never the
+    "...InBaseCurrency" fields, and why matching by qty+entry_price rather
+    than just UIC, since multiple strategies can share a UIC)."""
+    try:
+        resp = _get("/port/v1/positions/me")
+    except Exception as exc:
+        logger.warning(f"Position P&L lookup failed for UIC {uic}: {exc}")
+        return None
+    want_amount = qty if direction in ("Buy", "BUY") else -qty
+    best, best_diff = None, None
+    for p in resp.get("Data", []):
+        pb = p.get("PositionBase", {})
+        if pb.get("Uic") != uic or pb.get("AssetType") != "FxSpot":
+            continue
+        amount = pb.get("Amount", 0)
+        if abs(amount) != abs(want_amount):
+            continue
+        if (amount > 0) != (want_amount > 0):
+            continue
+        diff = abs((pb.get("OpenPrice") or 0) - entry_price)
+        if best_diff is None or diff < best_diff:
+            best, best_diff = p, diff
+    if best is None:
+        return None
+    pv  = best.get("PositionView", {})
+    pnl = pv.get("ProfitLossOnTrade")
+    costs = pv.get("TradeCostsTotal") or 0.0
+    return (pnl + costs) if pnl is not None else None
+
+
+def _eur_per_unit(ccy: str, akey: str) -> float | None:
+    """EUR value of one unit of `ccy`, from Saxo's own live quotes --
+    straight mirror of forex/runner.py's function of the same name (EUR{ccy}
+    direct if traded, else USD{ccy}+EURUSD triangulation), using this
+    module's own _fx_price() instead of forex.runner's price-fetch path."""
+    if ccy == "EUR":
+        return 1.0
+    if ccy in _EUR_RATE_CACHE:
+        return _EUR_RATE_CACHE[ccy]
+    def _pair(sym: str):
+        try:
+            return _fx_universe.get_pair(sym)   # raises KeyError if unknown
+        except KeyError:
+            return None
+
+    rate = None
+    direct = _pair(f"EUR{ccy}")
+    if direct is not None:
+        px = _fx_price(direct["uic"], akey)
+        if px and px > 0:
+            rate = 1.0 / px
+    else:
+        usd_leg = _pair(f"USD{ccy}")
+        eur_usd = _pair("EURUSD")
+        if usd_leg is not None and eur_usd is not None:
+            px_usd_ccy = _fx_price(usd_leg["uic"], akey)
+            px_eur_usd = _fx_price(eur_usd["uic"], akey)
+            if px_usd_ccy and px_usd_ccy > 0 and px_eur_usd and px_eur_usd > 0:
+                rate = 1.0 / (px_usd_ccy * px_eur_usd)
+    if rate is None:
+        logger.warning(f"Saxo has no live quote for {ccy} right now -- treating as unknown")
+        return None
+    _EUR_RATE_CACHE[ccy] = rate
+    return rate
 
 
 def _futures_live_price(uic: int, asset_type: str, entry: float,
@@ -281,6 +372,14 @@ def _check_forex(akey: str, dry_run: bool) -> int:
             continue
 
         logger.info(f"[MONITOR] CLOSE {strat}:{sym} — {reason}  pnl={pnl_pct:+.2f}%")
+
+        # 2026-08-28 fix: snapshot Saxo's own net (price + cost) P&L for this
+        # position BEFORE closing it -- same reasoning as forex/runner.py's
+        # should_exit()-driven closes ("captured while the position still
+        # exists to look up") -- /port/v1/positions/me can't find it anymore
+        # once _close_position() below actually closes it.
+        net_pnl_quote = None if dry_run else _position_net_pnl_quote_ccy(uic, qty, direction, entry)
+
         oid = _close_position(akey, uic, "FxSpot", qty, direction, dry_run)
         if oid is None:
             logger.error(f"[MONITOR] Close order FAILED for {strat}:{sym}")
@@ -303,8 +402,26 @@ def _check_forex(akey: str, dry_run: bool) -> int:
                     quantity=qty, price=live, order_id=oid, dry_run=False,
                     stop_price=stop, notes=f"intraday_monitor: {reason}",
                 )
+                # 2026-08-28 fix: this used to call log_close() with no
+                # fx_rate_to_base/cost override, so it fell through to
+                # log_close()'s default raw*qty computation -- unconverted
+                # quote-currency P&L with zero Saxo cost netting (confirmed
+                # on ~15% of all SIM forex closed trades in the ledger).
+                # Convert via this module's own _eur_per_unit(), mirroring
+                # forex/runner.py's should_exit()-driven close path exactly.
+                quote_ccy = sym[3:6] if len(sym) >= 6 else ""
+                fx_rate = _eur_per_unit(quote_ccy, akey)
+                if fx_rate is None:
+                    logger.warning(f"[MONITOR] No Saxo rate for {quote_ccy} AND no Saxo "
+                                    f"position P&L for {sym} -- realized P&L for this "
+                                    f"close will use an unconverted 1.0 placeholder, "
+                                    f"verify data/pnl_ledger.db for {sym} manually")
+                    fx_rate = 1.0
+                saxo_pnl_eur = (net_pnl_quote * fx_rate) if net_pnl_quote is not None else None
                 pnl_tracker.log_close("forex", sym, live, reason, strategy=strat,
-                                      asset_type="FxSpot")
+                                      asset_type="FxSpot",
+                                      fx_rate_to_base=fx_rate,
+                                      gross_pnl_base_override=saxo_pnl_eur)
             except Exception as exc:
                 logger.warning(f"[MONITOR] trade/pnl logging failed for {strat}:{sym}: {exc}")
 
