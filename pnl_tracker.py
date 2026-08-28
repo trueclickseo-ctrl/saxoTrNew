@@ -85,6 +85,16 @@ def _conn() -> sqlite3.Connection:
         c.commit()
     except sqlite3.OperationalError:
         pass  # column already exists
+    # 2026-08-29: gap_type ("weekly"/"london"/"newyork"/"tokyo") -- lets
+    # forex's "gap"/"gap_weekend" strategies be broken down by gap type
+    # instead of one combined win rate (explicit user requirement before
+    # deciding which session variants to keep). NULL for every non-gap
+    # trade and for gap trades logged before this column existed.
+    try:
+        c.execute("ALTER TABLE trades ADD COLUMN gap_type TEXT")
+        c.commit()
+    except sqlite3.OperationalError:
+        pass  # column already exists
     return c
 
 
@@ -94,12 +104,18 @@ def log_open(module: str, strategy: str, symbol: str, direction: str,
              quantity: float, entry_price: float, stop_price: float = 0,
              currency: str = "USD", order_id: str = None,
              timestamp: str = None, source_ref: str = None,
-             commission: float = 0.0, asset_type: str = "") -> int:
+             commission: float = 0.0, asset_type: str = "",
+             gap_type: str | None = None) -> int:
     """Record a new trade opening. Returns the new row id.
 
     commission: one-side entry commission in trade currency.
                 Pass 0 to auto-calculate via calc_commission(), or supply
                 explicitly. If both are 0, calc_commission() is called.
+    gap_type: "weekly"/"london"/"newyork"/"tokyo" for forex's "gap"/
+              "gap_weekend" strategies, None for everything else. Persists
+              on the row through close (log_close() doesn't need it again)
+              so per-gap-type stats can be queried independently -- see
+              report_gap_weekend_by_type.py.
     """
     if commission == 0.0:
         commission = calc_commission(module, quantity, entry_price, asset_type)
@@ -109,10 +125,10 @@ def log_open(module: str, strategy: str, symbol: str, direction: str,
             INSERT INTO trades
                 (module, strategy, symbol, direction, quantity, entry_price,
                  stop_price, commission, currency, order_id, status,
-                 timestamp_open, source_ref)
-            VALUES (?,?,?,?,?,?,?,?,?,?,'open',?,?)
+                 timestamp_open, source_ref, gap_type)
+            VALUES (?,?,?,?,?,?,?,?,?,?,'open',?,?,?)
         """, (module, strategy, symbol, direction, quantity, entry_price,
-              stop_price, commission, currency, order_id, ts, source_ref))
+              stop_price, commission, currency, order_id, ts, source_ref, gap_type))
         return cur.lastrowid
 
 

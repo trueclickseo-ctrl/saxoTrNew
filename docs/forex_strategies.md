@@ -5,7 +5,11 @@
 EM/exotic crosses added 2026-08-21 for **SIM-only** broad testing (see Audit below).
 LBO trades a separate, smaller 28-pair universe — majors/crosses only, EM/exotic
 pairs deliberately excluded (wider spreads don't suit a tight 2:1 RR day-trade).  
-**Strategies**: 11 active (9 rule-based swing + 1 deep learning swing + 1 day-trading breakout)  
+**Strategies**: 14 active (9 rule-based swing + 1 deep learning swing + 1 day-trading
+breakout + **3 SIM-only A/B tests added 2026-08-29**: `gap_weekend`, `donchian_quality`,
+`london_breakout_v2` — each a from-scratch parallel module tied to bug fixes/quality
+filters from a user design-doc review, running alongside its original with its own
+slots/state/ledger rows for direct comparison. See Strategies 12–14 below.)  
 **Max slots**: swing strategies scan and can hold a position in every pair in the
 active universe (no artificial cap below universe size) + **28 day-trading** (LBO,
 independent book, one slot per LBO pair)  
@@ -874,6 +878,9 @@ stale since before the universe expansion.
 | 9 | ML Signals | ML / Logistic Reg | ~57–62% | 7 features, per-pair retrain | 2.0×ATR | 2.0×R | 20d | **117** | Swing |
 | 10 | **CNN-LSTM** ★★★ | Deep Learning | **~55–65%** | 16 features, global model, attention | 2.5×ATR | 2.0×R | 15d | **117** | Swing |
 | **11** | **London Breakout** ★★ | **Day Trading** | **~58–63%** | **H1 Asian/London range + session clock** | **Range boundary** | **2.0× range** | **20:00 UTC** | **28** | **Day** |
+| 12 | Donchian Quality (A/B, NEW) | Momentum | TBD | Strategy 3 + breakout-strength band + ADX-rising + max EMA distance | 2.0×ATR | 2.0×R | 30d | **4** | Swing |
+| 13 | Gap Fill Weekend (A/B, NEW) | Structural mean-rev | TBD | Strategy 6, sizing/ref-bar fixed, sessions dormant | 1.5×gap | Gap target | 7d | **117** | Swing |
+| 14 | LBO V2 (A/B, NEW) | Day Trading | TBD | Strategy 11 + real 2:1 R/R filter + repeat-signal cooldown | Range boundary | 2.0× range | 20:00 UTC | **4** | Day |
 
 **"2.0×R" = `DEFAULT_TP_RR` (`forex/runner.py`)** — 2× that strategy's own
 stop distance (entry→stop), on the profit side. Added 2026-08-22: before
@@ -1191,6 +1198,155 @@ Every open and close fires an immediate email via `forex/notifier.py`:
 ```powershell
 python test_london_breakout.py
 # → 57/57 PASS  (unit, functional, exit, scan, blackbox, edge cases)
+```
+
+---
+
+## Strategy 12 — Donchian Quality (A/B test vs. Strategy 3) ★ NEW
+
+**File**: `forex/strategy_donchian_quality.py`
+**Type**: Momentum — SIM-only parallel A/B test
+**Added**: 2026-08-29, per an explicit user design-doc review of Strategy 3
+**Slots**: 4 (genuinely enforced — see note below)
+
+### Why this exists
+User review of Strategy 3 (Donchian Break) found its own `MAX_POSITIONS = 4`
+was never actually enforced by the runner — `donchian`'s real slot cap is
+the shared swing `_SWING_SLOTS` (184, the full universe), confirmed live.
+Rather than change the original ("let it run normal, run parallel and
+check which one is working good"), this is a from-scratch module with the
+review's filters added, registered as its own strategy so the two can be
+compared directly. `forex/strategy_donchian.py` is completely untouched.
+
+### What's different from Strategy 3
+| Change | Detail |
+|---|---|
+| Minimum breakout strength | `breakout_strength = (close − high30) / ATR` must be **≥ 0.10** — a fractional-pip break no longer fires |
+| Maximum breakout strength | Same ratio must be **≤ 1.50** — an already-extended/exhausted move is skipped, not prioritized |
+| ADX must be rising | `ADX ≥ 25` **and** `ADX > ADX two bars ago` — a decelerating trend no longer qualifies |
+| Max EMA(200) distance | `(close − EMA200) / ATR ≤ 3.0` — blocks a late/extended breakout that only clears the trend filter numerically |
+| Position cap | `MAX_POSITIONS = 4`, wired into `SLOTS_PER_STRATEGY["donchian_quality"]` as a REAL cap (the gap flagged above) |
+| Everything else | Exit logic, trailing stop, and sizing math are unchanged from Strategy 3 |
+
+### Entry — all conditions required
+| Direction | Conditions |
+|---|---|
+| **Long** | close > 30d high AND close > EMA(200) AND ADX ≥ 25 AND ADX rising AND 0.10 ≤ breakout_strength ≤ 1.50 AND EMA distance ≤ 3.0 ATR |
+| **Short** | close < 30d low AND close < EMA(200) AND ADX ≥ 25 AND ADX rising AND 0.10 ≤ breakout_strength ≤ 1.50 AND EMA distance ≤ 3.0 ATR |
+
+### Parameters
+| Param | Value |
+|---|---|
+| Entry/exit channel | 30d / 15d (same as Strategy 3) |
+| ADX minimum | 25 |
+| ADX rising lookback | 2 bars |
+| Min breakout strength | 0.10 ATR |
+| Max breakout strength | 1.50 ATR |
+| Max EMA(200) distance | 3.0 ATR |
+| ATR stop mult | 2.0× (unchanged) |
+| Max positions | 4 (real cap) |
+
+### Test Suite
+```powershell
+python test_2026_08_29_donchian_quality_strategy.py
+# → 16/16 PASS
+```
+
+---
+
+## Strategy 13 — Gap Fill Weekend (A/B test vs. Strategy 6) ★ NEW
+
+**File**: `forex/strategy_gap_weekend.py`
+**Type**: Structural mean-reversion — SIM-only parallel A/B test
+**Added**: 2026-08-29, per an explicit user design-doc review of Strategy 6
+**Slots**: same as Strategy 6 (swing universe size)
+
+### Why this exists
+User review found two real bugs in Strategy 6: (1) `size_position()`
+always sized off the WEEKLY 1.5× stop multiplier even for session gaps
+whose real stop is 2.0×, undersizing every session-gap position; (2) the
+session-gap reference-bar lookup silently fell back to the last available
+close when the true H1 reference bar was missing. Fixed in a from-scratch
+module — `forex/strategy_gap.py` untouched.
+
+### What's different from Strategy 6
+| Change | Detail |
+|---|---|
+| Sizing fix | `size_position()` takes `stop_mult` as a real parameter (1.5 weekly / 2.0 session) instead of a hardcoded constant |
+| Reference-bar fix | Missing true reference bar → signal skipped (`continue`), never substituted |
+| Per-gap-type tracking | New `gap_type` column in `pnl_ledger.db` + `report_gap_weekend_by_type.py` — WR/PF/Expectancy reported separately per weekly/london/newyork/tokyo, never combined |
+| Sessions disabled | `ENABLED_SESSIONS = set()` — **only Weekly trades right now**, per phased rollout |
+| ATR displacement filter (dormant) | Replaces tiny %-of-price thresholds — `0.8 ≤ move/ATR ≤ 2.0` |
+| Reversal confirmation (dormant) | Requires a confirming bearish/bullish H1 candle before fading, not an instant fade |
+| Quality-score ranking (dormant) | Composite of ATR displacement + reversal strength + distance from the recent 20-bar extreme, replacing "rank by raw gap size" |
+| Weekly logic | Deliberately unchanged — "keep the weekly strategy simple" |
+
+### Parameters (weekly — the only active path right now)
+| Param | Value |
+|---|---|
+| Min/max gap | 0.10%–2.00% (unchanged) |
+| Stop mult | 1.5× gap (unchanged) |
+| Time stop | 7 calendar days (unchanged) |
+| Risk per trade | 0.25% |
+
+### Test Suite
+```powershell
+python test_2026_08_29_gap_weekend_strategy.py
+# → 22/22 PASS
+
+python report_gap_weekend_by_type.py
+# per-gap-type WR / Profit Factor / Expectancy breakdown once trades exist
+```
+
+---
+
+## Strategy 14 — London Breakout V2 (A/B test vs. Strategy 11) ★ NEW
+
+**File**: `forex/strategy_london_breakout_v2.py`
+**Type**: Day Trading — SIM-only parallel A/B test
+**Added**: 2026-08-29, per an explicit 7-point user design-doc review of Strategy 11
+**Slots**: 4 (genuinely enforced)
+**Runs on the SAME real schedule as Strategy 11** — `run_lbo_london.bat`,
+`run_lbo_ny.bat`, and `run_lbo_close.bat` all now trigger
+`--strategy london_breakout,london_breakout_v2` together.
+
+### Why this exists
+A 7-point review found every one of the following genuinely present in
+Strategy 11's real code (each independently re-verified before building):
+range-hour boundary off-by-one, R/R not actually 2:1, backwards scoring
+formula, no repeat-signal protection, weak ATR filter, and — most subtly
+— a fallback `size_position()` that still had the exact `equity/10.7`
+hardcoded-rate bug already fixed in the main sizing path but never
+updated in the fallback. `forex/strategy_london_breakout.py` is
+completely untouched; still 28 pairs, 1.5% risk, same as always.
+
+### What's different from Strategy 11
+| Change | Detail |
+|---|---|
+| Range-hour boundary | Genuinely exclusive end (`< end_h`), not `<= end_h` |
+| Real R/R filter | `actual_rr = tp_distance / stop_distance ≥ 1.5` required, reinforced by a 0.10–0.50 ATR breakout-extension band |
+| Scoring fixed | Compression score genuinely rewards tighter ranges (was backwards) |
+| Repeat-signal protection | `symbol:date:session` cooldown — a closed position can't re-signal the same underlying breakout later that day |
+| Range/ATR ratio filter | `0.5 ≤ range/ATR ≤ 3.0`, replaces the weak fixed-5-pip check |
+| Position cap | `MAX_LBO_POSITIONS = 4` (was 28) |
+| Risk per trade | 0.5% (was 1.5%) |
+| Fallback sizing | Returns 0 (skip) instead of a hardcoded `equity/10.7` guess |
+| Capital | Shares the SAME dedicated LBO book as Strategy 11 (not a separate pool) — its much smaller risk/slot footprint keeps its worst-case additional draw small |
+
+### Parameters
+| Param | Value |
+|---|---|
+| Min/max range | 10–120 pips (unchanged) |
+| Min actual R/R | 1.5 |
+| Breakout-extension band | 0.10–0.50 ATR |
+| Range/ATR ratio band | 0.5–3.0 |
+| Risk per trade | 0.5% |
+| Max positions | 4 |
+
+### Test Suite
+```powershell
+python test_2026_08_29_lbo_v2_strategy.py
+# → 24/24 PASS
 ```
 
 ---

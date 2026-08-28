@@ -12,5 +12,10 @@ REM is why lbo_london.log was never actually updated by the real scheduled
 REM task despite LastTaskResult showing success). Task Scheduler now invokes
 REM this .bat directly via a single run_hidden.vbs wrap with the log path as
 REM its own 2nd argument, exactly like the working forex daily/exits tasks.
+REM 2026-08-29: london_breakout_v2 added to the same trigger (comma-separated
+REM --strategy list, runner.py already supports this) so both run on the
+REM identical real London-open schedule for a genuine A/B comparison, per
+REM explicit user request. london_breakout itself is unchanged -- same
+REM strategy name, same capital call, same behavior as before this line.
 cd /d E:\SaxoTrNew\SaxoTrNew
-pythonw -X utf8 forex\runner.py --strategy london_breakout --live
+pythonw -X utf8 forex\runner.py --strategy london_breakout,london_breakout_v2 --live

@@ -60,14 +60,17 @@ from forex.universe import PAIRS, ASSET_TYPE, get_pair, price_decimals as get_pr
 import forex.strategy             as strat_ema
 import forex.strategy_rsi         as strat_rsi
 import forex.strategy_donchian    as strat_donchian
+import forex.strategy_donchian_quality as strat_donchian_quality
 import forex.strategy_bb          as strat_bb
 import forex.strategy_pullback    as strat_pullback
 import forex.strategy_gap         as strat_gap
+import forex.strategy_gap_weekend as strat_gap_weekend
 import forex.strategy_supertrend  as strat_supertrend
 import forex.strategy_zscore      as strat_zscore
 import forex.strategy_ml                as strat_ml
 import forex.strategy_cnn_lstm         as strat_cnn_lstm
 import forex.strategy_london_breakout  as strat_lbo
+import forex.strategy_london_breakout_v2 as strat_lbo_v2
 import pnl_tracker
 import trade_logger
 import strategy_learner
@@ -87,14 +90,35 @@ STRATEGIES = {
     "ema":         strat_ema,
     "rsi":         strat_rsi,
     "donchian":    strat_donchian,
+    # 2026-08-29: SIM-only parallel A/B test against "donchian" -- adds
+    # the breakout-quality filters (min/max breakout strength, ADX-rising,
+    # max EMA200 distance) from the user's own design doc, plus a REALLY
+    # enforced 4-position cap (see SLOTS_PER_STRATEGY below and this
+    # module's own docstring item 5). "donchian" itself is untouched and
+    # keeps running exactly as before.
+    "donchian_quality": strat_donchian_quality,
     "bb":          strat_bb,
     "pullback":    strat_pullback,
     "gap":         strat_gap,
+    # 2026-08-29: SIM-only parallel A/B test against "gap" -- fixed
+    # sizing/ref-close bugs, sessions disabled pending separate-by-type
+    # results (see strategy_gap_weekend.py's module docstring). Never
+    # added to LIVE_ALLOWED_STRATEGIES / LIVE_EUR_ALLOWED_STRATEGIES below,
+    # so it can never run on either LIVE account regardless of this entry.
+    "gap_weekend": strat_gap_weekend,
     "supertrend":  strat_supertrend,
     "zscore":      strat_zscore,
     "ml":              strat_ml,
     "cnn_lstm":        strat_cnn_lstm,
     "london_breakout": strat_lbo,
+    # 2026-08-29: SIM-only parallel A/B test against "london_breakout" --
+    # fixes the range-hour boundary bug, the not-actually-2:1 R/R, the
+    # backwards scoring formula, repeat-signal risk, and the fallback
+    # size_position()'s hardcoded equity/10.7 bug; adds a real 4-position
+    # cap and cuts RISK_PCT to 0.5% (see strategy_london_breakout_v2.py's
+    # module docstring for the full 9-point list). "london_breakout"
+    # itself is untouched and keeps running exactly as before.
+    "london_breakout_v2": strat_lbo_v2,
 }
 _SWING_SLOTS = len(PAIRS)   # 2026-08-28 fix: was hardcoded 117 (stale since the
                             # SCANDI tier alone brought the real universe to 149,
@@ -111,7 +135,15 @@ SLOTS_PER_STRATEGY = {
     # universe was expanded to the full major+EM/exotic set for SIM testing —
     # so every swing strategy can take a position in every pair it signals on.
     "ema": _SWING_SLOTS, "rsi": _SWING_SLOTS, "donchian": _SWING_SLOTS, "bb": _SWING_SLOTS,
-    "pullback": _SWING_SLOTS, "gap": _SWING_SLOTS,
+    "pullback": _SWING_SLOTS, "gap": _SWING_SLOTS, "gap_weekend": _SWING_SLOTS,
+    # 2026-08-29: unlike "donchian" (which shares _SWING_SLOTS with every
+    # other swing strategy -- confirmed live that its own module-level
+    # MAX_POSITIONS=4 was never actually enforced by the runner), this cap
+    # for "donchian_quality" IS the real enforced limit, matching that
+    # module's own MAX_POSITIONS constant -- explicit fix for the gap the
+    # user's design doc flagged ("verify MAX_POSITIONS=4 is actually
+    # enforced"). "donchian" itself is left exactly as it was.
+    "donchian_quality": strat_donchian_quality.MAX_POSITIONS,
     "supertrend": _SWING_SLOTS, "zscore": _SWING_SLOTS, "ml": _SWING_SLOTS, "cnn_lstm": _SWING_SLOTS,
     "london_breakout": 28,  # universe expanded to 28 pairs 2026-08-20. Slots raised
                              # 10 -> 28 (2026-08-21, one slot per pair) so a multi-pair
@@ -121,6 +153,14 @@ SLOTS_PER_STRATEGY = {
                              # risk increase, done at the user's explicit request.
                              # NOT tied to _SWING_SLOTS -- LBO trades its own fixed
                              # 28-pair subset regardless of the broader universe size.
+    # 2026-08-29: user's explicit concern -- 28 pairs x 1.5% risk is a
+    # theoretical 42% account risk with heavy correlated FX-cross exposure
+    # (e.g. EURUSD/GBPUSD/EURJPY/GBPJPY buys can all just be one USD-
+    # weakness move). "london_breakout_v2" gets a REAL 4-position cap
+    # (matching its own MAX_LBO_POSITIONS) and RISK_PCT cut to 0.5% --
+    # worst case 4 x 0.5% = 2% of the LBO book. "london_breakout" itself
+    # is untouched, still 28 slots / 1.5% as before.
+    "london_breakout_v2": strat_lbo_v2.MAX_LBO_POSITIONS,
 }
 
 # Day-trade strategies run independently of the swing book's heat budget.
@@ -128,7 +168,7 @@ SLOTS_PER_STRATEGY = {
 # so the shared 6% heat cap would unfairly block them when the swing book
 # is fully deployed. Each day-trade strategy has its own position-count cap
 # (SLOTS_PER_STRATEGY) which already limits maximum concurrent exposure.
-DAY_TRADE_STRATEGIES = {"london_breakout"}
+DAY_TRADE_STRATEGIES = {"london_breakout", "london_breakout_v2"}
 
 # ── Session-aware pair groups ──────────────────────────────────────────────────
 # asian  : 06:20 PKT  — Tokyo/Sydney session (JPY crosses, AUD, NZD)
@@ -1142,6 +1182,13 @@ def _save_state(state: dict) -> None:
 
 
 GAP_COOLDOWN_FILE = os.path.join(DATA_DIR, "gap_cooldown.json")
+# 2026-08-29: "gap_weekend" gets its own cooldown file so a symbol traded
+# by one gap strategy this week doesn't block the other -- they're being
+# A/B tested independently, not sharing exhausted-symbol state.
+GAP_COOLDOWN_FILES = {
+    "gap":         GAP_COOLDOWN_FILE,
+    "gap_weekend": os.path.join(DATA_DIR, "gap_weekend_cooldown.json"),
+}
 
 
 def _gap_week_key() -> str:
@@ -1150,12 +1197,13 @@ def _gap_week_key() -> str:
     return f"{today.isocalendar()[0]}-W{today.isocalendar()[1]:02d}"
 
 
-def _load_gap_cooldown() -> set:
+def _load_gap_cooldown(strat_name: str = "gap") -> set:
     """Return the set of symbols exhausted for this week's gap event."""
     week = _gap_week_key()
-    if os.path.exists(GAP_COOLDOWN_FILE):
+    path = GAP_COOLDOWN_FILES.get(strat_name, GAP_COOLDOWN_FILE)
+    if os.path.exists(path):
         try:
-            with open(GAP_COOLDOWN_FILE) as f:
+            with open(path) as f:
                 data = json.load(f)
             if data.get("week_key") == week:
                 return set(data.get("exhausted", []))
@@ -1164,17 +1212,53 @@ def _load_gap_cooldown() -> set:
     return set()
 
 
-def _mark_gap_exhausted(sym: str) -> None:
+def _mark_gap_exhausted(sym: str, strat_name: str = "gap") -> None:
     """Add sym to this week's gap cooldown so it cannot re-enter."""
     week = _gap_week_key()
-    exhausted = _load_gap_cooldown()
+    exhausted = _load_gap_cooldown(strat_name)
     exhausted.add(sym)
     os.makedirs(DATA_DIR, exist_ok=True)
+    path = GAP_COOLDOWN_FILES.get(strat_name, GAP_COOLDOWN_FILE)
     try:
-        with open(GAP_COOLDOWN_FILE, "w") as f:
+        with open(path, "w") as f:
             json.dump({"week_key": week, "exhausted": sorted(exhausted)}, f, indent=2)
     except Exception as e:
-        logger.warning(f"gap_cooldown: could not write {GAP_COOLDOWN_FILE}: {e}")
+        logger.warning(f"gap_cooldown: could not write {path}: {e}")
+
+
+# 2026-08-29: "london_breakout_v2"'s fix #4 (repeat-signal protection) --
+# once a symbol trades in a given UTC-date+session, it's done for that
+# session-day even if the position closes early while price is still
+# beyond the same range boundary. Naturally self-pruning: only today's UTC
+# date's keys are ever kept, so the file never grows unbounded.
+LBO_V2_SESSION_COOLDOWN_FILE = os.path.join(DATA_DIR, "lbo_v2_session_cooldown.json")
+
+
+def _load_lbo_v2_session_cooldown() -> set:
+    """Return the set of 'YYYY-MM-DD:SYMBOL:session_label' keys already
+    traded today (UTC) by london_breakout_v2."""
+    if not os.path.exists(LBO_V2_SESSION_COOLDOWN_FILE):
+        return set()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    try:
+        with open(LBO_V2_SESSION_COOLDOWN_FILE) as f:
+            data = json.load(f)
+        return {k for k in data.get("traded", []) if k.startswith(today + ":")}
+    except Exception:
+        return set()
+
+
+def _mark_lbo_v2_session_traded(session_key: str) -> None:
+    """Add session_key (from the signal's own 'session_key' field) to
+    today's london_breakout_v2 cooldown."""
+    traded = _load_lbo_v2_session_cooldown()
+    traded.add(session_key)
+    os.makedirs(DATA_DIR, exist_ok=True)
+    try:
+        with open(LBO_V2_SESSION_COOLDOWN_FILE, "w") as f:
+            json.dump({"traded": sorted(traded)}, f, indent=2)
+    except Exception as e:
+        logger.warning(f"lbo_v2_session_cooldown: could not write {LBO_V2_SESSION_COOLDOWN_FILE}: {e}")
 
 
 def _log_order(entry: dict) -> None:
@@ -1617,7 +1701,7 @@ def _apply_breakeven_stop(key: str, pos: dict, df, strat_name: str,
     cur_stop    = float(pos.get("stop_price", 0))
     cur_close   = float(df["Close"].iloc[-1])
 
-    if strat_name == "gap":
+    if strat_name in ("gap", "gap_weekend"):
         gap_target = float(pos.get("gap_target", entry_price))
         if abs(gap_target - entry_price) < 1e-8:
             return False
@@ -1779,7 +1863,7 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
         # forcing a bad close) when it disagrees, costs nothing: a
         # genuine hit still closes via the resting order regardless, and
         # skipping never touches (or cancels) that resting order.
-        if strat_name == "gap" and (reason.startswith("gap_filled") or reason.startswith("hard_stop")):
+        if strat_name in ("gap", "gap_weekend") and (reason.startswith("gap_filled") or reason.startswith("hard_stop")):
             gap_target = float(pos.get("gap_target", entry))
             stop_price = float(pos.get("stop_price", 0))
             if reason.startswith("gap_filled"):
@@ -1857,8 +1941,8 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
             pnl_tracker.log_close(_pnl_module(), sym, live_px, reason, strategy=strat_name,
                                   fx_rate_to_base=fx_rate,
                                   gross_pnl_base_override=saxo_pnl_eur)
-            if strat_name == "gap":
-                _mark_gap_exhausted(sym)
+            if strat_name in ("gap", "gap_weekend"):
+                _mark_gap_exhausted(sym, strat_name)
             # Label the signal-log outcome for ML training data — prefer the
             # true net (price + broker cost) figure when we have it, so a
             # signal that "won" on raw price but lost to cost isn't labeled
@@ -1872,7 +1956,7 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
                 entry=float(pos.get("entry_price", live_px)),
                 exit_px=live_px, pnl_pct=pnl_pct, units=qty,
                 reason=reason,
-                session=pos.get("lbo_session", "") if strat_name == "london_breakout" else "",
+                session=pos.get("lbo_session", "") if strat_name in ("london_breakout", "london_breakout_v2") else "",
                 live=(ACCOUNT_ENV in ("live", "live_eur")),
                 net_pnl_native=net_pnl_quote,
             )
@@ -1913,12 +1997,14 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                  live_prices: dict | None = None,
                  agreement: dict | None = None,
                  weight: float = 1.0) -> int:
-    # Gap strategy: only run during defined session windows (weekly/london/newyork/tokyo).
+    # Gap strategy (and its "gap_weekend" A/B sibling, 2026-08-29): only run
+    # during defined session windows (weekly/london/newyork/tokyo).
     # Outside those windows, any overnight move ≥ 0.10% would generate false signals
     # with none of the structural fill edge that makes gap fading profitable.
-    gap_session: str | None = _detect_gap_session() if strat_name == "gap" else None
-    if strat_name == "gap" and gap_session is None:
-        logger.info(f"  [gap] Entries skipped — not in a gap session window "
+    _GAP_STRATS = ("gap", "gap_weekend")
+    gap_session: str | None = _detect_gap_session() if strat_name in _GAP_STRATS else None
+    if strat_name in _GAP_STRATS and gap_session is None:
+        logger.info(f"  [{strat_name}] Entries skipped — not in a gap session window "
                     f"({datetime.now(timezone.utc).strftime('%A %H:%M UTC')})")
         return 0
 
@@ -1932,9 +2018,11 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
 
     open_syms = {k.split(":", 1)[1] for k in positions if k.startswith(prefix)}
 
-    if strat_name == "london_breakout":
-        # London/NY Breakout: fetch H1 bars for the 28 configured pairs only.
-        lbo_pairs  = strat_lbo.PAIRS
+    if strat_name in ("london_breakout", "london_breakout_v2"):
+        # London/NY Breakout: fetch H1 bars for the configured pairs only.
+        # Generalized to strat_mod (was hardcoded to strat_lbo) 2026-08-29
+        # so "london_breakout_v2" runs through the identical dispatch path.
+        lbo_pairs  = strat_mod.PAIRS
         h1_lbo: dict = {}
         pair_meta: dict = {}
         for pi in PAIRS:
@@ -1945,6 +2033,11 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             pair_meta[sym] = {"pip_size": pi.get("pip_size", 0.0001)}
         # LBO is a separate day-trading book with its own capital, not a slice of
         # the swing account. Passing `equity` here made it risk 1.5% of everything.
+        # Both london_breakout and london_breakout_v2 currently share this SAME
+        # dedicated book -- v2's much smaller RISK_PCT (0.5%) and slot cap (4)
+        # keep its worst-case ADDITIONAL draw on it small (max 2% vs the
+        # original's already-existing 42% theoretical max), but this is a real,
+        # deliberate sharing decision worth knowing, not a separate pool.
         try:
             import atos.capital_config as _CAP
             lbo_equity = _CAP.forex_lbo_capital_eur()
@@ -1956,20 +2049,27 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             eq_q = _equity_in_quote(lbo_equity, sym)
             if eq_q is not None:
                 lbo_eq_by_pair[sym] = eq_q
-        logger.info(f"  [london_breakout] book capital {lbo_equity:,.0f} EUR "
-                    f"(1.5% = {lbo_equity*strat_lbo.RISK_PCT:,.0f} EUR/trade)")
-        signals = strat_lbo.generate_signals(
+        logger.info(f"  [{strat_name}] book capital {lbo_equity:,.0f} EUR "
+                    f"({strat_mod.RISK_PCT*100:.1f}% = {lbo_equity*strat_mod.RISK_PCT:,.0f} EUR/trade)")
+        lbo_kw = {}
+        if strat_name == "london_breakout_v2":
+            # Fix #4 (repeat-signal protection): thread the persisted
+            # already-traded-this-session-day set through -- see
+            # _load_lbo_v2_session_cooldown's docstring.
+            lbo_kw["already_traded_sessions"] = _load_lbo_v2_session_cooldown()
+        signals = strat_mod.generate_signals(
             h1_lbo, pair_meta, open_syms,
             account_equity=lbo_equity, equity_by_pair=lbo_eq_by_pair,
+            **lbo_kw,
         )
-        logger.info(f"  [london_breakout] {len(h1_lbo)} pairs scanned → {len(signals)} signal(s)")
-    elif strat_name == "gap" and gap_session != "weekly":
+        logger.info(f"  [{strat_name}] {len(h1_lbo)} pairs scanned → {len(signals)} signal(s)")
+    elif strat_name in _GAP_STRATS and gap_session != "weekly":
         # Session gap (London / NY / Tokyo): fetch H1 bars for ALL 34 pairs.
         # No pair-list restriction — gap_pct filter selects only pairs that actually
         # gapped (EURNOK, USDSEK, NZDJPY, AUDCHF etc. all get a fair look).
-        gap_exhausted = _load_gap_cooldown()
+        gap_exhausted = _load_gap_cooldown(strat_name)
         if gap_exhausted:
-            logger.info(f"  [gap:{gap_session}] cooldown: skipping {sorted(gap_exhausted)}")
+            logger.info(f"  [{strat_name}:{gap_session}] cooldown: skipping {sorted(gap_exhausted)}")
         h1_data: dict = {}
         for pi in PAIRS:
             h1_data[pi["symbol"]] = _fetch_history_h1(pi["uic"])
@@ -1977,13 +2077,13 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             gap_session, h1_data, open_symbols=open_syms, live_prices=live_prices or {},
             exhausted_symbols=gap_exhausted,
         )
-        logger.info(f"  [gap:{gap_session}] {len(h1_data)} pairs scanned → {len(signals)} signal(s)")
+        logger.info(f"  [{strat_name}:{gap_session}] {len(h1_data)} pairs scanned → {len(signals)} signal(s)")
     elif getattr(strat_mod, "NEEDS_LIVE_PRICES", False):
         kw: dict = {"open_symbols": open_syms, "live_prices": live_prices or {}}
-        if strat_name == "gap":
-            gap_exhausted = _load_gap_cooldown()
+        if strat_name in _GAP_STRATS:
+            gap_exhausted = _load_gap_cooldown(strat_name)
             if gap_exhausted:
-                logger.info(f"  [gap:weekly] cooldown: skipping {sorted(gap_exhausted)}")
+                logger.info(f"  [{strat_name}:weekly] cooldown: skipping {sorted(gap_exhausted)}")
             kw["exhausted_symbols"] = gap_exhausted
         signals = strat_mod.generate_signals(market_data, **kw)
     else:
@@ -2035,6 +2135,14 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         rp_kw     = {"risk_pct": sig["risk_pct_override"]} if "risk_pct_override" in sig else {}
         if "risk_pct" not in rp_kw and _live_risk_pct() is not None:
             rp_kw["risk_pct"] = _live_risk_pct()
+        # 2026-08-29: "gap_weekend"'s size_position() takes stop_mult as an
+        # explicit required parameter (fix for the sizing bug where the
+        # original gap strategy always sized off the weekly 1.5x multiplier
+        # even for session gaps whose real stop is 2.0x) -- only signals
+        # from that module ever carry a "stop_mult" key, so this is a no-op
+        # for every other strategy.
+        if "stop_mult" in sig:
+            rp_kw["stop_mult"] = sig["stop_mult"]
         # 2026-08-28, explicit user decision: LIVE/LIVE_EUR skip a trade
         # entirely (size_position() returns 0) rather than force it up to
         # the 1,000-unit floor when the account's own risk budget doesn't
@@ -2201,7 +2309,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         if not dry_run:
             pnl_tracker.log_open(_pnl_module(), strat_name, sym, direction, qty,
                                  sig["close"], sig["stop_price"], order_id=oid,
-                                 currency="EUR")
+                                 currency="EUR", gap_type=sig.get("gap_type"))
             signal_filter.log_signal(pos_key, features, module=_pnl_module())   # builds ML training data
 
             # Forward-SIM observation card (2026-08-27): structural/hybrid
@@ -2238,7 +2346,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 exposure_before_eur=exposure_before_notional,
                 exposure_after_eur=_currency_exposure_notional_eur(positions),
             )
-            if strat_name == "london_breakout":
+            if strat_name in ("london_breakout", "london_breakout_v2"):
                 fx_notify.send_lbo_trade_opened(
                     symbol=sym, direction=direction,
                     entry=sig["close"], stop=sig["stop_price"],
@@ -2246,6 +2354,12 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                     session=sig.get("session", ""),
                     range_pips=sig.get("range_pips", 0),
                 )
+            if strat_name == "london_breakout_v2" and "session_key" in sig:
+                # Fix #4: mark this exact symbol+date+session as traded so
+                # the SAME underlying breakout can't re-signal later today
+                # even if this position closes (TP/SL) while price is still
+                # beyond the range boundary.
+                _mark_lbo_v2_session_traded(sig["session_key"])
         entries += 1
     return entries
 
@@ -2665,7 +2779,7 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
                 # designed to find. Only trend-following strategies (ema,
                 # donchian, pullback, supertrend, ml, cnn_lstm) should be
                 # momentum-filtered.
-                _NO_MOMENTUM_FILTER = ("gap", "london_breakout", "rsi", "bb", "zscore")
+                _NO_MOMENTUM_FILTER = ("gap", "gap_weekend", "london_breakout", "london_breakout_v2", "rsi", "bb", "zscore")
                 _edata = market_data if strat_name in _NO_MOMENTUM_FILTER else entry_market_data
                 entries = _run_entries(strat_name, strat_mod, positions,
                                        _edata, equity, akey, dry_run, today_str,
@@ -3139,7 +3253,10 @@ if __name__ == "__main__":
             # entries (same signals, same pairs, double the position size).
             # LBO only runs here if explicitly requested via --strategy.
             if args.strategy == "all":
-                active = [s for s in active if s != "london_breakout"]
+                # london_breakout_v2 has the same "own dedicated schedule,
+                # never as an 'all' side effect" requirement as the
+                # original -- same reasoning as the comment above.
+                active = [s for s in active if s not in ("london_breakout", "london_breakout_v2")]
             run_daily(dry_run=not args.live, active_strategies=active,
                       session=args.session)
 

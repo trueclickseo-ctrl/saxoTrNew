@@ -162,6 +162,11 @@ STRAT_COL = {
     "ml":         "\033[38;5;119m",   # lime
     "london_breakout": "\033[38;5;214m",   # amber — day trading book
     "cnn_lstm":   "\033[38;5;135m",   # purple
+    # 2026-08-29: the 3 new SIM-only A/B-test strategies -- distinct colors
+    # so they're never mistaken for their originals at a glance.
+    "gap_weekend":        "\033[38;5;80m",    # teal
+    "donchian_quality":   "\033[38;5;120m",   # light green
+    "london_breakout_v2": "\033[38;5;220m",   # gold
 }
 
 
@@ -260,6 +265,13 @@ STRAT_LABELS_ALL = {
     "ml":         "ML Signals",
     "cnn_lstm":   "CNN-LSTM",
     "london_breakout": "LBO Day Trade",
+    # 2026-08-29: without an entry here, a strategy with real closed trades
+    # is SILENTLY DROPPED from the per-strategy breakdown entirely (see
+    # `ordered = [s for s in stats_by_strat if s in strat_labels] + ...`
+    # below) -- not just badly colored, genuinely invisible.
+    "gap_weekend":        "Gap Wknd (A/B)",
+    "donchian_quality":   "Donchian Qual (A/B)",
+    "london_breakout_v2": "LBO V2 (A/B)",
 }
 
 
@@ -298,6 +310,10 @@ def _strategy_breakdown_table(title: str, positions: list, live: dict,
 
     strat_labels = {k: v for k, v in STRAT_LABELS_ALL.items() if k not in exclude}
     lbo_slots    = 28 if "london_breakout" not in exclude else None
+    # 2026-08-29: the two new REAL-capped strategies (unlike gap_weekend,
+    # which -- like "gap" -- uses the full swing universe_size) -- see
+    # SLOTS_PER_STRATEGY in forex/runner.py for where these caps live.
+    STRAT_MAX_SLOTS_OVERRIDE = {"london_breakout_v2": 4, "donchian_quality": 4}
 
     if symbols is not None:
         pos_in_scope = [p for p in positions if p["symbol"] in symbols]
@@ -332,7 +348,8 @@ def _strategy_breakdown_table(title: str, positions: list, live: dict,
 
     for strat in ordered:
         label      = strat_labels[strat]
-        max_slots  = lbo_slots if strat == "london_breakout" else universe_size
+        max_slots  = (lbo_slots if strat == "london_breakout"
+                      else STRAT_MAX_SLOTS_OVERRIDE.get(strat, universe_size))
         sc    = STRAT_COL.get(strat, DM)
         count = sum(1 for p in pos_in_scope if p["strategy"] == strat)
 
@@ -450,8 +467,9 @@ def _positions_section(title: str, positions_subset: list, live: dict,
     total_costs_eur = 0.0   # spread + accrued swap/financing, NOT included in total_pnl
 
     if positions_subset:
-        strat_order = ["ema", "rsi", "donchian", "bb", "pullback", "gap",
-                       "supertrend", "zscore", "ml", "cnn_lstm", "london_breakout"]
+        strat_order = ["ema", "rsi", "donchian", "donchian_quality", "bb", "pullback",
+                       "gap", "gap_weekend", "supertrend", "zscore", "ml", "cnn_lstm",
+                       "london_breakout", "london_breakout_v2"]
         grouped: dict = {}
         for p in positions_subset:
             grouped.setdefault(p["strategy"], []).append(p)
@@ -579,7 +597,11 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     src_tag = "SAXO LIVE" if price_src == "saxo" else "n/a (token expired)"
     pairs_trading = len({p["symbol"] for p in positions})
     L.append(f"  {BD}{CY}║{'  FOREX QUANT DASHBOARD':^{W_TOTAL}}║{W}")
-    L.append(f"  {BD}{CY}║{f'  11 Strategies  |  {_total_pairs} FX Pairs  |  {pairs_trading}/{_total_pairs} trading now  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
+    # 2026-08-29: was hardcoded "11 Strategies" -- same class of drift bug
+    # this file's own 2026-08-25 fix note warns about elsewhere (a literal
+    # number silently going stale as strategies get added). Computed from
+    # STRAT_LABELS_ALL so it can never drift again.
+    L.append(f"  {BD}{CY}║{f'  {len(STRAT_LABELS_ALL)} Strategies  |  {_total_pairs} FX Pairs  |  {pairs_trading}/{_total_pairs} trading now  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
     # 2026-08-28: 2nd row added -- uses the EXACT Forex Grouping tier names
     # (not a coarser "core"/"exotic" paraphrase) per explicit user request,
     # so this line can be copy-referenced directly when configuring ATOS
@@ -605,14 +627,18 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
              f"{LV}{BD}■ Z-Score{W}  mean-rev   "
              f"{LM}{BD}■ ML{W}  ML signals   "
              f"\033[38;5;135m{BD}■ CNN-LSTM{W}  deep learning   "
-             f"\033[38;5;214m{BD}■ LBO{W}  day trade")
+             f"\033[38;5;214m{BD}■ LBO{W}  day trade   "
+             # 2026-08-29: 3 new SIM-only A/B-test strategies
+             f"\033[38;5;80m{BD}■ Gap Wknd{W}  A/B   "
+             f"\033[38;5;120m{BD}■ Donchian Qual{W}  A/B   "
+             f"\033[38;5;220m{BD}■ LBO V2{W}  A/B")
     L.append(f"  {DM}Scheduler: every 30min 06:00-03:00 PKT (scan)  |  14:00 PKT (exit check)  |  "
              f"Mon 03:00 PKT weekly + session gap windows (gap fill)  |  "
              f"{_total_pairs} pairs: {len(HIGH_VOLUME_SYMBOLS)} high volume + {len(CORE_STANDARD_SYMBOLS)} core standard + "
              f"{len(SCANDI_SYMBOLS)} scandi + {len(METALS_SYMBOLS)} metals + "
              f"{len(EXOTIC_SYMBOLS)} exotic ({len(EXOTIC_ASIA_SYMBOLS)} asia + {len(EXOTIC_EUROPE_SYMBOLS)} europe + "
              f"{len(EXOTIC_CARRY_SYMBOLS)} carry + {len(EXOTIC_LATAM_MIDEAST_SYMBOLS)} latam/mideast, SIM-only)  |  "
-             f"Max slots {_total_pairs} (28 for day-trade LBO){W}")
+             f"Max slots {_total_pairs} (28 for day-trade LBO, 4 for Donchian Qual / LBO V2 A/B tests){W}")
     L.append(HR)
     L.append("")
 
@@ -796,7 +822,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.extend(_strategy_breakdown_table(
         f"STRATEGY BREAKDOWN — SCANDI ({len(SCANDI_SYMBOLS)} pairs, SIM-only, excl. LBO)",
         positions, live, symbols=SCANDI_SYMBOLS, universe_size=len(SCANDI_SYMBOLS),
-        exclude={"london_breakout"}, color=SCANDI_COLOR, total_label="SCANDI TOTAL"))
+        exclude={"london_breakout", "london_breakout_v2"}, color=SCANDI_COLOR, total_label="SCANDI TOTAL"))
 
     # METALS — added 2026-08-28, explicit user request ("get all supported
     # currency pairs from saxo... add in the relevant groups"). 17
@@ -808,7 +834,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.extend(_strategy_breakdown_table(
         f"STRATEGY BREAKDOWN — METALS ({len(METALS_SYMBOLS)} pairs, Gold/Silver/Platinum spot, excl. LBO)",
         positions, live, symbols=METALS_SYMBOLS, universe_size=len(METALS_SYMBOLS),
-        exclude={"london_breakout"}, color=METALS_COLOR, total_label="METALS TOTAL"))
+        exclude={"london_breakout", "london_breakout_v2"}, color=METALS_COLOR, total_label="METALS TOTAL"))
 
     # EXOTIC regional split — added 2026-08-28 (replacing the blended
     # 83-pair EXOTIC section removed the same day, explicit user
@@ -822,22 +848,22 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.extend(_strategy_breakdown_table(
         "STRATEGY BREAKDOWN — EXOTIC ASIA (30 pairs, CNH/HKD/SGD/THB, excl. LBO)",
         positions, live, symbols=EXOTIC_ASIA_SYMBOLS, universe_size=30,
-        exclude={"london_breakout"}, color=EXOTIC_ASIA_COLOR, total_label="EXOTIC ASIA TOTAL"))
+        exclude={"london_breakout", "london_breakout_v2"}, color=EXOTIC_ASIA_COLOR, total_label="EXOTIC ASIA TOTAL"))
 
     L.extend(_strategy_breakdown_table(
         "STRATEGY BREAKDOWN — EXOTIC EUROPE (25 pairs, CZK/HUF/PLN/RON, excl. LBO)",
         positions, live, symbols=EXOTIC_EUROPE_SYMBOLS, universe_size=25,
-        exclude={"london_breakout"}, color=EXOTIC_EUROPE_COLOR, total_label="EXOTIC EUROPE TOTAL"))
+        exclude={"london_breakout", "london_breakout_v2"}, color=EXOTIC_EUROPE_COLOR, total_label="EXOTIC EUROPE TOTAL"))
 
     L.extend(_strategy_breakdown_table(
         "STRATEGY BREAKDOWN — EXOTIC HIGH-YIELD/CARRY (17 pairs, TRY/ZAR, excl. LBO)",
         positions, live, symbols=EXOTIC_CARRY_SYMBOLS, universe_size=17,
-        exclude={"london_breakout"}, color=EXOTIC_CARRY_COLOR, total_label="EXOTIC CARRY TOTAL"))
+        exclude={"london_breakout", "london_breakout_v2"}, color=EXOTIC_CARRY_COLOR, total_label="EXOTIC CARRY TOTAL"))
 
     L.extend(_strategy_breakdown_table(
         "STRATEGY BREAKDOWN — EXOTIC LATAM/MIDEAST (11 pairs, MXN/ILS/AED, excl. LBO)",
         positions, live, symbols=EXOTIC_LATAM_MIDEAST_SYMBOLS, universe_size=11,
-        exclude={"london_breakout"}, color=EXOTIC_LATAM_MIDEAST_COLOR, total_label="EXOTIC LATAM/MIDEAST TOTAL"))
+        exclude={"london_breakout", "london_breakout_v2"}, color=EXOTIC_LATAM_MIDEAST_COLOR, total_label="EXOTIC LATAM/MIDEAST TOTAL"))
 
     L.extend(_strategy_breakdown_table(
         f"STRATEGY BREAKDOWN — ALL {_total_pairs} PAIRS (blended reference)",

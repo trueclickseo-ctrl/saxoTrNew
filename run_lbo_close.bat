@@ -10,5 +10,7 @@ REM embedded spaces/args — with real args it produces "system cannot find the
 REM path specified" and nothing ever gets logged. Task Scheduler now invokes
 REM this .bat directly via a single run_hidden.vbs wrap with the log path as
 REM its own 2nd argument, exactly like the working forex daily/exits tasks.
+REM 2026-08-29: london_breakout_v2 added to the same force-close trigger --
+REM see run_lbo_london.bat's comment for the full rationale.
 cd /d E:\SaxoTrNew\SaxoTrNew
-pythonw -X utf8 forex\runner.py --strategy london_breakout --exits-only --live
+pythonw -X utf8 forex\runner.py --strategy london_breakout,london_breakout_v2 --exits-only --live
