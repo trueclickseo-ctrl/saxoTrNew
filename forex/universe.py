@@ -1317,6 +1317,35 @@ HIGH_VOLUME_SYMBOLS = {
     "EURAUD", "EURCAD", "GBPCHF", "GBPCAD", "GBPAUD",
 }
 
+# 2026-08-28 two-account LIVE design (final): SEK LIVE (bb) and EUR LIVE
+# (rsi) both trade this SAME entire 17-pair HIGH_VOLUME_SYMBOLS set --
+# explicit user decision ("I want to test both strategies BB and RSI ...
+# on 17 Pairs"). No exotic pairs on either LIVE account any longer.
+# (Superseded, same session, before ever being committed: a
+# HIGH_VOLUME_GROUP_A/B 9+8 non-overlapping split, and later a brief
+# design where EUR got zero pairs pending its own future subset.)
+#
+# Sharing the same 17 pairs across two accounts is safe despite Saxo
+# pooling positions/orders across all 3 sub-accounts under this Client
+# (confirmed live 2026-08-26 building the EUR account, and again in the
+# CADCHF/CHFAUD incident 2026-08-27) -- verified live 2026-08-28 that
+# every pooled position (PositionBase.AccountKey) and order (AccountKey,
+# top-level) record already carries its own genuine AccountKey, even
+# though the endpoint returns all 3 accounts' records together. The
+# earlier "no way to filter by AccountKey" finding was specifically about
+# the query-PARAM filter not working server-side, not about the field
+# being absent from each record. housekeeping_live.py/
+# housekeeping_live_eur.py now filter their own snapshot by matching this
+# field directly (see housekeeping_live.py's fetch_live_snapshot()
+# docstring) -- real, broker-verified attribution, not an inference from
+# which pairs an account is "supposed to" trade. Pair-tier partitioning
+# (CORE vs EXOTIC, or GROUP_A vs GROUP_B) is no longer load-bearing for
+# correctness.
+#
+# Future scope (not yet -- explicit user note, 2026-08-28): ema and
+# donchian may be added on this same 17-pair pool later, following the
+# same AccountKey-disambiguation pattern rather than another pair split.
+
 
 def get_tier(symbol: str) -> str:
     """'core' (live-trading candidate, 34 pairs), 'scandi' (SIM-only NOK/SEK/DKK

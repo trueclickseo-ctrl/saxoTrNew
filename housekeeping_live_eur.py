@@ -2,38 +2,20 @@
 housekeeping_live_eur.py
 -------------------------
 Cross-check / reconciliation for the real-money Saxo LIVE EUR sub-account
-ONLY (RSI Pullback on the 83 EXOTIC pairs, see forex/runner.py's
-LIVE_EUR_ALLOWED_STRATEGIES). Deliberately a separate file from both
-housekeeping.py (SIM) and housekeeping_live.py (the SEK LIVE account) --
-same reasoning as housekeeping_live.py's own docstring: this account never
-shares SIM's or the SEK account's adapters, entry points, or state.
+ONLY (RSI Pullback, see forex/runner.py's LIVE_EUR_ALLOWED_STRATEGIES).
+2026-08-28: this account trades the same 17-pair HIGH_VOLUME_SYMBOLS
+universe as the SEK LIVE account (bb) -- see fetch_live_snapshot()'s
+docstring for why that pair overlap is now safe. Legacy positions opened
+under this account's original design (RSI Pullback on the 83 EXOTIC
+pairs) may still be open too; both are reconciled/protected identically.
+Deliberately a separate file from both housekeeping.py (SIM) and
+housekeeping_live.py (the SEK LIVE account) -- same reasoning as
+housekeeping_live.py's own docstring: this account never shares SIM's or
+the SEK account's adapters, entry points, or state.
 
 What IS reused: the same generic, account-agnostic building blocks as
 housekeeping_live.py (LocalPosition/Finding/LiveSnapshot, reconcile_module(),
 _symbol_hint()) -- none of it carries SIM or SEK-account data.
-
-CRITICAL DIFFERENCE from housekeeping_live.py, found live 2026-08-26 while
-building this: Saxo's /port/v1/positions/me and /port/v1/orders/me are
-POOLED across all 3 sub-accounts under this Client (SEK/EUR/USD) --
-confirmed empirically that passing this account's own AccountKey as an
-explicit filter still returns the SEK account's positions unchanged. There
-is no way to ask Saxo's API to scope these two endpoints to just this
-sub-account. Fetching the raw snapshot naively (like housekeeping_live.py
-does for the SEK account, where this was never noticed because nothing else
-in the group had ever traded) would make every one of the SEK account's
-real, already-tracked-elsewhere positions look "fully untracked" from this
-script's point of view -- a false alarm, not a real problem.
-
-Fix: fetch_live_snapshot() filters positions_by_uic/orders_by_uic down to
-EXOTIC_SYMBOLS-tier uics only, immediately after the raw fetch, before any
-analysis touches it. Since this account can structurally only ever hold
-exotic-pair positions (LIVE_EUR_ALLOWED_STRATEGIES={"rsi"} +
-_filter_pairs_for_account() restricts entries to EXOTIC_SYMBOLS), scoping
-by WHAT this account could ever legitimately hold achieves the same result
-the AccountKey filter was supposed to but doesn't -- every check downstream
-(reconcile_module, fully-untracked scan, naked scan) then behaves exactly
-as if the snapshot were properly account-scoped, without needing any
-special-casing in the checks themselves.
 
 Usage:
     python housekeeping_live_eur.py    # reconcile + naked-position scan, once
@@ -51,7 +33,6 @@ from email.mime.text import MIMEText
 
 import saxo_client
 import saxo_order
-from forex.universe import EXOTIC_SYMBOLS, get_pair
 
 from housekeeping import (
     LocalPosition, Finding, LiveSnapshot, BaseAdapter, reconcile_module,
@@ -63,20 +44,39 @@ logger = logging.getLogger("housekeeping_live_eur")
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 
-# uic -> True for every uic that belongs to an EXOTIC pair -- built once
-# from forex.universe's own pair list, used to filter the (pooled) raw
-# snapshot down to only what this account could ever legitimately hold.
-_EXOTIC_UICS = {get_pair(sym)["uic"] for sym in EXOTIC_SYMBOLS}
-
 
 # ── Snapshot ────────────────────────────────────────────────────────────
 
 def fetch_live_snapshot() -> LiveSnapshot:
-    """Always env="live_eur". See module docstring for why this filters to
-    EXOTIC_SYMBOLS uics only -- Saxo's positions/orders endpoints are
-    pooled across all 3 sub-accounts in this Client, not scoped by
-    AccountKey the way balances/me and this file's own account resolution
-    might suggest."""
+    """Always env="live_eur".
+
+    CRITICAL FINDING, 2026-08-26: Saxo's /port/v1/positions/me and
+    /port/v1/orders/me are POOLED across all 3 sub-accounts under this
+    Client (SEK/EUR/USD) -- confirmed empirically that passing this
+    account's own AccountKey as a QUERY PARAM still returns the SEK
+    account's positions unchanged; there is no server-side way to scope
+    these two endpoints to just this sub-account. Original fix (2026-08-26
+    through 2026-08-27): filter the pooled snapshot to EXOTIC_SYMBOLS-tier
+    uics, since that's all this account could then legitimately hold --
+    ownership inferred from pair-tier, not verified directly.
+
+    SUPERSEDED 2026-08-28: verified live that every pooled position record
+    (PositionBase.AccountKey) and order record (AccountKey, top-level)
+    already carries its own AccountKey, even though the endpoint pools all
+    3 accounts together -- the earlier "no way to scope by AccountKey"
+    finding was about the query-param filter not working, not about the
+    field being absent from each record. This filters by THAT field
+    directly (matching against this account's own AccountKey from
+    saxo_client.get_account_key()) instead of inferring ownership from
+    which pairs the account is "supposed to" trade. This is what makes it
+    safe for this account (rsi) and the SEK account (bb) to now trade the
+    SAME 17-pair HIGH_VOLUME_SYMBOLS universe (explicit user decision) --
+    pair-tier partitioning is no longer load-bearing for correctness, and
+    this also correctly keeps reconciling any legacy EXOTIC_SYMBOLS
+    positions this account still holds from its original design, with no
+    special-casing needed for either pair set."""
+    akey = saxo_client.get_account_key(env="live_eur")
+
     pos_resp = saxo_client.get_positions(env="live_eur")
     positions = pos_resp.get("Data", pos_resp)
     ord_resp = saxo_client.get_orders(env="live_eur")
@@ -84,16 +84,16 @@ def fetch_live_snapshot() -> LiveSnapshot:
 
     positions_by_uic: dict = {}
     for p in positions:
-        uic = p["PositionBase"]["Uic"]
-        if uic not in _EXOTIC_UICS:
+        if p["PositionBase"].get("AccountKey") != akey:
             continue
+        uic = p["PositionBase"]["Uic"]
         positions_by_uic.setdefault(uic, []).append(p)
 
     orders_by_uic: dict = {}
     for o in orders:
-        uic = o.get("Uic")
-        if uic not in _EXOTIC_UICS:
+        if o.get("AccountKey") != akey:
             continue
+        uic = o.get("Uic")
         orders_by_uic.setdefault(uic, []).append(o)
 
     return LiveSnapshot(positions_by_uic, orders_by_uic)

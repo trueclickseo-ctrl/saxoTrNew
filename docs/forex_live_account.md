@@ -3,16 +3,16 @@
 **Status**: TWO real-money accounts now live under the same Saxo login.
 
 1. **SEK account** (`--account live`) — fully armed (`SAXO_LIVE_CONFIRMED=1` set, scheduled tasks registered) since 2026-08-25. **First real trade placed 2026-08-25, 23:08 PKT**: `donchian` opened EURNOK short (1,000 @ 10.86975, stop 10.98368, TP 10.52803) and GBPUSD long (1,000 @ 1.36466, stop 1.35165, TP 1.39047) — both bracket orders verified correct against Saxo's own web trader, `housekeeping_live`/`safeguard_live` confirmed clean immediately after.
-2. **EUR account** (`--account live_eur`) — fully armed (`SAXO_LIVE_EUR_CONFIRMED=1` set, scheduled tasks registered) since 2026-08-26. RSI Pullback only, on the 83 EXOTIC pairs only, sized off a 500 EUR code-level cap. See "Second real-money account: EUR sub-account" below for the full design and two important findings about how Saxo's API behaves for this multi-currency Client.
+2. **EUR account** (`--account live_eur`) — fully armed (`SAXO_LIVE_EUR_CONFIRMED=1` set, scheduled tasks registered) since 2026-08-26. RSI Pullback only. As of 2026-08-28, trades the **same 17-pair `HIGH_VOLUME_SYMBOLS` universe as the SEK account** (no exotic pairs live any longer) — safe because Saxo's pooled position/order records carry a genuine per-record `AccountKey` (verified live 2026-08-28), so `housekeeping_live_eur.py` attributes each record to the correct account directly instead of relying on non-overlapping pair sets. Legacy open EXOTIC-pair positions from this account's original design are still tracked/protected the same way. Sized off a 500 EUR code-level cap. See "Second real-money account: EUR sub-account" below for the full design and important findings about how Saxo's API behaves for this multi-currency Client.
 
 The rest of this document describes the SEK account in depth; the EUR account section below cross-references it rather than repeating shared concepts.
 
-**See also**: [forex_live_strategies.md](forex_live_strategies.md) (entry/exit rules for each of the 3 strategies, in depth) and [forex_live_scheduler.md](forex_live_scheduler.md) (every scheduled task, exact trigger times, SIM-conflict history).
+**See also**: [forex_live_strategies.md](forex_live_strategies.md) (entry/exit rules, in depth) and [forex_live_scheduler.md](forex_live_scheduler.md) (every scheduled task, exact trigger times, SIM-conflict history).
 
 **Module**: `forex/runner.py --account live` (same codebase as SIM, account-scoped via `set_account_env()`)
 **Account**: Saxo LIVE, sub-account `1070996INET`, SEK-denominated, opened with 6,000 SEK
-**Strategies**: exactly 3 of the 11 available — `donchian`, `ema`, `rsi` (hard-restricted in code, not just by convention)
-**Universe**: exactly the 34 `CORE_SYMBOLS` pairs — no exotic (hard-filtered in code)
+**Strategies**: as of 2026-08-28, `bb` only (history: `donchian`/`ema`/`rsi` -> `bb`/`rsi` -> briefly `bb`/`rsi`/`pullback` -> `bb`/`rsi` -> `bb` only once `rsi` moved exclusively to the EUR account) -- hard-restricted in code via `LIVE_ALLOWED_STRATEGIES`, not just by convention
+**Universe**: the 17-pair `HIGH_VOLUME_SYMBOLS` subset of `CORE_SYMBOLS` (narrowed 2026-08-27 from all 34 core pairs) -- no exotic (hard-filtered in code via `_filter_pairs_for_account()`)
 **Separate from SIM**: own Saxo app/login, own state/orders files, own pnl_tracker module (`forex_live`), own strategy-learner weights, own signal-filter/ML training data, own cross-process lock, own capital cap. Nothing is shared with the SIM account except the source code itself.
 
 ---
@@ -153,7 +153,7 @@ None of these caused a real financial loss — all were caught by direct questio
 **Module**: `forex/runner.py --account live_eur` (same codebase, same `set_account_env()` mechanism as the SEK account)
 **Account**: Saxo LIVE, sub-account `1076635INET`, EUR-denominated
 **Strategy**: exactly 1 — `rsi` (`LIVE_EUR_ALLOWED_STRATEGIES = {"rsi"}`, hard-restricted in code)
-**Universe**: exactly the 83 `EXOTIC_SYMBOLS` pairs — no core, no scandi (hard-filtered in code)
+**Universe**: as of 2026-08-28, the same 17-pair `HIGH_VOLUME_SYMBOLS` universe as the SEK account (changed from the original 83 `EXOTIC_SYMBOLS` pairs -- explicit user decision, see finding #2 below for why sharing pairs with the SEK account is safe)
 **Sizing cap**: 500 EUR (`atos.capital_config.forex_live_eur_risk_equity_eur()`) — of the 900 EUR actually sitting in that sub-account, only 500 is used as the sizing base
 **Separate from both SIM and the SEK account**: own state/orders files (`forex_live_eur_*.json`), own pnl_tracker module (`forex_live_eur`), own strategy-learner weights, own signal-filter/ML training data, own confirmation gate (`SAXO_LIVE_EUR_CONFIRMED`, independent of the SEK account's `SAXO_LIVE_CONFIRMED`). Shares the SEK account's Saxo LOGIN/OAuth token (see finding below) but nothing else.
 
@@ -162,7 +162,7 @@ None of these caused a real financial loss — all were caught by direct questio
 Both discovered empirically while building this account — worth knowing before extending Saxo API access here further:
 
 1. **Margin/balance is pooled across all 3 sub-accounts, not per-account.** `/port/v1/balances/me` returns the exact same pooled, SEK-denominated Client-Group total (~15,786 SEK) regardless of whether it's queried scoped by this account's own AccountKey, by ClientKey, or unscoped. There is no broker-enforced wall keeping this experiment's risk at exactly 500 EUR — only the code-level `_risk_equity()` cap provides that discipline (the same protection model the SEK account's own 6,000 SEK cap already relies on). `forex_live_eur_dashboard.py` deliberately does NOT label this pooled figure as "this account's equity" — doing so would be a real money-figure error on a real-money dashboard.
-2. **Positions/orders are ALSO pooled.** `/port/v1/positions/me` and `/port/v1/orders/me` return the SEK account's real positions even when explicitly filtered by the EUR account's own AccountKey — confirmed by inspecting the returned `PositionBase.AccountId` on each row. `housekeeping_live_eur.py`'s `fetch_live_snapshot()` compensates by filtering the raw snapshot down to `EXOTIC_SYMBOLS`-tier UICs immediately after fetch, before any reconciliation logic runs — this is the ONLY thing preventing every one of the SEK account's real, already-tracked-elsewhere positions from showing up as false "fully untracked" alerts in the EUR account's own housekeeping.
+2. **Positions/orders are ALSO pooled** — but each record still carries its own correct account attribution. `/port/v1/positions/me` and `/port/v1/orders/me` return the SEK account's real positions even when passing the EUR account's own AccountKey as a QUERY PARAM (that filter simply doesn't work server-side). However, every returned row DOES carry its own genuine `PositionBase.AccountKey` / top-level `AccountKey` field (verified live 2026-08-28) identifying which sub-account actually owns it. `housekeeping_live.py` / `housekeeping_live_eur.py`'s `fetch_live_snapshot()` now filter the raw pooled snapshot by matching that field against `saxo_client.get_account_key(env=...)` for their own account, immediately after fetch, before any reconciliation logic runs. (2026-08-26 through 2026-08-27, before this was found: filtered by pair-tier instead — `EXOTIC_SYMBOLS` for this account, `HIGH_VOLUME_SYMBOLS`/`CORE_SYMBOLS` for the SEK account — which only worked as long as the two accounts' pair sets never overlapped. The AccountKey filter is strictly better and is what makes it safe for both accounts to now trade the identical 17-pair `HIGH_VOLUME_SYMBOLS` universe.)
 
 ### Scheduling
 

@@ -161,6 +161,9 @@ def forex_live_eur_risk_equity_eur() -> float:
     Pullback on the 83 EXOTIC pairs using only 500 of the 900 EUR
     actually sitting in that sub-account -- isolated capital, isolated
     risk, deliberately not mixed with the SEK account's existing trading.
+    2026-08-28: this account moved to the same 17-pair HIGH_VOLUME_SYMBOLS
+    universe as the SEK account (no more exotic pairs live); this cap is
+    unchanged either way.
     """
     try:
         return float(_load()["strategies"]["forex_live_eur"]["risk_equity_eur"])

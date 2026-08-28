@@ -65,9 +65,19 @@ STRATEGY_NAMES = {
     # with or derived from SIM's 117-pair history. User explicitly requested
     # LIVE never share SIM's files/state. Starts neutral (1.0x every
     # strategy) until LIVE accumulates its own closed-trade history.
-    # 2026-08-27: {donchian, ema, rsi} -> {bb, rsi, pullback}, matching
-    # forex/runner.py's LIVE_ALLOWED_STRATEGIES change.
-    "forex_live": ["bb", "rsi", "pullback"],
+    # 2026-08-27/28: {donchian, ema, rsi} -> {bb, rsi} (via a brief
+    # {bb, rsi, pullback} step) -> {bb} once the two-account HIGH_VOLUME
+    # pilot moved rsi to the LIVE EUR account below -- matching
+    # forex/runner.py's LIVE_ALLOWED_STRATEGIES history, see that
+    # constant's comment.
+    "forex_live": ["bb"],
+    # 2026-08-28: forex_live_eur's own registry entry -- previously missing
+    # entirely (harmless in practice, since every get_weights() caller in
+    # forex/runner.py falls back to .get(strat, 1.0), but left get_weights()
+    # silently returning {} for this module with no seeded defaults). Now
+    # the LIVE EUR account's exclusive strategy under the two-account
+    # HIGH_VOLUME split (rsi on HIGH_VOLUME_GROUP_B).
+    "forex_live_eur": ["rsi"],
 }
 
 

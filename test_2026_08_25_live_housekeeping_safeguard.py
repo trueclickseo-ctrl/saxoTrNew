@@ -178,13 +178,40 @@ section("2. housekeeping_live.py -- snapshot fetch always env='live'")
 def test_fetch_live_snapshot_uses_env_live():
     import housekeeping_live as hkl
     import saxo_client
-    with patch.object(saxo_client, "get_positions", return_value={"Data": []}) as mock_pos, \
+    # 2026-08-28: fetch_live_snapshot() now also calls get_account_key(env="live")
+    # to attribute pooled positions/orders by their own AccountKey field
+    # (see the function's own docstring) -- must be mocked too, or this
+    # unit test would make a real Saxo API call.
+    with patch.object(saxo_client, "get_account_key", return_value="sek-key"), \
+         patch.object(saxo_client, "get_positions", return_value={"Data": []}) as mock_pos, \
          patch.object(saxo_client, "get_orders", return_value={"Data": []}) as mock_ord:
         hkl.fetch_live_snapshot()
     mock_pos.assert_called_once_with(env="live")
     mock_ord.assert_called_once_with(env="live")
 _run("housekeeping_live.fetch_live_snapshot() calls saxo_client.get_positions/get_orders with env='live'",
      test_fetch_live_snapshot_uses_env_live)
+
+
+def test_fetch_live_snapshot_filters_by_account_key():
+    # 2026-08-28: replaced pair-tier filtering with real AccountKey
+    # attribution -- a pooled position/order belonging to a DIFFERENT
+    # account (e.g. the EUR sub-account, sharing the same HIGH_VOLUME
+    # pairs) must be excluded even though its uic is one this account
+    # legitimately trades.
+    import housekeeping_live as hkl
+    import saxo_client
+    mine  = {"PositionBase": {"AccountKey": "sek-key", "Uic": 21}}
+    theirs = {"PositionBase": {"AccountKey": "eur-key", "Uic": 21}}
+    with patch.object(saxo_client, "get_account_key", return_value="sek-key"), \
+         patch.object(saxo_client, "get_positions", return_value={"Data": [mine, theirs]}), \
+         patch.object(saxo_client, "get_orders", return_value={"Data": []}):
+        snap = hkl.fetch_live_snapshot()
+    assert snap.positions_by_uic.get(21) == [mine], (
+        "fetch_live_snapshot() must keep only this account's own AccountKey, "
+        "even for a uic another LIVE account also legitimately trades"
+    )
+_run("housekeeping_live.fetch_live_snapshot() attributes pooled positions by AccountKey, not pair-tier",
+     test_fetch_live_snapshot_filters_by_account_key)
 
 
 # ═══════════════════════════════════════════════════════════════════════

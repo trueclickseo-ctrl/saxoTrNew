@@ -61,19 +61,22 @@ def fetch_live_snapshot() -> LiveSnapshot:
     """Always env="live" -- this file has no other mode. Never shares a
     snapshot with SIM's own fetch_live_snapshot() in housekeeping.py.
 
-    Filters to CORE_SYMBOLS-tier uics only -- found live 2026-08-26, the
-    same day the EUR sub-account (housekeeping_live_eur.py) placed its
-    first real trade: Saxo's /port/v1/positions/me and /port/v1/orders/me
-    are POOLED across all 3 sub-accounts under this Client (SEK/EUR/USD),
-    so this SEK-account-specific snapshot was picking up the EUR
-    account's real EURPLN position too -- with no local record of it
-    (correctly, it's not this account's trade), it got flagged as a false
-    "fully_untracked" alert. The fix already existed for the EUR side
-    (housekeeping_live_eur.py filters to EXOTIC_SYMBOLS); this applies the
-    same principle back to the original SEK-account file, which predates
-    the EUR account and never needed it before now."""
-    from forex.universe import CORE_SYMBOLS, get_pair
-    core_uics = {get_pair(sym)["uic"] for sym in CORE_SYMBOLS}
+    2026-08-26 through 2026-08-27: filtered by pair-tier (CORE_SYMBOLS, then
+    narrowed to HIGH_VOLUME_SYMBOLS) as a workaround, on the belief that
+    Saxo's pooled /port/v1/positions/me and /port/v1/orders/me endpoints
+    carried no per-record account attribution at all (confirmed only that
+    passing AccountKey as a QUERY PARAM doesn't filter server-side -- true,
+    but a different claim). That belief was wrong: verified live 2026-08-28
+    that every position (PositionBase.AccountKey) and order (AccountKey,
+    top-level) already carries its own AccountKey, even though the pooled
+    endpoint returns all 3 sub-accounts' records together. This filters by
+    THAT field directly -- the real, broker-verified attribution -- instead
+    of inferring ownership from which pairs an account is "supposed to"
+    trade. This is what makes it safe for this account (bb) and the EUR
+    account (rsi, housekeeping_live_eur.py) to trade the SAME 17-pair
+    HIGH_VOLUME_SYMBOLS universe (explicit user decision, 2026-08-28) --
+    pair-tier partitioning is no longer load-bearing for correctness."""
+    akey = saxo_client.get_account_key(env="live")
 
     pos_resp = saxo_client.get_positions(env="live")
     positions = pos_resp.get("Data", pos_resp)
@@ -82,16 +85,16 @@ def fetch_live_snapshot() -> LiveSnapshot:
 
     positions_by_uic: dict = {}
     for p in positions:
-        uic = p["PositionBase"]["Uic"]
-        if uic not in core_uics:
+        if p["PositionBase"].get("AccountKey") != akey:
             continue
+        uic = p["PositionBase"]["Uic"]
         positions_by_uic.setdefault(uic, []).append(p)
 
     orders_by_uic: dict = {}
     for o in orders:
-        uic = o.get("Uic")
-        if uic not in core_uics:
+        if o.get("AccountKey") != akey:
             continue
+        uic = o.get("Uic")
         orders_by_uic.setdefault(uic, []).append(o)
 
     return LiveSnapshot(positions_by_uic, orders_by_uic)

@@ -2,11 +2,18 @@
 forex_live_dashboard.py  —  Live (real-money) Forex positions dashboard
 ------------------------------------------------------------------------
 Same idea as forex_dashboard.py, but for the real-money Saxo LIVE account
-(2026-08-25) instead of SIM: 3 strategies (bb/rsi/pullback, changed
-2026-08-27 from donchian/ema/rsi), 17 HIGH_VOLUME pairs only (narrowed
-2026-08-27 from all 34 CORE_SYMBOLS), SEK-denominated equity (6,000 SEK
-opening balance) instead of SIM's EUR demo credit. No core/exotic split
-needed here -- the live account is 100% core by construction.
+(2026-08-25) instead of SIM: 1 strategy (bb only, as of 2026-08-28's
+two-account pilot -- history: donchian/ema/rsi -> bb/rsi -> briefly
+bb/rsi/pullback -> bb/rsi -> bb-only once rsi moved to the LIVE EUR
+account), the full 17-pair HIGH_VOLUME_SYMBOLS universe (narrowed
+2026-08-27 from all 34 CORE_SYMBOLS). A same-day (2026-08-28) attempt to
+narrow this further to a 9-pair HIGH_VOLUME_GROUP_A subset was explicitly
+reverted by the user before being committed -- the EUR account currently
+has zero live pairs of its own (new entries paused, see forex/runner.py's
+LIVE_EUR_ALLOWED_STRATEGIES comment), so this account safely keeps the
+whole 17-pair set. SEK-denominated equity (6,000 SEK opening balance)
+instead of SIM's EUR demo credit. No core/exotic split needed here -- the
+live account is 100% core by construction.
 
 Deliberately thin: reuses forex_dashboard.py's _positions_section() /
 _strategy_breakdown_table() / _section_header() rendering helpers
@@ -37,7 +44,7 @@ sys.path.insert(0, BASE_DIR)
 import price_service
 import pnl_tracker
 import forex.runner as runner
-from forex.universe import PAIRS as _UNIVERSE_PAIRS, CORE_SYMBOLS
+from forex.universe import PAIRS as _UNIVERSE_PAIRS, HIGH_VOLUME_SYMBOLS
 import forex_dashboard as fd   # reuse its rendering helpers + colors
 
 # 5 of the 34 CORE pairs are NOK/SEK/DKK crosses (paired against EUR/USD only
@@ -233,15 +240,17 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     )
     L.append(HR)
     if positions:
-        # 2026-08-27: LIVE_ALLOWED_STRATEGIES changed {donchian,ema,rsi} ->
-        # {bb,rsi,pullback} -- current allowlist listed first, but
-        # donchian/ema still appended if either has a real open position
-        # (existing positions from before the change keep trading out
-        # normally; they must never just vanish from this dashboard).
+        # 2026-08-27/28: LIVE_ALLOWED_STRATEGIES changed {donchian,ema,rsi}
+        # -> {bb,rsi} (via a brief {bb,rsi,pullback} step) -> {bb} once rsi
+        # moved to the LIVE EUR account in the two-account HIGH_VOLUME
+        # split -- current allowlist listed first, but donchian/ema/rsi/
+        # pullback still appended if any has a real open position (existing
+        # positions from before a change keep trading out normally; they
+        # must never just vanish from this dashboard).
         grouped: dict = {}
         for p in positions:
             grouped.setdefault(p["strategy"], []).append(p)
-        _current_live = ("bb", "rsi", "pullback")
+        _current_live = tuple(runner.LIVE_ALLOWED_STRATEGIES)
         strat_order = list(_current_live) + sorted(s for s in grouped if s not in _current_live)
         first_group = True
         for strat in strat_order:
@@ -300,12 +309,14 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append("")
 
     # ── Strategy breakdown -- single table, module="forex_live" ───────────
-    # Only the 3 approved strategies ever trade on this account -- exclude
-    # the other 8 rather than show 8 permanently-empty 0/0 rows.
+    # Driven off runner.LIVE_ALLOWED_STRATEGIES itself (currently just
+    # {"bb"} as of the 2026-08-28 two-account split -- rsi moved to the
+    # LIVE EUR account) rather than a hardcoded count, so this exclude set
+    # tracks the allowlist automatically whenever it changes.
     _not_live = set(runner.STRATEGIES) - runner.LIVE_ALLOWED_STRATEGIES
     L.extend(fd._strategy_breakdown_table(
         "STRATEGY BREAKDOWN — LIVE (real money)",
-        positions, live, symbols=CORE_SYMBOLS, universe_size=34,
+        positions, live, symbols=HIGH_VOLUME_SYMBOLS, universe_size=len(HIGH_VOLUME_SYMBOLS),
         exclude=_not_live, color=fd.GR, total_label="LIVE TOTAL",
         module="forex_live", currency_label="SEK"))
 
@@ -313,13 +324,14 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
              f"but in SEK, via pnl_tracker module='forex_live' (fully separate ledger from SIM's 'forex').{fd.W}")
     L.append("")
 
-    # ── Per-pair performance -- every CORE pair with at least one closed
-    # LIVE trade, not just a strategy-level aggregate. Scandi-cross core
-    # pairs (EURNOK/EURSEK/USDNOK/USDSEK/USDDKK) are marked with a flag and
-    # tallied separately so their progress toward the 10-trade review
-    # checkpoint is visible at a glance instead of requiring a manual count.
+    # ── Per-pair performance -- every HIGH_VOLUME pair with at least one
+    # closed LIVE trade, not just a strategy-level aggregate. Scandi-cross
+    # core pairs (EURNOK/EURSEK/USDNOK/USDSEK/USDDKK) are marked with a
+    # flag and tallied separately so their progress toward the 10-trade
+    # review checkpoint is visible at a glance instead of requiring a
+    # manual count.
     pair_stats = pnl_tracker.get_pair_summary("forex_live")
-    L.append(f"  {fd.BD}PER-PAIR PERFORMANCE{fd.W}  {fd.DM}(every CORE pair with a closed LIVE trade){fd.W}")
+    L.append(f"  {fd.BD}PER-PAIR PERFORMANCE{fd.W}  {fd.DM}(every HIGH_VOLUME pair with a closed LIVE trade){fd.W}")
     L.append("")
     if pair_stats:
         L.append(

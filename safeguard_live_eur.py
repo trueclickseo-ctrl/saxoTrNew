@@ -2,7 +2,11 @@
 safeguard_live_eur.py
 -----------------------
 Auto-fix agent for the real-money Saxo LIVE EUR sub-account ONLY (RSI
-Pullback / 83 exotic pairs). Same relationship to housekeeping_live_eur.py
+Pullback, on the same 17-pair HIGH_VOLUME_SYMBOLS universe as the SEK
+account as of 2026-08-28 -- see housekeeping_live_eur.py's docstring for
+the AccountKey-based disambiguation that makes the pair overlap safe;
+legacy exotic-pair positions from this account's original design are
+still fully protected too). Same relationship to housekeeping_live_eur.py
 that safeguard_live.py has to housekeeping_live.py -- a fully separate
 file from both the SEK LIVE account's safeguard_live.py and SIM's
 safeguard.py, per the same explicit user direction: each real-money

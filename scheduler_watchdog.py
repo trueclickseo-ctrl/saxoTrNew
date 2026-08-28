@@ -161,7 +161,8 @@ WINDOWS_TASKS = {
     "Forex LIVE Daily Run":   ("ATOS Forex LIVE Daily Run",   "forex_live_scheduler.log", 30, 4),
     "Forex LIVE Exit Check":  ("ATOS Forex LIVE Exit Check",  "forex_live_scheduler.log", 30, 30),
     # Second real-money account -- EUR sub-account (2026-08-26), RSI
-    # Pullback only on the 83 EXOTIC pairs. Own log, own state, own
+    # Pullback only, on the same 17-pair HIGH_VOLUME_SYMBOLS universe as
+    # the SEK account as of 2026-08-28. Own log, own state, own
     # SAXO_LIVE_EUR_CONFIRMED flag -- genuinely separate from the SEK
     # account above, so a failure on one is never masked by the other's
     # activity. Same grace/max_wait rationale as the SEK entries.

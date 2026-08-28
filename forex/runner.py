@@ -243,22 +243,42 @@ ACCOUNT_ENV = "sim"
 # effect while LIVE_TRADING_HALTED stays True -- this just makes sure the
 # right allowlist is in place for whenever it lifts.
 #
-# Went through two steps same day: first {bb, rsi} ("remove donchian and
-# ema... NO PULLBACK for now"), then explicitly reversed to also include
-# "pullback" ("add RSI PULLBACK both and BB" -> clarified via question to
-# mean re-including the separate pullback strategy, not just confirming
-# bb+rsi). Recorded both steps so a future read of this history isn't
-# confused by the apparent contradiction -- it's a real, deliberate
-# reversal within the same conversation, not a stale comment.
-LIVE_ALLOWED_STRATEGIES = {"bb", "rsi", "pullback"}
+# Went through three steps in one conversation -- recorded all of them so
+# a future read of this history isn't confused by the apparent back-and-
+# forth, it's real deliberate reversals, not a stale comment:
+#   1. {bb, rsi}            ("remove donchian and ema... NO PULLBACK for now")
+#   2. {bb, rsi, pullback}  ("add RSI PULLBACK both and BB" -> clarified to
+#                            mean re-including pullback, not just confirming bb+rsi)
+#   3. {bb, rsi}            (2026-08-28, reconciling a "34 cells" = 17x2
+#                            reference in a later message that assumed only
+#                            2 strategies -- explicitly confirmed via
+#                            question: drop pullback again)
+# 2026-08-28: narrowed again, from {bb, rsi} to {bb} only -- the two-
+# account pilot design puts rsi on the EUR account instead (see
+# LIVE_EUR_ALLOWED_STRATEGIES below), each account running exactly one
+# strategy. SEK trades the full 17-pair HIGH_VOLUME_SYMBOLS universe (see
+# _filter_pairs_for_account()) -- same as the EUR account below. Both
+# accounts sharing the same 17 pairs is safe: see
+# housekeeping_live.py's fetch_live_snapshot() docstring for the
+# AccountKey-based disambiguation that makes pair overlap a non-issue.
+# (History: a HIGH_VOLUME_GROUP_A/B 9+8 pair-split, and later a brief
+# "EUR gets zero pairs" pause, were both built then explicitly superseded
+# same-day before ever being committed.)
+LIVE_ALLOWED_STRATEGIES = {"bb"}
 
 # 2026-08-26: a SECOND, genuinely separate real-money account -- the EUR
 # sub-account under the same Saxo LIVE login (see _account()'s Currency
 # matching), isolated from the SEK account above with its own capital cap.
-# Explicit user request: test RSI Pullback, and ONLY RSI Pullback, on the
-# 83 EXOTIC pairs -- a focused single-strategy/single-tier experiment, not
-# an addition to the SEK account's existing CORE coverage (that would just
-# duplicate RSI's already-running core signals in a second account).
+# Originally: test RSI Pullback, and ONLY RSI Pullback, on the 83 EXOTIC
+# pairs. 2026-08-28: repurposed as the second half of the two-account
+# HIGH_VOLUME pilot (explicit user decision, "two €500 test accounts,
+# Account A one strategy, Account B the other") -- the user does NOT want
+# this account trading exotic pairs live any longer, and now trades the
+# SAME full 17-pair HIGH_VOLUME_SYMBOLS universe as the SEK account
+# ("I want to test both strategies BB and RSI ... on 17 Pairs"). Legacy
+# open EXOTIC_SYMBOLS positions from this account's original design are
+# still tracked/protected by housekeeping_live_eur.py/safeguard_live_eur.py
+# alongside any new HIGH_VOLUME positions.
 LIVE_EUR_ALLOWED_STRATEGIES = {"rsi"}
 
 # 2026-08-26: EMERGENCY HALT, both real-money accounts (SEK "live" and EUR
@@ -327,19 +347,28 @@ def _pnl_module() -> str:
 
 
 def _filter_pairs_for_account(pairs: list) -> list:
-    """Under the SEK LIVE account, restricted to HIGH_VOLUME_SYMBOLS (17
-    pairs -- majors + liquid crosses, a curated subset of CORE_SYMBOLS's
-    34). Narrowed from the full 34 on 2026-08-27, explicit user decision
-    ("instead of 34 pairs we will trade only HIGH VOLUME... after will add
-    more") -- start narrower, expand deliberately later rather than the
-    other direction. Under the EUR LIVE account (2026-08-26), restricted
-    the other way: EXOTIC_SYMBOLS (83 pairs) only -- that account exists
-    specifically to test rsi on exotic, nothing else, so it never even
-    sees the core pairs the SEK account already trades."""
-    if ACCOUNT_ENV == "live":
+    """2026-08-28 two-account LIVE design: SEK LIVE (bb) and EUR LIVE (rsi)
+    both trade the SAME full 17-pair HIGH_VOLUME_SYMBOLS universe (narrowed
+    from all 34 CORE_SYMBOLS on 2026-08-27) -- explicit user decision, "I
+    want to test both strategies BB and RSI ... on 17 Pairs". No exotic
+    pairs on either LIVE account any longer.
+
+    Sharing the same 17 pairs across two accounts is only safe because of a
+    same-day finding: Saxo's pooled /port/v1/positions/me and
+    /port/v1/orders/me responses carry a genuine per-record AccountKey
+    (verified live), so housekeeping_live.py/housekeeping_live_eur.py can
+    attribute each pooled position/order to the correct account directly,
+    instead of relying on non-overlapping pair sets to infer ownership.
+    See housekeeping_live.py's fetch_live_snapshot() docstring for the full
+    history (including an earlier HIGH_VOLUME_GROUP_A/B 9+8 pair-split, and
+    a brief "EUR gets zero pairs" pause, both superseded same-day before
+    being committed).
+
+    Future scope (not yet -- explicit user note): ema and donchian may be
+    added on this same 17-pair pool later, following the same AccountKey-
+    disambiguation pattern rather than another pair split."""
+    if ACCOUNT_ENV in ("live", "live_eur"):
         return [p for p in pairs if p["symbol"] in HIGH_VOLUME_SYMBOLS]
-    if ACCOUNT_ENV == "live_eur":
-        return [p for p in pairs if p["symbol"] in EXOTIC_SYMBOLS]
     return pairs
 
 
@@ -2650,11 +2679,14 @@ if __name__ == "__main__":
     ap.add_argument("--account", default="sim", choices=["sim", "live", "live_eur"],
                     help="Which Saxo account to run against (default: sim). "
                          "'live' is the real-money SEK account -- restricted to "
-                         "LIVE_ALLOWED_STRATEGIES and HIGH_VOLUME_SYMBOLS only, and "
-                         "requires SAXO_LIVE_CONFIRMED=1 to place real orders. "
-                         "'live_eur' is the real-money EUR sub-account (added "
-                         "2026-08-26) -- restricted to LIVE_EUR_ALLOWED_STRATEGIES "
-                         "(rsi only) and EXOTIC_SYMBOLS only, requires "
+                         "LIVE_ALLOWED_STRATEGIES (bb only) and HIGH_VOLUME_SYMBOLS "
+                         "(17 pairs) only, and requires SAXO_LIVE_CONFIRMED=1 to "
+                         "place real orders. 'live_eur' is the real-money EUR sub-"
+                         "account (added 2026-08-26) -- restricted to "
+                         "LIVE_EUR_ALLOWED_STRATEGIES (rsi only), on the SAME "
+                         "17-pair HIGH_VOLUME_SYMBOLS universe as 'live' (safe "
+                         "pair overlap via AccountKey-based reconciliation, see "
+                         "housekeeping_live.py), requires "
                          "SAXO_LIVE_EUR_CONFIRMED=1 to place real orders.")
     ap.add_argument("--status",   action="store_true",
                     help="Print open positions and exit")

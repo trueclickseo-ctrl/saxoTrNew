@@ -2,11 +2,20 @@
 forex_live_eur_dashboard.py  —  Live (real-money) EUR sub-account dashboard
 -----------------------------------------------------------------------------
 Same idea as forex_live_dashboard.py (the SEK LIVE account's dashboard),
-but for the EUR sub-account added 2026-08-26: RSI Pullback ONLY, on the
-83 EXOTIC pairs ONLY, sized off a 500 EUR code-level cap (see
-forex_live_eur_account_2026-08-26 session notes for why this is a code-
-level cap, not a broker-enforced wall -- Saxo pools margin across all 3
-of this Client's sub-accounts).
+but for the EUR sub-account added 2026-08-26: RSI Pullback ONLY. As of
+2026-08-28 this account trades the SAME 17-pair HIGH_VOLUME_SYMBOLS
+universe as the SEK account (bb) -- no exotic pairs live any longer
+("I want to test both strategies BB and RSI ... on 17 Pairs"). Sharing
+the same 17 pairs across both accounts is safe because
+housekeeping_live_eur.py's fetch_live_snapshot() now attributes each
+pooled Saxo position/order to the correct account via its own
+AccountKey field (verified live), not pair-tier membership -- see that
+docstring for the full history. Legacy open positions from this
+account's original EXOTIC_SYMBOLS design are still shown/tracked
+alongside any new HIGH_VOLUME trades. Still sized off a 500 EUR
+code-level cap (see forex_live_eur_account_2026-08-26 session notes for
+why this is a code-level cap, not a broker-enforced wall -- Saxo pools
+margin across all 3 of this Client's sub-accounts).
 
 Deliberately THINNER than forex_live_dashboard.py: this account is
 EUR-denominated, the SAME currency basis forex_dashboard.py's SIM
@@ -31,7 +40,7 @@ sys.path.insert(0, BASE_DIR)
 
 import price_service
 import forex.runner as runner
-from forex.universe import EXOTIC_SYMBOLS
+from forex.universe import HIGH_VOLUME_SYMBOLS
 import forex_dashboard as fd   # reuse its rendering helpers + EUR conversion
 
 REFRESH_SECONDS = 60
@@ -112,7 +121,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         src_tag = "n/a (token expired)"
     L.append(f"  {fd.BD}{fd.CY}╔{'═'*W_TOTAL}╗{fd.W}")
     L.append(f"  {fd.BD}{fd.CY}║{'  FOREX LIVE-EUR ACCOUNT — REAL MONEY':^{W_TOTAL}}║{fd.W}")
-    L.append(f"  {fd.BD}{fd.CY}║{f'  RSI Pullback only  |  83 Exotic Pairs  |  Sizing Cap: {cap_eur:,.0f} EUR  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{fd.W}")
+    L.append(f"  {fd.BD}{fd.CY}║{f'  RSI Pullback only  |  17 HIGH_VOLUME Pairs  |  Sizing Cap: {cap_eur:,.0f} EUR  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{fd.W}")
     L.append(f"  {fd.BD}{fd.CY}╚{'═'*W_TOTAL}╝{fd.W}")
     L.append("")
     pooled_s = f"{pooled_total:,.0f} {pooled_ccy}" if pooled_total else "—"
@@ -147,7 +156,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     _not_live_eur = set(runner.STRATEGIES) - runner.LIVE_EUR_ALLOWED_STRATEGIES
     L.extend(fd._strategy_breakdown_table(
         "STRATEGY BREAKDOWN — LIVE-EUR (real money)",
-        positions, live, symbols=EXOTIC_SYMBOLS, universe_size=83,
+        positions, live, symbols=HIGH_VOLUME_SYMBOLS, universe_size=len(HIGH_VOLUME_SYMBOLS),
         exclude=_not_live_eur, color=fd.GR, total_label="LIVE-EUR TOTAL",
         module="forex_live_eur", currency_label="EUR"))
 
