@@ -22,7 +22,11 @@ FOREX_STATE_PATH    = os.path.join(BASE_DIR, "data", "forex_state.json")
 
 sys.path.insert(0, BASE_DIR)
 import price_service
-from forex.universe import PAIRS as _UNIVERSE_PAIRS, CORE_SYMBOLS, SCANDI_SYMBOLS, HIGH_VOLUME_SYMBOLS, CORE_STANDARD_SYMBOLS
+from forex.universe import (
+    PAIRS as _UNIVERSE_PAIRS, CORE_SYMBOLS, SCANDI_SYMBOLS, HIGH_VOLUME_SYMBOLS,
+    CORE_STANDARD_SYMBOLS, EXOTIC_SYMBOLS, EXOTIC_ASIA_SYMBOLS, EXOTIC_EUROPE_SYMBOLS,
+    EXOTIC_CARRY_SYMBOLS, EXOTIC_LATAM_MIDEAST_SYMBOLS,
+)
 
 _UNIVERSE_BY_SYMBOL = {p["symbol"]: p for p in _UNIVERSE_PAIRS}
 
@@ -599,16 +603,26 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     # tier no matter which table it's attached to (2026-08-25, explicit
     # "clear separation" request; SCANDI color added same day when that
     # tier was introduced). CORE_COLOR retired 2026-08-28 along with the
-    # standalone CORE section (see below).
+    # standalone CORE section (see below) -- GR reused below for EXOTIC ASIA.
     SCANDI_COLOR, EXOTIC_COLOR, ALLTIER_COLOR = MG, YL, CY
     HIGH_VOLUME_COLOR = WH
     CORE_STANDARD_COLOR = BL
+    # EXOTIC regional sub-colors (2026-08-28) -- standard 8-color ANSI is
+    # already fully spoken for by the tiers above, so these use 256-color
+    # codes (same technique the strategy legend already uses for CNN-LSTM/
+    # LBO) to stay visually distinct from every other tier/region color.
+    EXOTIC_ASIA_COLOR, EXOTIC_EUROPE_COLOR = GR, "\033[38;5;208m"
+    EXOTIC_CARRY_COLOR, EXOTIC_LATAM_MIDEAST_COLOR = "\033[38;5;201m", "\033[38;5;51m"
 
-    exotic_symbols      = {p["symbol"] for p in _UNIVERSE_PAIRS} - CORE_SYMBOLS - SCANDI_SYMBOLS
+    exotic_symbols      = EXOTIC_SYMBOLS
     high_volume_positions = [p for p in positions if p["symbol"] in HIGH_VOLUME_SYMBOLS]
     core_standard_positions = [p for p in positions if p["symbol"] in CORE_STANDARD_SYMBOLS]
     scandi_positions    = [p for p in positions if p["symbol"] in SCANDI_SYMBOLS]
     exotic_positions    = [p for p in positions if p["symbol"] in exotic_symbols]
+    exotic_asia_positions          = [p for p in positions if p["symbol"] in EXOTIC_ASIA_SYMBOLS]
+    exotic_europe_positions        = [p for p in positions if p["symbol"] in EXOTIC_EUROPE_SYMBOLS]
+    exotic_carry_positions         = [p for p in positions if p["symbol"] in EXOTIC_CARRY_SYMBOLS]
+    exotic_latam_mideast_positions = [p for p in positions if p["symbol"] in EXOTIC_LATAM_MIDEAST_SYMBOLS]
     open_count          = len(positions)
 
     # ── Positions tables — HIGH VOLUME (17) + CORE STANDARD (17) first
@@ -649,6 +663,32 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         "OPEN POSITIONS — EXOTIC (83 pairs, SIM-only)",
         exotic_positions, live, position_costs, W_TOTAL, HR, color=EXOTIC_COLOR)
     L.extend(exotic_lines)
+
+    # EXOTIC regional split — added 2026-08-28, explicit user request
+    # ("divide this large [83] into smaller, more meaningful groups... so
+    # we will find tradeable pairs"). Every pair here already counts inside
+    # the blended EXOTIC total above, so — same double-counting rule as
+    # every other sub-tier in this file — their P&L/cost is deliberately
+    # excluded from the grand TOTAL sum below.
+    exotic_asia_lines, _ea_pnl, _ea_cost, _ea_costs_eur = _positions_section(
+        "OPEN POSITIONS — EXOTIC ASIA (30 pairs, CNH/HKD/SGD/THB)",
+        exotic_asia_positions, live, position_costs, W_TOTAL, HR, color=EXOTIC_ASIA_COLOR)
+    L.extend(exotic_asia_lines)
+
+    exotic_europe_lines, _ee_pnl, _ee_cost, _ee_costs_eur = _positions_section(
+        "OPEN POSITIONS — EXOTIC EUROPE (25 pairs, CZK/HUF/PLN/RON)",
+        exotic_europe_positions, live, position_costs, W_TOTAL, HR, color=EXOTIC_EUROPE_COLOR)
+    L.extend(exotic_europe_lines)
+
+    exotic_carry_lines, _ec_pnl, _ec_cost, _ec_costs_eur = _positions_section(
+        "OPEN POSITIONS — EXOTIC HIGH-YIELD/CARRY (17 pairs, TRY/ZAR)",
+        exotic_carry_positions, live, position_costs, W_TOTAL, HR, color=EXOTIC_CARRY_COLOR)
+    L.extend(exotic_carry_lines)
+
+    exotic_lm_lines, _elm_pnl, _elm_cost, _elm_costs_eur = _positions_section(
+        "OPEN POSITIONS — EXOTIC LATAM/MIDEAST (11 pairs, MXN/ILS/AED)",
+        exotic_latam_mideast_positions, live, position_costs, W_TOTAL, HR, color=EXOTIC_LATAM_MIDEAST_COLOR)
+    L.extend(exotic_lm_lines)
 
     total_pnl       = high_volume_pnl + core_standard_pnl + scandi_pnl + exotic_pnl
     total_cost      = high_volume_cost + core_standard_cost + scandi_cost + exotic_cost
@@ -718,6 +758,37 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         "STRATEGY BREAKDOWN — EXOTIC (83 pairs, SIM-only, excl. LBO)",
         positions, live, symbols=exotic_symbols, universe_size=83,
         exclude={"london_breakout"}, color=EXOTIC_COLOR, total_label="EXOTIC TOTAL"))
+
+    # EXOTIC regional split — added 2026-08-28, explicit user request
+    # ("divide this large [83] into smaller, more meaningful groups... so
+    # we will find tradeable pairs"). Shown directly beside the blended
+    # EXOTIC total above so each region's own track record is visible
+    # without waiting for it to move the whole 83-pair blended number.
+    # Grouped by non-G10 currency (the dimension that actually drives
+    # liquidity/correlation/political-risk), not by which G10 currency a
+    # pair happens to be quoted against -- see forex/universe.py's own
+    # comment for the exact bucketing rule and why it's a strict partition.
+    # Same LBO exclusion as SCANDI/EXOTIC above (LBO structurally never
+    # trades any of these pairs).
+    L.extend(_strategy_breakdown_table(
+        "STRATEGY BREAKDOWN — EXOTIC ASIA (30 pairs, CNH/HKD/SGD/THB, excl. LBO)",
+        positions, live, symbols=EXOTIC_ASIA_SYMBOLS, universe_size=30,
+        exclude={"london_breakout"}, color=EXOTIC_ASIA_COLOR, total_label="EXOTIC ASIA TOTAL"))
+
+    L.extend(_strategy_breakdown_table(
+        "STRATEGY BREAKDOWN — EXOTIC EUROPE (25 pairs, CZK/HUF/PLN/RON, excl. LBO)",
+        positions, live, symbols=EXOTIC_EUROPE_SYMBOLS, universe_size=25,
+        exclude={"london_breakout"}, color=EXOTIC_EUROPE_COLOR, total_label="EXOTIC EUROPE TOTAL"))
+
+    L.extend(_strategy_breakdown_table(
+        "STRATEGY BREAKDOWN — EXOTIC HIGH-YIELD/CARRY (17 pairs, TRY/ZAR, excl. LBO)",
+        positions, live, symbols=EXOTIC_CARRY_SYMBOLS, universe_size=17,
+        exclude={"london_breakout"}, color=EXOTIC_CARRY_COLOR, total_label="EXOTIC CARRY TOTAL"))
+
+    L.extend(_strategy_breakdown_table(
+        "STRATEGY BREAKDOWN — EXOTIC LATAM/MIDEAST (11 pairs, MXN/ILS/AED, excl. LBO)",
+        positions, live, symbols=EXOTIC_LATAM_MIDEAST_SYMBOLS, universe_size=11,
+        exclude={"london_breakout"}, color=EXOTIC_LATAM_MIDEAST_COLOR, total_label="EXOTIC LATAM/MIDEAST TOTAL"))
 
     L.extend(_strategy_breakdown_table(
         "STRATEGY BREAKDOWN — ALL 149 PAIRS (blended reference)",

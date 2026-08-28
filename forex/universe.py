@@ -1333,6 +1333,67 @@ CORE_STANDARD_SYMBOLS = CORE_SYMBOLS - HIGH_VOLUME_SYMBOLS
 assert not (CORE_STANDARD_SYMBOLS & HIGH_VOLUME_SYMBOLS), "the two CORE halves must never overlap"
 assert (CORE_STANDARD_SYMBOLS | HIGH_VOLUME_SYMBOLS) == CORE_SYMBOLS, "the two halves must exactly partition CORE_SYMBOLS"
 
+# EXOTIC_SYMBOLS -- the 83-pair SIM-only remainder (everything not CORE or
+# SCANDI). Previously only ever computed ad-hoc (forex_dashboard.py's own
+# `{p["symbol"] for p in PAIRS} - CORE_SYMBOLS - SCANDI_SYMBOLS` local),
+# materialized here as a real constant 2026-08-28 so the four regional
+# sub-groups below (and anything else) can import and partition it
+# directly instead of recomputing the same set expression repeatedly.
+EXOTIC_SYMBOLS = {p["symbol"] for p in PAIRS} - CORE_SYMBOLS - SCANDI_SYMBOLS
+
+# EXOTIC regional/thematic split -- added 2026-08-28, explicit user request
+# ("divide this large [83] into smaller, more meaningful groups... so we
+# will find tradeable pairs") after the CORE_STANDARD split above made the
+# same "which half actually works" question answerable for CORE. Every
+# pair is bucketed by its own non-G10 (exotic) currency -- the dimension
+# that actually drives liquidity/correlation/political-risk
+# characteristics, not the G10 currency it happens to be quoted against.
+# A pair with two exotic legs (e.g. CNHHKD, CZKPLN) goes to whichever
+# single region both its legs already share. Verified programmatically:
+# these four groups are a strict, non-overlapping, exhaustive partition of
+# EXOTIC_SYMBOLS (30 + 25 + 17 + 11 = 83, zero gaps).
+#
+#   EM ASIA          (CNH/HKD/SGD/THB)      -- 30 pairs
+#   EM EUROPE        (CZK/HUF/PLN/RON)      -- 25 pairs
+#   HIGH-YIELD/CARRY (TRY/ZAR)              -- 17 pairs, the classic
+#                                              carry-trade currencies,
+#                                              notoriously volatile and
+#                                              correlated with each other
+#                                              on global risk sentiment
+#   LATAM/MIDEAST    (MXN/ILS/AED)          -- 11 pairs, smallest group,
+#                                              a catch-all for the
+#                                              remaining regions
+_EXOTIC_ASIA_CCY          = {"CNH", "HKD", "SGD", "THB"}
+_EXOTIC_EUROPE_CCY        = {"CZK", "HUF", "PLN", "RON"}
+_EXOTIC_CARRY_CCY         = {"TRY", "ZAR"}
+_EXOTIC_LATAM_MIDEAST_CCY = {"MXN", "ILS", "AED"}
+
+
+def _exotic_bucket(symbol: str) -> str | None:
+    ccys = {symbol[:3], symbol[3:6]}
+    if ccys & _EXOTIC_ASIA_CCY:
+        return "asia"
+    if ccys & _EXOTIC_EUROPE_CCY:
+        return "europe"
+    if ccys & _EXOTIC_CARRY_CCY:
+        return "carry"
+    if ccys & _EXOTIC_LATAM_MIDEAST_CCY:
+        return "latam_mideast"
+    return None
+
+
+EXOTIC_ASIA_SYMBOLS          = {s for s in EXOTIC_SYMBOLS if _exotic_bucket(s) == "asia"}
+EXOTIC_EUROPE_SYMBOLS        = {s for s in EXOTIC_SYMBOLS if _exotic_bucket(s) == "europe"}
+EXOTIC_CARRY_SYMBOLS         = {s for s in EXOTIC_SYMBOLS if _exotic_bucket(s) == "carry"}
+EXOTIC_LATAM_MIDEAST_SYMBOLS = {s for s in EXOTIC_SYMBOLS if _exotic_bucket(s) == "latam_mideast"}
+
+_EXOTIC_GROUPS = (EXOTIC_ASIA_SYMBOLS, EXOTIC_EUROPE_SYMBOLS, EXOTIC_CARRY_SYMBOLS, EXOTIC_LATAM_MIDEAST_SYMBOLS)
+for _i, _g1 in enumerate(_EXOTIC_GROUPS):
+    for _g2 in _EXOTIC_GROUPS[_i + 1:]:
+        assert not (_g1 & _g2), "the four EXOTIC regional groups must never overlap"
+assert set().union(*_EXOTIC_GROUPS) == EXOTIC_SYMBOLS, "the four EXOTIC regional groups must exactly partition EXOTIC_SYMBOLS, no gaps"
+del _i, _g1, _g2
+
 # 2026-08-28 two-account LIVE design (final): SEK LIVE (bb) and EUR LIVE
 # (rsi) both trade this SAME entire 17-pair HIGH_VOLUME_SYMBOLS set --
 # explicit user decision ("I want to test both strategies BB and RSI ...
