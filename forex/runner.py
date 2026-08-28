@@ -302,13 +302,25 @@ LIVE_EUR_ALLOWED_STRATEGIES = {"rsi"}
 # "live_eur") -- explicit user instruction after the P&L base-currency bug
 # was found (a real live_eur close's WIN/LOSS email and ledger figure were
 # both wrong -- see _position_net_pnl_quote_ccy()'s docstring and
-# test_2026_08_26_live_pnl_base_currency_bug.py). Blocks BOTH entries and
-# exits for --live runs on either account -- existing positions still keep
-# their real broker-side stop/TP orders, which don't depend on this flag or
-# on ATOS's scheduler running at all. Do NOT flip this back to False without
-# the user's explicit go-ahead -- it is not something to "fix forward" once
-# the underlying bug is patched; they asked to be the one who lifts it.
-LIVE_TRADING_HALTED = True
+# test_2026_08_26_live_pnl_base_currency_bug.py). Blocked BOTH entries and
+# exits for --live runs on either account -- existing positions kept their
+# real broker-side stop/TP orders throughout, which never depended on this
+# flag or on ATOS's scheduler running at all.
+#
+# 2026-08-28: LIFTED, explicit user go-ahead (via AskUserQuestion, "Yes,
+# lift it now") -- the underlying P&L bug was fixed the same day it was
+# found (2026-08-26). Since then: cost-clearance gate added (2026-08-26),
+# block_below_min risk gate added, portfolio heat cap re-enabled for LIVE/
+# LIVE_EUR, capital caps raised to reflect the real pooled Saxo balance
+# (15,000 SEK / 1,350 EUR), and RISK_PCT raised to 0.75% -- all same-day,
+# 2026-08-28, all explicit user decisions with real-data verification
+# before each one (see forex_live_capital_and_risk_decision_2026-08-28.md
+# and forex_live_block_below_min_sizing_2026-08-28.md memory notes for the
+# full basis). Lifting this alone does NOT start automatic trading -- the
+# actual Windows Scheduled Tasks (ATOS Forex LIVE Daily Run / LIVE EUR
+# Daily Run / LIVE Exit Check / LIVE EUR Exit Check) were all left
+# Disabled while this halt was active and still need enabling separately.
+LIVE_TRADING_HALTED = False
 
 
 def set_account_env(env: str) -> None:

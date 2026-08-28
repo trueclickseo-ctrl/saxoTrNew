@@ -335,7 +335,13 @@ _run("forex/runner CLI: --account live --strategy gap is a hard error (gap is no
 
 
 def test_cli_rejects_live_without_confirmation_envvar():
-    proc = _run_cli(["--account", "live", "--strategy", "donchian", "--live"])
+    # Uses "bb" (the actually-allowed strategy for --account live) so this
+    # test isolates the confirmation/halt gate specifically -- it used to
+    # pass "donchian" (never a valid live strategy), which happened to work
+    # by accident while LIVE_TRADING_HALTED=True fired first and masked the
+    # real "strategy not allowed" error underneath. 2026-08-28: halt lifted,
+    # so that masking stopped -- fixed to use a genuinely-allowed strategy.
+    proc = _run_cli(["--account", "live", "--strategy", "bb", "--live"])
     assert proc.returncode == 2, f"expected argparse hard-error exit(2), got {proc.returncode}: {proc.stderr}"
     # Accept either gate: SAXO_LIVE_CONFIRMED (this test's original target) or
     # LIVE_TRADING_HALTED (2026-08-26 emergency stop, checked first when
