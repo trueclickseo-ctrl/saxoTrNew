@@ -135,7 +135,11 @@ def test_cost_gate_skip_condition_requires_both_values_present():
     # Must be gated on "round_trip_cost is not None" -- a None (lookup
     # failed) must never block the entry, matching the spread check's
     # existing fail-open pattern just above it in the same loop.
-    assert "if round_trip_cost is not None and expected_target_profit < round_trip_cost * MIN_EDGE_TO_COST_RATIO:" in src, (
+    # 2026-08-27: this condition moved into a named `blocked = (...)`
+    # variable when forward-observation logging was added, so both the
+    # log call and the skip check share one source of truth.
+    assert "blocked = (round_trip_cost is not None and" in src
+    assert "expected_target_profit < round_trip_cost * MIN_EDGE_TO_COST_RATIO)" in src, (
         "an unknown cost (lookup failure) must fail OPEN (don't block the "
         "entry), not closed -- same discipline as the existing spread check")
 _run("forex/runner: the cost gate fails OPEN (does not block entries) when "

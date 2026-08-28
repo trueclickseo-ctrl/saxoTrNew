@@ -160,8 +160,11 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
 
 
 def size_position(account_equity: float, atr: float,
-                  min_units: float = 1_000) -> int:
-    risk_amount   = account_equity * RISK_PCT
+                  min_units: float = 1_000, risk_pct: float | None = None) -> int:
+    """risk_pct: override this module's own RISK_PCT (e.g. a smaller LIVE-
+    pilot risk than SIM uses) -- defaults to RISK_PCT, so every existing
+    caller (SIM) is unaffected. See forex/runner.py's _live_risk_pct()."""
+    risk_amount   = account_equity * (risk_pct if risk_pct is not None else RISK_PCT)
     stop_distance = ATR_STOP_MULT * atr
     if stop_distance <= 0:
         return int(min_units)

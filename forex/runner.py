@@ -179,6 +179,28 @@ def _max_currency_exposure() -> int:
         return LIVE_MAX_CURRENCY_EXPOSURE
     return MAX_CURRENCY_EXPOSURE
 
+
+# 2026-08-27: user explicitly asked for LIVE to start at a SMALLER risk %
+# than SIM for the initial pilot ("If SIM says 0.25%, I would initially
+# consider LIVE at something like 0.10-0.15% per trade... after live
+# execution confirms spreads/fills/costs match assumptions, scale toward
+# the intended risk"). The mechanism is built (size_position() in bb/rsi/
+# pullback all accept an optional risk_pct override now) -- the actual
+# number below is a placeholder pending that decision, deliberately an
+# obviously-wrong sentinel (None means "no override, use SIM's 0.25%")
+# rather than a guessed real value. Do not treat None here as "decided
+# not to reduce it" -- it means the question hasn't been answered yet.
+LIVE_RISK_PCT_OVERRIDE: float | None = None
+
+
+def _live_risk_pct() -> float | None:
+    """None = no override (module's own RISK_PCT applies, same as SIM).
+    A real value here only takes effect for live/live_eur -- SIM is
+    never affected regardless of what this constant holds."""
+    if ACCOUNT_ENV in ("live", "live_eur"):
+        return LIVE_RISK_PCT_OVERRIDE
+    return None
+
 # Reject a signal if the pair's live spread is wider than this % of price —
 # a proxy for "this pair's home market is currently illiquid" without needing
 # a per-currency trading-hours table (which several EM/exotic currencies don't
@@ -1915,6 +1937,8 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         if strat_name not in DAY_TRADE_STRATEGIES and not _heat_allows_entry(positions, equity):
             break   # heat cap reached — stop all entries for this strategy
         rp_kw     = {"risk_pct": sig["risk_pct_override"]} if "risk_pct_override" in sig else {}
+        if "risk_pct" not in rp_kw and _live_risk_pct() is not None:
+            rp_kw["risk_pct"] = _live_risk_pct()
         if "units" in sig:
             qty = sig["units"]   # london_breakout pre-computes sizing from SEK capital
         else:
