@@ -59,6 +59,11 @@ function StratColor([string]$s) {
         "macd"     { return "Yellow"  }
         "squeeze"  { return "Red"     }
         "ma_cross" { return "Cyan"    }
+        # 2026-08-28 fix: was missing entirely -- trend_ma (futures/runner.py's
+        # 7th strategy) fell through to the generic "White" default, same as
+        # any truly-unknown strategy name, instead of getting its own color
+        # once it eventually has a closed trade to show here.
+        "trend_ma" { return "DarkYellow" }
         default    { return "White"   }
     }
 }

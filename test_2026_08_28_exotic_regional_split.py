@@ -12,11 +12,11 @@ strict, non-overlapping, exhaustive partition of EXOTIC_SYMBOLS:
   HIGH-YIELD/CARRY (TRY/ZAR)       -- 17 pairs
   LATAM/MIDEAST (MXN/ILS/AED)      -- 11 pairs
 
-Unlike the CORE_STANDARD split (which replaced the standalone CORE
-section entirely), the blended 83-pair EXOTIC section is deliberately
-KEPT here -- the four regions are additive detail alongside it, not a
-replacement, since the user asked to divide it for visibility, not to
-remove the aggregate view.
+Same-day follow-up: "Remove Exotic pairs 83 from dashboard as we have now
+separately EM ASIA/EUROPE/CARRY/LATAM_MIDEAST" -- the blended 83-pair
+EXOTIC section was then removed too, same reasoning as CORE_STANDARD's
+earlier removal of the standalone CORE section (the 4 regions already
+exactly partition it, so the blended view was redundant).
 """
 
 import os
@@ -141,17 +141,25 @@ _run("forex_dashboard.py --once shows all 4 EXOTIC regional STRATEGY BREAKDOWN s
      test_dashboard_shows_all_four_exotic_regional_breakdown_sections)
 
 
-def test_dashboard_still_shows_the_blended_exotic_section_too():
-    # Unlike CORE (replaced entirely by HIGH VOLUME + CORE STANDARD), the
-    # blended 83-pair EXOTIC section is deliberately KEPT alongside the 4
-    # new regional ones -- the user asked to divide it for visibility, not
-    # to remove the aggregate view.
+def test_dashboard_no_longer_shows_the_blended_exotic_section():
+    # 2026-08-28 follow-up, same day: "Remove Exotic pairs 83 from
+    # dashboard as we have now separately EM ASIA/EUROPE/CARRY/
+    # LATAM_MIDEAST" -- same reasoning as CORE's earlier removal, the 4
+    # regions already exactly partition the blended 83-pair view, so it
+    # was redundant. Mirrors test_2026_08_28_core_standard_split.py's
+    # equivalent CORE-removal test.
     proc = _run_dashboard()
     out = proc.stdout
-    assert "OPEN POSITIONS — EXOTIC (83 pairs" in out
-    assert "STRATEGY BREAKDOWN — EXOTIC (83 pairs" in out
-_run("forex_dashboard.py --once still shows the blended 83-pair EXOTIC section alongside the 4 regions",
-     test_dashboard_still_shows_the_blended_exotic_section_too)
+    assert "OPEN POSITIONS — EXOTIC (83 pairs" not in out, (
+        "the blended 83-pair EXOTIC positions section must be removed -- "
+        "the 4 regional groups already exactly partition it"
+    )
+    assert "STRATEGY BREAKDOWN — EXOTIC (83 pairs" not in out, (
+        "the blended 83-pair EXOTIC strategy breakdown must be removed -- "
+        "the 4 regional groups already exactly partition it"
+    )
+_run("forex_dashboard.py --once no longer shows the blended 83-pair EXOTIC section",
+     test_dashboard_no_longer_shows_the_blended_exotic_section)
 
 
 print(f"\n{BOLD}{'='*70}{RESET}")

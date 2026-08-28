@@ -529,8 +529,67 @@ SP500_TICKERS = [
     "IFF",   # International Flavors & Fragrances — ingredients
 ]
 
+# ── High-growth / high-volume additions (2026-08-28) ───────────────────────────
+# Explicit user request, after liking a real US Reversion trade (CRWD): "expand
+# stock universe but only with high growth volume share, good companies so we
+# catch more these signals." Deliberately kept SEPARATE from SP500_TICKERS above
+# (not all of these are confirmed current S&P 500 constituents -- some are
+# Nasdaq-100/mid-cap growth names not yet index-eligible) rather than folding
+# them in and making that name inaccurate. Run lookup_missing.py after this
+# change too, same as any SP500_TICKERS edit, to fill in real Saxo UICs.
+HIGH_GROWTH_TICKERS = [
+    # ── Fintech / payments growth ──────────────────────────────────────────
+    # (Block/Cash App already covered above as "XYZ" -- discovered while
+    # building this list that a wrong-ticker "SQ" addition here would have
+    # duplicated it AND resolved to a completely unrelated instrument, see
+    # this file's git history/commit message for the full story.)
+    "COIN",  # Coinbase — largest US crypto exchange
+    "AFRM",  # Affirm — buy-now-pay-later
+    "UPST",  # Upstart — AI lending
+
+    # ── AI / compute infrastructure ────────────────────────────────────────
+    "SMCI",  # Super Micro Computer — AI server hardware
+    "ARM",   # Arm Holdings — chip IP powering most mobile/AI silicon
+    "APP",   # AppLovin — mobile ad-tech, AI-driven ad engine
+
+    # ── Space / quantum ─────────────────────────────────────────────────────
+    "IONQ",  # IonQ — quantum computing
+    "RKLB",  # Rocket Lab — small-satellite launch
+
+    # ── Auto / retail growth ────────────────────────────────────────────────
+    "CVNA",  # Carvana — online used-car retail, high-momentum turnaround
+
+    # ── Social / consumer internet ──────────────────────────────────────────
+    "RDDT",  # Reddit — social media, 2024 IPO
+    "PINS",  # Pinterest — visual discovery/ads
+
+    # ── Crypto-treasury / miners ─────────────────────────────────────────────
+    "MSTR",  # Strategy (MicroStrategy) — largest corporate bitcoin holder
+    "MARA",  # Marathon Digital — bitcoin mining
+    "RIOT",  # Riot Platforms — bitcoin mining
+
+    # ── Security / govtech ───────────────────────────────────────────────────
+    "AXON",  # Axon Enterprise — tasers, police body-cams/software
+
+    # ── Power / AI-datacenter demand theme ───────────────────────────────────
+    "GEV",   # GE Vernova — power generation/grid, AI-datacenter demand
+    "VST",   # Vistra — power generator, nuclear + AI-datacenter demand
+    "CEG",   # Constellation Energy — largest US nuclear operator
+    "NRG",   # NRG Energy — power generation/retail
+    "TLN",   # Talen Energy — nuclear power, AI-datacenter PPAs
+
+    # ── Consumer / retail high-growth ────────────────────────────────────────
+    "ELF",   # e.l.f. Beauty — high-growth mass cosmetics
+    "DECK",  # Deckers Brands — HOKA/UGG footwear
+    "WSM",   # Williams-Sonoma — premium home goods
+    "CROX",  # Crocs — footwear, high-margin growth
+
+    # ── Biotech high-growth ───────────────────────────────────────────────────
+    "ALNY",  # Alnylam Pharmaceuticals — RNAi therapeutics
+]
+
 # Deduplicated, sector order preserved
-US_TICKERS = list(dict.fromkeys(SP500_TICKERS))
+US_TICKERS = list(dict.fromkeys(SP500_TICKERS + HIGH_GROWTH_TICKERS))
 
 # ── Legacy / inactive ─────────────────────────────────────────────────────────
 OMX30_TICKERS    = []

@@ -21,6 +21,7 @@ UIC_CACHE_PATH       = os.path.join(BASE_DIR, "data", "futures_uic_cache.json")
 
 sys.path.insert(0, BASE_DIR)
 import price_service
+from futures.universe import MARKETS as _FUT_MARKETS   # pure data module, safe to import
 
 REFRESH_SECONDS = 30
 
@@ -66,6 +67,10 @@ W   = "\033[0m";  BD  = "\033[1m";  DM  = "\033[2m"; WH = "\033[97m"
 STRAT_COL = {
     "donchian": GR, "rsi": CY, "ema": YL,
     "macd": BL, "squeeze": WH, "ma_cross": MG,
+    "trend_ma": "\033[38;5;208m",   # 2026-08-28 fix: was missing entirely --
+                                    # see the 2026-08-28 comment above strat_order
+                                    # below for why (trend_ma was invisible on
+                                    # this dashboard despite scanning every hour)
 }
 STRAT_DESC = {
     "donchian": "Donchian 30-day breakout",
@@ -74,6 +79,7 @@ STRAT_DESC = {
     "macd":     "MACD(12,26,9) momentum",
     "squeeze":  "BB Squeeze breakout",
     "ma_cross": "SMA(50/200) cross",
+    "trend_ma": "MA(20/100) trend strength",   # 2026-08-28 fix, see STRAT_COL above
 }
 
 
@@ -210,8 +216,13 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
 
     # ── Header ────────────────────────────────────────────────────
     L.append(f"  {BD}{MG}╔{'═'*W_TOTAL}╗{W}")
+    # 2026-08-28 fix: this whole header used to hardcode a stale 6-strategy/
+    # 5-market/30-slot picture (missing trend_ma and 8 of the 13 real
+    # markets entirely) -- now built from futures.universe.MARKETS and
+    # STRAT_DESC/STRAT_COL directly so it can't drift out of sync again.
+    _mkt_syms = " · ".join(m["symbol"] for m in _FUT_MARKETS)
     L.append(f"  {BD}{MG}║{'  FUTURES QUANT DASHBOARD':^{W_TOTAL}}║{W}")
-    sub = f"  Donchian · RSI(2) · EMA · MACD · Squeeze · MA Cross  |  ES · NQ · GC · CL · ZB  |  {now_ts}"
+    sub = f"  7 Strategies  |  {len(_FUT_MARKETS)} Markets  |  {now_ts}"
     L.append(f"  {BD}{MG}║{sub:^{W_TOTAL}}║{W}")
     L.append(f"  {BD}{MG}╚{'═'*W_TOTAL}╝{W}")
     L.append(f"  Price source: {src_note}")
@@ -225,11 +236,12 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         f"{YL}{BD}■ EMA(5/20){W}  trend   "
         f"{BL}{BD}■ MACD{W}  momentum   "
         f"{WH}{BD}■ Squeeze{W}  BB squeeze   "
-        f"{MG}{BD}■ MA Cross{W}  golden/death"
+        f"{MG}{BD}■ MA Cross{W}  golden/death   "
+        f"{STRAT_COL['trend_ma']}{BD}■ MA(20/100){W}  trend strength"
     )
     L.append(
-        f"  {DM}Scheduler: daily run  |  6 strategies × 5 slots = 30 max positions  |  "
-        f"Markets: ES (S&P500) · NQ (NASDAQ) · GC (Gold) · CL (Oil) · ZB (T-Bond){W}"
+        f"  {DM}Scheduler: hourly run  |  7 strategies × 5 slots = 35 max positions  |  "
+        f"{len(_FUT_MARKETS)} markets: {_mkt_syms}{W}"
     )
     L.append(HR)
     L.append("")
@@ -252,7 +264,11 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     near_stop_list = []
 
     if positions:
-        strat_order = ["donchian", "rsi", "ema", "macd", "squeeze", "ma_cross"]
+        # 2026-08-28 fix: was missing "trend_ma" (futures/runner.py's 7th
+        # strategy) entirely -- trend_ma has been scanning every hour since
+        # it was added, but any of its positions were silently invisible on
+        # this dashboard's OPEN POSITIONS breakdown the whole time.
+        strat_order = ["donchian", "rsi", "ema", "macd", "squeeze", "ma_cross", "trend_ma"]
         grouped: dict = {}
         for p in positions:
             grouped.setdefault(p["strategy"], []).append(p)
