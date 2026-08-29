@@ -587,7 +587,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     # same day (a hardcoded "149"/"34 core" etc. silently drifting out of
     # sync the next time the universe changes).
     _total_pairs = len(_UNIVERSE_PAIRS)
-    W_TOTAL = 139  # widened 2026-08-26 for the "X/{total} trading now" header segment
+    W_TOTAL = 139  # widened 2026-08-26 for the positions/pairs header segment
     HR      = f"  {DM}{'─' * W_TOTAL}{W}"
 
     L = []
@@ -596,12 +596,19 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append(f"  {BD}{CY}╔{'═'*W_TOTAL}╗{W}")
     src_tag = "SAXO LIVE" if price_src == "saxo" else "n/a (token expired)"
     pairs_trading = len({p["symbol"] for p in positions})
+    # 2026-08-29: show BOTH the position count and the distinct-pair count.
+    # The run-summary email's "Positions" metric counts open positions
+    # (one per strategy:symbol key, so the same pair held by 2 strategies
+    # is 2), while this line used to show only distinct pairs -- the two
+    # numbers looked contradictory (e.g. email "119" vs dashboard "81/184").
+    # Both are now labelled explicitly and shown side by side here and in
+    # the email so they reconcile at a glance.
     L.append(f"  {BD}{CY}║{'  FOREX QUANT DASHBOARD':^{W_TOTAL}}║{W}")
     # 2026-08-29: was hardcoded "11 Strategies" -- same class of drift bug
     # this file's own 2026-08-25 fix note warns about elsewhere (a literal
     # number silently going stale as strategies get added). Computed from
     # STRAT_LABELS_ALL so it can never drift again.
-    L.append(f"  {BD}{CY}║{f'  {len(STRAT_LABELS_ALL)} Strategies  |  {_total_pairs} FX Pairs  |  {pairs_trading}/{_total_pairs} trading now  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
+    L.append(f"  {BD}{CY}║{f'  {len(STRAT_LABELS_ALL)} Strategies  |  {_total_pairs} FX Pairs  |  {len(positions)} positions in {pairs_trading}/{_total_pairs} pairs  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
     # 2026-08-28: 2nd row added -- uses the EXACT Forex Grouping tier names
     # (not a coarser "core"/"exotic" paraphrase) per explicit user request,
     # so this line can be copy-referenced directly when configuring ATOS

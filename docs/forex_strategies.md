@@ -21,11 +21,14 @@ atomically at entry (2026-08-22) — a true OCO bracket via
 `saxo_order.place_with_stop()`, not dependent on a scheduled run to add
 protection later. See "Strategy Comparison" below for each strategy's
 take-profit rule.  
-**Risk gates — SIM-testing state, NOT the intended live config**: portfolio
-heat cap and currency-exposure cap are both currently disabled (raised to
-effectively unlimited) for full SIM testing across the expanded universe.
-**Both must be reinstated with real values before trading live capital** —
-see Audit 2026-08-22.  
+**Risk gates — SIM vs LIVE**: on **SIM** the portfolio heat cap and
+per-currency exposure cap are disabled (raised to effectively unlimited)
+for full testing breadth across the 184-pair universe. On the **real-money
+LIVE / LIVE_EUR accounts** they are active: heat cap 6%, per-currency
+exposure cap `LIVE_MAX_CURRENCY_EXPOSURE = 5` (2026-08-29, was 1), plus a
+weekend market-hours gate, a 3× cost-clearance gate, and (RSI only) a
+10k–100k-unit lot ladder. See [forex_live_account.md](forex_live_account.md)
+"Current configuration" for the full LIVE gate list.  
 **Price source**: live SIM orders, position sizing, and `forex_dashboard.py`
 use **Saxo's own live quotes only** (2026-08-22, explicit user direction) —
 `forex/runner.py`'s and `forex_dashboard.py`'s `_eur_per_unit()` triangulate
@@ -1353,8 +1356,15 @@ python test_2026_08_29_lbo_v2_strategy.py
 
 ## Currency Exposure Filter
 
-The runner enforces `MAX_CURRENCY_EXPOSURE = 3` — at most **±3 net positions** per currency across all strategies simultaneously.
+At most **±N net positions** per currency across all strategies simultaneously
+(`_max_currency_exposure()` / `_currency_ok()`):
 
-**Example**: If you already have 3 long positions involving USD (EURUSD short, GBPUSD short, USDJPY long), any new signal that would add a 4th USD long or short is **skipped** with a log message.
+| Account | Limit |
+|---|---|
+| SIM | `MAX_CURRENCY_EXPOSURE = 999` (effectively off — full testing breadth, explicit 2026-08-21 decision) |
+| LIVE / LIVE_EUR | `LIVE_MAX_CURRENCY_EXPOSURE = 5` (2026-08-29, raised from 1 — the cap of 1 let one position own a whole currency slot and blocked nearly every subsequent RSI signal; see [forex_live_account.md](forex_live_account.md)) |
 
-This prevents correlated drawdowns where 4+ strategies all lose simultaneously on the same currency move.
+**Example** (LIVE): with a long MXNUSD and a long GBPPLN open, a new EURUSD
+or GBPUSD signal that would push net USD (or GBP) exposure past 5 is
+**skipped** with a log message. This prevents correlated drawdowns where
+several positions all lose simultaneously on the same currency move.

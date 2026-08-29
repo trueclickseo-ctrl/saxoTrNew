@@ -159,8 +159,8 @@ ws_s.merge_cells("A1:D1")
 
 cheapest = sorted_cells[0]
 most_expensive = sorted_cells[-1]
-CURRENT_CAP_EUR = 1350  # forex_live_eur's configured cap, config/capital.json -- marked in the table below
-thresholds = sorted(set([500, 900, 1000, CURRENT_CAP_EUR, 1500, 2000, 3000, 4000, 5000, 6500]))
+CURRENT_CAP_EUR = 6000  # forex_live_eur's configured cap, config/capital.json -- marked in the table below
+thresholds = sorted(set([500, 900, 1000, 1350, CURRENT_CAP_EUR, 1500, 2000, 3000, 4000, 5000, 6500]))
 coverage = {t: sum(1 for c in cells if c["eq_eur_both_gates"] <= t) for t in thresholds}
 
 r0 = 3

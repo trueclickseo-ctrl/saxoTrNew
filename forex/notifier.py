@@ -93,13 +93,18 @@ hr { border: none; border-top: 1px solid #21262d; margin: 16px 0; }
 """
 
 
-def _wrap(title: str, body_html: str) -> str:
+def _wrap(title: str, body_html: str, subtitle: str | None = None) -> str:
     now = datetime.now().strftime("%d %b %Y  %H:%M PKT")
+    # subtitle defaults kept generic -- callers that know the real
+    # strategy/pair/venue counts (send_run_summary) pass an accurate one so
+    # this line can't silently go stale the way the old hardcoded literal
+    # strategy+pair+venue string did (it drifted to a wrong pair count).
+    sub = subtitle or "FX Autopilot"
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>{_STYLE}</style></head><body><div class="wrap">
   <div class="header">
     <div class="logo">FX AUTOPILOT</div>
-    <div class="sub">9 Strategies · 34 Pairs · Saxo SIM &nbsp;·&nbsp; {now}</div>
+    <div class="sub">{sub} &nbsp;·&nbsp; {now}</div>
   </div>
   <div class="body">
     <h2>{title}</h2>
@@ -168,6 +173,10 @@ def send_run_summary(
     healed_stops:  int = 0,
     healed_tp:     int = 0,
     live:          bool = False,   # True = the real-money LIVE account, not SIM
+    pairs_trading: int = 0,        # distinct pairs held (holdings counts strategy:symbol keys)
+    strategy_count: int = 0,       # strategies that ran this cycle
+    pair_count:    int = 0,        # pairs in the scanned universe
+    venue:         str = "",       # "Saxo SIM" / "Saxo LIVE" / "Saxo LIVE_EUR"
 ) -> None:
     """
     Send run summary email after each live execution.
@@ -205,8 +214,9 @@ def send_run_summary(
         <div class="val" style="color:#58a6ff">${equity:,.0f}</div>
       </div>
       <div class="metric">
-        <div class="lbl">Holdings</div>
+        <div class="lbl">Positions</div>
         <div class="val">{holdings}</div>
+        <div class="muted">{f"in {pairs_trading} pair{'s' if pairs_trading != 1 else ''}" if pairs_trading else "&nbsp;"}</div>
       </div>
       <div class="metric">
         <div class="lbl">Entries</div>
@@ -306,9 +316,97 @@ def send_run_summary(
 
     action = (f"{entries}E/{exits}X" if (entries or exits) else "no trades")
     tag = "[LIVE] " if live else ""
-    subject = (f"{tag}FX Autopilot — {action} | {holdings} open | "
+    pos_txt = f"{holdings} pos" + (f"/{pairs_trading} pairs" if pairs_trading else "")
+    subject = (f"{tag}FX Autopilot — {action} | {pos_txt} | "
                f"${equity:,.0f} equity | {time_} PKT")
-    _send(subject, _wrap(f"{'LIVE — ' if live else ''}Run Complete — {session.upper()} Session", body))
+    _sub = " · ".join(x for x in [
+        f"{strategy_count} Strateg{'ies' if strategy_count != 1 else 'y'}" if strategy_count else "",
+        f"{pair_count} Pairs" if pair_count else "",
+        venue or ("Saxo LIVE" if live else "Saxo SIM"),
+    ] if x)
+    _send(subject, _wrap(f"{'LIVE — ' if live else ''}Run Complete — {session.upper()} Session",
+                         body, subtitle=_sub))
+
+
+def send_signals_detected(
+    strategy:       str,
+    signals:        list,          # raw dicts from strat.generate_signals()
+    entered:        list,          # symbols actually entered this run
+    account_env:    str,           # "live" | "live_eur"
+    market_closed:  bool = False,  # True = FX weekend, entries were gated
+) -> None:
+    """Real-money accounts only: email the strategy signals a LIVE scan
+    produced, with whether each was entered. Exists so a signal that fires
+    while the FX market is closed for the weekend (entries gated by
+    _fx_market_open) -- or one blocked by any other gate -- is still
+    visible, not silently swallowed. SIM never calls this.
+    """
+    if not signals:
+        return
+
+    now   = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    time_ = now.strftime("%H:%M")
+    entered_set = set(entered or [])
+    venue = "LIVE (real money)" if account_env == "live" else "LIVE EUR (real money)"
+
+    if market_closed:
+        headline = (f'<span class="badge warn">FX MARKET CLOSED</span>'
+                    f'<p style="color:#d29922;margin-top:14px">'
+                    f'{len(signals)} {strategy.upper()} signal(s) detected but '
+                    f'<strong>NOT entered</strong> — the FX market is closed for the '
+                    f'weekend. Entries resume Sunday ~22:00 UTC; these will be '
+                    f're-evaluated on fresh data then, not carried over as resting '
+                    f'orders.</p>')
+    else:
+        n_in = sum(1 for s in signals if s.get("symbol") in entered_set)
+        headline = (f'<span class="badge info">{len(signals)} SIGNAL(S)</span>'
+                    f'<p class="muted" style="margin-top:14px">{n_in} entered, '
+                    f'{len(signals) - n_in} not taken (blocked by an entry gate — '
+                    f'exposure cap / cost / spread / slots / heat; see the run log '
+                    f'for the exact reason on each).</p>')
+
+    rows = ""
+    for s in signals:
+        sym  = s.get("symbol", "")
+        did  = sym in entered_set
+        dirn = s.get("direction", "")
+        cls  = "buy" if dirn == "Buy" else "sell"
+        rsi  = s.get("rsi", s.get("score", ""))
+        try:
+            rsi = f"{float(rsi):.1f}"
+        except Exception:
+            rsi = "—"
+        stop = s.get("stop_price", "")
+        try:
+            stop = f"{float(stop):.5f}"
+        except Exception:
+            stop = "—"
+        status = ('<span class="badge buy">ENTERED</span>' if did
+                  else '<span class="muted">not entered</span>')
+        rows += (f"<tr><td><span class='badge {cls}'>{dirn}</span></td>"
+                 f"<td class='sym'>{sym}</td><td class='muted'>RSI {rsi}</td>"
+                 f"<td class='muted'>{stop}</td><td>{status}</td></tr>")
+
+    body = f"""
+    {headline}
+    <table>
+      <thead><tr><th>Side</th><th>Pair</th><th>Signal</th><th>Stop</th><th>Status</th></tr></thead>
+      <tbody>{rows}</tbody>
+    </table>
+    <p class="muted" style="margin-top:12px">
+      Strategy: {strategy.upper()} &nbsp;·&nbsp; {venue} &nbsp;·&nbsp; {time_} PKT &nbsp;·&nbsp; {today}
+    </p>
+    """
+
+    n_entered = sum(1 for s in signals if s.get("symbol") in entered_set)
+    if market_closed:
+        subj = f"[LIVE] {strategy.upper()} — {len(signals)} signal(s) detected, market closed [{today}]"
+    else:
+        subj = (f"[LIVE] {strategy.upper()} — {len(signals)} signal(s), "
+                f"{n_entered} entered [{today}]")
+    _send(subj, _wrap(f"LIVE — {strategy.upper()} Signals Detected", body,
+                      subtitle=f"{venue} · {time_} PKT"))
 
 
 def send_weekly_report(

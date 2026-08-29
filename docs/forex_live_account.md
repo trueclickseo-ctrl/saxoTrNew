@@ -9,6 +9,57 @@ The rest of this document describes the SEK account in depth; the EUR account se
 
 **See also**: [forex_live_strategies.md](forex_live_strategies.md) (entry/exit rules, in depth) and [forex_live_scheduler.md](forex_live_scheduler.md) (every scheduled task, exact trigger times, SIM-conflict history).
 
+---
+
+## Current configuration (authoritative — updated 2026-08-30)
+
+Much of the prose below this section predates the 2026-08-28 two-account
+redesign and the 2026-08-29/30 tuning. Where they disagree, this table wins.
+
+| Setting | SEK account (`--account live`) | EUR account (`--account live_eur`) |
+|---|---|---|
+| Strategy | `bb` only (`LIVE_ALLOWED_STRATEGIES`) — currently **Disabled** at the scheduler | `rsi` only (`LIVE_EUR_ALLOWED_STRATEGIES`) — **active** |
+| Universe | 17-pair `HIGH_VOLUME_SYMBOLS` | same 17 (49 after a later expansion — see scheduler doc) |
+| Sizing cap | `risk_equity_sek: 15000` | `risk_equity_eur: 6000` (was 1,350; raised 2026-08-29) |
+| Risk % per trade | `LIVE_RISK_PCT_OVERRIDE = 0.0075` (0.75%) — shared constant, both accounts | same |
+| Trading halt | `LIVE_TRADING_HALTED = False` (lifted 2026-08-28 by explicit go-ahead) | same |
+
+**Gates between a signal and a real order (LIVE only; SIM has none of these):**
+
+- **Weekend market-hours gate** (2026-08-29) — no new entries while FX is
+  closed (`_fx_market_open()`: Fri ~22:00 → Sun ~22:00 UTC). Exits and
+  stop-management still run every cycle. Signals that fire during the
+  closure are still generated and **emailed** (`send_signals_detected`,
+  `market_closed=True`) so nothing is silently swallowed; they are
+  re-evaluated on fresh data at reopen, never left as resting orders.
+- **Per-currency exposure cap** — `LIVE_MAX_CURRENCY_EXPOSURE = 5` (was 1;
+  raised 2026-08-29 because the cap of 1 let one position consume a whole
+  currency slot and blocked nearly every subsequent RSI signal). SIM stays
+  unlimited (999).
+- **Cost-clearance gate** — a signal whose own target can't clear
+  `MIN_EDGE_TO_COST_RATIO = 3.0 ×` Saxo's real round-trip commission is
+  skipped. Bigger position size (see the RSI lot ladder) makes more
+  signals clear this.
+- **RSI real-money lot ladder** (2026-08-29) — RSI risk-sizes as normal,
+  then snaps the quantity to the nearest 10,000-unit rung, clamped to
+  [10,000, 100,000] (`_snap_rsi_live_lot`). Reason: at the 1,000-unit
+  minimum lot the flat ~5 EUR commission turned RSI's 2:1 reward:risk into
+  ~0.9:1 net. Trade-off: on tight-stop pairs the 10k floor pushes realised
+  risk above the 0.75% target (still inside the heat cap). SIM untouched.
+- **Portfolio heat cap** — 6% of the sizing base in combined open risk
+  (re-enabled for LIVE/LIVE_EUR 2026-08-28). Known gap: each account's
+  heat check sees only its own positions, not the other account's against
+  the same pooled Saxo balance.
+- **Margin cap** — never uses more than 50% of available broker margin.
+
+**Emails per LIVE run:** the run-summary email (`send_run_summary`) **plus**
+a signals-detected email whenever that scan produced signals. The
+run-summary "Positions" metric counts `strategy:symbol` keys; it also
+shows the distinct-pair count so it reconciles with the dashboard header
+(`forex_dashboard.py`: "N positions in P/total pairs").
+
+---
+
 **Module**: `forex/runner.py --account live` (same codebase as SIM, account-scoped via `set_account_env()`)
 **Account**: Saxo LIVE, sub-account `1070996INET`, SEK-denominated, opened with 6,000 SEK
 **Strategies**: as of 2026-08-28, `bb` only (history: `donchian`/`ema`/`rsi` -> `bb`/`rsi` -> briefly `bb`/`rsi`/`pullback` -> `bb`/`rsi` -> `bb` only once `rsi` moved exclusively to the EUR account) -- hard-restricted in code via `LIVE_ALLOWED_STRATEGIES`, not just by convention

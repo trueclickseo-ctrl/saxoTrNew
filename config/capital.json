@@ -109,11 +109,22 @@
       "balance, confirmed live). Restricted by explicit user decision to exactly",
       "rsi (see forex/runner.py's LIVE_EUR_ALLOWED_STRATEGIES) on the same 17",
       "HIGH_VOLUME_SYMBOLS pairs as the SEK account (no more exotic pairs live,",
-      "since the 2026-08-28 two-account redesign)."
+      "since the 2026-08-28 two-account redesign).",
+      "2026-08-29: raised 1,350 -> 6,000 EUR, explicit user decision. Trigger: the",
+      "first real RSI entry after the currency-cap raise (GBPUSD) sized to only",
+      "1,000 units (the minimum lot) at 0.75% of 1,350 EUR = ~10 EUR risk. At that",
+      "size Saxo's flat ~5 EUR round-trip commission turns the strategy's designed",
+      "2:1 reward:risk into ~0.9:1 net -- a losing edge even on winning trades.",
+      "6,000 EUR (~= 40% of the ~15,800 EUR real pooled balance) sizes GBPUSD to",
+      "~6,000 units, commission ~7% of target, net R:R ~1.7. Risk % stays 0.75%",
+      "(NOT raised -- keeps per-trade heat low so the 6% heat cap still allows",
+      "~8 concurrent positions, and does not touch the SEK account). Known",
+      "shared-pool caveat unchanged: this account's heat cap can't see the SEK",
+      "account's exposure against the same real balance."
     ],
     "forex_live_eur": {
       "enabled": true,
-      "risk_equity_eur": 1350
+      "risk_equity_eur": 6000
     }
 
   }

@@ -209,14 +209,20 @@ MAX_CURRENCY_EXPOSURE = 999
 # at the time, a separate bug fixed the same day -- see
 # test_2026_08_26_chfaud_uic_mismatch.py). MAX_CURRENCY_EXPOSURE being
 # unlimited (999) let it through uncontested; the user closed the duplicate
-# leg manually once found. 1 is deliberately tight -- each currency may be
-# net long or short by at most one position's worth on a LIVE account small
-# enough (500-6,000 SEK/EUR) that concentrated risk matters far more than
-# breadth of diversification right now. This does mean LIVE can't hold e.g.
-# both GBPUSD and AUDUSD long simultaneously (both push USD short by 1,
-# totalling 2) -- an intentional trade-off, not an oversight; revisit only
-# as a separate, deliberate decision once the account has grown.
-LIVE_MAX_CURRENCY_EXPOSURE = 1
+# leg manually once found. The cap was initially set to 1 -- deliberately
+# tight for a 500-6,000 SEK/EUR account.
+#
+# 2026-08-29: user raised it to 5. LIVE_EUR was rejecting nearly every RSI
+# signal because one MXNUSD position consumed the whole USD slot and shut
+# out EURUSD / USDDKK / GBPUSD the same night (LIVE_EUR scheduler log,
+# 00:46-03:00 runs, all four SKIP "currency exposure limit (max 1)"). At 5,
+# any single currency may be net long OR short by up to 5 positions' worth
+# across all open positions. This does re-open the original AUDCHF-Buy +
+# CHFAUD-Sell doubling scenario (net exposure only 2, under the cap) --
+# accepted trade-off; the opposite-direction and opposing-strategy guards
+# still catch same-ticker / directly-opposed cases. Revisit if the account
+# starts concentrating heavily on one currency.
+LIVE_MAX_CURRENCY_EXPOSURE = 5
 
 
 def _max_currency_exposure() -> int:
@@ -257,6 +263,33 @@ def _live_risk_pct() -> float | None:
     if ACCOUNT_ENV in ("live", "live_eur"):
         return LIVE_RISK_PCT_OVERRIDE
     return None
+
+
+# 2026-08-29: user instruction -- "do not buy 1 quantity for RSI always buy
+# 10, 20 ... 100 units" (units meant in thousands; Saxo's FX minimum is
+# 1,000 and it cannot place less). RSI on a real-money account risk-sizes
+# exactly as before, then SNAPS the result to the nearest 10,000-unit rung,
+# clamped to [10,000, 100,000]. Why: at the 1,000-unit minimum lot Saxo's
+# flat ~5 EUR round-trip commission dominated the trade -- it turned RSI's
+# designed 2:1 reward:risk into ~0.9:1 net (a losing edge even on winners).
+# Snapping UP, not skipping: a signal that already cleared block_below_min
+# at 1,000 units is taken at >=10,000. Accepted trade-off -- on tight-stop
+# pairs the 10k floor pushes realised risk above the 0.75% target (GBPUSD
+# ~1.25% of the 6,000 EUR cap), still inside the 6% portfolio heat cap and
+# RSI's own 4-position limit. SIM is deliberately untouched: its demo
+# equity already sizes RSI in the ~8k-170k range and a 100k ceiling there
+# would suppress signal-testing breadth.
+RSI_LIVE_LOT_RUNG = 10_000
+RSI_LIVE_LOT_MIN  = 10_000
+RSI_LIVE_LOT_MAX  = 100_000
+
+
+def _snap_rsi_live_lot(raw_qty: int) -> int:
+    """Snap a risk-sized RSI quantity to the nearest 10k rung, clamped to
+    [10k, 100k]. Caller gates on ACCOUNT_ENV in ('live','live_eur') and
+    strategy == 'rsi'."""
+    rung = int(round(raw_qty / RSI_LIVE_LOT_RUNG)) * RSI_LIVE_LOT_RUNG
+    return max(RSI_LIVE_LOT_MIN, min(RSI_LIVE_LOT_MAX, rung))
 
 # Reject a signal if the pair's live spread is wider than this % of price —
 # a proxy for "this pair's home market is currently illiquid" without needing
@@ -925,6 +958,37 @@ def _detect_gap_session() -> str | None:
         if h == 12 or (h == 13 and m < 30):
             return "newyork"
     return None
+
+
+def _fx_market_open(now_utc: datetime | None = None) -> bool:
+    """True when the FX spot market is inside its normal trading week.
+
+    FX trades continuously from ~Sunday 22:00 UTC to ~Friday 22:00 UTC and
+    is fully closed in between (all of Saturday, and Sunday before 22:00).
+    The real weekend boundary shifts between 21:00 and 22:00 UTC with US
+    daylight saving; this uses 22:00 UTC at both ends -- matching
+    _detect_gap_session()'s Sunday-reopen constant -- and deliberately errs
+    toward "closed" in that 1-hour margin. The only thing gated on this is
+    whether to PLACE a new entry order: a daily strategy losing the first
+    hour of the FX week is immaterial, a Market order resting on a closed
+    market and filling later at an unrelated price is not.
+
+    Per-currency local-market hours (TRY/MXN/ZAR etc. trading thin outside
+    their home session even mid-week) are deliberately NOT modelled here --
+    the live per-pair spread check (MAX_SPREAD_PCT) already rejects a pair
+    whose market is currently illiquid, the same 2026-08-21 design choice
+    that picked spread-checking over a per-currency trading-hours table.
+    So mid-week this returns True for every pair and scanning stays full.
+    """
+    now = now_utc or datetime.now(timezone.utc)
+    dow = now.isoweekday()   # 1=Mon … 7=Sun
+    if dow == 6:                       # Saturday — closed all day
+        return False
+    if dow == 7 and now.hour < 22:     # Sunday, before the 22:00 UTC reopen
+        return False
+    if dow == 5 and now.hour >= 22:    # Friday, after the 22:00 UTC close
+        return False
+    return True
 
 
 def _momentum_rank(market_data: dict, top_n: int) -> set:
@@ -2008,6 +2072,25 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                     f"({datetime.now(timezone.utc).strftime('%A %H:%M UTC')})")
         return 0
 
+    # 2026-08-29: on a real-money account, never place a NEW entry while the
+    # FX market is closed for the weekend. A signal computed on stale Friday
+    # data would otherwise be sent as a Market order that just rests until
+    # Monday's open and fills there at an unrelated price, with no re-check
+    # of the setup -- the exact "fake early RSI trigger fills after reopen"
+    # problem this guards against. Exits and stop-management are untouched:
+    # they run every cycle regardless (run_daily / run_exits_only), so a
+    # weekend scan still fully protects open positions. Gap strategies are
+    # exempt -- they have their own session windows just above and
+    # "gap_weekend" is meant to trade the Sunday reopen. SIM is unaffected
+    # (it deliberately scans and trades all 7 days for forward-test breadth).
+    # Mid-week this is always open, so scanning covers every pair as normal.
+    # NB: this is a FLAG, not an early return -- signals are still generated
+    # below so a weekend signal can be emailed (send_signals_detected), it
+    # just isn't acted on.
+    _weekend_entry_block = (ACCOUNT_ENV in ("live", "live_eur")
+                            and strat_name not in _GAP_STRATS
+                            and not _fx_market_open())
+
     base_slots = SLOTS_PER_STRATEGY[strat_name]
     max_slots  = max(1, int(base_slots * strategy_learner.slot_scale(weight)))
     prefix     = f"{strat_name}:"
@@ -2089,10 +2172,27 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
     else:
         signals = strat_mod.generate_signals(market_data, open_symbols=open_syms)
 
+    # Weekend on a real-money account: signals are generated (above) so they
+    # can be surfaced, but no entry is placed -- they'd only rest as stale
+    # Market orders until Monday. Email them and stop here.
+    if _weekend_entry_block:
+        logger.info(f"  [{strat_name}] {len(signals)} signal(s) detected — NOT entered, "
+                    f"FX market closed for the weekend "
+                    f"({datetime.now(timezone.utc).strftime('%A %H:%M UTC')}); "
+                    f"exits/stops still run, entries resume Sunday 22:00 UTC")
+        if signals and not dry_run:
+            try:
+                fx_notify.send_signals_detected(strat_name, signals, entered=[],
+                                                account_env=ACCOUNT_ENV, market_closed=True)
+            except Exception as exc:
+                logger.warning(f"  [{strat_name}] signals-detected email failed: {exc}")
+        return 0
+
     exposure  = _currency_exposure(positions)
     agreement = agreement or {}
 
     entries = 0
+    entered_syms: list[str] = []
     for sig in signals:
         if entries >= slots_free:
             break
@@ -2178,6 +2278,21 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                             f"doesn't naturally justify even the {pair_info['min_units']:,.0f}-unit "
                             f"minimum at current capital; not forcing an oversized trade")
                 continue
+
+            # 2026-08-29: RSI on a real-money account snaps to a 10k-100k
+            # lot ladder (see _snap_rsi_live_lot's docstring). Placed after
+            # the qty>0 / block_below_min check above and BEFORE the cost
+            # gate below, so the gate evaluates the real order size. Guarded
+            # on the pair's own min_units so a pair whose minimum lot is
+            # itself above 10k (none of the 17 live HIGH_VOLUME pairs, but
+            # be safe) keeps its normal floored size.
+            if (ACCOUNT_ENV in ("live", "live_eur") and strat_name == "rsi"
+                    and pair_info["min_units"] <= RSI_LIVE_LOT_RUNG):
+                snapped = _snap_rsi_live_lot(qty)
+                if snapped != qty:
+                    logger.info(f"  [{strat_name}] {sym}: risk-sized {qty:,} → "
+                                f"{snapped:,} (LIVE 10k–100k lot ladder)")
+                qty = snapped
 
         # london_breakout/gap provide their own session-range-based target;
         # every other strategy gets a broker-side TP at DEFAULT_TP_RR times
@@ -2361,6 +2476,18 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 # beyond the range boundary.
                 _mark_lbo_v2_session_traded(sig["session_key"])
         entries += 1
+        entered_syms.append(sym)
+
+    # 2026-08-29: on a real-money account, email every signal this scan
+    # produced and whether it was entered -- so a signal blocked by a gate
+    # (exposure cap, cost, spread, slots, heat) is visible, not just the
+    # ones that made it through. SIM never sends this (noise + no need).
+    if ACCOUNT_ENV in ("live", "live_eur") and signals and not dry_run:
+        try:
+            fx_notify.send_signals_detected(strat_name, signals, entered=entered_syms,
+                                            account_env=ACCOUNT_ENV, market_closed=False)
+        except Exception as exc:
+            logger.warning(f"  [{strat_name}] signals-detected email failed: {exc}")
     return entries
 
 
@@ -2868,6 +2995,13 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
                 healed_stops   = healed_stops,
                 healed_tp      = healed_tp,
                 live           = (ACCOUNT_ENV == "live"),
+                # holdings counts strategy:symbol keys; pairs_trading is the
+                # distinct-symbol count -- both shown so the email and the
+                # dashboard header reconcile (see forex_dashboard.py note).
+                pairs_trading  = len({k.split(":", 1)[1] for k in positions}),
+                strategy_count = len(active_strategies),
+                pair_count     = len(active_pairs),
+                venue          = f"Saxo {ACCOUNT_ENV.upper()}",
             )
         except Exception as exc:
             logger.warning(f"Run-summary email failed: {exc}")
