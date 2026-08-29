@@ -5,7 +5,7 @@ it runs today** — parameters, entry/exit rules, sizing, where it runs (SIM /
 LIVE), and any known stale docstring notes. **None of these describe changes** —
 the strategies run as-is.
 
-The 14 strategies are the keys of `STRATEGIES` in [`forex/runner.py`](../forex/runner.py).
+The 15 strategies are the keys of `STRATEGIES` in [`forex/runner.py`](../forex/runner.py).
 
 ## Swing strategies (daily bars, SIM scan)
 
@@ -20,6 +20,7 @@ The 14 strategies are the keys of `STRATEGIES` in [`forex/runner.py`](../forex/r
 | `supertrend` | [forex_supertrend_strategy.md](forex_supertrend_strategy.md) | SuperTrend(10,3) + EMA(200) | SIM |
 | `zscore` | [forex_zscore_strategy.md](forex_zscore_strategy.md) | z-score(20) ±2σ reversion | SIM |
 | `ml` | [forex_ml_strategy.md](forex_ml_strategy.md) | per-pair logistic regression, 7 features | SIM |
+| `advanced_ml` | [forex_advanced_ml_strategy.md](forex_advanced_ml_strategy.md) | regularized logistic reg + regime + trend filters (A/B vs `ml`) | SIM |
 | `cnn_lstm` | [forex_cnn_lstm_strategy.md](forex_cnn_lstm_strategy.md) | CNN + BiLSTM + attention (⚠️ barely fires) | SIM |
 
 ## Gap strategies (session windows, need live prices)

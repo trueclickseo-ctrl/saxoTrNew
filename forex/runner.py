@@ -68,6 +68,7 @@ import forex.strategy_gap_weekend as strat_gap_weekend
 import forex.strategy_supertrend  as strat_supertrend
 import forex.strategy_zscore      as strat_zscore
 import forex.strategy_ml                as strat_ml
+import forex.strategy_advanced_ml       as strat_advanced_ml
 import forex.strategy_cnn_lstm         as strat_cnn_lstm
 import forex.strategy_london_breakout  as strat_lbo
 import forex.strategy_london_breakout_v2 as strat_lbo_v2
@@ -109,6 +110,16 @@ STRATEGIES = {
     "supertrend":  strat_supertrend,
     "zscore":      strat_zscore,
     "ml":              strat_ml,
+    # 2026-08-30: SIM-only parallel A/B test against "ml" (user-supplied
+    # design, "implement this strategy too along our ML, lets see if catch
+    # new signals"). Regularized (L2) logistic regression, 252-bar window,
+    # 5-day ATR-normalized target with a neutral zone excluded from
+    # training, plus regime (ADX + ATR-percentile band) and directional
+    # EMA-stack trend filters, threshold 0.62. Also ships an
+    # update_stop_price() breakeven+trail hook (wired generically in
+    # _run_exits). "ml" itself is completely untouched. Never added to
+    # either LIVE allowlist -- SIM only.
+    "advanced_ml":     strat_advanced_ml,
     "cnn_lstm":        strat_cnn_lstm,
     "london_breakout": strat_lbo,
     # 2026-08-29: SIM-only parallel A/B test against "london_breakout" --
@@ -145,6 +156,10 @@ SLOTS_PER_STRATEGY = {
     # enforced"). "donchian" itself is left exactly as it was.
     "donchian_quality": strat_donchian_quality.MAX_POSITIONS,
     "supertrend": _SWING_SLOTS, "zscore": _SWING_SLOTS, "ml": _SWING_SLOTS, "cnn_lstm": _SWING_SLOTS,
+    # 2026-08-30: mirrors "ml" -- uncapped slots so the A/B comparison isn't
+    # distorted by an artificial concurrency limit one side doesn't have.
+    # Its own regime/trend filters + 0.62 threshold are the real selectivity.
+    "advanced_ml": _SWING_SLOTS,
     "london_breakout": 28,  # universe expanded to 28 pairs 2026-08-20. Slots raised
                              # 10 -> 28 (2026-08-21, one slot per pair) so a multi-pair
                              # breakout day is never capped below what the pair list can
@@ -314,7 +329,11 @@ BASE_URL    = "https://gateway.saxobank.com/sim/openapi"
 DATA_DIR    = os.path.join(_ROOT, "data")
 STATE_FILE  = os.path.join(DATA_DIR, "forex_state.json")
 ORDERS_FILE = os.path.join(DATA_DIR, "forex_orders.json")
-CHART_BARS  = 340   # enough for ML strategy: EMA(200) + 126 lookback + 14 buffer
+CHART_BARS  = 500   # 2026-08-30: 340 -> 500 for "advanced_ml" (EMA200 + 252-bar
+                    # training window + buffer = MIN_BARS 492). Every other
+                    # strategy reads converged span<=200 indicators at iloc[-1],
+                    # already stable well before 340 bars -- their signals are
+                    # unchanged; the only cost is a slightly larger per-pair fetch.
 
 ACCOUNT_ENV = "sim"
 
@@ -1861,6 +1880,22 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
                     cur_stop, float(df["Close"].iloc[-1]), atr_now, pos.get("direction", "Buy"))
                 if round(new_stop, 6) != round(cur_stop, 6) and new_stop > 0:
                     pos["stop_price"] = round(new_stop, 6)
+            except Exception:
+                pass
+
+        # 2026-08-30: strategy_advanced_ml ships its own combined breakeven+
+        # trail as update_stop_price(position, df). Applied here as a local
+        # pos["stop_price"] ratchet -- same contract as the trailing_stop_update
+        # block above (broker-side sync is handled by _apply_breakeven_stop's
+        # amend below plus the stop invigilator, identical to every other
+        # trailing strategy). No existing strategy defines this method, so
+        # this branch only ever runs for "advanced_ml".
+        if df is not None and hasattr(strat_mod, "update_stop_price"):
+            try:
+                cur_stop = float(pos.get("stop_price", 0))
+                new_stop = strat_mod.update_stop_price(pos, df)
+                if new_stop and round(float(new_stop), 6) != round(cur_stop, 6):
+                    pos["stop_price"] = round(float(new_stop), 6)
             except Exception:
                 pass
 
