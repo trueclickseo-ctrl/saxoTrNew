@@ -58,6 +58,7 @@ import saxo_auth
 
 from forex.universe import PAIRS, ASSET_TYPE, get_pair, price_decimals as get_price_decimals, CORE_SYMBOLS, EXOTIC_SYMBOLS, HIGH_VOLUME_SYMBOLS
 import forex.strategy             as strat_ema
+import forex.strategy_advanced_ema as strat_advanced_ema
 import forex.strategy_rsi         as strat_rsi
 import forex.strategy_donchian    as strat_donchian
 import forex.strategy_donchian_quality as strat_donchian_quality
@@ -89,6 +90,14 @@ logger = logging.getLogger("forex.runner")
 # ── Strategy registry ─────────────────────────────────────────────────────────
 STRATEGIES = {
     "ema":         strat_ema,
+    # 2026-08-30: SIM-only parallel A/B test against "ema" (user-supplied
+    # design, "implement this too on ATOS SIM account like above"). Adds a
+    # rising-ADX regime check + ATR-percentile band, EMA50 macro-trend
+    # confirmation, a recent-crossover age limit, and a trend-quality
+    # composite score (ADX + DI dominance + EMA separation) instead of
+    # ADX alone. "ema" (forex/strategy.py) is completely untouched. Never
+    # added to either LIVE allowlist -- SIM only.
+    "advanced_ema": strat_advanced_ema,
     "rsi":         strat_rsi,
     "donchian":    strat_donchian,
     # 2026-08-29: SIM-only parallel A/B test against "donchian" -- adds
@@ -145,7 +154,8 @@ SLOTS_PER_STRATEGY = {
     # slot count. Raised to 34 (2026-08-20), then to 117 (2026-08-21) when the
     # universe was expanded to the full major+EM/exotic set for SIM testing —
     # so every swing strategy can take a position in every pair it signals on.
-    "ema": _SWING_SLOTS, "rsi": _SWING_SLOTS, "donchian": _SWING_SLOTS, "bb": _SWING_SLOTS,
+    "ema": _SWING_SLOTS, "advanced_ema": _SWING_SLOTS,  # advanced_ema (2026-08-30): uncapped, mirrors "ema" for a clean A/B
+    "rsi": _SWING_SLOTS, "donchian": _SWING_SLOTS, "bb": _SWING_SLOTS,
     "pullback": _SWING_SLOTS, "gap": _SWING_SLOTS, "gap_weekend": _SWING_SLOTS,
     # 2026-08-29: unlike "donchian" (which shares _SWING_SLOTS with every
     # other swing strategy -- confirmed live that its own module-level

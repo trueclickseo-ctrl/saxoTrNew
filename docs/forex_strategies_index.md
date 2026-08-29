@@ -5,13 +5,14 @@ it runs today** — parameters, entry/exit rules, sizing, where it runs (SIM /
 LIVE), and any known stale docstring notes. **None of these describe changes** —
 the strategies run as-is.
 
-The 15 strategies are the keys of `STRATEGIES` in [`forex/runner.py`](../forex/runner.py).
+The 16 strategies are the keys of `STRATEGIES` in [`forex/runner.py`](../forex/runner.py).
 
 ## Swing strategies (daily bars, SIM scan)
 
 | Strategy | Doc | Type | Runs on |
 |---|---|---|---|
 | `ema` | [forex_ema_strategy.md](forex_ema_strategy.md) | EMA(5/30) crossover + ADX | SIM |
+| `advanced_ema` | [forex_advanced_ema_strategy.md](forex_advanced_ema_strategy.md) | `ema` + EMA50 confirm + rising-ADX + vol-percentile + recent-cross-only (A/B vs `ema`) | SIM |
 | `rsi` | [forex_rsi_strategy.md](forex_rsi_strategy.md) | RSI(2) pullback (mean-reversion) | SIM **+ LIVE_EUR (real money)** |
 | `donchian` | [forex_donchian_strategy.md](forex_donchian_strategy.md) | 30-day channel breakout (strict) | SIM |
 | `donchian_quality` | [forex_donchian_quality_strategy.md](forex_donchian_quality_strategy.md) | `donchian` + breakout-quality filters (A/B) | SIM |
