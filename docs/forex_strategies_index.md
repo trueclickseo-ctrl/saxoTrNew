@@ -5,7 +5,9 @@ it runs today** — parameters, entry/exit rules, sizing, where it runs (SIM /
 LIVE), and any known stale docstring notes. **None of these describe changes** —
 the strategies run as-is.
 
-The 16 strategies are the keys of `STRATEGIES` in [`forex/runner.py`](../forex/runner.py).
+The 20 strategies are the keys of `STRATEGIES` in [`forex/runner.py`](../forex/runner.py).
+The `advanced_*` / `*_master` ones are SIM-only A/B experiments running in
+parallel with their untouched originals — none of them can place a real-money order.
 
 ## Swing strategies (daily bars, SIM scan)
 
@@ -14,15 +16,19 @@ The 16 strategies are the keys of `STRATEGIES` in [`forex/runner.py`](../forex/r
 | `ema` | [forex_ema_strategy.md](forex_ema_strategy.md) | EMA(5/30) crossover + ADX | SIM |
 | `advanced_ema` | [forex_advanced_ema_strategy.md](forex_advanced_ema_strategy.md) | `ema` + EMA50 confirm + rising-ADX + vol-percentile + recent-cross-only (A/B vs `ema`) | SIM |
 | `rsi` | [forex_rsi_strategy.md](forex_rsi_strategy.md) | RSI(2) pullback (mean-reversion) | SIM **+ LIVE_EUR (real money)** |
+| `advanced_rsi_master` | [forex_advanced_rsi_master_strategy.md](forex_advanced_rsi_master_strategy.md) | `rsi` + EMA50/200 alignment + slope + distance + reversal-confirm (A/B vs `rsi`) | SIM |
 | `donchian` | [forex_donchian_strategy.md](forex_donchian_strategy.md) | 30-day channel breakout (strict) | SIM |
 | `donchian_quality` | [forex_donchian_quality_strategy.md](forex_donchian_quality_strategy.md) | `donchian` + breakout-quality filters (A/B) | SIM |
 | `bb` | [forex_bb_strategy.md](forex_bb_strategy.md) | Bollinger(20,2) + RSI reversion | SIM **+ SEK LIVE** (task Disabled) |
+| `advanced_bb_master` | [forex_advanced_bb_master_strategy.md](forex_advanced_bb_master_strategy.md) | `bb` + ADX ceiling + band-width + excursion + reversal-confirm (A/B vs `bb`) | SIM |
 | `pullback` | [forex_pullback_strategy.md](forex_pullback_strategy.md) | trend pullback to EMA(20) | SIM |
+| `advanced_pullback_master` | [forex_advanced_pullback_master_strategy.md](forex_advanced_pullback_master_strategy.md) | `pullback` + EMA5>20>50 structure + vol-percentile + DI + same-day bounce (A/B vs `pullback`) | SIM |
 | `supertrend` | [forex_supertrend_strategy.md](forex_supertrend_strategy.md) | SuperTrend(10,3) + EMA(200) | SIM |
 | `zscore` | [forex_zscore_strategy.md](forex_zscore_strategy.md) | z-score(20) ±2σ reversion | SIM |
 | `ml` | [forex_ml_strategy.md](forex_ml_strategy.md) | per-pair logistic regression, 7 features | SIM |
 | `advanced_ml` | [forex_advanced_ml_strategy.md](forex_advanced_ml_strategy.md) | regularized logistic reg + regime + trend filters (A/B vs `ml`) | SIM |
 | `cnn_lstm` | [forex_cnn_lstm_strategy.md](forex_cnn_lstm_strategy.md) | CNN + BiLSTM + attention (⚠️ barely fires) | SIM |
+| `advanced_cnn_lstm_master` | [forex_advanced_cnn_lstm_master_strategy.md](forex_advanced_cnn_lstm_master_strategy.md) | stricter selection wrapper on the **same** CNN-LSTM model, no retrain (A/B vs `cnn_lstm`) | SIM |
 
 ## Gap strategies (session windows, need live prices)
 

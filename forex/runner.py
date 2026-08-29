@@ -60,10 +60,13 @@ from forex.universe import PAIRS, ASSET_TYPE, get_pair, price_decimals as get_pr
 import forex.strategy             as strat_ema
 import forex.strategy_advanced_ema as strat_advanced_ema
 import forex.strategy_rsi         as strat_rsi
+import forex.strategy_advanced_rsi_master as strat_advanced_rsi_master
 import forex.strategy_donchian    as strat_donchian
 import forex.strategy_donchian_quality as strat_donchian_quality
 import forex.strategy_bb          as strat_bb
+import forex.strategy_advanced_bb_master as strat_advanced_bb_master
 import forex.strategy_pullback    as strat_pullback
+import forex.strategy_advanced_pullback_master as strat_advanced_pullback_master
 import forex.strategy_gap         as strat_gap
 import forex.strategy_gap_weekend as strat_gap_weekend
 import forex.strategy_supertrend  as strat_supertrend
@@ -71,6 +74,7 @@ import forex.strategy_zscore      as strat_zscore
 import forex.strategy_ml                as strat_ml
 import forex.strategy_advanced_ml       as strat_advanced_ml
 import forex.strategy_cnn_lstm         as strat_cnn_lstm
+import forex.strategy_advanced_cnn_lstm_master as strat_advanced_cnn_lstm_master
 import forex.strategy_london_breakout  as strat_lbo
 import forex.strategy_london_breakout_v2 as strat_lbo_v2
 import pnl_tracker
@@ -99,6 +103,13 @@ STRATEGIES = {
     # added to either LIVE allowlist -- SIM only.
     "advanced_ema": strat_advanced_ema,
     "rsi":         strat_rsi,
+    # 2026-08-30: SIM-only A/B vs "rsi" (user-supplied "master" design).
+    # Robust one-sided RSI(2), EMA50/EMA200 alignment + EMA200 slope, a
+    # minimum EMA200-distance gate, ATR-percentile band, a post-extreme
+    # reversal-confirmation bar, and DI confirmation. "rsi" (and the LIVE_EUR
+    # account that runs it) is completely untouched -- this is a shadow/A/B
+    # on SIM only, never in either LIVE allowlist.
+    "advanced_rsi_master": strat_advanced_rsi_master,
     "donchian":    strat_donchian,
     # 2026-08-29: SIM-only parallel A/B test against "donchian" -- adds
     # the breakout-quality filters (min/max breakout strength, ADX-rising,
@@ -108,7 +119,18 @@ STRATEGIES = {
     # keeps running exactly as before.
     "donchian_quality": strat_donchian_quality,
     "bb":          strat_bb,
+    # 2026-08-30: SIM-only A/B vs "bb" (user-supplied "master" design).
+    # Adds an ADX_MAX ceiling (avoid band-walks), ATR-percentile band, a
+    # minimum band-width and minimum excursion-in-ATR gate, and a
+    # prior-excursion + today's-reversal confirmation. "bb" is untouched;
+    # SIM only, never in either LIVE allowlist.
+    "advanced_bb_master": strat_advanced_bb_master,
     "pullback":    strat_pullback,
+    # 2026-08-30: SIM-only A/B vs "pullback" (user-supplied "master"
+    # design). Adds EMA5>EMA20>EMA50 structure, ATR-percentile band,
+    # ADX-not-fading check, DI confirmation, and a same-day bounce
+    # (close > prev close). "pullback" is untouched; SIM only.
+    "advanced_pullback_master": strat_advanced_pullback_master,
     "gap":         strat_gap,
     # 2026-08-29: SIM-only parallel A/B test against "gap" -- fixed
     # sizing/ref-close bugs, sessions disabled pending separate-by-type
@@ -130,6 +152,13 @@ STRATEGIES = {
     # either LIVE allowlist -- SIM only.
     "advanced_ml":     strat_advanced_ml,
     "cnn_lstm":        strat_cnn_lstm,
+    # 2026-08-30: SIM-only A/B vs "cnn_lstm" (user-supplied "master"
+    # design). Same pre-trained model, NO retrain -- just a stricter
+    # selection wrapper: confidence 0.52 + class-margin 0.08 + hold-prob
+    # ceiling, ADX/ATR-percentile regime confirmation, ADX-rising check,
+    # and an EMA20/50 + DI directional agreement gate. "cnn_lstm" is
+    # untouched; SIM only.
+    "advanced_cnn_lstm_master": strat_advanced_cnn_lstm_master,
     "london_breakout": strat_lbo,
     # 2026-08-29: SIM-only parallel A/B test against "london_breakout" --
     # fixes the range-hour boundary bug, the not-actually-2:1 R/R, the
@@ -157,6 +186,11 @@ SLOTS_PER_STRATEGY = {
     "ema": _SWING_SLOTS, "advanced_ema": _SWING_SLOTS,  # advanced_ema (2026-08-30): uncapped, mirrors "ema" for a clean A/B
     "rsi": _SWING_SLOTS, "donchian": _SWING_SLOTS, "bb": _SWING_SLOTS,
     "pullback": _SWING_SLOTS, "gap": _SWING_SLOTS, "gap_weekend": _SWING_SLOTS,
+    # 2026-08-30: the 4 user-supplied "advanced_*_master" A/B strategies --
+    # each uncapped, mirroring its original (rsi / bb / pullback / cnn_lstm)
+    # so neither side of the comparison has an artificial concurrency edge.
+    "advanced_rsi_master": _SWING_SLOTS, "advanced_bb_master": _SWING_SLOTS,
+    "advanced_pullback_master": _SWING_SLOTS, "advanced_cnn_lstm_master": _SWING_SLOTS,
     # 2026-08-29: unlike "donchian" (which shares _SWING_SLOTS with every
     # other swing strategy -- confirmed live that its own module-level
     # MAX_POSITIONS=4 was never actually enforced by the runner), this cap
@@ -2951,7 +2985,13 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
                 # designed to find. Only trend-following strategies (ema,
                 # donchian, pullback, supertrend, ml, cnn_lstm) should be
                 # momentum-filtered.
-                _NO_MOMENTUM_FILTER = ("gap", "gap_weekend", "london_breakout", "london_breakout_v2", "rsi", "bb", "zscore")
+                _NO_MOMENTUM_FILTER = ("gap", "gap_weekend", "london_breakout", "london_breakout_v2",
+                                       "rsi", "bb", "zscore",
+                                       # 2026-08-30: mean-reversion A/B variants -- exempt for the
+                                       # same reason as their originals ("rsi"/"bb"): the momentum
+                                       # pre-filter ranks by trend strength, which suppresses the
+                                       # reversal setups they are designed to catch.
+                                       "advanced_rsi_master", "advanced_bb_master")
                 _edata = market_data if strat_name in _NO_MOMENTUM_FILTER else entry_market_data
                 entries = _run_entries(strat_name, strat_mod, positions,
                                        _edata, equity, akey, dry_run, today_str,
