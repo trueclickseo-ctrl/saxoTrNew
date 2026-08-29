@@ -177,6 +177,15 @@ WINDOWS_TASKS = {
     # max_first_run_wait=1 (tight -- this task should never go an hour
     # without having run at least once under normal operation).
     "Saxo LIVE Token Keepalive": ("ATOS Saxo LIVE Token Keepalive", "saxo_live_keepalive.log", 20, 1),
+    # Added 2026-08-30: after a proper PKCE `python saxo_auth.py` login the
+    # SIM token is ~20-min access / ~60-min refresh (NOT the 24h that
+    # set_token.py assumed). The SIM scan runs 06:05 -> ~03:00 PKT then a
+    # ~3h overnight gap, longer than the 60-min refresh window -- so
+    # without this every-15-min keepalive the SIM token dies overnight and
+    # the first morning scan fails with TOKEN EXPIRED. Same grace/first-run
+    # rationale as the LIVE keepalive above. This is a SIM-named task, so
+    # unlike the LIVE one the watchdog IS allowed to auto-restart it.
+    "Saxo SIM Token Keepalive": ("ATOS Saxo SIM Token Keepalive", "saxo_sim_keepalive.log", 20, 1),
 }
 
 # ── Registry: Claude-native scheduled tasks (no Windows entry) ──────────────
