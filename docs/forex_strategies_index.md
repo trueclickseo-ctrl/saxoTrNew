@@ -8,6 +8,8 @@ the strategies run as-is.
 The 20 strategies are the keys of `STRATEGIES` in [`forex/runner.py`](../forex/runner.py).
 The `advanced_*` / `*_master` ones are SIM-only A/B experiments running in
 parallel with their untouched originals — none of them can place a real-money order.
+All 20 appear in the SIM scan and in `forex_dashboard.py` (`STRAT_LABELS_ALL` /
+`STRAT_COL` / the strategy legend + per-strategy breakdown tables).
 
 ## Swing strategies (daily bars, SIM scan)
 

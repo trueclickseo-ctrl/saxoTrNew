@@ -167,6 +167,15 @@ STRAT_COL = {
     "gap_weekend":        "\033[38;5;80m",    # teal
     "donchian_quality":   "\033[38;5;120m",   # light green
     "london_breakout_v2": "\033[38;5;220m",   # gold
+    # 2026-08-30: the 6 user-supplied "advanced_*" SIM-only A/B strategies --
+    # each a lighter shade of its original's colour so the pairing reads at
+    # a glance (advanced_ema~ema, advanced_ml~ml, etc.).
+    "advanced_ema":               "\033[38;5;51m",    # bright cyan  (~ema)
+    "advanced_rsi_master":        "\033[38;5;213m",   # pink         (~rsi)
+    "advanced_bb_master":         "\033[38;5;229m",   # pale yellow  (~bb)
+    "advanced_pullback_master":   "\033[38;5;75m",    # light blue   (~pullback)
+    "advanced_ml":                "\033[38;5;156m",   # pale green   (~ml)
+    "advanced_cnn_lstm_master":   "\033[38;5;177m",   # light purple (~cnn_lstm)
 }
 
 
@@ -272,6 +281,15 @@ STRAT_LABELS_ALL = {
     "gap_weekend":        "Gap Wknd (A/B)",
     "donchian_quality":   "Donchian Qual (A/B)",
     "london_breakout_v2": "LBO V2 (A/B)",
+    # 2026-08-30: the 6 user-supplied "advanced_*" SIM-only A/B strategies.
+    # Same rule as the 2026-08-29 note above -- no entry here == silently
+    # dropped from the per-strategy breakdown even with real closed trades.
+    "advanced_ema":               "EMA Adv (A/B)",
+    "advanced_rsi_master":        "RSI Master (A/B)",
+    "advanced_bb_master":         "BB Master (A/B)",
+    "advanced_pullback_master":   "Pullback Mstr (A/B)",
+    "advanced_ml":                "ML Adv (A/B)",
+    "advanced_cnn_lstm_master":   "CNN-LSTM Mstr (A/B)",
 }
 
 
@@ -467,8 +485,11 @@ def _positions_section(title: str, positions_subset: list, live: dict,
     total_costs_eur = 0.0   # spread + accrued swap/financing, NOT included in total_pnl
 
     if positions_subset:
-        strat_order = ["ema", "rsi", "donchian", "donchian_quality", "bb", "pullback",
-                       "gap", "gap_weekend", "supertrend", "zscore", "ml", "cnn_lstm",
+        strat_order = ["ema", "advanced_ema", "rsi", "advanced_rsi_master",
+                       "donchian", "donchian_quality", "bb", "advanced_bb_master",
+                       "pullback", "advanced_pullback_master",
+                       "gap", "gap_weekend", "supertrend", "zscore",
+                       "ml", "advanced_ml", "cnn_lstm", "advanced_cnn_lstm_master",
                        "london_breakout", "london_breakout_v2"]
         grouped: dict = {}
         for p in positions_subset:
@@ -638,7 +659,14 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
              # 2026-08-29: 3 new SIM-only A/B-test strategies
              f"\033[38;5;80m{BD}■ Gap Wknd{W}  A/B   "
              f"\033[38;5;120m{BD}■ Donchian Qual{W}  A/B   "
-             f"\033[38;5;220m{BD}■ LBO V2{W}  A/B")
+             f"\033[38;5;220m{BD}■ LBO V2{W}  A/B   "
+             # 2026-08-30: 6 user-supplied SIM-only A/B "advanced_*" strategies
+             f"{STRAT_COL['advanced_ema']}{BD}■ EMA Adv{W}  A/B   "
+             f"{STRAT_COL['advanced_rsi_master']}{BD}■ RSI Mstr{W}  A/B   "
+             f"{STRAT_COL['advanced_bb_master']}{BD}■ BB Mstr{W}  A/B   "
+             f"{STRAT_COL['advanced_pullback_master']}{BD}■ Pullback Mstr{W}  A/B   "
+             f"{STRAT_COL['advanced_ml']}{BD}■ ML Adv{W}  A/B   "
+             f"{STRAT_COL['advanced_cnn_lstm_master']}{BD}■ CNN-LSTM Mstr{W}  A/B")
     L.append(f"  {DM}Scheduler: every 30min 06:00-03:00 PKT (scan)  |  14:00 PKT (exit check)  |  "
              f"Mon 03:00 PKT weekly + session gap windows (gap fill)  |  "
              f"{_total_pairs} pairs: {len(HIGH_VOLUME_SYMBOLS)} high volume + {len(CORE_STANDARD_SYMBOLS)} core standard + "
