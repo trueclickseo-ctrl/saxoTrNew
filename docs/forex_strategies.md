@@ -681,10 +681,10 @@ When price deviates more than 2 standard deviations from its 20-day mean, it is 
 
 ## Strategy 9 — Machine Learning Signals (Logistic Regression)
 
-**File**: `forex/strategy_ml.py`  
+**File**: `forex/strategy_ml.py` · **Full write-up**: [forex_ml_strategy.md](forex_ml_strategy.md)  
 **Type**: ML — Data-Driven  
-**Win Rate**: ~57–62% (varies by market regime)  
-**Slots**: 20  
+**Win Rate**: ~57–62% (docstring estimate — judge from the live SIM dashboard, not this number)  
+**Slots**: `_SWING_SLOTS` (= `len(PAIRS)`, currently 184 — effectively uncapped)  
 
 ### Concept
 Trains a logistic regression model on the last 126 daily bars (6 months) per pair. Seven normalized technical features capture trend, momentum, volatility, and mean-reversion simultaneously. Only trades when model confidence exceeds the threshold. Pure numpy implementation — no sklearn dependency.
