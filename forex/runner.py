@@ -56,7 +56,7 @@ import saxo_order
 import pandas as pd
 import saxo_auth
 
-from forex.universe import PAIRS, ASSET_TYPE, get_pair, price_decimals as get_price_decimals, CORE_SYMBOLS, EXOTIC_SYMBOLS, HIGH_VOLUME_SYMBOLS
+from forex.universe import PAIRS, ASSET_TYPE, get_pair, price_decimals as get_price_decimals, CORE_SYMBOLS, EXOTIC_SYMBOLS, HIGH_VOLUME_SYMBOLS, METALS_SYMBOLS
 import forex.strategy             as strat_ema
 import forex.strategy_advanced_ema as strat_advanced_ema
 import forex.strategy_rsi         as strat_rsi
@@ -669,6 +669,63 @@ def _patch(path: str, body: dict) -> dict:
 def _delete(path: str, params: dict | None = None) -> None:
     r = requests.delete(f"{BASE_URL}{path}", headers=_hdrs(), params=params, timeout=15)
     r.raise_for_status()
+
+
+# ── Tick-size rounding ────────────────────────────────────────────────────────
+# Every FX price we send Saxo (stop, take-profit, breakeven amend) has to land
+# on a valid tick increment or Saxo rejects the whole order with
+# "PriceNotInTickSizeIncrements" (400). For the 34 majors + most crosses the
+# instrument's own decimal precision (forex.universe.price_decimals, itself
+# derived from Saxo's live Format.Decimals) already rounds cleanly onto the
+# tick. The precious-metal tier does NOT: XAUJPY / XAUTHB / XPTZAR quote with
+# pip_size = 10, which price_decimals() maps to 1dp, but their real Saxo
+# TickSize is 1.0 — so round(146892.59, 1) = 146892.6 is not a whole tick and
+# the stop/TP is rejected outright, leaving a naked position (seen live
+# 2026-08-30 on ml:XAUTHB and advanced_ml:XAUTHB — both stop_order_id=None).
+# Same bug class as ZC's 0.25 tick in the futures module (2026-08-24), and
+# saxo_order._round_price already accepts a tick_size override for exactly
+# this — forex just never passed one. Metals is a SIM-only tier, so this
+# only ever affects SIM.
+
+_METALS_TICK_CACHE: dict[str, float | None] = {}
+
+
+def _metals_tick_size(sym: str) -> float | None:
+    """Real Saxo TickSize for a precious-metal pair, from the live
+    /ref/v1/instruments/details reference data (NOT guessed from decimal
+    places — TickSizeStopOrder can be coarser than Format.Decimals implies).
+    Returns None for any non-metals pair (decimal-place rounding is correct
+    for those and this avoids ~180 ref-data calls per scan) and for a metals
+    pair whose lookup fails (caller falls back to decimal rounding). Cached
+    per process — an instrument's tick size doesn't change at runtime."""
+    if sym not in METALS_SYMBOLS:
+        return None
+    if sym in _METALS_TICK_CACHE:
+        return _METALS_TICK_CACHE[sym]
+    tick: float | None = None
+    try:
+        uic  = get_pair(sym)["uic"]
+        data = _get("/ref/v1/instruments/details",
+                    {"Uics": str(uic), "AssetType": ASSET_TYPE}).get("Data", [])
+        if data:
+            raw = data[0].get("TickSizeStopOrder") or data[0].get("TickSize")
+            tick = float(raw) if raw is not None else None
+    except Exception as exc:
+        logger.warning(f"  [tick_size] {sym}: live TickSize lookup failed ({exc}) "
+                       f"— falling back to decimal-place rounding")
+    _METALS_TICK_CACHE[sym] = tick
+    return tick
+
+
+def _round_order_price(sym: str, price: float) -> float:
+    """Round an FX order price to the instrument's real tick size when one is
+    known (metals), otherwise to its decimal precision. Mirrors
+    saxo_order._round_price's tick logic so the heal / breakeven paths that
+    POST their own order bodies stay consistent with place_with_stop()."""
+    tick = _metals_tick_size(sym)
+    if tick:
+        return round(round(price / tick) * tick, 10)
+    return round(price, get_price_decimals(sym))
 
 
 # ── Token / Account ───────────────────────────────────────────────────────────
@@ -1734,7 +1791,7 @@ def _amend_stop_order(order_id: str, new_price: float, sym: str, akey: str, uic:
     even against order ids verified live via GET /port/v1/orders/me).
     """
     dp = get_price_decimals(sym)
-    rounded = round(new_price, dp)
+    rounded = _round_order_price(sym, new_price)   # tick-snaps metals; == round(_,dp) otherwise
     try:
         _patch(f"/trade/v2/orders/{order_id}", {
             "AccountKey":    akey,
@@ -1786,7 +1843,7 @@ def _replace_stop_order(pos: dict, sym: str, akey: str, new_price: float) -> str
     direction  = pos.get("direction", "Buy")
     close_side = "Sell" if direction == "Buy" else "Buy"
     dp         = get_price_decimals(sym)
-    rounded    = round(new_price, dp)
+    rounded    = _round_order_price(sym, new_price)   # tick-snaps metals; == round(_,dp) otherwise
     try:
         resp    = _post("/trade/v2/orders", {
             "AccountKey":    akey,
@@ -2451,6 +2508,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 take_profit_price = tp,
                 symbol            = sym,
                 price_decimals    = get_price_decimals(sym),
+                tick_size         = _metals_tick_size(sym),
             )
             if entry_oid is None:
                 # Order rejected by Saxo — nothing was opened. Must not fall
@@ -2620,11 +2678,13 @@ def _heal_missing_stops(positions: dict, akey: str) -> int:
         qty        = pos["quantity"]
         stop_price = pos["stop_price"]
         close_side = "Sell" if direction == "Buy" else "Buy"
-        # Same rounding rule as saxo_order.place_with_stop's price_decimals —
-        # this healing path had its own independent JPY-only/5dp guess,
-        # which is exactly the bug that let AUDTRY/CNH-pair stops fail with
-        # PriceNotInTickSizeIncrements in the first place (2026-08-21).
-        rounded    = round(stop_price, get_price_decimals(sym))
+        # Same rounding rule as saxo_order.place_with_stop — this healing path
+        # had its own independent JPY-only/5dp guess, which is exactly the bug
+        # that let AUDTRY/CNH-pair stops fail with PriceNotInTickSizeIncrements
+        # in the first place (2026-08-21). _round_order_price also snaps
+        # metals (XAUJPY/XAUTHB/XPTZAR) to their real 1.0 tick — plain decimal
+        # rounding there produced naked positions (2026-08-30).
+        rounded    = _round_order_price(sym, stop_price)
 
         if (uic, close_side, "Stop") in open_orders or \
            (uic, close_side, "StopLimit") in open_orders:
@@ -2683,7 +2743,7 @@ def _heal_missing_tp(positions: dict, akey: str) -> int:
         qty        = pos["quantity"]
         tp_price   = pos["tp_price"]
         close_side = "Sell" if direction == "Buy" else "Buy"
-        rounded_tp = round(tp_price, get_price_decimals(sym))
+        rounded_tp = _round_order_price(sym, tp_price)
 
         if (uic, close_side, "Limit") in open_orders:
             pos["tp_order_id"] = "synced"
