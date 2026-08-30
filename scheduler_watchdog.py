@@ -173,9 +173,12 @@ WINDOWS_TASKS = {
     # that file's docstring for why it exists: LIVE's refresh_token only
     # lives 1h, LIVE's trading runs are ~2h apart, so something has to
     # touch the token more often than that or every run in between fails
-    # with TOKEN EXPIRED). grace=20 (well under its own 15-min cadence),
-    # max_first_run_wait=1 (tight -- this task should never go an hour
-    # without having run at least once under normal operation).
+    # with TOKEN EXPIRED). 2026-08-30: cadence tightened 15 -> 10 min and
+    # the task hardened (SYSTEM principal + StartWhenAvailable + 3x
+    # restart-on-failure) after it kept dying on every reboot/sleep gap.
+    # grace=20 (2x the 10-min cadence, covers the restart-on-failure
+    # window), max_first_run_wait=1 (tight -- this task should never go an
+    # hour without having run at least once under normal operation).
     "Saxo LIVE Token Keepalive": ("ATOS Saxo LIVE Token Keepalive", "saxo_live_keepalive.log", 20, 1),
     # Added 2026-08-30: after a proper PKCE `python saxo_auth.py` login the
     # SIM token is ~20-min access / ~60-min refresh (NOT the 24h that
