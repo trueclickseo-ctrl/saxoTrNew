@@ -41,28 +41,45 @@ $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoi
     -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `
     -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
 
-# Prefer SYSTEM (survives a reboot before any interactive logon). Fall back
-# to the current interactive user if SYSTEM can't be used (e.g. not elevated).
-$principal = $null
-try {
-    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest -ErrorAction Stop
-    $principalKind = "SYSTEM"
-} catch {
-    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-    $principalKind = "$env:USERNAME (interactive -- SYSTEM unavailable, are you elevated?)"
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    Write-Host "WARNING: not running elevated -- the SYSTEM principal will be rejected and this" -ForegroundColor Yellow
+    Write-Host "         falls back to '$env:USERNAME (interactive)', which does NOT survive a" -ForegroundColor Yellow
+    Write-Host "         reboot-before-logon. For the full fix, re-run from an ADMIN PowerShell." -ForegroundColor Yellow
+    Write-Host ""
 }
 
-try {
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
-        -Settings $settings -Principal $principal -Description $desc `
-        -Force -ErrorAction Stop | Out-Null
-    Write-Host "OK   $taskName registered as $principalKind: every 10 min, StartWhenAvailable, 3x restart-on-failure" -ForegroundColor Green
-} catch {
-    Write-Host "FAILED ${taskName}: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host "       (Task modification is sometimes blocked on this box -- try deleting it first:" -ForegroundColor Yellow
-    Write-Host "        Unregister-ScheduledTask -TaskName `"$taskName`" -Confirm:`$false   then re-run this script.)" -ForegroundColor Yellow
+# SYSTEM survives a reboot before any interactive logon; interactive is the
+# fallback (still gets StartWhenAvailable + the tighter cadence + restarts).
+$sysP  = New-ScheduledTaskPrincipal -UserId "SYSTEM"       -LogonType ServiceAccount -RunLevel Highest
+$userP = New-ScheduledTaskPrincipal -UserId $env:USERNAME  -LogonType Interactive    -RunLevel Limited
+
+function Try-Register($principal, $kind) {
+    # 1) plain -Force (modify in place)   2) delete + create   -- some boxes block (1)
+    try {
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+            -Settings $settings -Principal $principal -Description $desc -Force -ErrorAction Stop | Out-Null
+        return $kind
+    } catch {
+        try {
+            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+                -Settings $settings -Principal $principal -Description $desc -ErrorAction Stop | Out-Null
+            return "$kind (via delete+create)"
+        } catch {
+            Write-Host "  register as $kind failed: $($_.Exception.Message)" -ForegroundColor DarkYellow
+            return $null
+        }
+    }
+}
+
+$done = Try-Register $sysP "SYSTEM"
+if (-not $done) { $done = Try-Register $userP "$env:USERNAME (interactive)" }
+if (-not $done) {
+    Write-Host "FAILED -- could not register the task at all." -ForegroundColor Red
     exit 1
 }
+Write-Host "OK   $taskName registered as $done -- every 10 min, StartWhenAvailable, 3x restart-on-failure" -ForegroundColor Green
 
 # Prove it actually works in whatever context it now runs under.
 Write-Host ""
