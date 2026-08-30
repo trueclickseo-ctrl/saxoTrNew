@@ -24,6 +24,13 @@
 # RUN THIS ONCE, AS ADMINISTRATOR:
 #   Right-click PowerShell -> Run as Administrator, then:
 #   powershell -ExecutionPolicy Bypass -File "E:\SaxoTrNew\SaxoTrNew\setup_saxo_live_keepalive.ps1"
+#
+# PREREQ for the SYSTEM principal: SAXO_LIVE_APP_KEY must be a MACHINE env var
+# (SYSTEM can't read your user vars). It's a public OAuth client id, not a
+# secret. Set it once, elevated:
+#   [Environment]::SetEnvironmentVariable('SAXO_LIVE_APP_KEY','<your live app key>','Machine')
+# (done 2026-08-30 for key cde1333f...; only needs redoing if the LIVE app is
+# re-registered. There is no SAXO_LIVE_APP_SECRET -- the LIVE app is PKCE.)
 
 $taskName = "ATOS Saxo LIVE Token Keepalive"
 $desc     = "Keeps the real-money Saxo LIVE OAuth session alive every 10 min. Hardened 2026-08-30: SYSTEM principal + StartWhenAvailable + restart-on-failure so a reboot/sleep gap can't kill the 1h refresh_token. See saxo_live_token_keepalive.py."
