@@ -61,15 +61,16 @@ function Try-Register($principal, $kind) {
             -Settings $settings -Principal $principal -Description $desc -Force -ErrorAction Stop | Out-Null
         return $kind
     } catch {
-        try {
-            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
-                -Settings $settings -Principal $principal -Description $desc -ErrorAction Stop | Out-Null
-            return "$kind (via delete+create)"
-        } catch {
-            Write-Host "  register as $kind failed: $($_.Exception.Message)" -ForegroundColor DarkYellow
-            return $null
-        }
+        Write-Host "  register as $kind (-Force) failed: $($_.Exception.Message)" -ForegroundColor DarkYellow
+    }
+    try {
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+            -Settings $settings -Principal $principal -Description $desc -ErrorAction Stop | Out-Null
+        return "$kind (via delete+create)"
+    } catch {
+        Write-Host "  register as $kind (delete+create) failed: $($_.Exception.Message)" -ForegroundColor DarkYellow
+        return $null
     }
 }
 
