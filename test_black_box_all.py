@@ -133,8 +133,11 @@ def run_etf_blackbox():
         def _get(path, params=None):
             uic = (params or {}).get("Uic")
             r = returns_map.get(uic, 0.0)
-            # Build 68-bar history where last/first = 1+r
-            hist = [100.0] + [100.0 * (1 + r)] * 67
+            # _history() trims to the last LOOKBACK bars, so build a linear ramp
+            # spanning exactly that window (100 -> 100*(1+r)) plus a trimmed prefix.
+            n = SectorRotationStrategy.LOOKBACK
+            ramp = [100.0 * (1 + r * i / (n - 1)) for i in range(n)]
+            hist = [ramp[0]] * 10 + ramp
             return {"Data": [{"Close": p} for p in hist]}
         return types.SimpleNamespace(get=_get)
 

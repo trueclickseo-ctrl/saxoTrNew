@@ -24,13 +24,15 @@ ENTRY:
   Long : predicted probability ≥ CONFIDENCE_THRESHOLD  AND  ADX ≥ 20
   Short: predicted probability ≤ (1 - CONFIDENCE_THRESHOLD)  AND  ADX ≥ 20
 
-EXIT (first hit):
-  A. Model prediction flips direction with confidence ≥ CONFIDENCE_THRESHOLD
-  B. ATR hard stop: 2.0 × ATR(14)
-  C. Time stop: 20 calendar days
+EXIT (first hit, in this priority order — see should_exit()):
+  A. Time stop: 20 calendar days
+  B. ATR hard stop: 2.0 × ATR(14) at entry (also placed broker-side)
+  C. Model prediction flips direction with confidence ≥ CONFIDENCE_THRESHOLD
 
-SIZING: 1% equity risk per trade, ATR-based.
-Expected WR: ~57-62% (varies by market regime)
+SIZING: RISK_PCT (0.25%) equity risk per trade, ATR-based.  (docstring said
+        "1%" through 2026-08-24; the constant is the single source of truth.)
+Expected WR: docstring estimate only — judge from the live SIM dashboard's
+        per-strategy P&L, not this number.
 """
 
 import numpy as np

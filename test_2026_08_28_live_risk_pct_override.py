@@ -64,15 +64,21 @@ _run("forex.strategy_rsi: a smaller risk_pct override genuinely reduces "
      "position size, not a no-op", test_size_position_override_actually_changes_size)
 
 
-def test_live_risk_pct_is_none_by_default_pending_user_decision():
+def test_live_risk_pct_override_is_an_explicit_user_decision():
+    """Originally this asserted the value stayed None (undecided). On
+    2026-08-28 the user made the call (0.25% -> 0.75%) as part of the
+    LIVE capital/risk decision -- see docs / memory. It must be either
+    None (undecided) or a small, sane, explicitly-set fraction; never a
+    careless large number."""
     import forex.runner as r
-    assert r.LIVE_RISK_PCT_OVERRIDE is None, (
-        "the actual override value must stay an explicit 'not yet decided' "
-        "(None) sentinel, not a guessed real number -- this is the user's "
-        "business decision to make, not one to invent here")
-_run("forex/runner: LIVE_RISK_PCT_OVERRIDE stays None (mechanism built, "
-     "value not guessed) until the user picks a real number",
-     test_live_risk_pct_is_none_by_default_pending_user_decision)
+    v = r.LIVE_RISK_PCT_OVERRIDE
+    assert v is None or (isinstance(v, float) and 0.0 < v <= 0.02), (
+        f"LIVE_RISK_PCT_OVERRIDE = {v!r} -- expected None or a deliberate "
+        f"fraction in (0, 0.02]; a value outside that range looks like a bug, "
+        f"not a decision")
+_run("forex/runner: LIVE_RISK_PCT_OVERRIDE is None or a sane explicit "
+     "fraction (user set 0.75% on 2026-08-28)",
+     test_live_risk_pct_override_is_an_explicit_user_decision)
 
 
 def test_live_risk_pct_only_applies_to_live_accounts():

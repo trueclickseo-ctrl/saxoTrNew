@@ -43,7 +43,14 @@ _LOG_DIR  = os.path.join(_ROOT, "logs")
 os.makedirs(_LOG_DIR, exist_ok=True)
 _LOG_FILE = os.path.join(_LOG_DIR, f"monitor_{date.today():%Y-%m-%d}.log")
 _fmt = logging.Formatter("%(asctime)s  %(levelname)-7s  %(message)s", datefmt="%H:%M:%S")
-_fh  = logging.FileHandler(_LOG_FILE, encoding="utf-8")
+try:
+    _fh = logging.FileHandler(_LOG_FILE, encoding="utf-8")
+except PermissionError:
+    # Today's log was created by the SYSTEM-run scheduled task; an interactive
+    # user (or any non-SYSTEM process) can't append to it. Fall back to a
+    # ".fallback" sibling so merely *importing* this module never crashes.
+    # scheduler_watchdog already reads whichever of the two is newer.
+    _fh = logging.FileHandler(_LOG_FILE + ".fallback", encoding="utf-8")
 _fh.setFormatter(_fmt)
 _sh  = logging.StreamHandler()
 _sh.setFormatter(_fmt)

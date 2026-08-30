@@ -619,30 +619,52 @@ _run("all open trades have strategy = 'US Blend' or 'US Reversion'", t_db_blend_
 
 
 # ══════════════════════════════════════════════════════════════════
-# 9. MARKET HOURS CONSISTENCY
+# 9. MARKET HOURS
 # ══════════════════════════════════════════════════════════════════
-section("9. Market Hours  (intraday_monitor vs intraday_reversion)")
+section("9. Market Hours  (atos.intraday_reversion.us_market_is_open)")
 
-from intraday_monitor import _market_is_open as monitor_open
+# NOTE (2026-08-30): intraday_monitor.py used to expose _market_is_open() and
+# was cross-checked here. It has since been repurposed into the Saxo
+# forex/futures intraday position monitor and no longer has any market-hours
+# concept, so section 9 now black-box-tests the reversion scanner's own gate.
+import atos.intraday_reversion as _ir
 from atos.intraday_reversion import us_market_is_open as scanner_open
 
-def t_both_market_checks_return_bool():
-    m = monitor_open()
-    s = scanner_open()
-    assert isinstance(m, bool)
-    assert isinstance(s, bool)
-_run("both market-open checks return bool", t_both_market_checks_return_bool)
+def t_market_check_returns_bool():
+    assert isinstance(scanner_open(), bool)
+_run("us_market_is_open() returns a bool", t_market_check_returns_bool)
 
-def t_scanner_window_inside_monitor_window():
-    """The scanner window (10:00-15:30 ET) must be a subset of the monitor window (09:30-16:00).
-    We test this structurally: scanner should never return True when monitor returns False."""
-    # We can't simulate specific times easily, but we can verify both are currently consistent
-    m = monitor_open()
-    s = scanner_open()
-    # If scanner says open, monitor must also say open (scanner is narrower window)
-    if s:
-        assert m, "scanner says OPEN but monitor says CLOSED — scanner window exceeds monitor window"
-_run("scanner open window is subset of monitor open window (no orphaned scans)", t_scanner_window_inside_monitor_window)
+import datetime as _dt
+import types as _types
+
+class _FrozenClock:
+    """Context manager that freezes atos.intraday_reversion's `datetime.datetime.utcnow()`."""
+    def __init__(self, utc):
+        self._utc = utc
+    def __enter__(self):
+        self._real = _ir.datetime
+        fake_datetime = type("dt", (), {"utcnow": staticmethod(lambda: self._utc)})
+        _ir.datetime = _types.SimpleNamespace(datetime=fake_datetime, timedelta=_dt.timedelta)
+    def __exit__(self, *a):
+        _ir.datetime = self._real
+
+def t_market_closed_on_weekend():
+    """Force Saturday and Sunday 12:00 ET (16:00Z, since ET = UTC-4h) -> closed."""
+    with _FrozenClock(_dt.datetime(2026, 8, 29, 16, 0)):   # Saturday
+        sat = scanner_open()
+    with _FrozenClock(_dt.datetime(2026, 8, 30, 16, 0)):   # Sunday
+        sun = scanner_open()
+    assert sat is False and sun is False, f"weekend not closed (sat={sat} sun={sun})"
+_run("us_market_is_open() is False on Sat/Sun", t_market_closed_on_weekend)
+
+def t_market_window_boundaries():
+    """Open 10:00 & 12:00 ET, closed 09:59 and 15:31 ET, on a weekday (Wed 2026-08-26)."""
+    def _at(h, m):   # ET = UTC - 4h  ->  UTC hour = ET hour + 4
+        with _FrozenClock(_dt.datetime(2026, 8, 26, h + 4, m)):
+            return scanner_open()
+    assert _at(12, 0) and _at(10, 0), "session midday / 10:00 ET should be OPEN"
+    assert not _at(9, 59) and not _at(15, 31), "09:59 and 15:31 ET should be CLOSED"
+_run("us_market_is_open() honours the 10:00-15:30 ET window", t_market_window_boundaries)
 
 
 # ══════════════════════════════════════════════════════════════════

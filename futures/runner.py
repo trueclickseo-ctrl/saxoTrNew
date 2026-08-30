@@ -141,7 +141,15 @@ os.makedirs(_LOG_DIR, exist_ok=True)
 _LOG_FILE = os.path.join(_LOG_DIR, f"futures_{date.today():%Y-%m-%d}.log")
 
 _fmt = logging.Formatter("%(asctime)s  %(levelname)-7s  %(message)s", datefmt="%H:%M:%S")
-_fh  = logging.FileHandler(_LOG_FILE, encoding="utf-8")
+try:
+    _fh = logging.FileHandler(_LOG_FILE, encoding="utf-8")
+except PermissionError:
+    # Today's log was created by the SYSTEM-run scheduled task; a non-SYSTEM
+    # process (interactive session, another user, the safeguard pass importing
+    # this module just to read state) can't append. Fall back to a ".fallback"
+    # sibling so importing this module never crashes -- see housekeeping.py's
+    # FuturesAdapter note for the outage this class of bug already caused.
+    _fh = logging.FileHandler(_LOG_FILE + ".fallback", encoding="utf-8")
 _fh.setFormatter(_fmt)
 _sh  = logging.StreamHandler()
 _sh.setFormatter(_fmt)

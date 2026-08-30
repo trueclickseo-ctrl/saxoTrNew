@@ -54,34 +54,47 @@ _run("forex.universe: uic=7 is labeled CHFAUD (base=CHF, quote=AUD), not "
      "the wrong CADCHF", test_uic_7_is_chfaud_not_cadchf)
 
 
-def test_cadchf_no_longer_in_universe():
+def test_chfaud_present_and_any_cadchf_is_correctly_labelled():
+    # 2026-08-28's Saxo currencypairs cross-check re-added CADCHF as a
+    # GENUINE separate pair (CAD/CHF) with its own verified uic (5, not 7).
+    # So "CADCHF exists" is no longer a bug -- what must never happen is
+    # CADCHF resolving to uic 7 (the AUD-quoted instrument) again.
     from forex.universe import PAIRS
-    syms = {p["symbol"] for p in PAIRS}
-    assert "CADCHF" not in syms, "the wrong symbol must not linger anywhere in PAIRS"
-    assert "CHFAUD" in syms
-_run("forex.universe: CADCHF fully replaced by CHFAUD, not left as a "
-     "second (also wrong) entry", test_cadchf_no_longer_in_universe)
+    by_sym = {p["symbol"]: p for p in PAIRS}
+    assert "CHFAUD" in by_sym
+    if "CADCHF" in by_sym:
+        c = by_sym["CADCHF"]
+        assert c["uic"] != 7, "CADCHF must not point at uic 7 (that is CHFAUD)"
+        assert c["base"] == "CAD" and c["quote"] == "CHF", (
+            f"CADCHF mislabelled: base={c['base']} quote={c['quote']}")
+_run("forex.universe: CHFAUD present; CADCHF (if present) is a real CAD/CHF "
+     "pair on its own uic, never uic 7", test_chfaud_present_and_any_cadchf_is_correctly_labelled)
 
 
-def test_chfaud_in_core_symbols_not_cadchf():
+def test_chfaud_in_core_symbols():
     from forex.universe import CORE_SYMBOLS
     assert "CHFAUD" in CORE_SYMBOLS
-    assert "CADCHF" not in CORE_SYMBOLS
-_run("forex.universe: CORE_SYMBOLS uses CHFAUD, not CADCHF",
-     test_chfaud_in_core_symbols_not_cadchf)
+_run("forex.universe: CORE_SYMBOLS contains CHFAUD",
+     test_chfaud_in_core_symbols)
 
 
-def test_session_pairs_asian_london_still_equals_core_symbols():
+def test_session_pairs_are_valid_universe_symbols_with_chfaud_in_london():
+    # Originally asserted SESSION_PAIRS exactly partitioned CORE_SYMBOLS.
+    # CORE_SYMBOLS was later deliberately expanded (17 -> 49, commit 5cc5bb6,
+    # for the LIVE_EUR rsi universe) without widening the day-trade session
+    # sets, so that exact-partition invariant no longer holds by design.
+    # What still must hold: every session pair is a real universe symbol,
+    # CHFAUD sits in london, and no session set carries the old wrong name.
     import forex.runner as r
-    from forex.universe import CORE_SYMBOLS
+    from forex.universe import PAIRS
+    valid = {p["symbol"] for p in PAIRS}
     union = r.SESSION_PAIRS["asian"] | r.SESSION_PAIRS["london"]
-    assert union == CORE_SYMBOLS, (
-        f"SESSION_PAIRS must still exactly partition CORE_SYMBOLS after the "
-        f"rename -- diff: {union.symmetric_difference(CORE_SYMBOLS)}")
+    unknown = union - valid
+    assert not unknown, f"SESSION_PAIRS references non-universe symbols: {unknown}"
+    assert union <= set(r.CORE_SYMBOLS) if hasattr(r, "CORE_SYMBOLS") else True
     assert "CHFAUD" in r.SESSION_PAIRS["london"]
-_run("forex/runner: SESSION_PAIRS['asian']+['london'] still exactly equals "
-     "CORE_SYMBOLS after the CHFAUD rename",
-     test_session_pairs_asian_london_still_equals_core_symbols)
+_run("forex/runner: SESSION_PAIRS are all valid universe symbols, CHFAUD in "
+     "london", test_session_pairs_are_valid_universe_symbols_with_chfaud_in_london)
 
 
 def test_london_breakout_pairs_uses_chfaud():
@@ -93,24 +106,15 @@ _run("forex.strategy_london_breakout: PAIRS uses CHFAUD, still 28 pairs total",
      test_london_breakout_pairs_uses_chfaud)
 
 
-def test_no_cadchf_in_active_pair_lists():
-    # The old wrong symbol is intentionally still mentioned in universe.py's
-    # explanatory comment on uic=7 (documents why the fix happened) -- that's
-    # fine. What must NOT happen is CADCHF appearing in any of the actual
-    # data structures a caller could look up.
+def test_no_pair_list_maps_a_name_to_the_wrong_uic_7():
+    # The real anti-regression: whatever a caller looks up, the *only* symbol
+    # that may resolve to uic 7 is CHFAUD. (CADCHF as a legit CAD/CHF pair on
+    # its own uic is fine -- see the test above.)
     import forex.universe as u
-    import forex.runner as r
-    import forex.strategy_london_breakout as lbo
-    all_symbols = {p["symbol"] for p in u.PAIRS}
-    assert "CADCHF" not in all_symbols
-    assert "CADCHF" not in u.CORE_SYMBOLS
-    assert "CADCHF" not in u.SCANDI_SYMBOLS
-    assert "CADCHF" not in r.SESSION_PAIRS["asian"]
-    assert "CADCHF" not in r.SESSION_PAIRS["london"]
-    assert "CADCHF" not in lbo.PAIRS
-_run("forex: CADCHF doesn't appear in any actual pair set/list a caller "
-     "could look up (PAIRS, CORE_SYMBOLS, SESSION_PAIRS, LBO PAIRS)",
-     test_no_cadchf_in_active_pair_lists)
+    by_uic7 = [p["symbol"] for p in u.PAIRS if p["uic"] == 7]
+    assert by_uic7 == ["CHFAUD"], f"uic 7 resolves to {by_uic7}, expected only CHFAUD"
+_run("forex: uic 7 resolves to CHFAUD and nothing else",
+     test_no_pair_list_maps_a_name_to_the_wrong_uic_7)
 
 
 print(f"\n{BOLD}{'='*70}{RESET}")

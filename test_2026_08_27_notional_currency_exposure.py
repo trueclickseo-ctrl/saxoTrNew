@@ -77,14 +77,25 @@ _run("forex/runner: _currency_exposure_notional_eur() skips (never "
 
 
 def test_notional_exposure_not_wired_into_any_gate():
+    """Visibility only. 2026-08-27's forward-observation feature added a
+    _currency_exposure_notional_eur() call inside _run_entries, but ONLY to
+    record exposure_before/after on the observation card -- it must never
+    drive a skip/continue/return or be compared against a limit."""
     import inspect
+    import re
     import forex.runner as r
     src = inspect.getsource(r._run_entries)
-    assert "_currency_exposure_notional_eur" not in src, (
-        "this must stay visibility-only for now -- wiring it into the entry "
-        "loop's gate is a separate, deliberate decision not yet made")
-_run("forex/runner: notional exposure is NOT wired into the entry loop's "
-     "gate yet (visibility only, by design)",
+    for m in re.finditer(r"_currency_exposure_notional_eur\s*\([^)]*\)", src):
+        # 400 chars of surrounding context around each call site
+        ctx = src[max(0, m.start() - 200): m.end() + 200]
+        assert not re.search(r"(>=?|<=?|LIVE_MAX|MAX_CURRENCY|continue|return\s|skip)",
+                             ctx.replace("_currency_exposure_notional_eur", "")), (
+            f"notional exposure appears to be used in a gating branch:\n{ctx}")
+    # And the --scan panel still labels it non-authoritative.
+    assert "not a gate" in inspect.getsource(r).lower() or \
+           "visibility only" in inspect.getsource(r).lower()
+_run("forex/runner: notional exposure stays visibility-only (card logging, "
+     "never a gate)",
      test_notional_exposure_not_wired_into_any_gate)
 
 

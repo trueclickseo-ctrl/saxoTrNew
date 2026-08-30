@@ -75,6 +75,15 @@ FALLBACK_RATES_TO_SEK = {
     "SGD": 7.45,   # Singapore dollar
     "THB": 0.28,   # Thai baht
     "ZAR": 0.59,   # South African rand
+    # Added 2026-08-30 — the METALS universe expansion added XAUXAG ("Gold /
+    # Silver"), whose *quote* currency is XAG (troy ounces of silver). Yahoo's
+    # XAGSEK=X ticker structurally 404s (same KeyError('exchangeTimezoneName')
+    # class as ILS/TRY/MXN/CNH — a permanent broken ticker, so this fallback
+    # ALWAYS fires for XAG, it is not a transient safety net). Triangulated
+    # from SI=F (COMEX silver, USD/oz) × USDSEK at add time. Same caveat as the
+    # rest of this table — drifts hard with the silver price, log loudly when
+    # used, re-check before trading real capital. XAUXAG is SIM-only.
+    "XAG": 650.0,  # troy ounce of silver, in SEK (SI=F × USDSEK, 2026-08-30)
 }
 
 # Cached per process run so a single cycle doesn't refetch the same rate
