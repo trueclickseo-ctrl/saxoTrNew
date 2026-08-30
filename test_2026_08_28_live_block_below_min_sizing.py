@@ -136,14 +136,17 @@ def test_live_caps_reflect_the_2026_08_28_pooled_balance_raise():
     # sharing it), paired with LIVE_RISK_PCT_OVERRIDE=0.75%.
     # 2026-08-29: EUR cap raised again 1,350 -> 6,000 (explicit user
     # decision) -- 1,000-unit minimum-lot trades were commission-dominated
-    # (flat ~5 EUR round-trip vs ~10 EUR risk budget). See capital.json's
+    # (flat ~5 EUR round-trip vs ~10 EUR risk budget).
+    # 2026-08-30: EUR cap raised 6,000 -> 8,000 (explicit user decision,
+    # AskUserQuestion) ahead of an 18,000 SEK deposit -- ~2.5x the
+    # post-deposit real pooled balance (~33,800 SEK). See capital.json's
     # forex_live_eur comment. SEK cap unchanged; risk % unchanged at 0.75%.
     import atos.capital_config as cc
     sek_cap = cc.forex_live_risk_equity_sek()
     eur_cap = cc.forex_live_eur_risk_equity_eur()
     assert sek_cap == 15_000.0, f"expected the 2026-08-28 15,000 SEK cap, got {sek_cap}"
-    assert eur_cap == 6_000.0, f"expected the 2026-08-29 6,000 EUR cap, got {eur_cap}"
-_run("atos.capital_config: LIVE caps are 15,000 SEK / 6,000 EUR (2026-08-29 EUR raise)",
+    assert eur_cap == 8_000.0, f"expected the 2026-08-30 8,000 EUR cap, got {eur_cap}"
+_run("atos.capital_config: LIVE caps are 15,000 SEK / 8,000 EUR (2026-08-30 EUR raise)",
      test_live_caps_reflect_the_2026_08_28_pooled_balance_raise)
 
 

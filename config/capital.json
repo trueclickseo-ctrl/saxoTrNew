@@ -115,16 +115,24 @@
       "1,000 units (the minimum lot) at 0.75% of 1,350 EUR = ~10 EUR risk. At that",
       "size Saxo's flat ~5 EUR round-trip commission turns the strategy's designed",
       "2:1 reward:risk into ~0.9:1 net -- a losing edge even on winning trades.",
-      "6,000 EUR (~= 40% of the ~15,800 EUR real pooled balance) sizes GBPUSD to",
-      "~6,000 units, commission ~7% of target, net R:R ~1.7. Risk % stays 0.75%",
-      "(NOT raised -- keeps per-trade heat low so the 6% heat cap still allows",
-      "~8 concurrent positions, and does not touch the SEK account). Known",
-      "shared-pool caveat unchanged: this account's heat cap can't see the SEK",
-      "account's exposure against the same real balance."
+      "2026-08-30: raised 6,000 -> 8,000 EUR, explicit user decision (AskUserQuestion),",
+      "ahead of an 18,000 SEK deposit on Mon 2026-09-01. Verified live that day from",
+      "BOTH scheduled-run logs ('Equity 15,867 -> sizing off 6,000'): the real POOLED",
+      "balance is ~15,800 SEK (~EUR 1,400), reported in SEK, shared across all 3",
+      "sub-accounts -- NOT ~15,800 EUR (an earlier note here had a units error).",
+      "Post-deposit real balance ~= 33,800 SEK (~EUR 3,050); 8,000 EUR is ~2.5x that",
+      "-- a deliberate leverage choice for bigger natural size / better commission",
+      "ratio (user declined both the 1:1 EUR 3,000 and the 5x EUR 15,000 options).",
+      "Risk % stays 0.75%. Paired with an RSI-ONLY 8% heat cap",
+      "(_HEAT_LIMIT_BY_STRATEGY in forex/runner.py) allowing ~10 concurrent RSI",
+      "positions. Shared-pool caveat unchanged: this account's heat cap can't see",
+      "the SEK account's exposure against the same real balance -- at 2.5x leverage",
+      "a full RSI book + the SEK account could still hit Saxo's real 50% margin gate",
+      "(_margin_allows_entry), which is the intended hard backstop."
     ],
     "forex_live_eur": {
       "enabled": true,
-      "risk_equity_eur": 6000
+      "risk_equity_eur": 8000
     }
 
   }

@@ -548,6 +548,15 @@ def _filter_pairs_for_account(pairs: list) -> list:
 
 # ── Portfolio risk limits ─────────────────────────────────────────────────────
 PORTFOLIO_HEAT_LIMIT  = 0.06   # pause new entries when heat ≥ 6% of equity
+
+# 2026-08-30: per-strategy heat-cap override, explicit user decision
+# (AskUserQuestion: "raise to 8% for RSI only"). The RSI(2) pullback book on
+# the LIVE_EUR account is meant to run ~10 concurrent positions; at 0.75%
+# risk/trade that needs ~8% heat, not the shared 6%. Scoped to strat_name so
+# every other strategy — and the SEK LIVE account (bb) sharing the same real
+# pooled balance — keeps the 6% guardrail. Saxo's real 50% margin gate
+# (_margin_allows_entry) is still the hard backstop above all of this.
+_HEAT_LIMIT_BY_STRATEGY = {"rsi": 0.08}
 DRAWDOWN_PAUSE_PCT    = 0.10   # pause entries when drawdown > 10% from rolling peak
 DAILY_LOSS_LIMIT_PCT  = 0.03   # block entries if today's realised P&L ≤ −3% of equity
 PEAK_EQUITY_FILE      = os.path.join(DATA_DIR, "forex_peak_equity.json")
@@ -1633,7 +1642,7 @@ def _portfolio_heat_pct(positions: dict, equity: float) -> float:
     return heat / equity
 
 
-def _heat_allows_entry(positions: dict, equity: float) -> bool:
+def _heat_allows_entry(positions: dict, equity: float, strat_name: str | None = None) -> bool:
     """Disabled 2026-08-21 at user's explicit request — "do not block new
     entries, I want to test fully all strategies" — while the SIM account is
     scanning the expanded 117-pair universe. Heat is still computed and
@@ -1650,13 +1659,14 @@ def _heat_allows_entry(positions: dict, equity: float) -> bool:
     "should be reinstated before trading live capital" -- that reinstatement
     never actually happened until now. SIM stays disabled, unchanged, for
     the original 2026-08-21 full-testing-breadth reason."""
+    limit = _HEAT_LIMIT_BY_STRATEGY.get(strat_name, PORTFOLIO_HEAT_LIMIT)
     heat = _portfolio_heat_pct(positions, equity)
-    if heat >= PORTFOLIO_HEAT_LIMIT:
+    if heat >= limit:
         if ACCOUNT_ENV in ("live", "live_eur"):
-            logger.info(f"  [HEAT] Portfolio heat {heat:.1%} >= {PORTFOLIO_HEAT_LIMIT:.0%} "
-                        f"— blocking new entries (LIVE)")
+            logger.info(f"  [HEAT] Portfolio heat {heat:.1%} >= {limit:.0%} "
+                        f"— blocking new entries (LIVE{f', {strat_name}' if strat_name in _HEAT_LIMIT_BY_STRATEGY else ''})")
             return False
-        logger.info(f"  [HEAT] Portfolio heat {heat:.1%} >= {PORTFOLIO_HEAT_LIMIT:.0%} "
+        logger.info(f"  [HEAT] Portfolio heat {heat:.1%} >= {limit:.0%} "
                     f"(limit disabled for SIM testing — NOT blocking)")
     return True
 
@@ -2366,7 +2376,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             continue
         if not _margin_allows_entry():
             break   # real Saxo margin too tight — stop entries for EVERY strategy, LBO included
-        if strat_name not in DAY_TRADE_STRATEGIES and not _heat_allows_entry(positions, equity):
+        if strat_name not in DAY_TRADE_STRATEGIES and not _heat_allows_entry(positions, equity, strat_name):
             break   # heat cap reached — stop all entries for this strategy
         rp_kw     = {"risk_pct": sig["risk_pct_override"]} if "risk_pct_override" in sig else {}
         if "risk_pct" not in rp_kw and _live_risk_pct() is not None:
