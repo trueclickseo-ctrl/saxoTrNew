@@ -34,7 +34,7 @@ fire intraday on a move that later reverses. No multi-bar confirmation.
 | Risk per trade | **0.25%** SIM (`RISK_PCT = 0.0025`); **0.75%** on LIVE_EUR via `LIVE_RISK_PCT_OVERRIDE` | |
 | Time stop | 12 calendar days | `TIME_STOP_DAYS` |
 | Lot round | 1,000 | `LOT_ROUND` |
-| `MAX_POSITIONS` | 4 | declared; runner slot cap is `_SWING_SLOTS` = 184 |
+| `MAX_POSITIONS` | 4 | **dead code** — the runner never reads it (slot cap is `_SWING_SLOTS` = 184). The real cap on concurrent RSI positions on LIVE_EUR is the **RSI-only 8% portfolio-heat cap** (`_HEAT_LIMIT_BY_STRATEGY`, 2026-08-30) ≈ **10 positions** at 0.75% risk each. |
 
 ---
 
@@ -72,12 +72,13 @@ every LIVE gate:
 | Gate | Effect |
 |---|---|
 | `LIVE_RISK_PCT_OVERRIDE = 0.0075` | sizes off 0.75%, not 0.25% |
-| `risk_equity_eur = 6000` cap | sizing base is €6,000 (capped from the ~€15.8k pooled balance) |
+| `risk_equity_eur = 8000` cap | sizing base is €8,000 (2026-08-30, raised from 6,000 ahead of an 18k SEK deposit). The real pooled Saxo balance is **~15,800 SEK ≈ €1,400** (→ ~€3,050 post-deposit), so €8,000 is ~2.5× — a deliberate leverage choice. |
 | **10k–100k lot ladder** (`_snap_rsi_live_lot`) | risk-sized qty snapped to the nearest 10,000, clamped [10k, 100k] |
 | `LIVE_MAX_CURRENCY_EXPOSURE = 5` | ≤ 5 net positions per currency |
 | Cost gate `MIN_EDGE_TO_COST_RATIO = 3.0` | skip if target < 3× Saxo round-trip commission |
 | Weekend market-hours gate | no new entries Fri ~22:00 → Sun ~22:00 UTC; signals still emailed |
-| 6% portfolio heat cap, 50% margin cap | shared |
+| **RSI-only 8% portfolio-heat cap** (`_HEAT_LIMIT_BY_STRATEGY`) | ≈ 10 concurrent RSI positions; every other strategy + the SEK account keep 6% |
+| 50% Saxo margin cap | shared hard backstop across all books |
 
 See [forex_live_account.md](forex_live_account.md) for the full LIVE picture.
 

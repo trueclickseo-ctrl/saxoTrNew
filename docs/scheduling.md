@@ -182,9 +182,14 @@ see §6.
    before the next scheduled run even started — every run past the first
    hour post-login failed with a `TOKEN EXPIRED` alert email and was
    skipped entirely (no scan, no orders). New `saxo_live_token_keepalive.py`
-   + `ATOS Saxo LIVE Token Keepalive` task (every 15 min, all day) keeps
-   the refresh chain alive between real trading runs. Does not replace
-   the one-time interactive login itself (`python saxo_auth.py --live`)
+   + `ATOS Saxo LIVE Token Keepalive` task keeps the refresh chain alive
+   between real trading runs. **2026-08-30**: hardened to run as **SYSTEM**
+   + `StartWhenAvailable` + every 10 min + 3× restart-on-failure, after it
+   kept dying on every reboot/sleep gap (interactive-user task didn't run
+   with nobody logged in → one >60-min gap killed the 1h refresh token).
+   `SAXO_LIVE_APP_KEY` moved to a Machine env var so SYSTEM can read it
+   (public client id, not a secret). Does not replace the one-time
+   interactive login itself (`python saxo_auth.py --live`)
    — that still requires a real browser + Saxo credentials.
 6. **LIVE's schedule moved from 9 fixed times/day to every 45 min,
    06:00-22:00 PKT** (~22 runs/day) — explicit user request. Verified
@@ -324,7 +329,7 @@ pointer/summary so this doc stays a complete map of every scheduled task.
 | `ATOS Forex LIVE Exit Check` | 14:00 PKT, daily | `run_forex_live_exits.bat` → `runner.py --account live --exits-only --live` | Backstop only — Daily Run above already checks exits every 45 min. |
 | `ATOS Forex LIVE EUR Daily Run` | every 45 min, 06:00-03:00 PKT | `run_forex_live_eur_daily.bat` → `runner.py --account live_eur --strategy rsi --live` | **Added 2026-08-26.** Second real-money account (EUR sub-account) — rsi only, 83 EXOTIC pairs only. Own confirmation gate (`SAXO_LIVE_EUR_CONFIRMED`). |
 | `ATOS Forex LIVE EUR Exit Check` | 14:00 PKT, daily | `run_forex_live_eur_exits.bat` → `runner.py --account live_eur --exits-only --live` | Backstop only — EUR Daily Run above already checks exits every 45 min. |
-| `ATOS Saxo LIVE Token Keepalive` | every 15 min, all day | `run_saxo_live_keepalive.bat` → `saxo_live_token_keepalive.py` | **Added 2026-08-25.** Keeps the LIVE refresh-token chain alive between real trading runs — shared by both accounts (same OAuth login) — see the 2026-08-25 findings above for why this was necessary. |
+| `ATOS Saxo LIVE Token Keepalive` | every 10 min, all day, **as SYSTEM** | `run_saxo_live_keepalive.bat` → `saxo_live_token_keepalive.py` | **Added 2026-08-25; hardened 2026-08-30** (SYSTEM + `StartWhenAvailable` + 3× restart, `SAXO_LIVE_APP_KEY` → Machine env var). Keeps the LIVE refresh-token chain alive between real trading runs — shared by both accounts (same OAuth login) — see the 2026-08-25 findings above. |
 
 Real money, separate Saxo login/app/state/lock/capital-cap from SIM in
 every respect. Hard rails enforced in code (never just convention): SEK
@@ -413,7 +418,7 @@ when the next scheduled cycle happens to run.
 | Task | Fires | Command | Notes |
 |---|---|---|---|
 | `ATOS Intraday Monitor` | 18:25 PKT, daily (per its own registered trigger) | `python intraday_monitor.py` | Stop-loss / position monitor. **Unresolved mystery flagged 2026-08-25** — the real script clearly runs every ~1-2 min all day (confirmed via `logs/monitor_{date}.log`), but this task's own trigger is only once-daily. Something else appears to be invoking it that often; not identified. See the 2026-08-25 findings above. |
-| `ATOS Saxo LIVE Token Keepalive` | every 15 min, all day | `saxo_live_token_keepalive.py` | **Added 2026-08-25.** See §1e above. |
+| `ATOS Saxo LIVE Token Keepalive` | every 10 min, all day, **as SYSTEM** | `saxo_live_token_keepalive.py` | **Added 2026-08-25; hardened 2026-08-30.** See §1e above. |
 | `ATOS PnL Sync` | 23:00 PKT, daily | `run_pnl_sync.bat` → `pnl_tracker.py --sync` | Syncs open/closed trades from all module state files into `data/pnl_ledger.db`. **Was actually configured as a weekly Sunday-only trigger since creation (2026-08-19) — never fired even once, silently freezing stock P&L data at 2026-08-14. Fixed to real daily 2026-08-21 and backfilled.** |
 | `ATOS Scheduler Watchdog` | every 30 min | `python scheduler_watchdog.py` | See §6. |
 | `ATOS Daily Chart` | 23:15 PKT, daily | `run_daily_chart.bat` → `daily_chart.py` | **Added 2026-08-21.** Generates a 2-panel per-strategy P&L chart (cumulative + today's) for EACH of the 4 modules **separately** — stock/etf/futures/forex each get their own independent chart file, never combined — from `data/pnl_ledger.db`. Fires 15 min after `ATOS PnL Sync` so every module's data is fully synced first. Saves `data/charts/{module}_strategy_YYYY-MM-DD.png` (permanent daily record) and `data/charts/{module}_strategy_latest.png` (always-current), then emails all of today's charts as inline attachments via `config/email.json` (one section per module in the email body). Skips a module gracefully (chart and email) if it has no closed trades yet — ETF/futures did on the day this was added, will start appearing automatically once they have their first closed trade. |

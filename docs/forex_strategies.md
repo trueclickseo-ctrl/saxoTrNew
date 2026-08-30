@@ -24,10 +24,12 @@ take-profit rule.
 **Risk gates — SIM vs LIVE**: on **SIM** the portfolio heat cap and
 per-currency exposure cap are disabled (raised to effectively unlimited)
 for full testing breadth across the 184-pair universe. On the **real-money
-LIVE / LIVE_EUR accounts** they are active: heat cap 6%, per-currency
-exposure cap `LIVE_MAX_CURRENCY_EXPOSURE = 5` (2026-08-29, was 1), plus a
-weekend market-hours gate, a 3× cost-clearance gate, and (RSI only) a
-10k–100k-unit lot ladder. See [forex_live_account.md](forex_live_account.md)
+LIVE / LIVE_EUR accounts** they are active: heat cap 6% (**8% for `rsi`
+only**, `_HEAT_LIMIT_BY_STRATEGY`, 2026-08-30 — ≈ 10 concurrent RSI
+positions), per-currency exposure cap `LIVE_MAX_CURRENCY_EXPOSURE = 5`
+(2026-08-29, was 1), plus a weekend market-hours gate, a 3× cost-clearance
+gate, and (RSI only) a 10k–100k-unit lot ladder. See
+[forex_live_account.md](forex_live_account.md)
 "Current configuration" for the full LIVE gate list.  
 **Price source**: live SIM orders, position sizing, and `forex_dashboard.py`
 use **Saxo's own live quotes only** (2026-08-22, explicit user direction) —
@@ -79,10 +81,10 @@ dashboard. All items fixed unless marked Open.
 |---|---------|----------|--------|
 | 1 | London Breakout had never produced a real signal since inception — `_session_range()` read the session-hour window off `df.index.hour`; the real H1 data carries the hour in a separate `HourUTC` column instead, so the mask matched ~0 rows on every call, forever | **Critical** | Fixed — 13 real signals produced live post-fix where it previously produced 0 |
 | 2 | A single rejected order used to crash the ENTIRE scheduled run — `saxo_order._place_entry_then_stop()` had no exception handling, so every strategy queued after the failure silently never ran that cycle | **Critical** | Fixed |
-| 3 | Wrong tick-size rounding on TRY/CNH-quoted pairs (4dp, not the 5dp default) caused a live `PriceNotInTickSizeIncrements` rejection on a stop order while the Market entry still went through — position briefly held with no stop-loss | **High** | Fixed, in all 4 duplicated locations |
+| 3 | Wrong tick-size rounding on TRY/CNH-quoted pairs (4dp, not the 5dp default) caused a live `PriceNotInTickSizeIncrements` rejection on a stop order while the Market entry still went through — position briefly held with no stop-loss | **High** | Fixed, in all 4 duplicated locations. **2026-08-30 recurrence** on the METALS tier: `XAUJPY`/`XAUTHB`/`XPTZAR` (pip_size=10 → `price_decimals()` says 1dp) have a real Saxo TickSize of **1.0**, so `round(146892.59, 1)` was still rejected and `ml:XAUTHB` / `advanced_ml:XAUTHB` went naked. Fixed with `_metals_tick_size()` (live `/ref/v1/instruments/details` lookup, METALS-gated, cached) + `_round_order_price()` wired into the same 4 paths (`f8048ae`). SIM-only tier. |
 | 4 | Cross-strategy opposite-direction stacking — different strategies independently held both Long and Short on the same pair (NZDUSD, USDTHB, USDCZK) simultaneously, since each strategy only ever checks its own open positions | **Medium** | Fixed — new entries opposing another strategy's existing position are now blocked; same-direction stacking deliberately left alone |
 | 5 | `pnl_tracker.sync_etf_from_json()`: SQLite doesn't support `ORDER BY`/`LIMIT` on `UPDATE` — silently failed the first time a real ETF sell was ever synced; a second bug in the same path would have marked a partially-sold position fully closed, dropping the remaining shares from the ledger | **High** | Fixed |
-| 6 | TRY/MXN/CNH had no fallback FX rate, and their live Yahoo lookup structurally 404s (confirmed, not a bad-data-day) — every pair quoted in one of these was silently unsizable, permanently | Medium | Fixed |
+| 6 | TRY/MXN/CNH had no fallback FX rate, and their live Yahoo lookup structurally 404s (confirmed, not a bad-data-day) — every pair quoted in one of these was silently unsizable, permanently | Medium | Fixed. **2026-08-30**: same class — the METALS tier added `XAUXAG` (quote ccy = silver oz); `XAGSEK=X` also permanently 404s, so `get_rate_to_sek("XAG")` *raised* (broke P&L conversion for any `ml`/`advanced_ml` XAUXAG position). Added `"XAG": 650.0` to `fx.FALLBACK_RATES_TO_SEK` (`ac5c84b`). |
 | 7 | Account-wide margin exhaustion — stocks/ETF/forex share one Saxo margin pool; disabling the heat cap ran usable margin to 5,546 EUR available (99.22% utilization), blocking new entries and protective stops alike | Medium | Mitigated — sold ~half of every stock/ETF position, cut swing `RISK_PCT` 1%→0.5%; margin now 55,774 EUR available (92.69%) |
 | 8 | `atos_live.db` held 4 phantom/stale rows not matching live Saxo (one entirely fictional position) | Medium | Reconciled — closed with honest unknown P&L, not a guessed number; new standing rule added (state must always match live Saxo, every module) |
 | 9 | Only 1 of 10 forex strategies (EMA) had ever been backtested, and only on 7 G7 majors — the 83-pair EM/exotic expansion and 9 of 10 strategies had zero historical validation before live signals started firing on them | **High** | Closed — see "Backtesting" section below. Real finding, not just a validation formality: `ema`, `donchian`, `pullback`, `supertrend` show weak/negative historical edge on the CORE universe too, not only the new exotic pairs |

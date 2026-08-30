@@ -20,7 +20,7 @@ redesign and the 2026-08-29/30 tuning. Where they disagree, this table wins.
 |---|---|---|
 | Strategy | `bb` only (`LIVE_ALLOWED_STRATEGIES`) — currently **Disabled** at the scheduler | `rsi` only (`LIVE_EUR_ALLOWED_STRATEGIES`) — **active** |
 | Universe | 17-pair `HIGH_VOLUME_SYMBOLS` | same 17 (49 after a later expansion — see scheduler doc) |
-| Sizing cap | `risk_equity_sek: 15000` | `risk_equity_eur: 6000` (was 1,350; raised 2026-08-29) |
+| Sizing cap | `risk_equity_sek: 15000` | `risk_equity_eur: 8000` (1,350 → 6,000 on 2026-08-29 → **8,000 on 2026-08-30**, ahead of an 18k SEK deposit). Real pooled balance is ~15,800 SEK ≈ €1,400, so €8,000 ≈ 2.5× — a deliberate leverage choice. |
 | Risk % per trade | `LIVE_RISK_PCT_OVERRIDE = 0.0075` (0.75%) — shared constant, both accounts | same |
 | Trading halt | `LIVE_TRADING_HALTED = False` (lifted 2026-08-28 by explicit go-ahead) | same |
 
@@ -47,9 +47,12 @@ redesign and the 2026-08-29/30 tuning. Where they disagree, this table wins.
   ~0.9:1 net. Trade-off: on tight-stop pairs the 10k floor pushes realised
   risk above the 0.75% target (still inside the heat cap). SIM untouched.
 - **Portfolio heat cap** — 6% of the sizing base in combined open risk
-  (re-enabled for LIVE/LIVE_EUR 2026-08-28). Known gap: each account's
-  heat check sees only its own positions, not the other account's against
-  the same pooled Saxo balance.
+  (re-enabled for LIVE/LIVE_EUR 2026-08-28). **2026-08-30: `rsi` gets an
+  8% cap** (`_HEAT_LIMIT_BY_STRATEGY = {"rsi": 0.08}`) ≈ 10 concurrent RSI
+  positions; every other strategy + the SEK account stay at 6%. Known gap:
+  each account's heat check sees only its own positions, not the other
+  account's against the same pooled Saxo balance — Saxo's real 50% margin
+  cap is the shared hard backstop.
 - **Margin cap** — never uses more than 50% of available broker margin.
 
 **Emails per LIVE run:** the run-summary email (`send_run_summary`) **plus**
@@ -111,7 +114,7 @@ Three Windows Scheduled Tasks:
 
 - **`ATOS Forex LIVE Daily Run`** (created via `setup_scheduler_live.ps1`, Administrator) — **every 45 min, 06:00-03:00 PKT** (moved from 9 fixed times/day 2026-08-25, explicit user request; window extended from 22:00 to 03:00 PKT 2026-08-26 to cover the tail of the NY session, which doesn't actually roll over until ~17:00 ET / ~02:00 PKT). Checks all 34 core pairs every run, for both new entries AND exits (stop-loss/TP/time-stop) together — the reasoning is that a signal reads "today's still-forming daily candle," which keeps updating through the day as price moves, so frequent re-checks catch a breakout/crossover as it develops.
 - **`ATOS Forex LIVE Exit Check`** — once daily at `14:00`. Backstop only — Daily Run above already checks exits every 45 min.
-- **`ATOS Saxo LIVE Token Keepalive`** (created via `setup_saxo_live_keepalive.ps1`, Administrator) — every 15 min, all day. Calls `saxo_auth.get_valid_access_token(env="live")` to keep the refresh-token chain alive; added 2026-08-25 after finding LIVE's app issues a 20-min access token / 1-hour refresh token — far shorter than SIM's 24h token — which the old 9-times/2h-gap schedule couldn't keep alive between runs. Doesn't replace the one-time interactive login (`python saxo_auth.py --live`) itself.
+- **`ATOS Saxo LIVE Token Keepalive`** (created via `setup_saxo_live_keepalive.ps1`, Administrator) — **every 10 min, all day, runs as SYSTEM**. Calls `saxo_auth.get_valid_access_token(env="live")` to keep the refresh-token chain alive; added 2026-08-25 after finding LIVE's app issues a 20-min access token / 1-hour refresh token — far shorter than SIM's 24h token — which the old 9-times/2h-gap schedule couldn't keep alive between runs. **Hardened 2026-08-30** (it kept dying on every reboot/sleep gap → manual browser re-login): SYSTEM principal + `StartWhenAvailable` + 15→10 min + 3× restart-on-failure, so a reboot landing before auto-logon can't take it offline. SYSTEM needs `SAXO_LIVE_APP_KEY` as a **Machine** env var (it's a public client id, not a secret — no `SAXO_LIVE_APP_SECRET` exists). Doesn't replace the one-time interactive login (`python saxo_auth.py --live`) itself.
 
 Both run `run_forex_live_daily.bat` / `run_forex_live_exits.bat`, which call:
 ```

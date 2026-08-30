@@ -148,7 +148,8 @@ qty           = floor(raw / min_units) × min_units
 
 - `RISK_PCT = 0.0025` — **0.25%**, matching the other swing strategies (cut
   from 1% → 0.5% on 2026-08-22, then → 0.25% on 2026-08-24; the module
-  docstring still says "1%" and is stale).
+  docstring's stale "1%" / "~57-62% WR" / exit-order text was corrected
+  2026-08-30, `ac5c84b`).
 - `block_below_min=True` (LIVE/LIVE_EUR only) makes it return `0` instead of
   flooring up to `min_units` — but the ML strategy never runs on a LIVE
   account, so in practice it always floors up on SIM.
@@ -206,6 +207,7 @@ pair for the `--scan` panel and the dashboard.
 | File | Role |
 |---|---|
 | [`forex/strategy_ml.py`](../forex/strategy_ml.py) | this strategy |
+| [`test_2026_08_30_ml_strategy_and_logic.py`](../test_2026_08_30_ml_strategy_and_logic.py) | unit/logic suite (15 tests) — incl. an explicit no-look-ahead check on the 126-bar training window |
 | [`forex/strategy_cnn_lstm.py`](../forex/strategy_cnn_lstm.py) | the heavier deep-learning strategy (⚠️ never fires at `CONFIDENCE = 0.58` — see `docs/forex_strategies.md` Strategy 10) |
 | [`forex/signal_filter.py`](../forex/signal_filter.py) | the ML **meta-gate** (`ml_probability`, `passes_ml`, `retrain`) |
 | [`strategy_learner.py`](../strategy_learner.py) | P&L-driven slot-allocation learner (repo root) |
