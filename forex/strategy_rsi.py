@@ -28,8 +28,6 @@ SIZING: 1% equity risk per trade, ATR-based.
 THIS MODULE IS PURE — no I/O, no orders, no state.
 """
 
-import math
-
 import numpy as np
 import pandas as pd
 
@@ -169,13 +167,21 @@ def size_position(account_equity: float, atr: float,
     pilot risk than SIM uses) -- defaults to RISK_PCT, so every existing
     caller (SIM) is unaffected. See forex/runner.py's _live_risk_pct().
 
-    risk_amount (2026-08-31): an ABSOLUTE risk budget for this one trade,
+    risk_amount (2026-08-31): an ABSOLUTE risk CEILING for this one trade,
     already expressed in the same currency as `atr` (the pair's quote
-    currency). When given it is used verbatim instead of
-    `account_equity * risk_pct` -- lets a caller target a fixed
-    per-trade risk (e.g. the LIVE accounts' EUR45-risk RSI sizing) that
-    is uniform across pairs regardless of stop width. account_equity /
-    risk_pct are ignored in that case. SIM never passes this.
+    currency). When given it is used instead of `account_equity * risk_pct`
+    -- lets a caller cap per-trade risk at a fixed figure, uniform across
+    pairs regardless of stop width (the LIVE accounts' EUR45-max-risk RSI
+    sizing). In this mode the lot is rounded DOWN to `min_units`, so
+    realised risk-if-stopped stays AT OR BELOW the ceiling; a pair whose
+    stop is wide enough that even one min-lot would exceed the ceiling
+    returns 0 (skip the trade -- risk_amount is a hard cap, not a target
+    to floor up to). account_equity / risk_pct are ignored in that case.
+    SIM never passes this.
+
+    Revised 2026-08-31 (same day): the first cut of this param rounded UP
+    and treated EUR45 as a MINIMUM. User correction: EUR45 is the MAXIMUM,
+    round down, skip if a single lot already exceeds it.
 
     block_below_min (2026-08-28, explicit user decision): when True,
     returns 0 instead of flooring UP to min_units if the risk-appropriate
@@ -195,12 +201,12 @@ def size_position(account_equity: float, atr: float,
         return 0 if block_below_min else int(min_units)
     raw = risk_budget / stop_distance
     if risk_amount is not None:
-        # Absolute-risk mode: round UP to the lot increment so the realised
-        # risk is AT LEAST the requested budget (the caller asked for a
-        # "minimum" per-trade risk), never systematically under it the way
-        # flooring would be.
-        rounded = math.ceil(raw / min_units) * int(min_units)
-        return rounded if rounded >= min_units else int(min_units)
+        # Absolute-risk CEILING mode: round DOWN to the lot increment so
+        # realised risk-if-stopped stays AT OR BELOW the budget. If even
+        # one min-lot would exceed it, return 0 -- the caller treats
+        # risk_amount as a hard cap, not a target to floor up to.
+        floored_cap = int(raw / min_units) * int(min_units)
+        return floored_cap if floored_cap >= min_units else 0
     floored = int(raw / min_units) * int(min_units)
     if floored < min_units:
         return 0 if block_below_min else int(min_units)
