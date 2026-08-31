@@ -11,8 +11,8 @@ the RSI(2) book (user-specified design):
 R = initial entry-to-stop distance. Ratchet only. Primary exit (RSI
 recovery / 2R broker TP / 12d time / hard stop) is unchanged.
 
-OFF by default: PROFIT_LADDER_ACCOUNTS is empty, so no account's behaviour
-changes until it's explicitly switched on after the backtest.
+2026-08-31: switched ON for both real-money accounts ({"live","live_eur"})
+at the user's explicit request. SIM stays OFF (not in the set).
 """
 
 import os
@@ -64,27 +64,35 @@ def _target(pos, r_mult):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-section("1. Default OFF — no account behaviour changes")
+section("1. ON for both real-money accounts, OFF for SIM")
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_off_by_default():
-    assert r.PROFIT_LADDER_ACCOUNTS == set(), "ladder must ship OFF for every account"
-    assert not r._profit_ladder_active("rsi")
-_run("PROFIT_LADDER_ACCOUNTS is empty and _profit_ladder_active('rsi') is False", test_off_by_default)
+def test_on_for_live_off_for_sim():
+    assert r.PROFIT_LADDER_ACCOUNTS == {"live", "live_eur"}, (
+        "ladder is ON for both real-money accounts as of 2026-08-31"
+    )
+    old_env = r.ACCOUNT_ENV
+    try:
+        r.ACCOUNT_ENV = "sim"
+        assert not r._profit_ladder_active("rsi"), "SIM must stay OFF"
+        for env in ("live", "live_eur"):
+            r.ACCOUNT_ENV = env
+            assert r._profit_ladder_active("rsi"), f"{env} rsi book must be on the ladder"
+    finally:
+        r.ACCOUNT_ENV = old_env
+_run("PROFIT_LADDER_ACCOUNTS == {live, live_eur}; active for live/live_eur rsi, not SIM", test_on_for_live_off_for_sim)
 
 
 def test_activation_is_account_and_strategy_scoped():
-    r.PROFIT_LADDER_ACCOUNTS = {"live_eur"}
     old_env = r.ACCOUNT_ENV
     try:
         r.ACCOUNT_ENV = "live_eur"
         assert r._profit_ladder_active("rsi")
         assert not r._profit_ladder_active("bb"), "only the rsi book, never another strategy"
         r.ACCOUNT_ENV = "sim"
-        assert not r._profit_ladder_active("rsi"), "only the enabled account"
+        assert not r._profit_ladder_active("rsi"), "SIM never, regardless of strategy"
     finally:
         r.ACCOUNT_ENV = old_env
-        r.PROFIT_LADDER_ACCOUNTS = set()
 _run("activation is gated on BOTH account and strategy", test_activation_is_account_and_strategy_scoped)
 
 
