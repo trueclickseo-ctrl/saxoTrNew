@@ -2578,6 +2578,22 @@ def _legacy_exit_strategies(active_strategies, positions) -> list:
     return sorted((held - active) & set(STRATEGIES))
 
 
+def _reconcile_closed_vs_saxo() -> None:
+    """Post-run backstop: verify recently-closed LIVE trades against Saxo's
+    own closed-position record and correct any price drift in the ledger /
+    observation cards (the substrate the AI journal + give-back learn
+    from). LIVE only -- Saxo SIM has no closedpositions endpoint. Fully
+    read-only w.r.t. trading state; never raises. See
+    reconcile_closed_trades_vs_saxo.py."""
+    if ACCOUNT_ENV not in ("live", "live_eur"):
+        return
+    try:
+        import reconcile_closed_trades_vs_saxo as _rc
+        _rc.run(env=ACCOUNT_ENV)
+    except Exception as exc:
+        logger.warning(f"  [reconcile-vs-saxo] skipped (non-fatal): {exc}")
+
+
 def _run_exits(strat_name: str, strat_mod, positions: dict,
                market_data: dict, akey: str, dry_run: bool,
                today_str: str) -> int:
@@ -3836,6 +3852,7 @@ def run_exits_only(dry_run: bool = True,
     else:
         state["last_exits_check"] = datetime.now().isoformat()
         _save_state(state)
+        _reconcile_closed_vs_saxo()
     return {"exits": total_exits, "holding": len(positions), "dry_run": dry_run}
 
 
@@ -4074,6 +4091,7 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
     else:
         state["last_run"] = datetime.now().isoformat()
         _save_state(state)
+        _reconcile_closed_vs_saxo()
 
     # ── Order-venue circuit breaker: one email at end of run + retry flag ─────
     if not dry_run:
