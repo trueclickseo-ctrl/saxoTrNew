@@ -99,7 +99,7 @@ print(f"\n{BOLD}2. the runner hook is inert unless AI is enabled{RESET}")
 
 def test_hook_is_guarded_and_cannot_change_entries():
     src = inspect.getsource(r._run_entries)
-    start = src.index("if ai_config.ai_enabled_for(ACCOUNT_ENV):")
+    start = src.index("ai_config.ai_enabled_for(ACCOUNT_ENV):")
     hook = src[start: src.index("if not _currency_ok")]
     assert "ai_config.ai_enabled_for(ACCOUNT_ENV)" in hook, "hook must be behind the kill switch"
     assert "try:" in hook and "except Exception" in hook, "hook must never raise into the loop"
@@ -148,8 +148,10 @@ _run("log_proposal() appends a well-formed jsonl row", test_log_proposal_appends
 
 
 def test_hook_is_only_hook_in_runner():
-    src = open(os.path.join(BASE_DIR, "forex", "runner.py"), encoding="utf-8").read()
-    # exactly one build + one log call -- Sprint 2 adds one hook, not many
+    # exactly one build + one log CALL inside the entry loop -- Sprint 2 adds
+    # one hook, not many. (The module also defines no-op stubs of the same
+    # names in an import-guard except block; scope the count to _run_entries.)
+    src = inspect.getsource(r._run_entries)
     assert src.count("_ai_build_proposal(") == 1 and src.count("_ai_log_proposal(") == 1
 _run("Sprint 2 adds exactly ONE proposal hook to forex/runner.py", test_hook_is_only_hook_in_runner)
 

@@ -89,11 +89,26 @@ import forex.rsi_signal_registry as rsi_signal_registry
 # AI advisory layer (Sprint 0+). Ships OFF (ai_enabled_for -> False by
 # default). Every touchpoint is guarded by that call. Import is cheap and
 # side-effect-free; nothing here runs unless config/ai.json enables it.
-import ai.config as ai_config
-import ai.agent.trading_copilot as ai_trading_copilot
-from ai.features.trade_proposal import (build_proposal as _ai_build_proposal,
-                                        log_proposal as _ai_log_proposal,
-                                        log_shadow_decision as _ai_log_shadow)
+#
+# Wrapped in try/except because this module is run as a script AND re-imported
+# by safeguard/housekeeping in the same process -- if the AI sub-package ever
+# fails to import (partial-module race, a broken edit, a missing optional
+# dep), the deterministic trading engine must still load and run. On failure
+# the hooks below see ai_config is None / the stubs and skip themselves.
+try:
+    import ai.config as ai_config
+    import ai.agent.trading_copilot as ai_trading_copilot
+    from ai.features.trade_proposal import (build_proposal as _ai_build_proposal,
+                                            log_proposal as _ai_log_proposal,
+                                            log_shadow_decision as _ai_log_shadow)
+except Exception as _ai_import_exc:                      # pragma: no cover
+    logging.getLogger(__name__).warning(
+        "  [ai] advisory layer unavailable, running deterministic-only: %s", _ai_import_exc)
+    ai_config = None
+    ai_trading_copilot = None
+    def _ai_build_proposal(*a, **k): return {}
+    def _ai_log_proposal(*a, **k): return None
+    def _ai_log_shadow(*a, **k): return None
 
 logging.basicConfig(
     level=logging.INFO,
@@ -2847,7 +2862,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         #             entered/skipped outcome after this loop.
         # Guarded by the AI kill switch (OFF by default). Cannot change
         # entries / qty / anything downstream; any exception is swallowed.
-        if ai_config.ai_enabled_for(ACCOUNT_ENV):
+        if ai_config is not None and ai_config.ai_enabled_for(ACCOUNT_ENV):
             try:
                 _prop = _ai_build_proposal(
                     account_env=ACCOUNT_ENV, strategy=strat_name, symbol=sym,

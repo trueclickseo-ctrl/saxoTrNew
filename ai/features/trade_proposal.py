@@ -19,7 +19,16 @@ import json
 import os
 from datetime import datetime, timezone
 
-from ai.regime.classifier import classify_regime
+# NOTE: ai.regime.classifier is imported LAZILY inside build_proposal(), not
+# here. classifier.py pulls in forex.strategy at its module top; importing
+# it here put forex.strategy on this module's import-time dependency chain,
+# and forex/runner.py imports THIS module. Under the runner's "run as a
+# script, then re-imported by safeguard/housekeeping" pattern (and any
+# threaded first-import), that chain opened a window where a second importer
+# could observe a half-initialised ai.features.trade_proposal and raise
+# "cannot import name 'log_shadow_decision'" -- which broke forex
+# reconciliation on 2026-08-31. The lazy import keeps module load trivial
+# and side-effect-free.
 
 _DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), "data")
@@ -53,7 +62,14 @@ def build_proposal(*, account_env: str, strategy: str, symbol: str, direction: s
             "strategy": key.split(":", 1)[0] if ":" in key else None,
         })
 
-    regime = classify_regime(regime_bars) if regime_bars is not None else {"label": "UNKNOWN"}
+    if regime_bars is not None:
+        try:
+            from ai.regime.classifier import classify_regime
+            regime = classify_regime(regime_bars)
+        except Exception:
+            regime = {"label": "UNKNOWN"}
+    else:
+        regime = {"label": "UNKNOWN"}
 
     return {
         "ts": datetime.now(timezone.utc).isoformat(),

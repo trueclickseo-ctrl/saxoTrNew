@@ -126,9 +126,14 @@ _run("a model refusal -> HOLD", test_refusal_is_hold)
 
 
 def test_no_sdk_is_hold():
-    _uninstall_fake()   # ensure it's really gone
-    d = tc.evaluate_proposal(_PROP)
-    assert d["action"] == "HOLD" and "not installed" in d["comment"]
+    # force `import anthropic` to fail even if the real SDK is installed
+    _uninstall_fake()
+    sys.modules["anthropic"] = None
+    try:
+        d = tc.evaluate_proposal(_PROP)
+        assert d["action"] == "HOLD" and "not installed" in d["comment"]
+    finally:
+        _uninstall_fake()
 _run("anthropic SDK not installed -> HOLD", test_no_sdk_is_hold)
 
 
@@ -169,7 +174,7 @@ def test_hook_is_agent_gated_and_downstream_inert():
     assert "ai_trading_copilot.evaluate_proposal(" in src
     # decision is stashed, then logged after the loop -- never applied
     assert "_ai_shadow_pending.append(" in src and "_ai_log_shadow(" in src
-    hook = src[src.index("if ai_config.ai_enabled_for(ACCOUNT_ENV):"): src.index("if not _currency_ok")]
+    hook = src[src.index("ai_config.ai_enabled_for(ACCOUNT_ENV):"): src.index("if not _currency_ok")]
     for forbidden in ("place_with_stop", "_post(", "size_position", "positions[pos_key]",
                       "entries += 1", "pos_record", "_amend_stop_order"):
         assert forbidden not in hook, f"advisory hook must not contain {forbidden!r}"
