@@ -629,12 +629,19 @@ BREAKEVEN_GAP_FILL_PCT  = 0.50
 # Ratchet only (a rung never loosens the stop). Primary exit is still RSI
 # recovery / 2 R broker TP / 12-day time stop / hard stop -- unchanged.
 #
-# OFF by default: PROFIT_LADDER_ACCOUNTS is empty, so every account keeps the
-# current behaviour byte-for-byte. Set it to {"live_eur"} (or add "sim") to
-# switch that account's RSI book onto the ladder. Keep it OFF until the
-# backtest (backtests/rsi_exit_ladder_backtest.py) shows it beats the current
-# policy on realistic spreads/commission/intrabar handling.
-PROFIT_LADDER_ACCOUNTS: set[str] = set()
+# 2026-08-31: turned ON for both real-money accounts ({"live","live_eur"}) at
+# the user's explicit, repeated request -- the exact 3-stage design they
+# specified (+0.75 R breakeven+costs / +1.0 R lock +0.5 R / +1.25 R 1xATR
+# trail), after a GBPPLN position gave back +30 -> -24 PLN. The backtest
+# (backtests/rsi_exit_ladder_backtest.py, 17 pairs / 12 y / 2365 trades)
+# showed only a small net edge and that it doesn't fully close the give-back
+# (avg MFE ~0.51 R sits below the 0.75 R first rung) -- but the ladder only
+# ever TIGHTENS a stop (pure ratchet, never loosens), the primary RSI-
+# recovery / 2 R TP / 12-day exits are unchanged, and the user accepts the
+# "may clip some winners a touch early" trade-off to stop the give-back.
+# SIM stays OFF (not in the set) -- byte-for-byte unchanged. Empty the set
+# to revert both accounts to the plain breakeven + 1.5xATR trail.
+PROFIT_LADDER_ACCOUNTS: set[str] = {"live", "live_eur"}
 PROFIT_LADDER_STRATEGIES         = {"rsi"}
 PROFIT_LADDER_BREAKEVEN_R        = 0.75
 PROFIT_LADDER_COST_BUFFER_R      = 0.10
@@ -1189,6 +1196,35 @@ def _fetch_history(uic: int, count: int = CHART_BARS) -> pd.DataFrame | None:
     except Exception as exc:
         logger.warning(f"Chart fetch failed for UIC {uic}: {exc}")
         return None
+
+
+def _add_held_position_history(market_data: dict, positions: dict) -> None:
+    """Fetch daily history for any OPEN position whose pair is NOT in the
+    scanned universe and mutate it into `market_data`.
+
+    Found live 2026-08-31: `rsi:GBPPLN` on the LIVE EUR account (opened as
+    an exotic 2026-08-26, before that account was narrowed to CORE_SYMBOLS
+    only) had `market_data.get("GBPPLN")` return None every run for days,
+    because `market_data` is only ever built for `active_pairs`. With
+    df=None EVERY exit path silently no-ops -- the generic trailing block,
+    _apply_breakeven_stop, _apply_profit_ladder_stop AND strategy_rsi.
+    should_exit (which early-returns on df=None, so even the 12-day time
+    stop never fires). The position ran +30 -> -24 PLN managed only by its
+    original entry-day broker stop/TP. This closes that gap for every
+    strategy: a held position on a since-dropped pair is still fully
+    exit-managed, not just protected by its resting broker orders."""
+    held = {k.split(":", 1)[1] for k in positions if ":" in k}
+    for sym in held - set(market_data):
+        pi = _PAIRS_BY_SYMBOL.get(sym)
+        if pi is None:
+            logger.warning(f"  [exits] held position on {sym} but it's not in the "
+                           f"pair universe at all — can't fetch history to manage it")
+            continue
+        market_data[sym] = _fetch_history(pi["uic"])
+        if market_data[sym] is None:
+            logger.warning(f"  [exits] {sym}: held position outside the scanned "
+                           f"universe and its history fetch returned nothing — "
+                           f"still protected by its broker stop/TP only this run")
 
 
 def _fetch_history_h1(uic: int, count: int = 48) -> pd.DataFrame | None:
@@ -3160,6 +3196,7 @@ def run_exits_only(dry_run: bool = True,
     market_data: dict[str, pd.DataFrame | None] = {}
     for pair in active_pairs:
         market_data[pair["symbol"]] = _fetch_history(pair["uic"])
+    _add_held_position_history(market_data, positions)
 
     total_exits = 0
     for strat_name in active_strategies:
@@ -3293,6 +3330,7 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
     market_data: dict[str, pd.DataFrame | None] = {}
     for pair in active_pairs:
         market_data[pair["symbol"]] = _fetch_history(pair["uic"])
+    _add_held_position_history(market_data, positions)
 
     # ── Momentum pre-filter: restrict NEW entries to top trending pairs ────────
     # Exits always run on the full market_data (we never suppress stop-checks).
