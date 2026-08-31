@@ -470,9 +470,11 @@ def _positions_section(title: str, positions_subset: list, live: dict,
     2026-08-25 for unambiguous visual separation between tiers."""
     L = _section_header(f"{title}  ({len(positions_subset)} active)", color, W_TOTAL)
 
+    # 2026-09-01: table is grouped by PAIR now (pair is the group header +
+    # mini-subtotal); each row's 2nd column is blank since the pair is above.
     COL_HDR = (
         f"  {DM}"
-        f"{'Strategy':<10}  {'Pair':<7}  {'Side':<6}  "
+        f"{'Strategy':<10}  {'':<7}  {'Side':<6}  "
         f"{'Qty':>12}  {'Entry':>10}  {'Now':>10}  "
         f"{'Stop':>10}  {'P&L (EUR)':>12}  {'%':>9}  "
         f"{'ATR':>8}  {'Days':>5}  {'Stop Risk':>12}{W}"
@@ -491,28 +493,73 @@ def _positions_section(title: str, positions_subset: list, live: dict,
                        "gap", "gap_weekend", "supertrend", "zscore",
                        "ml", "advanced_ml", "cnn_lstm", "advanced_cnn_lstm_master",
                        "london_breakout", "london_breakout_v2"]
-        grouped: dict = {}
-        for p in positions_subset:
-            grouped.setdefault(p["strategy"], []).append(p)
+        _sidx = {s: i for i, s in enumerate(strat_order)}
 
-        first_group = True
-        for strat in strat_order:
-            grp = grouped.get(strat, [])
-            if not grp:
-                continue
-            sc = STRAT_COL.get(strat, DM)
-            if not first_group:
+        # 2026-09-01 (user): group by PAIR, strategies nested under each, with
+        # a per-pair mini-subtotal. Surfaces multi-strategy concentration on
+        # one instrument (e.g. XAUEUR held by rsi + gap + advanced_ml) that
+        # the old strategy-grouping scattered across three places.
+        by_pair: dict = {}
+        for p in positions_subset:
+            by_pair.setdefault(p["symbol"], []).append(p)
+
+        def _row_metrics(p):
+            """(pnl_eur|None, cost_eur|None, dist_pct|None) for one position."""
+            sym, ep, qty = p["symbol"], p["entry"], p["qty"]
+            now_px = live.get(sym)
+            is_long = p["direction"] == "Buy"
+            quote_ccy = sym[3:6] if len(sym) >= 6 else ""
+            eur_rate = _eur_per_unit(quote_ccy, live) if now_px and ep > 0 else None
+            pnl_eur = cost_eur = None
+            if now_px and ep > 0 and eur_rate is not None:
+                raw = (now_px - ep) if is_long else (ep - now_px)
+                pnl_eur = raw * qty * eur_rate
+                cost_eur = ep * qty * eur_rate
+            dist = (abs(now_px - p["stop"]) / now_px * 100
+                    if (p["stop"] > 0 and now_px) else None)
+            return pnl_eur, cost_eur, dist
+
+        # order the pairs: most-concentrated first, then worst P&L, then name
+        pair_rank = []
+        for sym, grp in by_pair.items():
+            pnls = [x[0] for x in (_row_metrics(p) for p in grp) if x[0] is not None]
+            pair_rank.append((
+                -len({p["strategy"] for p in grp}),         # more strategies first
+                sum(pnls) if pnls else 0.0,                  # then worse P&L first
+                sym,
+            ))
+        ordered_syms = [s for _, _, s in sorted(pair_rank)]
+
+        for gi, sym in enumerate(ordered_syms):
+            grp = sorted(by_pair[sym], key=lambda p: _sidx.get(p["strategy"], 99))
+            if gi:
                 L.append(f"  {DM}{'·'*W_TOTAL}{W}")
-            first_group = False
+
+            m = [_row_metrics(p) for p in grp]
+            pair_pnl   = sum(x[0] for x in m if x[0] is not None)
+            pair_units = sum(p["qty"] for p in grp)
+            n_strat    = len({p["strategy"] for p in grp})
+            closest    = min((x[2] for x in m if x[2] is not None), default=None)
+            _priced    = any(x[0] is not None for x in m)
+            hc = GR if pair_pnl >= 0 else RD
+            pnl_txt = (f"{hc}{pair_pnl:>+,.0f} EUR{W}" if _priced else f"{DM}—{W}")
+            close_txt = (f"  ·  closest stop {closest:.2f}%" if closest is not None else "")
+            L.append(
+                f"  {color}{BD}{sym:<7}{W}  {DM}"
+                f"{n_strat} strateg{'y' if n_strat == 1 else 'ies'}  ·  "
+                f"{pair_units:,} unit{'' if pair_units == 1 else 's'}  ·  "
+                f"{W}{pnl_txt}{DM}{close_txt}{W}"
+            )
 
             for p in grp:
-                sym      = p["symbol"]
+                strat    = p["strategy"]
                 is_long  = p["direction"] == "Buy"
                 now_px   = live.get(sym)
                 ep       = p["entry"]
                 stop_px  = p["stop"]
                 qty      = p["qty"]
                 atr      = p["atr"]
+                sc       = STRAT_COL.get(strat, DM)
                 try:
                     held = (date.today() - date.fromisoformat(p["entry_date"])).days
                 except Exception:
@@ -553,7 +600,7 @@ def _positions_section(title: str, positions_subset: list, live: dict,
                     dist_s = f"{DM}{'—':>12}{W}"
 
                 L.append(
-                    f"  {sc}{BD}{strat:<10}{W}  {BD}{sym:<7}{W}  {side_tag}  "
+                    f"  {sc}{BD}{strat:<10}{W}  {'':<7}  {side_tag}  "
                     f"{DM}{qty:>12,}{W}  {DM}{ep:>10.5f}{W}  {BD}{now_s:>10}{W}  "
                     f"{stp_col}{stop_s:>10}{W}  {_pad_ansi(pnl_s, 17)}  "
                     f"{_pad_ansi(pct_s, 14)}  {DM}{atr:>8.5f}{W}  "
