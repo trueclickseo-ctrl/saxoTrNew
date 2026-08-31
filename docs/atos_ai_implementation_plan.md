@@ -1,5 +1,7 @@
 # ATOS AI — Implementation Plan (Sprints, Friday 2026-08-28 start)
 
+> **Status (2026-08-31):** Sprint 0 ✅ (`ai/` + kill switch, `6f95903`) · Sprint 1 ✅ (regime classifier, `cc1ad8c`) · Sprint 2 next. Also shipped adjacent to this plan: the exit-advisor Stage A shadow scorer (`fbc8f94`, roadmap #16/#8) and the RSI-signal-registry (threshold study + Trade-Probability data, roadmap #4) — both feed the same evidence base. Open decisions still owed: Sprint 4's multiplier `FLOOR`, and who rules a review window "volatile enough".
+
 Companion to [`docs/atos_ai_roadmap.md`](atos_ai_roadmap.md), which owns the *vision/governance* (v1 scope, autonomy levels, Trade Constitution, JSON schemas). This doc owns the *how and in what order* — six sprints, each with its own deliverable, its own test gate, and its own go/no-go before the next one starts. No sprint begins until the previous one's test gate is green. Nothing here touches LIVE; Sprint 5 (SIM A/B) is the ceiling for this plan, and rolling to LIVE is explicitly out of scope — it requires the separate written decision already mandated in the roadmap doc's governance rules.
 
 Locked scope this plan implements (from the roadmap doc, do not re-litigate): one consolidated agent, not six. Regime is a deterministic code feature (ADX/ATR/MA-slope/vol-bands), not an LLM call. Sizing is a bounded multiplier only — no dynamic SL/TP in v1. Shadow mode is exited on evidence, not a calendar date. Level 2 semi-autonomous is the ceiling; anything past it needs its own separate decision.
