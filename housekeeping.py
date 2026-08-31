@@ -417,7 +417,13 @@ class StocksAdapter(BaseAdapter):
         con = sqlite3.connect(ATOS_DB)
         con.row_factory = sqlite3.Row
         cur = con.cursor()
-        cur.execute("SELECT id, ticker, direction, shares FROM trades WHERE exit_date IS NULL")
+        # COALESCE(paper,0)=0 -- skip locally-simulated fills (Saxo SIM order
+        # engine was down; booked with paper=1 in atos_runner). They have no
+        # Saxo counterpart and are managed entirely by ATOS's own should_exit()
+        # logic; reconciliation must not see them or it flags ledger drift.
+        # Same treatment as ForexAdapter's `if v.get("paper"): continue`.
+        cur.execute("SELECT id, ticker, direction, shares FROM trades "
+                    "WHERE exit_date IS NULL AND COALESCE(paper, 0) = 0")
         out = []
         for row in cur.fetchall():
             info = by_ticker.get(row["ticker"])

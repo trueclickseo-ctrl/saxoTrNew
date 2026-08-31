@@ -135,6 +135,11 @@ def migrate_schema():
         "ALTER TABLE signals ADD COLUMN rsi REAL",
         "ALTER TABLE signals ADD COLUMN dip_pct REAL",
         "ALTER TABLE signals ADD COLUMN vol_ratio REAL",
+        # 2026-09-01: SIM paper-fill fallback. paper=1 means Saxo SIM's order
+        # engine rejected the real order (CouldNotCompleteRequest 90) and the
+        # trade was booked LOCALLY, managed by ATOS's own should_exit() logic.
+        # It has no Saxo counterpart -- housekeeping's StocksAdapter skips it.
+        "ALTER TABLE trades ADD COLUMN paper INTEGER DEFAULT 0",
     ]
     with _conn() as conn:
         for sql in migrations:
@@ -146,20 +151,22 @@ def migrate_schema():
 # -- Trades ---------------------------------------------------------
 
 def insert_trade(data: dict) -> int:
-    """Insert a new open trade. Returns the trade id."""
-    data = {"strategy": "ATOS_v1", **data}  # default if caller omits it
+    """Insert a new open trade. Returns the trade id.
+    `paper` (default 0): 1 == a locally-simulated fill because Saxo SIM
+    rejected the real order (see migrate_schema)."""
+    data = {"strategy": "ATOS_v1", "paper": 0, **data}  # defaults if caller omits
     with _conn() as conn:
         cur = conn.execute("""
             INSERT INTO trades
               (strategy, market_group, ticker, direction, entry_date, entry_price, shares,
                commission_sek, entry_score, d1_trend, d2_momentum, d3_breakout,
                d4_mean_revert, d5_volume, d6_smart_money, d7_mom_quality, d8_regime,
-               trailing_stop_high, regime_at_entry, stop_price)
+               trailing_stop_high, regime_at_entry, stop_price, paper)
             VALUES
               (:strategy, :market_group, :ticker, :direction, :entry_date, :entry_price, :shares,
                :commission_sek, :entry_score, :d1_trend, :d2_momentum, :d3_breakout,
                :d4_mean_revert, :d5_volume, :d6_smart_money, :d7_mom_quality, :d8_regime,
-               :trailing_stop_high, :regime_at_entry, :stop_price)
+               :trailing_stop_high, :regime_at_entry, :stop_price, :paper)
         """, data)
         return cur.lastrowid
 

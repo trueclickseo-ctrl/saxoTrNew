@@ -167,6 +167,29 @@ LEGACY_PER_MARKET_STRATEGY_ENABLED = False
 # Then flip this to True when the verdict is ENABLE.
 US_REVERSION_ENABLED = True   # SIM enabled 2026-08-08 — honest OOS validated (Sharpe 2.39, WR 70%)
 
+# ── SIM paper-fill fallback (2026-09-01) ──────────────────────────────────
+# Mirrors forex/runner.py's SIM_PAPER_FILL_ON_REJECT. Saxo SIM's order
+# engine has been rejecting essentially every order with
+# "CouldNotCompleteRequest (90)" since ~2026-08-28 (hits forex, stocks and
+# protective stops alike). Forex rides it out by booking the fill locally;
+# stocks had no such fallback, so a valid signal (e.g. PYPL US Reversion:
+# RSI 33, -10.5% dip, 3.3x vol, 2026-08-31 — ~18 rejected attempts, then the
+# window closed) was simply missed.
+#
+# With this on, a rejected SIM stock BUY is booked in the trades table with
+# paper=1 at the scan price and managed by ATOS's own should_exit() /
+# rebalance logic. housekeeping.StocksAdapter skips paper rows (no Saxo
+# counterpart to reconcile). The stocks module is SIM-only — saxo_client
+# defaults to env="sim" and atos_runner never passes env="live"; _STOCKS_ENV
+# documents that and is the one gate to change if a LIVE stocks account is
+# ever added. A paper-fill can NEVER happen unless _STOCKS_ENV == "sim".
+_STOCKS_ENV = "sim"
+STOCKS_SIM_PAPER_FILL_ON_REJECT = True
+
+
+def _stocks_paper_fill_enabled() -> bool:
+    return STOCKS_SIM_PAPER_FILL_ON_REJECT and _STOCKS_ENV == "sim"
+
 # ── Signal caches — written by run_us_momentum/run_us_reversion, read by dashboard ──
 _blend_signal: dict  = {}   # keys: targets, risk_off, reason, momentum, lowvol
 _rev_signals:  list  = []   # list of candidate dicts from USR.scan()
@@ -1260,6 +1283,7 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
     shares = int(shares)
     if shares < 1 or ticker not in imap:
         return False
+    paper = 0
     try:
         if side == "Buy":
             # Attach stop-loss/take-profit atomically with the entry — this
@@ -1269,15 +1293,29 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
             # native Saxo GTC bracket is enforced 24/7 even if a run is missed.
             stop_p = round(price * (1 - US_BLEND_STOP_PCT), 2)
             tp_p   = round(price * (1 + US_BLEND_TP_PCT), 2)
-            saxo_order.place_with_stop(
+            entry_oid, _, _ = saxo_order.place_with_stop(
                 post_fn=saxo_client.post,
                 account_key=saxo_client.get_account_key(),
                 uic=imap[ticker]["uic"], asset_type="Stock", amount=shares,
                 buy_sell="Buy", stop_price=stop_p, take_profit_price=tp_p,
                 label=f"US Blend:{ticker}",
             )
+            if entry_oid is None:
+                # Saxo rejected it (no exception -- place_with_stop returns
+                # None). Previously this fell through and recorded a PHANTOM
+                # DB row Saxo didn't have. Now: paper-fill on SIM, else skip.
+                if not _stocks_paper_fill_enabled():
+                    print(f"  [US momentum] BUY {shares} {ticker} REJECTED — "
+                          f"no position opened, no DB row recorded")
+                    return False
+                paper = 1
+                print(f"  [US momentum] PAPER-FILL {ticker}: {shares} @ ${price:.2f} — "
+                      f"Saxo SIM rejected the order; booked locally")
         else:
-            saxo_client.place_market_order(imap[ticker]["uic"], "Stock", side, shares)
+            cur_is_paper = bool(cur_trade and cur_trade.get("paper"))
+            if not cur_is_paper:
+                saxo_client.place_market_order(imap[ticker]["uic"], "Stock", side, shares)
+            # paper position: no Saxo counterpart -- DB close happens below
     except Exception as e:
         print(f"  [US momentum] {side} {shares} {ticker} FAILED: {e}")
         return False
@@ -1294,6 +1332,7 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
             "d7_mom_quality": 0, "d8_regime": 0,
             "stop_price": round(price * (1 - US_BLEND_STOP_PCT), 2),
             "trailing_stop_high": price, "regime_at_entry": "momentum",
+            "paper": paper,
         })
         record_fill(-(shares * price_sek + comm))
         _append_trade_log("US Blend", "BUY", ticker, shares, price,
@@ -1305,7 +1344,7 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
             side="BUY", ticker=ticker, shares=shares, price_usd=price,
             value_sek=shares * price_sek, strategy="US Blend",
             account_balance_sek=get_total_equity(db.get_open_trades()),
-            reason="Weekly momentum rebalance",
+            reason=("[PAPER-FILL — Saxo SIM down] " if paper else "") + "Weekly momentum rebalance",
         )
     else:  # Sell (full close of the tracked position)
         comm = commission_sek(shares, price_sek)
@@ -1366,6 +1405,8 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
                 if uic is not None and amount:
                     held_uics.add(uic)
             for tk in list(us_open.keys()):
+                if us_open[tk].get("paper"):
+                    continue   # locally-simulated fill -- no Saxo position to reconcile against
                 info = imap.get(tk)
                 uic = info.get("uic") if info else None
                 if uic is None or uic not in held_uics:
@@ -1645,11 +1686,15 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
         exit_flag, reason = USR.should_exit(trade, cur_price, cur_rsi, sma20, days_held)
         if exit_flag:
             sh = trade.get("shares", 0) or 0
-            print(f"  {tag} EXIT {ticker}: {reason}")
+            is_paper = bool(trade.get("paper"))
+            print(f"  {tag} EXIT {ticker}: {reason}{' [PAPER]' if is_paper else ''}")
             uic = imap.get(ticker, {}).get("uic")
-            if uic and sh > 0:
+            if (uic and sh > 0) or (is_paper and sh > 0):
                 try:
-                    saxo_client.place_market_order(uic, "Stock", "Sell", sh)
+                    if not is_paper:
+                        saxo_client.place_market_order(uic, "Stock", "Sell", sh)
+                    # paper position: no Saxo counterpart to sell -- just close
+                    # the DB row at the current price, same as forex paper exits
                     comm_exit = commission_sek(sh, sh * cur_price * fx_usd)
                     pnl_sek = (cur_price - trade.get("entry_price", 0)) * sh * fx_usd - comm_exit
                     db.close_trade(trade["id"], exit_price=cur_price,
@@ -1770,9 +1815,14 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
                 buy_sell="Buy", stop_price=stop_p,
                 label=f"US Reversion:{ticker}",
             )
+            paper = 0
             if entry_oid is None:
-                print(f"  {tag} buy {ticker} REJECTED — no position opened, no DB row recorded")
-                continue
+                if not _stocks_paper_fill_enabled():
+                    print(f"  {tag} buy {ticker} REJECTED — no position opened, no DB row recorded")
+                    continue
+                paper = 1
+                print(f"  {tag} PAPER-FILL {ticker}: {shares} @ ${price:.2f} — Saxo SIM "
+                      f"rejected the order; booked locally, managed by ATOS should_exit() logic")
             comm = commission_sek(shares, cost_sek)
             db.insert_trade({
                 "strategy": "US Reversion", "market_group": "US Equities",
@@ -1785,6 +1835,7 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
                 "d5_volume": cand["vol_ratio"],
                 "d6_smart_money": 0, "d7_mom_quality": 0, "d8_regime": 0,
                 "stop_price": stop_p, "trailing_stop_high": price, "regime_at_entry": "reversion",
+                "paper": paper,
             })
             ordered_tickers.add(ticker)
             _append_trade_log(
@@ -1803,7 +1854,8 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
                 side="BUY", ticker=ticker, shares=shares, price_usd=price,
                 value_sek=cost_sek, strategy="US Reversion",
                 account_balance_sek=get_total_equity(db.get_open_trades()),
-                reason=f"RSI {cand['rsi']:.1f} | Dip {cand['dip_pct']}% | Vol {cand['vol_ratio']}x",
+                reason=(("[PAPER-FILL — Saxo SIM down] " if paper else "")
+                        + f"RSI {cand['rsi']:.1f} | Dip {cand['dip_pct']}% | Vol {cand['vol_ratio']}x"),
             )
         except Exception as e:
             print(f"  {tag} buy {ticker} FAILED: {e}")
@@ -2004,9 +2056,14 @@ def run_intraday_cycle():
                 buy_sell="Buy", stop_price=stop_p,
                 label=f"US Reversion:{ticker}",
             )
+            paper = 0
             if entry_oid is None:
-                print(f"  {ticker}: order REJECTED — no position opened, no DB row recorded")
-                continue
+                if not _stocks_paper_fill_enabled():
+                    print(f"  {ticker}: order REJECTED — no position opened, no DB row recorded")
+                    continue
+                paper = 1
+                print(f"  {ticker}: PAPER-FILL {shares} @ ${price_usd:.2f} — Saxo SIM "
+                      f"rejected the order; booked locally, managed by ATOS exit logic")
             comm = commission_sek(shares, value_sek)
             db.insert_trade({
                 "strategy": "US Reversion", "market_group": "US Equities",
@@ -2019,6 +2076,7 @@ def run_intraday_cycle():
                 "d5_volume": cand["vol_ratio"],
                 "d6_smart_money": 0, "d7_mom_quality": 0, "d8_regime": 0,
                 "stop_price": stop_p, "trailing_stop_high": price_usd, "regime_at_entry": "reversion",
+                "paper": paper,
             })
             _append_trade_log(
                 strategy="US Reversion",
