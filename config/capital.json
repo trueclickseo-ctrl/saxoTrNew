@@ -4,7 +4,10 @@
   "account": {
     "starting_capital_sek": 300000,
     "max_deploy_pct": 0.90,
-    "cash_buffer_pct": 0.10
+    "cash_buffer_pct": 0.10,
+
+    "_sim_max_trade_notional_eur_comment": "2026-09-01 (user): SIM is for testing strategies, not for size. Hard ceiling on the NOTIONAL value of any single SIM entry -- forex/stocks/ETF. A signal whose computed size exceeds this is scaled DOWN to it (then floored to the instrument minimum); the strategy's risk math is untouched, only the absolute position size. WHY: even at 0.25% risk, low-ATR forex pairs sized to ~EUR 180,000 notional on a ~EUR 27,800 base (e.g. 196,000x USDHKD), and forex+futures margin exposure hit EUR 5.4M. Win-rate / expectancy / R-multiple are scale-invariant, so smaller size costs the study nothing. FUTURES ARE EXEMPT -- one contract is already the floor and can't be shrunk. Set 0 to disable.",
+    "sim_max_trade_notional_eur": 10000
   },
 
   "strategies": {

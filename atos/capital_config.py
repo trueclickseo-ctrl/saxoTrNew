@@ -52,6 +52,16 @@ def cash_buffer_pct() -> float:
     return float(_load()["account"].get("cash_buffer_pct", 0.10))
 
 
+def sim_max_trade_notional_eur() -> float:
+    """Hard ceiling on the notional value of any single SIM entry
+    (forex / stocks / ETF -- futures exempt). 0 (or absent) = disabled.
+    See config/capital.json's `_sim_max_trade_notional_eur_comment`."""
+    try:
+        return float(_load()["account"].get("sim_max_trade_notional_eur", 0) or 0)
+    except (KeyError, TypeError, ValueError):
+        return 0.0
+
+
 # ── US Blend ───────────────────────────────────────────────────────────────
 
 def blend_allocation_pct() -> float:

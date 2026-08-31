@@ -190,6 +190,27 @@ STOCKS_SIM_PAPER_FILL_ON_REJECT = True
 def _stocks_paper_fill_enabled() -> bool:
     return STOCKS_SIM_PAPER_FILL_ON_REJECT and _STOCKS_ENV == "sim"
 
+
+def _sim_cap_shares(shares: int, price_usd: float, fx_usd_sek: float) -> int:
+    """Clamp a stock BUY to config/capital.json account.sim_max_trade_notional_eur
+    (2026-09-01, user -- SIM is for testing, not size). The stocks module is
+    SIM-only. Rarely binds (a reversion slot is ~SEK 13,500 / ~EUR 1,250) but
+    a backstop if the sleeves grow. 0/absent = disabled."""
+    try:
+        cap_eur = CAP.sim_max_trade_notional_eur()
+    except Exception:
+        return shares
+    if not cap_eur or cap_eur <= 0 or shares < 1 or not price_usd or not fx_usd_sek:
+        return shares
+    cap_sek = cap_eur * (_rate_to_sek("EUR") or 11.5)
+    if shares * price_usd * fx_usd_sek <= cap_sek:
+        return shares
+    capped = max(int(cap_sek / (price_usd * fx_usd_sek)), 1)
+    if capped != shares:
+        print(f"  [stocks] SIM notional cap: {shares} → {capped} sh "
+              f"(cap €{cap_eur:,.0f})")
+    return capped
+
 # ── Signal caches — written by run_us_momentum/run_us_reversion, read by dashboard ──
 _blend_signal: dict  = {}   # keys: targets, risk_off, reason, momentum, lowvol
 _rev_signals:  list  = []   # list of candidate dicts from USR.scan()
@@ -1281,6 +1302,8 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
               todays_actions: list, price: float, cur_trade: dict = None) -> bool:
     """Place ONE US market order and update DB + local cash on success."""
     shares = int(shares)
+    if side == "Buy":
+        shares = _sim_cap_shares(shares, price, _rate_to_sek("USD"))
     if shares < 1 or ticker not in imap:
         return False
     paper = 0
@@ -1789,7 +1812,7 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
             print(f"  {tag} {ticker}: no UIC in instrument_map — skip")
             continue
 
-        shares = int(slot_sek / (price * fx_usd))
+        shares = _sim_cap_shares(int(slot_sek / (price * fx_usd)), price, fx_usd)
         if shares < 1:
             print(f"  {tag} {ticker}: slot too small for 1 share — skip")
             continue
@@ -2037,7 +2060,7 @@ def run_intraday_cycle():
         if not uic:
             print(f"  {ticker}: no UIC in instrument_map — skip")
             continue
-        shares    = int(slot_sek / (price_usd * fx_usd))
+        shares    = _sim_cap_shares(int(slot_sek / (price_usd * fx_usd)), price_usd, fx_usd)
         if shares < 1:
             print(f"  {ticker}: slot {slot_sek:,.0f} SEK too small for 1 share at ${price_usd:.2f}. Skip.")
             continue

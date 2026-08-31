@@ -136,6 +136,21 @@ class ETFExecutor:
         if budget_ccy <= 0:
             return
 
+        # SIM per-trade notional cap (2026-09-01, user): SIM is for testing,
+        # not size. ETF budget is sized off the raw SIM cash (~EUR 646k of
+        # demo credit); clamp it to config/capital.json
+        # account.sim_max_trade_notional_eur. Account ccy is EUR on SIM so
+        # this is a direct comparison. 0/absent = disabled.
+        try:
+            from atos.capital_config import sim_max_trade_notional_eur
+            _cap = sim_max_trade_notional_eur()
+            if _cap and 0 < _cap < budget_ccy:
+                logger.info(f"ETF {signal.symbol}: SIM notional cap "
+                            f"{budget_ccy:.0f} -> {_cap:.0f} EUR")
+                budget_ccy = _cap
+        except Exception:
+            pass
+
         price    = signal.last_price or signal.fast_ma  # last close is the best proxy
         # Capped at 50 shares/name — added 2026-08-22 at user's request. A
         # flat dollar budget alone sized cheap ETFs (XLF, XLE at $50-60) into

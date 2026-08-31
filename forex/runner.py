@@ -3124,6 +3124,29 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 continue
             qty = _ai_qty
 
+        # ── SIM per-trade notional cap (2026-09-01, user) ───────────────────
+        # SIM is for strategy testing, not size. Even at 0.25% risk, low-ATR
+        # pairs sized to ~EUR 180k notional on a ~EUR 27,800 base. Cap the
+        # NOTIONAL (not the risk math) to config/capital.json
+        # account.sim_max_trade_notional_eur, then floor to the pair minimum.
+        # SIM only; LIVE accounts keep their real (small) sizing untouched.
+        if ACCOUNT_ENV == "sim" and "units" not in sig:
+            import atos.capital_config as _cap_cfg
+            _cap_eur = _cap_cfg.sim_max_trade_notional_eur()
+            if _cap_eur and _cap_eur > 0:
+                _base_ccy = sym[:3]
+                _eur_per_base = _eur_per_unit(_base_ccy, akey)
+                if _eur_per_base:
+                    _notional_eur = qty * _eur_per_base
+                    if _notional_eur > _cap_eur:
+                        _capped = max(int(_cap_eur / _eur_per_base), int(pair_info["min_units"]))
+                        if _capped != qty:
+                            logger.info(f"  [{strat_name}] {sym}[{direction}] SIM notional cap: "
+                                        f"{qty:,} → {_capped:,} units "
+                                        f"(~€{_notional_eur:,.0f} → ~€{_capped * _eur_per_base:,.0f}, "
+                                        f"cap €{_cap_eur:,.0f})")
+                            qty = _capped
+
         # london_breakout/gap provide their own session-range-based target;
         # every other strategy gets a broker-side TP at DEFAULT_TP_RR times
         # its own stop distance, so it's protected on both sides at the
