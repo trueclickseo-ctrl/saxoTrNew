@@ -457,6 +457,130 @@ def _strategy_breakdown_table(title: str, positions: list, live: dict,
     return L
 
 
+def _abbr_eur(v: float) -> str:
+    """Compact EUR: +25.3k / -1,941 / +0."""
+    if v is None:
+        return "—"
+    if abs(v) >= 1000:
+        return f"{v/1000:+,.1f}k"
+    return f"{v:+,.0f}"
+
+
+def _consolidated_breakdown(positions: list, live: dict, color: str = CY) -> list:
+    """Replaces the 8 per-tier STRATEGY BREAKDOWN tables (2026-09-01, user:
+    "1 instead of all separately but have all information smartly") with:
+      1. TIER SCORECARD  -- one row per tier (pairs/active/closed/WR/PF/
+         all-time/today/unrealized). The 8 old "TOTAL" lines, side by side.
+      2. STRATEGY x TIER P&L GRID -- strategies (rows with any activity) x
+         tiers (cols), cell = all-time realized P&L. Shows *where* each
+         strategy makes/loses money -- the cross-tab the 8 separate tables
+         couldn't. Data is per-strategy per-tier from
+         pnl_tracker.get_strategy_summary(symbols=<tier set>), exactly what
+         the old tables used.
+    The full per-strategy ALL-pairs table + the strategy x SYMBOL detail
+    (pnl_tracker.get_strategy_symbol_summary) are unchanged / still available.
+    """
+    import pnl_tracker
+    _LBO_EXCL = {"london_breakout", "london_breakout_v2"}
+    tiers = [
+        ("High Vol",  "HIGH VOLUME",   HIGH_VOLUME_SYMBOLS,          frozenset()),
+        ("Core Std",  "CORE STANDARD", CORE_STANDARD_SYMBOLS,        frozenset()),
+        ("Scandi",    "SCANDI",        SCANDI_SYMBOLS,               _LBO_EXCL),
+        ("Metals",    "METALS",        METALS_SYMBOLS,               _LBO_EXCL),
+        ("Ex Asia",   "EXOTIC ASIA",   EXOTIC_ASIA_SYMBOLS,          _LBO_EXCL),
+        ("Ex Euro",   "EXOTIC EUROPE", EXOTIC_EUROPE_SYMBOLS,        _LBO_EXCL),
+        ("Ex Carry",  "EXOTIC CARRY",  EXOTIC_CARRY_SYMBOLS,         _LBO_EXCL),
+        ("Ex LatAm",  "EXOTIC LATAM",  EXOTIC_LATAM_MIDEAST_SYMBOLS, _LBO_EXCL),
+    ]
+    today_str = date.today().isoformat()
+
+    # per-tier: {strategy: realized_pnl}, plus tier totals
+    tier_strat_pnl: dict = {}
+    tier_totals: dict = {}
+    for short, _full, syms, excl in tiers:
+        try:
+            srows = pnl_tracker.get_strategy_summary("forex", symbols=syms)
+            trows = pnl_tracker.get_strategy_summary_since("forex", today_str, symbols=syms)
+        except Exception:
+            srows, trows = [], []
+        by_strat = {r["strategy"]: r for r in srows if r["strategy"] not in excl}
+        tier_strat_pnl[short] = {k: (v.get("total_pnl") or 0.0) for k, v in by_strat.items()}
+
+        pos_scope = [p for p in positions if p["symbol"] in syms and p["strategy"] not in excl]
+        unreal = 0.0
+        for p in pos_scope:
+            now_px = live.get(p["symbol"])
+            if now_px and p["entry"] > 0:
+                er = _eur_per_unit(p["symbol"][3:6], live)
+                if er is not None:
+                    raw = (now_px - p["entry"]) if p["direction"] == "Buy" else (p["entry"] - now_px)
+                    unreal += raw * p["qty"] * er
+        realized = sum(v.get("total_pnl") or 0.0 for v in by_strat.values())
+        gp = sum(v.get("gross_profit", 0.0) or 0.0 for v in by_strat.values())
+        gl = abs(sum(v.get("gross_loss", 0.0) or 0.0 for v in by_strat.values()))
+        wins = sum(v.get("wins", 0) for v in by_strat.values())
+        losses = sum(v.get("losses", 0) for v in by_strat.values())
+        n_closed = sum(v.get("trades", 0) for v in by_strat.values())
+        today_pnl = sum(r.get("total_pnl") or 0.0 for r in trows if r["strategy"] not in excl)
+        tier_totals[short] = {
+            "pairs": len(syms), "active": len(pos_scope), "closed": n_closed,
+            "wins": wins, "losses": losses,
+            "wr": (wins / n_closed * 100) if n_closed else None,
+            "pf": (gp / gl) if gl > 0 else None,
+            "realized": realized, "today": today_pnl, "unreal": unreal,
+        }
+
+    W_TOTAL = 108
+    HR = f"  {DM}{'─' * W_TOTAL}{W}"
+    L = _section_header("STRATEGY BREAKDOWN — BY TIER (all 8 tiers, one view)", color, W_TOTAL)
+
+    # ── 1. TIER SCORECARD ──────────────────────────────────────────────────
+    L.append(f"  {DM}{'Tier':<14}  {'Pairs':>5}  {'Active':>6}  {'Closed':>7}  {'W/L':>8}  "
+             f"{'WR%':>6}  {'PF':>7}  {'All-Time':>13}  {'Today':>10}  {'Unreal':>10}{W}")
+    L.append(HR)
+    for short, full, _syms, _excl in tiers:
+        t = tier_totals[short]
+        rc = GR if t["realized"] >= 0 else RD
+        uc = GR if t["unreal"] >= 0 else RD
+        tc = GR if t["today"] >= 0 else RD
+        wr_s = f"{t['wr']:.1f}%" if t["wr"] is not None else "—"
+        pf_s = f"{t['pf']:.2f}" if t["pf"] is not None else "—"
+        wl_s = f"{t['wins']}W/{t['losses']}L"
+        today_s = _abbr_eur(t["today"]) if t["today"] else "—"
+        L.append(
+            f"  {BD}{short:<14}{W}  {DM}{t['pairs']:>5}  {t['active']:>6}  {t['closed']:>7}  "
+            f"{wl_s:>8}{W}  {wr_s:>6}  {DM}{pf_s:>7}{W}  "
+            f"{rc}{BD}{_abbr_eur(t['realized']):>13}{W}  "
+            f"{tc}{today_s:>10}{W}  "
+            f"{uc}{_abbr_eur(t['unreal']):>10}{W}"
+        )
+    L.append(HR)
+
+    # ── 2. STRATEGY x TIER P&L GRID (all-time realized) ────────────────────
+    active_strats = [s for s in STRAT_LABELS_ALL
+                     if any(abs(tier_strat_pnl[sh].get(s, 0.0)) > 0.5 for sh, *_ in tiers)]
+    if active_strats:
+        L.append("")
+        L.append(f"  {BD}Strategy × tier — all-time realised P&L (EUR){W}")
+        L.append(f"  {DM}{'':<16}" + "".join(f"{sh:>11}" for sh, *_ in tiers) + f"{'  Σ':>11}{W}")
+        for s in active_strats:
+            row_vals = [tier_strat_pnl[sh].get(s, 0.0) for sh, *_ in tiers]
+            cells = ""
+            for v in row_vals:
+                c = GR if v > 0.5 else (RD if v < -0.5 else DM)
+                cells += f"{c}{_abbr_eur(v) if abs(v) > 0.5 else '·':>11}{W}"
+            tot = sum(row_vals)
+            tc = GR if tot > 0.5 else (RD if tot < -0.5 else DM)
+            L.append(f"  {STRAT_COL.get(s, DM)}{BD}{STRAT_LABELS_ALL[s]:<16}{W}{cells}"
+                     f"{tc}{BD}{_abbr_eur(tot):>11}{W}")
+    L.append(HR)
+    L.append(f"  {DM}·  = no closed trades in that tier   ·   "
+             f"per-strategy overall = the ALL-PAIRS table below   ·   "
+             f"per (strategy, pair) = pnl_tracker.get_strategy_symbol_summary('forex'){W}")
+    L.append("")
+    return L
+
+
 def _positions_section(title: str, positions_subset: list, live: dict,
                         position_costs: dict, W_TOTAL: int, HR: str,
                         color: str = CY) -> tuple:
@@ -884,73 +1008,16 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     # its own 28-pair majors/crosses subset, genuinely overlaps both CORE
     # halves, unlike SCANDI/EXOTIC below where LBO structurally never
     # trades).
-    L.extend(_strategy_breakdown_table(
-        "STRATEGY BREAKDOWN — HIGH VOLUME (17 pairs, subset of CORE, majors + liquid crosses)",
-        positions, live, symbols=HIGH_VOLUME_SYMBOLS, universe_size=17,
-        color=HIGH_VOLUME_COLOR, total_label="HIGH VOL TOTAL"))
+    # 2026-09-01 (user: "1 instead of all separately but have all info
+    # smartly"): the 8 near-identical per-tier STRATEGY BREAKDOWN tables
+    # (HIGH VOLUME / CORE STANDARD / SCANDI / METALS / EXOTIC ASIA|EUROPE|
+    # CARRY|LATAM), each ~20 mostly-zero rows, collapsed into a TIER
+    # SCORECARD (8 rows) + a strategy x tier all-time-P&L grid. Same
+    # underlying data (pnl_tracker.get_strategy_summary per tier set).
+    L.extend(_consolidated_breakdown(positions, live, color=HIGH_VOLUME_COLOR))
 
-    # CORE STANDARD — added 2026-08-28, HIGH VOLUME's exact complement
-    # within CORE (an exact partition) -- shown directly beside HIGH
-    # VOLUME above so the two halves' track records can be compared side
-    # by side, the actual question this split exists to answer ("does
-    # liquidity actually predict which CORE pairs perform"). Same LBO
-    # inclusion as CORE/HIGH VOLUME (LBO's own 28-pair majors/crosses
-    # subset genuinely overlaps both CORE halves). Grew from 17 to 32
-    # pairs the same day this comment was last touched (currencypairs
-    # cross-check added 15 new CORE pairs, all landing here).
-    L.extend(_strategy_breakdown_table(
-        f"STRATEGY BREAKDOWN — CORE STANDARD ({len(CORE_STANDARD_SYMBOLS)} pairs, subset of CORE, the other half)",
-        positions, live, symbols=CORE_STANDARD_SYMBOLS, universe_size=len(CORE_STANDARD_SYMBOLS),
-        color=CORE_STANDARD_COLOR, total_label="CORE STD TOTAL"))
-
-    # 2026-08-28: grew from 32 to 35 pairs (currencypairs cross-check
-    # added 3 new non-EUR/USD-vs-NOK crosses) -- computed live below.
-    L.extend(_strategy_breakdown_table(
-        f"STRATEGY BREAKDOWN — SCANDI ({len(SCANDI_SYMBOLS)} pairs, SIM-only, excl. LBO)",
-        positions, live, symbols=SCANDI_SYMBOLS, universe_size=len(SCANDI_SYMBOLS),
-        exclude={"london_breakout", "london_breakout_v2"}, color=SCANDI_COLOR, total_label="SCANDI TOTAL"))
-
-    # METALS — added 2026-08-28, explicit user request ("get all supported
-    # currency pairs from saxo... add in the relevant groups"). 17
-    # precious-metal spot pairs (Gold/Silver/Platinum vs various
-    # currencies), deliberately its own tier rather than folded into
-    # CORE/SCANDI/EXOTIC's fiat-currency system -- see
-    # forex/universe.py's METALS_SYMBOLS comment for why. Excludes LBO
-    # (structurally never trades these) same as SCANDI/EXOTIC above.
-    L.extend(_strategy_breakdown_table(
-        f"STRATEGY BREAKDOWN — METALS ({len(METALS_SYMBOLS)} pairs, Gold/Silver/Platinum spot, excl. LBO)",
-        positions, live, symbols=METALS_SYMBOLS, universe_size=len(METALS_SYMBOLS),
-        exclude={"london_breakout", "london_breakout_v2"}, color=METALS_COLOR, total_label="METALS TOTAL"))
-
-    # EXOTIC regional split — added 2026-08-28 (replacing the blended
-    # 83-pair EXOTIC section removed the same day, explicit user
-    # instruction) so each region's own track record is visible instead of
-    # one blended 83-pair number. Grouped by non-G10 currency (the
-    # dimension that actually drives liquidity/correlation/political-
-    # risk), not by which G10 currency a pair happens to be quoted against
-    # -- see forex/universe.py's own comment for the exact bucketing rule
-    # and why it's a strict partition. Same LBO exclusion as SCANDI above
-    # (LBO structurally never trades any of these pairs).
-    L.extend(_strategy_breakdown_table(
-        "STRATEGY BREAKDOWN — EXOTIC ASIA (30 pairs, CNH/HKD/SGD/THB, excl. LBO)",
-        positions, live, symbols=EXOTIC_ASIA_SYMBOLS, universe_size=30,
-        exclude={"london_breakout", "london_breakout_v2"}, color=EXOTIC_ASIA_COLOR, total_label="EXOTIC ASIA TOTAL"))
-
-    L.extend(_strategy_breakdown_table(
-        "STRATEGY BREAKDOWN — EXOTIC EUROPE (25 pairs, CZK/HUF/PLN/RON, excl. LBO)",
-        positions, live, symbols=EXOTIC_EUROPE_SYMBOLS, universe_size=25,
-        exclude={"london_breakout", "london_breakout_v2"}, color=EXOTIC_EUROPE_COLOR, total_label="EXOTIC EUROPE TOTAL"))
-
-    L.extend(_strategy_breakdown_table(
-        "STRATEGY BREAKDOWN — EXOTIC HIGH-YIELD/CARRY (17 pairs, TRY/ZAR, excl. LBO)",
-        positions, live, symbols=EXOTIC_CARRY_SYMBOLS, universe_size=17,
-        exclude={"london_breakout", "london_breakout_v2"}, color=EXOTIC_CARRY_COLOR, total_label="EXOTIC CARRY TOTAL"))
-
-    L.extend(_strategy_breakdown_table(
-        "STRATEGY BREAKDOWN — EXOTIC LATAM/MIDEAST (11 pairs, MXN/ILS/AED, excl. LBO)",
-        positions, live, symbols=EXOTIC_LATAM_MIDEAST_SYMBOLS, universe_size=11,
-        exclude={"london_breakout", "london_breakout_v2"}, color=EXOTIC_LATAM_MIDEAST_COLOR, total_label="EXOTIC LATAM/MIDEAST TOTAL"))
-
+    # The one full per-strategy table stays -- master reference across the
+    # whole 184-pair universe.
     L.extend(_strategy_breakdown_table(
         f"STRATEGY BREAKDOWN — ALL {_total_pairs} PAIRS (blended reference)",
         positions, live, symbols=None, universe_size=_total_pairs,
