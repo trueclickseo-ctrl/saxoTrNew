@@ -1,6 +1,10 @@
 # ATOS AI — Implementation Plan (Sprints, Friday 2026-08-28 start)
 
-> **Status (2026-08-31):** Sprint 0 ✅ (`ai/` + kill switch, `6f95903`) · Sprint 1 ✅ (regime classifier, `cc1ad8c`) · Sprint 2 next. Also shipped adjacent to this plan: the exit-advisor Stage A shadow scorer (`fbc8f94`, roadmap #16/#8) and the RSI-signal-registry (threshold study + Trade-Probability data, roadmap #4) — both feed the same evidence base. Open decisions still owed: Sprint 4's multiplier `FLOOR`, and who rules a review window "volatile enough".
+> **Status (2026-08-31):** Sprint 0 ✅ (`e5bbf9f`) · Sprint 1 ✅ (`fc0d5b5`) · Sprint 2 ✅ (`cc1a5b1`) · Sprint 3 ✅ (`80e8b04`, hardened in `22b9f75`). **Sprint 4 is NEXT but BLOCKED** on the two open decisions below + a real shadow-evidence sample (needs `pip install anthropic` done ✅ + `ANTHROPIC_API_KEY` + `config/ai.json` `enabled_sim`+`agent_enabled`=true, then ~40+ resolved shadow decisions spanning a user-confirmed adverse stretch). Also shipped adjacent to this plan: the exit-advisor Stage A shadow scorer (`fbc8f94`, roadmap #16/#8) and the RSI-signal-registry (threshold study + Trade-Probability data, roadmap #4) — both feed the same evidence base.
+>
+> **Live progress log: [`docs/atos_ai_tracker.md`](atos_ai_tracker.md)** — every AI commit, test count, decision, and the current blocker, kept current as work lands.
+>
+> **Open decisions still owed (Sprint 4):** (1) the multiplier `FLOOR` in `[FLOOR, 1.0]` — placeholder `MULTIPLIER_FLOOR = 0.10` in `ai/agent/trading_copilot.py`; (2) who rules a review window "volatile enough" — the plan says the user, explicitly, each time.
 
 Companion to [`docs/atos_ai_roadmap.md`](atos_ai_roadmap.md), which owns the *vision/governance* (v1 scope, autonomy levels, Trade Constitution, JSON schemas). This doc owns the *how and in what order* — six sprints, each with its own deliverable, its own test gate, and its own go/no-go before the next one starts. No sprint begins until the previous one's test gate is green. Nothing here touches LIVE; Sprint 5 (SIM A/B) is the ceiling for this plan, and rolling to LIVE is explicitly out of scope — it requires the separate written decision already mandated in the roadmap doc's governance rules.
 

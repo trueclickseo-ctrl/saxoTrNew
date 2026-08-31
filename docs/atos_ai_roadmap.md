@@ -1,6 +1,8 @@
 # ATOS AI Roadmap
 
-Planning discussion held 2026-08-26. **Not started yet** — explicit user decision to begin building this on **Friday, 2026-08-28**, one item at a time, tested on SIM first before any of it touches either LIVE account (SEK or EUR).
+Planning discussion held 2026-08-26. Build started 2026-08-28, one item at a time, tested on SIM first before any of it touches either LIVE account (SEK or EUR).
+
+> **Build progress:** Sprints 0–3 shipped (shadow mode, nothing touches live trading). Current state, commits, test counts, and open decisions are tracked in **[`docs/atos_ai_tracker.md`](atos_ai_tracker.md)**. Sprint order and per-sprint test gates: [`docs/atos_ai_implementation_plan.md`](atos_ai_implementation_plan.md).
 
 ---
 
