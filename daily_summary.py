@@ -152,6 +152,58 @@ def _strategy_rows(strategies: list[dict]) -> str:
     </table>"""
 
 
+def _profit_ladder_section() -> str:
+    """RSI profit-protection ladder forward-test roll-up (added 2026-08-31).
+    Shows ladder (rsi) vs control (advanced_rsi_master) per account and a
+    loud flag once the sample is big enough to act on. Best-effort -- never
+    raises into the email."""
+    try:
+        import report_profit_ladder as rpl
+        s = rpl.summarize()
+    except Exception as exc:
+        return f"<h2>RSI Profit Ladder</h2><p class='muted'>roll-up unavailable: {exc}</p>"
+    if not s["per"]:
+        return ("<h2>RSI Profit Ladder</h2><p class='muted'>No RSI trades have closed "
+                "with observation cards yet — nothing to compare.</p>")
+
+    rows = ""
+    for env, b in s["per"].items():
+        for arm_name, arm in (("ladder (rsi)", b["ladder"]), ("control (adv_rsi)", b["control"])):
+            cap = arm["avg_capture"]
+            cap_col = "pos" if (cap is not None and cap > 0.5) else ("neg" if cap is not None else "muted")
+            rows += f"""<tr>
+              <td class="sym">{env}</td>
+              <td class="muted">{arm_name}</td>
+              <td>{arm['n']}</td>
+              <td>{arm['win_rate'] if arm['win_rate'] is not None else '—'}{'%' if arm['win_rate'] is not None else ''}</td>
+              <td>{arm['avg_r'] if arm['avg_r'] is not None else '—'}</td>
+              <td>{('€' + format(arm['avg_giveback_eur'], ',.0f')) if arm['avg_giveback_eur'] is not None else '—'}</td>
+              <td class="{cap_col}">{cap if cap is not None else '—'}</td>
+            </tr>"""
+
+    flag = (f"<p class='pos' style='font-weight:700;margin-top:10px'>SAMPLE READY — "
+            f"≥{s['ready_threshold']} closed trades per arm in at least one account. "
+            f"Compare avg capture / avg R above and decide whether to keep, retune the "
+            f"rungs, or turn the ladder off.</p>"
+            if s["sample_ready"] else
+            f"<p class='muted' style='margin-top:10px'>Sample still building — need "
+            f"≥{s['ready_threshold']} closed trades per arm before this comparison is "
+            f"worth acting on. (`python report_profit_ladder.py` for the full breakdown.)</p>")
+
+    return f"""
+    <h2>RSI Profit Ladder — forward test</h2>
+    <p class="muted" style="margin:0 0 8px">capture = net P&amp;L ÷ max favourable excursion
+    (1.0 = kept all the profit, ≤0 = gave it all back). Ladder is on for the <code>rsi</code>
+    book; <code>advanced_rsi_master</code> keeps the plain policy as the control.</p>
+    <table>
+      <thead><tr><th>Account</th><th>Arm</th><th>Closed</th><th>WR</th><th>Avg R</th>
+      <th>Avg give-back</th><th>Avg capture</th></tr></thead>
+      <tbody>{rows}</tbody>
+    </table>
+    {flag}
+    """
+
+
 def send_daily_summary(since: str | None = None) -> bool:
     since = since or date.today().isoformat()
     sections = []
@@ -204,7 +256,7 @@ def send_daily_summary(since: str | None = None) -> bool:
     mutate live state, which this report doesn't do. See the Housekeeping/Safeguard emails (every 30 min) for that.</p>
     """
 
-    body = header + "".join(sections)
+    body = header + "".join(sections) + _profit_ladder_section()
     subject = f"Daily Summary — {total_trades} trades | {day_sign}${total_pnl:,.0f} | {since}"
     html = _wrap(f"Trading Day — {since}", body)
     return _send_email(subject, html)

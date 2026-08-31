@@ -62,6 +62,47 @@ def _fmt(v, w=8, nd=1):
     return f"{v:>{w}.{nd}f}" if isinstance(v, (int, float)) else f"{'--':>{w}}"
 
 
+SAMPLE_READY_PER_ARM = 30   # closed trades per arm before the comparison is worth acting on
+
+
+def summarize(trades=None) -> dict:
+    """Machine-readable roll-up for the daily-summary email and any caller
+    that wants the numbers without the ANSI report. Groups a flat metric
+    block per (account_env, arm) where arm is 'ladder' (rsi) or
+    'control' (advanced_rsi_master)."""
+    if trades is None:
+        trades = _load_closed()
+
+    def _block(ts):
+        nets = [t["net_pnl_eur"] for t in ts if t.get("net_pnl_eur") is not None]
+        inprofit = [t for t in ts if (t.get("mfe_eur") or 0) > 0 and t.get("net_pnl_eur") is not None]
+        gb = [t["mfe_eur"] - t["net_pnl_eur"] for t in inprofit]
+        cap = [t["net_pnl_eur"] / t["mfe_eur"] for t in inprofit if t["mfe_eur"] > 0]
+        rs = [t["r_multiple"] for t in ts if t.get("r_multiple") is not None]
+        return {
+            "n": len(ts),
+            "net_eur": round(sum(nets), 1) if nets else 0.0,
+            "win_rate": round(100 * sum(1 for v in nets if v > 0) / len(nets), 1) if nets else None,
+            "avg_r": round(statistics.mean(rs), 3) if rs else None,
+            "avg_giveback_eur": round(statistics.mean(gb), 1) if gb else None,
+            "avg_capture": round(statistics.mean(cap), 2) if cap else None,
+            "rungs": dict(Counter(t.get("ladder_rung") or "none" for t in ts)),
+        }
+
+    out = {"per": {}, "sample_ready": False, "ready_threshold": SAMPLE_READY_PER_ARM}
+    for env in ("sim", "live", "live_eur"):
+        lad = [t for t in trades if t.get("strategy") == "rsi" and t.get("account_env") == env]
+        ctl = [t for t in trades if t.get("strategy") == "advanced_rsi_master" and t.get("account_env") == env]
+        if lad or ctl:
+            out["per"][env] = {"ladder": _block(lad), "control": _block(ctl)}
+    # ready once ANY environment has both arms above the threshold
+    out["sample_ready"] = any(
+        b["ladder"]["n"] >= SAMPLE_READY_PER_ARM and b["control"]["n"] >= SAMPLE_READY_PER_ARM
+        for b in out["per"].values()
+    )
+    return out
+
+
 def _stats(trades, label):
     n = len(trades)
     print(f"\n{BOLD}{CYAN}{label}{RESET}  ({n} closed trade(s))")
