@@ -661,13 +661,18 @@ Then news/sentiment (#14/#15) and strategy discovery (#19) after those ten.
 
 **Full phased implementation plan (sprints 0-5, files, hook points, and test gates for each) is in [`docs/atos_ai_implementation_plan.md`](atos_ai_implementation_plan.md) — testing happens within each sprint, not deferred to the end.**
 
-**Actual v1 sprint (resolved 2026-08-26 — this is what Friday starts with):**
-- [ ] Regime classifier as a plain code function (ADX/ATR/MA-slope/vol-bands → a regime label) — no LLM, no agent, just a feature
-- [ ] Single consolidated agent, one structured JSON call, combining Signal Scoring (0-100, regime as one input factor) + Position Sizing (bounded multiplier only, no SL/TP adjustment)
-- [ ] Shadow mode first: agent evaluates every real SIM signal, logs its decision next to the actual outcome, influences nothing — gated on accumulating enough tracked outcomes (including at least one adverse/volatile stretch) to judge it, not on a fixed time window
-- [ ] Only after shadow mode looks good: Level 2 semi-autonomous (agent can skip/resize within the existing fixed risk limits) — still SIM only, still both accounts' history before LIVE
+**Actual v1 sprint (resolved 2026-08-26) — status 2026-09-01, full detail in [`docs/atos_ai_tracker.md`](atos_ai_tracker.md):**
+- [x] Regime classifier as a plain code function (ADX/ATR/MA-slope/vol-bands → a regime label) — `ai/regime/classifier.py`, no LLM
+- [x] Single consolidated agent, one structured JSON call — Signal Scoring + bounded-multiplier sizing, no SL/TP — `ai/agent/trading_copilot.py`
+- [x] Shadow mode: agent scores every real signal on SIM + both LIVE, logs next to the outcome, influences nothing — **RUNNING since 2026-08-31**, ~3 decisions so far, target ~40 through an adverse stretch
+- [~] Level 2 semi-autonomous (agent can skip/resize within fixed risk limits, SIM only) — **code shipped inert**; activation = flip `config/ai.json shadow_mode → false` after the shadow-evidence review
 
-**Everything below this line is the roadmap for later phases, not the Friday sprint:**
+**Diagnostic layer (always read-only — observes, never acts; not on the autonomy ladder):**
+- [x] **#18 AI Trading Journal** — per-trade LLM retrospective, SIM + both LIVE. Its first run found the MAE/MFE measurement bug (now fixed).
+- [x] **P2 give-back analysis** (`report_giveback.py`) — MFE-vs-final normalised by risk, per strategy × account. Waiting for ~1 week of clean data. Decides whether an exit rule / SuperTrend V2 gets built.
+- Governance: **journal observes → human/quant hypothesis → deterministic code → backtest → validation → deploy.** No auto-apply.
+
+**Everything below this line is the roadmap for later phases:**
 
 - [ ] #1 Market Regime AI (trend/range/high-vol/low-vol classifier from existing ATR/ADX data — feeds nearly everything below)
 - [ ] #4 Trade Quality / Probability Model (expected-value framing: win probability × reward − loss probability × risk)
@@ -677,10 +682,11 @@ Then news/sentiment (#14/#15) and strategy discovery (#19) after those ten.
 - [ ] #11 Volatility Prediction
 - [ ] #12 Anomaly Detection (feeds a "defensive mode" concept, most relevant to LIVE)
 - [ ] #16 Open Position AI / Trade Management (continuous monitoring of held positions, not just entry-time scoring)
-- [ ] #13 Portfolio Correlation AI (exposure concentration across instruments, not just position count)
-- [x] **#18 AI Trading Journal — SHIPPED 2026-08-31.** `ai/features/trade_journal.py`: one batched LLM call per trading day over that day's CLOSED trades (paired entry+exit observation cards + AI shadow verdict + exit-advisor flags) → per-trade entry/exit quality, why-won/lost, one lesson, tags + a daily pattern summary. **Strictly read-only** w.r.t. all trading state (user requirement; locked by tests). Runs from `daily_summary.py`; `python ai_trade_journal.py --report`. `config/ai.json journal_enabled`. See `docs/atos_ai_tracker.md`.
-- [ ] #6 Dynamic Position Sizing, #9 Stop-Loss Intelligence, #10 Take-Profit Intelligence (once regime detection exists to condition on)
+- [ ] #13 Portfolio Correlation AI (exposure concentration across instruments, not just position count) — **queued as "P3"**: `ml`+`advanced_ml` both long XAUTRY = one thesis, not two. Portfolio-level gate, deterministic, not inside strategies.
+- [x] **#18 AI Trading Journal — SHIPPED 2026-08-31 (`738364a`), LIVE coverage + MAE fix `4e2edb8`.** `ai/features/trade_journal.py`: batched LLM calls over a day's CLOSED trades → per-trade entry/exit quality, why-won/lost, one lesson, tags + a daily pattern summary. **Strictly read-only** (user requirement; AST-locked by tests). Covers SIM + both LIVE. `python ai_trade_journal.py --report`. See `docs/atos_ai_tracker.md`.
+- [ ] #6 Dynamic Position Sizing, #9 Stop-Loss Intelligence, #10 Take-Profit Intelligence (once regime detection exists to condition on) — **P2 give-back analysis is the evidence gate for #8/#9/#10**: don't build an exit/trailing/TP change until `report_giveback.py` shows *which* strategies systematically give profit back
 - [ ] #7 AI Entry Optimization
+- [ ] **P4 (execution quality, not a wishlist item)** — measure PLN-cross stop slippage: log intended-stop → actual-fill, express in ATR/R, quantify the expectancy hit. Some "strategy losses" may be execution losses.
 - [ ] #17 AI Portfolio Manager (whole-book view, builds on #13)
 - [ ] #14 Economic Event Intelligence (start with a hard-coded calendar blackout, not full NLP)
 - [ ] #15 Sentiment Analysis, #19 Strategy Discovery, #20 AI Model Evolution pipeline (lowest priority, most speculative — #19/#20 also define the promotion process every earlier model should retroactively be held to)

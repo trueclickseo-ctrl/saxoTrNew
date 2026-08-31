@@ -1,16 +1,16 @@
 # ATOS AI — Implementation Plan (Sprints, Friday 2026-08-28 start)
 
-> **Status (2026-08-31):** Sprint 0 ✅ (`e5bbf9f`) · Sprint 1 ✅ (`fc0d5b5`) · Sprint 2 ✅ (`cc1a5b1`) · Sprint 3 ✅ (`80e8b04`, hardened `22b9f75`) · Sprint 3.5 ✅ cost-controls + shadow-on-LIVE (`aace238`), model → `claude-sonnet-5` (`997aedf`).
+> **Status (2026-09-01):** Sprints 0–3.5 ✅ · Sprint 4 code ✅ **shipped inert** · AI Trading Journal ✅ (M3.6) · MAE/MFE fix ✅ (M3.7) · P2 give-back report ✅ (waiting for data). **Read [`docs/atos_ai_tracker.md`](atos_ai_tracker.md) for the live table, milestones, and the Next modules queue** — this header is a pointer, that file is the source of truth.
 >
-> **The shadow study is RUNNING** (`327e204`) — `claude-sonnet-5` scores every RSI signal on SIM + both real LIVE accounts and logs APPROVE/REJECT/MODIFY next to the real outcome. Nothing is applied (shadow on SIM; `can_apply_decision` hardcoded False for LIVE). Now: accumulate ~40+ resolved decisions spanning a user-confirmed adverse stretch, review weekly with `ai_shadow_report.py`.
+> **The shadow study is RUNNING** (`327e204`) — `claude-sonnet-5` scores every RSI signal on SIM + both real LIVE accounts, logs APPROVE/REJECT/MODIFY next to the outcome, **applies nothing**. Now: accumulate ~40+ resolved decisions spanning a user-confirmed adverse stretch (M4), review with `ai_shadow_report.py` (M5).
 >
-> **Sprint 4 CODE is shipped inert** (2026-08-31) — the SIM sizing hook exists but `can_apply_decision("sim")` is False under the committed `config/ai.json` (`shadow_mode:true`), so it is a no-op on `main`. Activation = flip `shadow_mode → false`, still **BLOCKED** on the evidence sample + the M5 adverse-window review. Run the SIM A/B + kill-switch drill at activation.
+> **Sprint 4 CODE is shipped inert** — the SIM sizing hook exists but `can_apply_decision("sim")` is False under the committed config (`shadow_mode:true`). Activation = flip `shadow_mode → false`, **BLOCKED** on M4 + the M5 review. Run the SIM A/B + kill-switch drill at activation.
 >
-> Adjacent, feeding the same evidence base: exit-advisor Stage A shadow scorer (`fbc8f94`, roadmap #16/#8), RSI-signal-registry (`5646e30`, roadmap #4). Pipeline health: `ai_shadow_health.py` (wired into `scheduler_watchdog.py`).
+> **Diagnostic layer (always read-only, never on the autonomy ladder):** AI Trading Journal (`738364a`) — per-trade retrospective, SIM + both LIVE. P2 give-back report `report_giveback.py` (`b252cd7`) — needs ~1 week of clean post-MAE-fix data. Exit-advisor Stage A (`fbc8f94`), RSI-signal-registry (`5646e30`), pipeline health `ai_shadow_health.py`.
 >
-> **Live progress log: [`docs/atos_ai_tracker.md`](atos_ai_tracker.md)** — every AI commit, test count, decision, and the current blocker, kept current as work lands.
+> **Governance:** findings flow **journal observes → human/quant hypothesis → deterministic code → backtest → validation → deploy.** The LLM never converts a finding into a code change.
 >
-> **Open decisions:** (1) multiplier `FLOOR` — ✅ **RESOLVED → `0.25`** (`MULTIPLIER_FLOOR` in `ai/agent/trading_copilot.py`); (2) who rules a review window "volatile enough" — still the user, explicitly, at the M5 review.
+> **Open decisions:** (1) multiplier `FLOOR` — ✅ **RESOLVED → `0.25`**; (2) "volatile enough" — still the user, at the M5 review.
 
 Companion to [`docs/atos_ai_roadmap.md`](atos_ai_roadmap.md), which owns the *vision/governance* (v1 scope, autonomy levels, Trade Constitution, JSON schemas). This doc owns the *how and in what order* — six sprints, each with its own deliverable, its own test gate, and its own go/no-go before the next one starts. No sprint begins until the previous one's test gate is green. Nothing here touches LIVE; Sprint 5 (SIM A/B) is the ceiling for this plan, and rolling to LIVE is explicitly out of scope — it requires the separate written decision already mandated in the roadmap doc's governance rules.
 

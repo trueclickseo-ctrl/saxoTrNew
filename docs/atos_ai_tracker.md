@@ -8,25 +8,22 @@ Running log of the AI layer's build. Update this file **whenever an AI change la
 
 ---
 
-## Current state (2026-08-31)
+## Current state (2026-09-01)
 
 | | |
 |---|---|
-| **Last sprint shipped** | Sprint 4 **code** — SIM sizing hook, ships **inert** (`shadow_mode:true` ⇒ `can_apply_decision("sim")` False). Sprint 3 (`80e8b04`) + 3.5 (`aace238`) + model → sonnet (`997aedf`) before it. |
-| **Next step** | Accumulate shadow evidence (M4), then the M5 review, then **flip `config/ai.json` `shadow_mode` → `false`** to activate Sprint 4 on SIM. |
-| **Sprint 4 status** | **Code shipped inert 2026-08-31.** D1 decided (`FLOOR = 0.25`). Activation still gated on M4 (~40 decisions) + M5 (user confirms an adverse window). Flipping `shadow_mode` is the whole activation — no further code. |
-| **AI live in production?** | **Shadow study RUNNING** (`327e204`, 2026-08-31) — `enabled_sim` + `enabled_live_shadow` + `agent_enabled` all true. `claude-sonnet-5` scores every RSI signal on SIM + both LIVE accounts and logs it. **Nothing applied** (`shadow_mode` true on SIM; `can_apply_decision` hardcoded False for LIVE). Pending: console spend cap + a reboot for the scheduled tasks to inherit `ANTHROPIC_API_KEY`. |
-| **AI touching LIVE money?** | No — impossible without a code change. LIVE can *shadow-log* (`enabled_live_shadow`) but `can_apply_decision("live")` / `("live_eur")` is hardcoded `False` (`_AI_ACTING_ACCOUNTS = {"sim"}`). |
-| **`anthropic` SDK** | `1.2.0`, installed 2026-08-31. `ANTHROPIC_API_KEY` set (User scope). End-to-end verified — `evaluate_proposal()` returned a real APPROVE. |
+| **AI live in production?** | **Shadow study RUNNING** (`327e204`) — `enabled_sim` + `enabled_live_shadow` + `agent_enabled` all true. `claude-sonnet-5` scores every RSI signal on SIM + both LIVE accounts, logs it, **applies nothing** (`shadow_mode` true on SIM; `can_apply_decision` hardcoded False for LIVE). **AI Trading Journal** also live (`journal_enabled:true`) — read-only per-trade retrospective, all forex accounts. |
+| **AI touching money (SIM or LIVE)?** | **No.** Sprint 4 code (SIM sizing) is shipped but inert. LIVE acting is impossible without a code change (`_AI_ACTING_ACCOUNTS = {"sim"}`). |
+| **Last thing shipped** | P2 give-back report (`b252cd7`) · MAE/MFE window-bug fix + journal LIVE coverage (`4e2edb8`) · AI Trading Journal (`738364a`) · Sprint 4 inert + `ai_shadow_health.py` (`5e71c49`) |
+| **Operator tasks** | ✅ Reboot done · ✅ Anthropic console monthly spend cap set (**$10**, ~$0.05 used) |
+| **`anthropic` SDK** | `1.2.0`. `ANTHROPIC_API_KEY` set (User scope), inherited by scheduled tasks post-reboot — verified with real `agent_meta.ok=true` calls on SIM + `live` + `live_eur`. |
 
-### ⏭️ NEXT STEP — right now
+### ⏭️ NEXT — nothing to build; two things accumulating
 
-**Nothing to build.** The shadow study is running; it just needs to accumulate. One operator task left, then wait:
+1. **Shadow evidence (M4)** — ~3 decisions logged so far (SIM+LIVE), target ~40. Weekly: `python ai_shadow_report.py`. Then the **M5 review** (does APPROVE beat REJECT through a rough patch?), then flip `config/ai.json shadow_mode → false` to activate Sprint 4 on SIM.
+2. **Clean give-back data (P2)** — the 2026-09-01 MAE/MFE fix means clean excursion data only starts now (~15–30 SIM closes/day). Weekly: `python report_giveback.py`. When mature (~1 week, ≥10–15 clean trades/strategy), it drives the exit-improvement / SuperTrend-V2 decision.
 
-1. **Anthropic console → Settings → Limits → set a monthly spend cap** (e.g. $10). **Still not done.**
-2. ✅ **Reboot done (2026-08-31).** Scheduled scans now inherit `ANTHROPIC_API_KEY` — verified: the 16:29 UTC SIM shadow decision has `agent_meta.ok=true` (real `claude-sonnet-5` call).
-3. **Wait ~1–3 weeks.** Every RSI signal on SIM + both LIVE accounts gets scored and logged to `data/ai_shadow_decisions.jsonl` (nothing applied).
-4. **Weekly:** `python ai_shadow_report.py`. It says "not enough" under 40 decisions, then shows APPROVE-vs-REJECT expectancy + flags candidate rough days.
+Everything else (opportunity ranking, calendar blackout, correlation gate, PLN-slippage measurement) is queued — see **Next modules queue** below.
 
 ### Pipeline health monitoring (`ai_shadow_health.py`, 2026-08-31)
 
@@ -37,10 +34,6 @@ The AI layer is wrapped in try/except everywhere: a broken `ANTHROPIC_API_KEY` /
 - **silent hook** — ≥3 distinct agent-eligible signals logged as proposals in 48h, none ever got a decision;
 - **total silence** — neither `data/ai_*.jsonl` written in >96h while the study is on.
 Runnable by hand: `python ai_shadow_health.py`. Tests: `test_2026_08_31_ai_shadow_health.py` (16 ✅). Only fires when `config/ai.json` has the study on; silent otherwise.
-
-The next *build* is **Sprint 4**, and it stays blocked until:
-- ~40+ resolved shadow decisions on SIM **AND** the user confirms the window included a real adverse/volatile stretch (D2), and
-- the multiplier `FLOOR` is decided (D1).
 
 ### Cost controls in place (`aace238`)
 | Lever | Effect |
@@ -63,12 +56,36 @@ Plus: set a hard **monthly spend limit** on the console.
 | M2 | Signal → structured proposal pipe, log-only, zero behaviour change | ✅ | 2026-08-31 | `test_ai_trade_proposal`, regression unchanged |
 | M3 | Trading Copilot agent returns a decision; any failure → HOLD, never raises | ✅ | 2026-08-31 | `test_ai_trading_copilot` incl. 20× unreachable-endpoint drill |
 | M3.5 | Cost controls + shadow-on-LIVE (log-only, can never act on LIVE) | ✅ | 2026-08-31 | `test_ai_config` two-tier gate asserts; live `evaluate_proposal()` verified |
-| **M4** | **Shadow evidence: ~40+ resolved decisions spanning a user-confirmed adverse stretch** | 🟡 **in progress** | — | `ai_shadow_report.py`; decisions accumulating from 2026-08-31 |
+| M3.6 | **AI Trading Journal** — read-only per-trade retrospective, SIM + both LIVE | ✅ | 2026-08-31 | `test_2026_08_31_ai_trade_journal` (24 ✅); first run found the MAE/MFE bug |
+| M3.7 | MAE/MFE measurement fixed + 68 corrupted historical cards invalidated | ✅ | 2026-09-01 | `test_2026_09_01_mae_mfe_window_fix` (10 ✅) |
+| **M4** | **Shadow evidence: ~40+ resolved decisions spanning a user-confirmed adverse stretch** | 🟡 **in progress** (~3 so far) | — | `ai_shadow_report.py`; accumulating SIM + LIVE since 2026-08-31 |
+| M4b | **Clean give-back evidence** — ≥10–15 clean (post-MAE-fix) closed trades per strategy | 🟡 **in progress** (0 so far) | — | `report_giveback.py`; accrues ~15–30/day from 2026-09-01 |
 | M5 | Review: does APPROVE beat REJECT on expectancy through a rough patch? | ⬜ | — | user + report, in conversation |
+| M5b | Review the give-back distribution — which strategies (if any) systematically fail to monetise favorable excursions? | ⬜ | — | user + `report_giveback.py`, in conversation |
 | M6 | Sprint 4 — agent's `size_multiplier` changes SIM order size (Level 2, SIM only) | 🟡 **code shipped inert** 2026-08-31; activation blocked on M4/M5 | — | `test_2026_08_31_ai_sprint4_sizing_hook` (14 ✅); SIM A/B pending activation |
 | M7 | Sprint 5 — separate written go/no-go before anything further. LIVE acting is its own decision, not in this plan. | ⬜ | — | — |
 
-Autonomy ladder: currently **Level 1** (advisory, shadow). M6 = **Level 2** (semi-autonomous, SIM only). That is the ceiling of the current plan.
+Autonomy ladder: currently **Level 1** (advisory, shadow). M6 = **Level 2** (semi-autonomous, SIM only). That is the ceiling of the current plan. The Journal (M3.6) and give-back analysis (M4b) are a **diagnostic layer** — always read-only, never on the autonomy ladder.
+
+---
+
+## Next modules queue (priority order)
+
+Nothing here is started. Each is gated on the evidence above and follows the governance rule: **AI observes → human/quant hypothesis → deterministic code → backtest → validation → deploy.**
+
+| # | Module | Gate / when | Notes |
+|---|---|---|---|
+| 1 | **M5 review + Sprint 4 activation** | M4 (~40 shadow decisions + adverse window) | Flip `shadow_mode → false`; run the SIM A/B + kill-switch drill first. |
+| 2 | **P2 give-back review** | M4b (~1 week of clean data) | `report_giveback.py` per strategy × account. If a strategy shows (e.g.) >35% of ≥2R trades finishing <0R → hypothesis for a strategy-specific exit change. **This is what decides whether SuperTrend V2 / an exit rule gets built.** |
+| 3 | **Opportunity ranking (roadmap #2 ext)** | after M5 (Copilot proven on rsi) | Rank a scan's candidate signals against each other, take the best N instead of first-come-first-served. Biggest "more profitable" lever. Touches entry selection → shadow-first. |
+| 4 | **P3 — portfolio correlation / concentration gate** | after P2 | `ml` + `advanced_ml` both long XAUTRY = one thesis, not two independent opportunities. Portfolio-level exposure check, deterministic, not inside individual strategies. |
+| 5 | **P4 — PLN-cross stop-slippage measurement** | independent | Log intended-stop → actual-fill at stop-execution time (small runner change), then measure slippage in ATR/R and its expectancy impact. Some "strategy losses" may be execution losses. |
+| 6 | **Economic-calendar blackout (roadmap #14, cheap version)** | after Sprint 4 | Hard-coded high-impact windows (NFP/FOMC/ECB/CPI) → no new entries / wider stops. No NLP. Biggest loss-avoidance lever. Shadow-first. |
+| 7 | **Add `pullback` (then `bb`) to the shadow agent** | after M5 | One-line `config/ai.json agent_strategies` change. Second-wave A/B once rsi has proven the Copilot has edge. |
+| 8 | **Exit Advisor Stage B** | after P2 | ML on the observation cards (Stage A deterministic scorer already shadow-logging). |
+| — | **SuperTrend V2** (user-provided, prior session — **file not in repo**, must be re-shared) | after P2 | Do not build against corrupted give-back evidence. Decision comes out of module #2. |
+
+Deferred to the roadmap's later-phase list: full news/sentiment agent, strategy discovery (#19), the 6-agent split, adaptive scan cadence.
 
 ---
 
@@ -158,4 +175,7 @@ Not in the v1 sprint plan. Cheap interim version (hardcoded economic-calendar bl
 - **2026-08-31 (later still)** — reboot done, scheduled-scan API key inheritance verified live. **`ai_shadow_health.py`** added + wired into `scheduler_watchdog.py` (degraded-rate / silent-hook / total-silence alerting for the shadow pipeline — the try/except-everywhere AI layer would otherwise hide a dead key / hit cap). 3 stale `test_ai_*` "ships OFF" assertions repaired (the committed `config/ai.json` is deliberately enabled now — they test the code-level fail-safe defaults instead). User confirmed **keep `agent_strategies` at `rsi`-only until the M5 review**, then consider adding `pullback` (+ `bb`) as the second wave.
 - **2026-08-31 (Sprint 4)** — D1 resolved → **`FLOOR = 0.25`**. **Sprint 4 code shipped inert**: `forex/runner._ai_apply_decision_to_qty` + the `_run_entries` sizing hook (after sizing, before the cost gate), gated by `can_apply_decision` which is False under the committed config. Dedup bypass when acting. `log_shadow_decision` gains an `applied` field. `test_2026_08_31_ai_sprint4_sizing_hook.py` (14 ✅). **Activation = flip `config/ai.json` `shadow_mode` → `false`** once M4 evidence + M5 review clear — no further code, but run the SIM A/B + kill-switch drill first.
 - **2026-08-31 (AI Trading Journal, roadmap #18)** — user picked it as the next build, with a hard requirement: **strictly read-only w.r.t. trading state during the shadow phase**. Shipped `ai/features/trade_journal.py` + `ai_trade_journal.py` CLI + a `daily_summary.py` section, `config/ai.json journal_enabled:true`. Batched LLM calls, ≤8-trade chunks (`CHUNK_SIZE=8`, `EVAL_TIMEOUT_S=120`, `MAX_TOKENS=16000`; first chunk carries whole-day context + emits the `day_summary`; salvages a truncated response for whatever complete objects it holds; one summary per day). Covers **SIM + both LIVE forex accounts** (no account filter — user requirement; every forex trade writes an observation card). ~$0.02–0.10/day. Read-only enforced by `test_2026_08_31_ai_trade_journal.py` (24 ✅): no trade-capable imports, no order-mutation calls in source, write-mode `open()` only ever targets `JOURNAL_LOG`, inputs byte-unchanged across a run. First real run's `day_summary` independently flagged: the corrupted MAE/MFE bug, a "won on paper, lost on the tape" give-back/cost pattern, and duplicate correlated signals (ml+advanced_ml on XAUTRY; pullback+advanced_pullback_master on NZDPLN).
-- **2026-09-01 (MAE/MFE window bug — journal's first real find, fixed)** — `forex/runner._run_exits` measured MAE/MFE over the **full ~350-bar daily chart window** (`since_entry = df`), not the holding period → 67 of 68 closed trades had a corrupted excursion (MAE −9,412 EUR vs 76 EUR risk). Fix: `_bars_for_excursion()` bounds to calendar-days-held + buffer; intraday strategies (`gap`/`gap_weekend`/`london_breakout*`) get one daily bar, flagged `mae_mfe_coarse`; an excursion > `_MAE_MFE_SANE_R` (25×) entry-risk is rejected, not logged. `fix_observation_card_mae_mfe.py` nulled the 68 historical values (raw kept as `*_raw`, marker `mae_mfe_invalidated`). Clean MAE/MFE accrues forward. `test_2026_09_01_mae_mfe_window_fix.py` (10 ✅). **User's workflow rule: journal observes → human/quant hypothesis → deterministic code → backtest → validation → deploy. The LLM never auto-converts a finding into a code change.**
+- **2026-09-01 (MAE/MFE window bug — journal's first real find, fixed) `4e2edb8`** — `forex/runner._run_exits` measured MAE/MFE over the **full ~350-bar daily chart window** (`since_entry = df`), not the holding period → 67 of 68 closed trades had a corrupted excursion (MAE −9,412 EUR vs 76 EUR risk). Fix: `_bars_for_excursion()` bounds to calendar-days-held + buffer; intraday strategies (`gap`/`gap_weekend`/`london_breakout*`) get one daily bar, flagged `mae_mfe_coarse`; an excursion > `_MAE_MFE_SANE_R` (25×) entry-risk is rejected, not logged. `fix_observation_card_mae_mfe.py` nulled the 68 historical values (raw kept as `*_raw`, marker `mae_mfe_invalidated`). Clean MAE/MFE accrues forward. `test_2026_09_01_mae_mfe_window_fix.py` (10 ✅). Same commit: **AI Journal now explicitly covers SIM + both LIVE forex accounts** (user requirement — it always had no account filter; made it visible: account column, LIVE weighted heavier, MAE quality flags in the dossier). `CHUNK_SIZE` 15→8, `MAX_TOKENS`→16000, truncated-response salvage, one `day_summary`/day.
+- **2026-09-01 (governance rule encoded)** — the AI Journal is a **strictly read-only diagnostic layer**. Findings flow: **journal observes → human/quant hypothesis → deterministic code → backtest → validation → deploy.** The LLM never converts a finding ("systemic missing trailing rule") into a code change. Enforced structurally: the journal module imports nothing trade-capable and its write-mode `open()` only ever targets its own file (AST-checked in tests).
+- **2026-09-01 (P2 give-back report) `b252cd7`** — `report_giveback.py` (read-only). MFE_R / Final_R / Giveback_R / Capture, the "went our way then went bad" rules (≥1R→<0.25R, ≥2R→<0R, ≥3R→<1R), a lifecycle distribution, **broken down by strategy AND by account**. Skips the pre-fix invalidated trades; coarse (intraday) trades in a separate loose-bound bucket. 0 clean trades today; matures ~1 week. `test_2026_09_01_giveback_report.py` (9 ✅). Its output is a hypothesis, not a change. Added **Next modules queue** to this file. **SuperTrend V2 (user-provided, prior session) is NOT in the repo** — no `strategy_supertrend_v2.py`, no git history, no stash; must be re-shared before that work starts. Decision to build it (or an exit rule) comes out of the P2 review.
+- **2026-09-01 (operator task done)** — Anthropic console monthly spend cap set to **$10** (~$0.05 used, resets Sep 1 UTC). All operator tasks for the shadow study now complete.
