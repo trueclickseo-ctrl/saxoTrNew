@@ -81,12 +81,26 @@ for RSI positions so the two systems never fight. New positions store
 
 **Gating:** `PROFIT_LADDER_ACCOUNTS` (empty ⇒ off everywhere) × `PROFIT_LADDER_STRATEGIES = {"rsi"}`.
 Set `PROFIT_LADDER_ACCOUNTS = {"live_eur"}` to switch on. Backtest first:
-`python backtests/rsi_exit_ladder_backtest.py`. The 2026-08-31 run over ~1,800
-historical RSI trades came back a **wash** — win rate +0.8 pp, expectancy and
-give-back essentially unchanged — because RSI(2) trades are too small/fast
-(avg MFE ≈ 0.52 R, avg hold ≈ 4 days) to reach the 0.75 R first rung. Left OFF
-pending a re-run with tighter rungs and a cost model matched to the real
-per-lot Saxo commission.
+`python backtests/rsi_exit_ladder_backtest.py`.
+
+2026-08-31 run — 17 pairs, 12 y, 2,365 trades, cost = 0.03 R/trade:
+
+| | Current | Ladder | Δ |
+|---|---|---|---|
+| Win rate | 61.6% | 62.7% | **+1.0 pp** |
+| Avg R / trade | −0.013 | −0.010 | +0.003 |
+| Total R | −30.1 | −23.3 | +6.9 R |
+| Max drawdown | 34.4 R | 30.8 R | **−3.6 R** |
+| Avg give-back | 0.279 R | 0.283 R | ~0 (unchanged) |
+
+Small net improvement, but it does **not** fix give-back: avg MFE is only
+≈ 0.51 R (avg hold ≈ 4 days), well below the 0.75 R first rung, so most
+RSI(2) trades never trigger a ladder step. Both policies also show slightly
+negative net expectancy at a 3%-of-R cost assumption (this replay omits the
+`signal_filter` / consensus / momentum context the live path applies).
+Flag stays **OFF** pending: (a) a re-run with lower rungs (~0.4 / 0.6 / 0.8 R)
+matched to this strategy's actual MFE profile, and (b) `--cost-r` set to the
+real per-lot Saxo commission.
 
 ## Sizing (SIM)
 
