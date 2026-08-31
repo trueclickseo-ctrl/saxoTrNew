@@ -12,7 +12,8 @@
 
   "_agent_comment": "enabled_sim / enabled_live_shadow alone just LOG trade proposals (free). agent_enabled=true additionally calls the LLM (agent_model) to evaluate each proposal -- costs money per signal, needs ANTHROPIC_API_KEY. The decision is still only LOGGED until Sprint 4 (SIM only).",
   "agent_enabled": false,
-  "agent_model": "claude-opus-5",
+  "_agent_model_comment": "claude-sonnet-5 for the shadow study (~5x cheaper per token than opus). Switch to claude-opus-5 if Sonnet's calls look weak in ai_shadow_report.py.",
+  "agent_model": "claude-sonnet-5",
 
   "_cost_controls_comment": "agent_strategies: which strategies the paid agent evaluates -- ['*'] for all, or a list. Default ['rsi'] keeps the bill tiny during the shadow study (one strategy is enough to prove edge, and rsi is the one that runs on both LIVE accounts). agent_dedup: evaluate each signal (account|strategy|symbol|date) ONCE per day, not every 30-min rescan.",
   "agent_strategies": ["rsi"],

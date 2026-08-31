@@ -198,7 +198,7 @@ def test_shadow_decision_row_shape():
         if os.path.exists(p):
             os.remove(p)
         dec = {"action": "MODIFY", "size_multiplier": 0.5, "comment": "trim",
-               "_agent": {"ok": True, "model": "claude-opus-5", "latency_ms": 812}}
+               "_agent": {"ok": True, "model": "claude-sonnet-5", "latency_ms": 812}}
         tp.log_shadow_decision({**_PROP, "ts": "2026-08-31T12:00:00+00:00"}, dec, entered=True)
         row = json.loads(open(p).read().strip())
         assert row["agent_action"] == "MODIFY" and row["entered_by_atos"] is True

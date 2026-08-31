@@ -50,7 +50,10 @@ _DEFAULTS = {
     # the LLM agent to evaluate each proposal costs money per signal. Kept a
     # separate switch so proposal logging can run without paid agent calls.
     "agent_enabled": False,
-    "agent_model": "claude-opus-5",
+    # 2026-08-31: user switched Opus -> Sonnet for the shadow study to keep
+    # the bill low (~5x cheaper per token). Revisit if Sonnet's judgement
+    # looks weak in ai_shadow_report.py.
+    "agent_model": "claude-sonnet-5",
     # cost controls for the paid agent call (Sprint 3.5):
     #   agent_strategies -- which strategies the agent evaluates. ["*"] = all.
     #     Default is rsi only: the shadow study only needs one strategy's
@@ -140,7 +143,7 @@ def agent_dedup_enabled() -> bool:
 
 
 def agent_model() -> str:
-    return str(_load().get("agent_model") or "claude-opus-5")
+    return str(_load().get("agent_model") or "claude-sonnet-5")
 
 
 def config_path() -> str:
