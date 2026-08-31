@@ -57,7 +57,36 @@ fire intraday on a move that later reverses. No multi-bar confirmation.
 | B | Long: `RSI(2) ≥ 55` / Short: `RSI(2) ≤ 45` | `rsi_recovery (…)` |
 | C | Long: `low ≤ stop` / Short: `high ≥ stop` | `hard_stop (px)` |
 
-No trailing stop (`trailing_stop_update` not defined — RSI holds are too short).
+Plus a broker-side take-profit at `2.0 × R` (`DEFAULT_TP_RR`) resting from entry,
+and — every scheduled cycle, in `_run_exits` — the stop is tightened by:
+
+- **`trailing_stop_update()`** — `stop = max(stop, close − 1.5 × ATR)` (ratchet, active from the first cycle). *(The old "no trailing stop" note in this doc was stale — the function is defined and called.)*
+- **`_apply_breakeven_stop()`** — one-shot move to exact `entry_price` once unrealised profit ≥ `1.0 × ATR_at_entry` (≈ +0.67 R).
+
+### Opt-in profit-protection ladder (2026-08-31, OFF by default)
+
+`forex/runner.py` `_profit_ladder_target_stop()` — an alternative to the two
+lines above for the RSI book, staging the stop instead of one jump to entry:
+
+| Unrealised profit | Stop moves to |
+|---|---|
+| ≥ 0.75 R | `entry + 0.10 R` (breakeven + costs) |
+| ≥ 1.00 R | `entry + 0.50 R` (locked profit) |
+| ≥ 1.25 R | `max(entry + 0.50 R, close − 1.0 × ATR)` — trailing starts here, not before |
+
+Ratchet only; primary exits (RSI recovery / 2R TP / 12-day / hard stop) unchanged.
+When active it **replaces** both `trailing_stop_update` and `_apply_breakeven_stop`
+for RSI positions so the two systems never fight. New positions store
+`initial_stop_price` as the frozen R reference.
+
+**Gating:** `PROFIT_LADDER_ACCOUNTS` (empty ⇒ off everywhere) × `PROFIT_LADDER_STRATEGIES = {"rsi"}`.
+Set `PROFIT_LADDER_ACCOUNTS = {"live_eur"}` to switch on. Backtest first:
+`python backtests/rsi_exit_ladder_backtest.py`. The 2026-08-31 run over ~1,800
+historical RSI trades came back a **wash** — win rate +0.8 pp, expectancy and
+give-back essentially unchanged — because RSI(2) trades are too small/fast
+(avg MFE ≈ 0.52 R, avg hold ≈ 4 days) to reach the 0.75 R first rung. Left OFF
+pending a re-run with tighter rungs and a cost model matched to the real
+per-lot Saxo commission.
 
 ## Sizing (SIM)
 

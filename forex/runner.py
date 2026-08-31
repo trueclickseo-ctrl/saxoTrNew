@@ -567,6 +567,84 @@ BREAKEVEN_THRESHOLD_ATR = 1.0
 # Gap strategy: move stop to entry_price once price is this % toward the gap target
 BREAKEVEN_GAP_FILL_PCT  = 0.50
 
+# ── RSI(2) profit-protection ladder (2026-08-31) ─────────────────────────────
+# An OPT-IN alternative to the always-on trailing_stop_update + one-shot
+# _apply_breakeven_stop for the RSI(2) mean-reversion book. Design hypothesis
+# (user-specified): protect an unrealised gain in stages instead of a single
+# move-to-exact-entry, and don't trail at all until the trade has proven
+# itself, so RSI(2)'s normal noise/retracement isn't stopped out prematurely.
+# R = the initial entry-to-stop distance (1.5 x ATR_at_entry for RSI):
+#
+#   >= 0.75 R profit  -> stop to entry + COST_BUFFER_R x R  (breakeven + costs)
+#   >= 1.00 R profit  -> stop to entry + LOCK_R x R          (lock +0.5 R)
+#   >= 1.25 R profit  -> stop to max(lock level, close - TRAIL_ATR_MULT x ATR_now)
+#
+# Ratchet only (a rung never loosens the stop). Primary exit is still RSI
+# recovery / 2 R broker TP / 12-day time stop / hard stop -- unchanged.
+#
+# OFF by default: PROFIT_LADDER_ACCOUNTS is empty, so every account keeps the
+# current behaviour byte-for-byte. Set it to {"live_eur"} (or add "sim") to
+# switch that account's RSI book onto the ladder. Keep it OFF until the
+# backtest (backtests/rsi_exit_ladder_backtest.py) shows it beats the current
+# policy on realistic spreads/commission/intrabar handling.
+PROFIT_LADDER_ACCOUNTS: set[str] = set()
+PROFIT_LADDER_STRATEGIES         = {"rsi"}
+PROFIT_LADDER_BREAKEVEN_R        = 0.75
+PROFIT_LADDER_COST_BUFFER_R      = 0.10
+PROFIT_LADDER_LOCK_ACTIVATE_R    = 1.00
+PROFIT_LADDER_LOCK_R             = 0.50
+PROFIT_LADDER_TRAIL_ACTIVATE_R   = 1.25
+PROFIT_LADDER_TRAIL_ATR_MULT     = 1.00
+
+
+def _profit_ladder_active(strat_name: str) -> bool:
+    return (ACCOUNT_ENV in PROFIT_LADDER_ACCOUNTS
+            and strat_name in PROFIT_LADDER_STRATEGIES)
+
+
+def _profit_ladder_target_stop(pos: dict, df, strat_name: str) -> float | None:
+    """Return the laddered stop level for `pos` given current bars, or None if
+    no rung applies yet. Pure — no I/O, no mutation — so the backtest can call
+    it directly. Ratcheting against the position's current stop is the
+    caller's job (see _apply_profit_ladder_stop)."""
+    if df is None or len(df) < 1:
+        return None
+    is_long = pos.get("direction", "Buy") == "Buy"
+    entry   = float(pos.get("entry_price", 0) or 0)
+    if entry <= 0:
+        return None
+
+    init_stop = pos.get("initial_stop_price")
+    if init_stop:
+        R = abs(entry - float(init_stop))
+    else:
+        atr_entry = float(pos.get("atr_at_entry", 0) or 0)
+        R = strat_rsi.ATR_STOP_MULT * atr_entry
+    if R <= 0:
+        return None
+
+    cur_close = float(df["Close"].iloc[-1])
+    profit    = (cur_close - entry) if is_long else (entry - cur_close)
+    r_mult    = profit / R
+
+    if r_mult >= PROFIT_LADDER_TRAIL_ACTIVATE_R:
+        lock = (entry + PROFIT_LADDER_LOCK_R * R) if is_long else (entry - PROFIT_LADDER_LOCK_R * R)
+        try:
+            atr_now = float(strat_rsi._atr(df["High"], df["Low"], df["Close"]).iloc[-1])
+        except Exception:
+            atr_now = 0.0
+        if atr_now > 0:
+            trail = (cur_close - PROFIT_LADDER_TRAIL_ATR_MULT * atr_now) if is_long \
+                    else (cur_close + PROFIT_LADDER_TRAIL_ATR_MULT * atr_now)
+            return max(lock, trail) if is_long else min(lock, trail)
+        return lock
+    if r_mult >= PROFIT_LADDER_LOCK_ACTIVATE_R:
+        return (entry + PROFIT_LADDER_LOCK_R * R) if is_long else (entry - PROFIT_LADDER_LOCK_R * R)
+    if r_mult >= PROFIT_LADDER_BREAKEVEN_R:
+        buf = PROFIT_LADDER_COST_BUFFER_R * R
+        return (entry + buf) if is_long else (entry - buf)
+    return None
+
 # ── Default take-profit (2026-08-22) ──────────────────────────────────────────
 # gap/london_breakout compute their own tp_price/gap_target from their own
 # session-range logic. The other 9 strategies (ema/rsi/donchian/bb/pullback/
@@ -2028,6 +2106,57 @@ def _apply_breakeven_stop(key: str, pos: dict, df, strat_name: str,
     return False
 
 
+def _apply_profit_ladder_stop(key: str, pos: dict, df, strat_name: str,
+                              akey: str, dry_run: bool) -> bool:
+    """Ratchet `pos["stop_price"]` up to the RSI profit-ladder level for the
+    current bars, and best-effort sync the broker stop order (same amend /
+    cancel+replace / drop-for-heal path as _apply_breakeven_stop). Returns
+    True if the local stop moved this call.
+
+    Only ever called from _run_exits when _profit_ladder_active(strat_name)
+    is True (opt-in, see PROFIT_LADDER_ACCOUNTS) — and in that case it
+    REPLACES both the generic trailing_stop_update block and
+    _apply_breakeven_stop for this position, so the two stop-management
+    systems never fight."""
+    target = _profit_ladder_target_stop(pos, df, strat_name)
+    if target is None:
+        return False
+
+    is_long  = pos.get("direction", "Buy") == "Buy"
+    cur_stop = float(pos.get("stop_price", 0) or 0)
+    new_stop = max(cur_stop, target) if is_long else min(cur_stop, target)
+    if new_stop <= 0 or abs(new_stop - cur_stop) < 1e-9:
+        return False
+
+    sym = key.split(":", 1)[1] if ":" in key else key
+    tag = "[DRY] " if dry_run else ""
+    entry = float(pos.get("entry_price", 0) or 0)
+    init_stop = pos.get("initial_stop_price")
+    R = abs(entry - float(init_stop)) if init_stop else strat_rsi.ATR_STOP_MULT * float(pos.get("atr_at_entry", 0) or 0)
+    r_now = ((float(df["Close"].iloc[-1]) - entry) if is_long
+             else (entry - float(df["Close"].iloc[-1]))) / R if R > 0 else 0.0
+    logger.info(f"  {tag}[PROFIT-LADDER] {key}: {r_now:.2f}R in profit — "
+                f"stop {cur_stop:.5f} → {new_stop:.5f}")
+
+    pos["stop_price"] = round(new_stop, 6)
+    if dry_run:
+        return True
+
+    stop_oid = pos.get("stop_order_id")
+    if stop_oid and stop_oid not in ("synced", None, "") and \
+       _amend_stop_order(stop_oid, new_stop, sym, akey, pos["uic"]):
+        return True
+    new_oid = _replace_stop_order(pos, sym, akey, new_stop)
+    if new_oid:
+        pos["stop_order_id"] = new_oid
+        return True
+    # Broker sync failed — drop the stale id so _heal_missing_stops re-places
+    # a fresh GTC stop at the new price next run. The local stop_price still
+    # moved and should_exit() enforces it softly every cycle in the meantime.
+    pos["stop_order_id"] = None
+    return True
+
+
 # ── Per-strategy exit / entry helpers ─────────────────────────────────────────
 
 def _run_exits(strat_name: str, strat_mod, positions: dict,
@@ -2042,8 +2171,15 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
         ed        = pos.get("entry_date", today_str)
         cal_days  = (date.today() - date.fromisoformat(ed)).days
 
+        # RSI profit-protection ladder (opt-in, OFF by default): when active
+        # for this account+strategy it OWNS this position's stop management
+        # and REPLACES both the generic trailing block below and
+        # _apply_breakeven_stop -- so the two systems can never fight. Every
+        # other strategy / account is completely unaffected.
+        _ladder_active = _profit_ladder_active(strat_name)
+
         # Trail stop
-        if df is not None and hasattr(strat_mod, "trailing_stop_update"):
+        if not _ladder_active and df is not None and hasattr(strat_mod, "trailing_stop_update"):
             from forex.strategy import _atr as _ema_atr
             try:
                 atr_fn = getattr(strat_mod, "_atr", _ema_atr)
@@ -2072,8 +2208,13 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
             except Exception:
                 pass
 
-        # Breakeven stop — move to entry_price once profit threshold reached
-        _apply_breakeven_stop(key, pos, df, strat_name, akey, dry_run)
+        # Breakeven stop — move to entry_price once profit threshold reached.
+        # When the RSI profit ladder is active it takes over this role
+        # entirely (it has its own breakeven rung plus lock/trail rungs).
+        if _ladder_active:
+            _apply_profit_ladder_stop(key, pos, df, strat_name, akey, dry_run)
+        else:
+            _apply_breakeven_stop(key, pos, df, strat_name, akey, dry_run)
 
         # Forward-SIM observation (2026-08-27): MAE/MFE from the daily bars
         # already fetched for should_exit()/trailing-stop above -- no extra
@@ -2621,6 +2762,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             "direction":      direction,
             "entry_price":    sig["close"],
             "stop_price":     sig["stop_price"],
+            "initial_stop_price": sig["stop_price"],  # frozen R reference; stop_price gets ratcheted, this doesn't
             "tp_price":       tp,   # broker-side target for every strategy now (own or DEFAULT_TP_RR fallback)
             "quantity":       qty,
             "entry_date":     today_str,
