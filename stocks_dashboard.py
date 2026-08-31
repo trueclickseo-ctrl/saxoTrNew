@@ -283,6 +283,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     total_pnl = 0.0
     near_stop = []
 
+    seen: set[str] = set()
     if saxo:
         # Live from Saxo API
         for p in saxo:
@@ -301,6 +302,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
             ppc = ((now - ep) / ep * 100) if now and ep else 0.0
             drow = db.get(base, {})
             stop = _effective_stop(drow)
+            seen.add(base)
             rows.append({
                 "ticker": base, "shs": shs, "entry": ep, "now": now,
                 "stop": stop, "pnl": pnl, "ppc": ppc,
@@ -311,21 +313,32 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
             total_pnl += pnl
             if stop > 0 and now > 0 and now < stop * 1.05:
                 near_stop.append(f"{base}  now={now:.2f}  stop={stop:.2f}")
-    elif db:
-        for base, drow in db.items():
-            ep   = float(drow.get("entry_price", 0) or 0)
-            shs  = int(drow.get("shares", 0) or 0)
-            stop = _effective_stop(drow)
-            rows.append({
-                "ticker": base, "shs": shs, "entry": ep, "now": None,
-                "stop": stop, "pnl": None, "ppc": None,
-                "regime": (drow.get("regime_at_entry") or "—")[:10],
-                "strategy": (drow.get("strategy") or "—")[:12],
-                "exit": _exit_info(drow), "live": False,
-            })
 
+    # Local open trades with no Saxo counterpart — paper fills (Saxo SIM
+    # rejected the order, booked locally, managed by ATOS's own should_exit)
+    # and any position Saxo's snapshot didn't return. Previously these were
+    # shown ONLY when the Saxo snapshot was completely empty (`elif db`), so a
+    # paper position sat invisible next to any real one. Now always merged.
+    n_paper = n_local = 0
+    for base, drow in (db or {}).items():
+        if base in seen:
+            continue
+        is_paper = bool(drow.get("paper"))
+        n_paper += is_paper
+        n_local += 1
+        rows.append({
+            "ticker": (base + " *") if is_paper else base,
+            "shs": int(drow.get("shares", 0) or 0),
+            "entry": float(drow.get("entry_price", 0) or 0), "now": None,
+            "stop": _effective_stop(drow), "pnl": None, "ppc": None,
+            "regime": (drow.get("regime_at_entry") or "—")[:10],
+            "strategy": (drow.get("strategy") or "—")[:12],
+            "exit": _exit_info(drow), "live": False,
+        })
+
+    _extra = f"  {DM}+ {n_local} local" + (f" ({n_paper} paper){W}" if n_paper else f"{W}")
     if saxo:
-        src_note = f"{GR}live from Saxo{W}"
+        src_note = f"{GR}live from Saxo{W}" + (_extra if n_local else "")
     elif not token:
         src_note = f"{RD}token expired — run: python set_token.py{W}"
     else:
@@ -388,6 +401,9 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
             L.append(f"  {RD}{BD}⚠  {len(near_stop)} position(s) within 5% of stop — review!{W}")
             for ns in near_stop:
                 L.append(f"  {RD}   • {ns}{W}")
+        if n_paper:
+            L.append(f"  {DM}*  paper fill — Saxo SIM rejected the live order; booked "
+                     f"locally, managed by ATOS should_exit() against live quotes{W}")
     else:
         L.append(f"  {DM}No open stock positions.{W}")
 
