@@ -211,6 +211,80 @@ def _sim_cap_shares(shares: int, price_usd: float, fx_usd_sek: float) -> int:
               f"(cap €{cap_eur:,.0f})")
     return capped
 
+
+def _heal_missing_stock_stops(open_trades: list) -> None:
+    """Re-place the broker-side protective stop for any open non-paper stock
+    position whose original stop was rejected (stop_order_id is NULL).
+
+    2026-09-01: Saxo SIM started accepting ENTRY orders again after the
+    ~Aug-28 outage, but rejected the stop placed microseconds later with
+    "NotOwned" -- a settlement race (the fill hasn't propagated yet).
+    place_with_stop returned (entry_oid, None): the position is real, the
+    broker stop is missing. This runs once per cycle, confirms the position
+    is actually held at Saxo (settled) and not already stop-covered, then
+    places a GTC stop and records its id. Software-side exits
+    (US Reversion should_exit(), US Blend trailing) protect it meanwhile.
+    Best-effort -- never raises into the cycle."""
+    need = [t for t in open_trades
+            if not t.get("paper") and not t.get("stop_order_id")
+            and (t.get("stop_price") or 0) > 0 and (t.get("shares") or 0) > 0]
+    if not need:
+        return
+    try:
+        from instrument_map import load_instrument_map
+        imap = load_instrument_map()
+    except Exception as e:
+        print(f"  [stop-heal] instrument_map load failed: {e}")
+        return
+    try:
+        held: dict = {}
+        for p in saxo_client.get_positions().get("Data", []):
+            b = p.get("PositionBase", {})
+            u, amt = b.get("Uic"), b.get("Amount", 0)
+            if u is not None and amt:
+                held[u] = held.get(u, 0.0) + amt
+    except Exception as e:
+        print(f"  [stop-heal] could not fetch Saxo positions: {e}")
+        return
+    try:
+        stopped_uics = {
+            o.get("Uic") for o in saxo_client.get_orders("Stock").get("Data", [])
+            if o.get("BuySell") == "Sell"
+            and "Stop" in str(o.get("OpenOrderType") or o.get("OrderType") or "")
+        }
+    except Exception:
+        stopped_uics = set()
+
+    try:
+        ak = saxo_client.get_account_key()
+    except Exception as e:
+        print(f"  [stop-heal] no account key: {e}")
+        return
+
+    healed = 0
+    for t in need:
+        tk = t["ticker"]
+        uic = (imap.get(tk) or {}).get("uic")
+        if not uic:
+            continue
+        if uic not in held or abs(held[uic]) < (t["shares"] or 0) * 0.999:
+            continue   # not settled / not fully held yet -- retry next cycle
+        if uic in stopped_uics:
+            db.set_stop_order_id(t["id"], "EXISTING")
+            continue
+        oid = saxo_order.place_stop_only(
+            post_fn=saxo_client.post, account_key=ak, uic=uic,
+            asset_type="Stock", amount=int(t["shares"]),
+            entry_side=("Buy" if str(t.get("direction", "BUY")).upper() == "BUY" else "Sell"),
+            stop_price=float(t["stop_price"]), symbol=tk)
+        if oid:
+            db.set_stop_order_id(t["id"], oid)
+            healed += 1
+            print(f"  [stop-heal] {tk}: broker stop restored @ {t['stop_price']} (id {oid})")
+    if healed:
+        print(f"  [stop-heal] restored {healed} missing broker stop(s)")
+
+
 # ── Signal caches — written by run_us_momentum/run_us_reversion, read by dashboard ──
 _blend_signal: dict  = {}   # keys: targets, risk_off, reason, momentum, lowvol
 _rev_signals:  list  = []   # list of candidate dicts from USR.scan()
@@ -836,6 +910,20 @@ def run_cycle():
             "block_reason": None if order_ok else "order_failed",
         })
 
+    # ── 6a2. Heal missing broker-side stops ───────────────────────
+    # 2026-09-01: on 2026-09-01 the Saxo SIM order engine started accepting
+    # ENTRY orders again (after the ~Aug-28 outage) but rejected the
+    # protective stop placed microseconds later with "NotOwned" -- a
+    # settlement race (the fill hasn't propagated to the account yet).
+    # place_with_stop returns (entry_oid, None); the position is real but
+    # has no broker stop. This re-attempts the stop each cycle once the
+    # position has settled. Software-side exits still run regardless
+    # (US Reversion's should_exit(), US Blend's trailing check).
+    try:
+        _heal_missing_stock_stops(db.get_open_trades())
+    except Exception as e:
+        print(f"  [stop-heal] skipped: {e}")
+
     # ── 6b. New entries ───────────────────────────────────────────
     if not daily_loss_cap_breached(open_trades):
         buy_candidates = [
@@ -1316,7 +1404,7 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
             # native Saxo GTC bracket is enforced 24/7 even if a run is missed.
             stop_p = round(price * (1 - US_BLEND_STOP_PCT), 2)
             tp_p   = round(price * (1 + US_BLEND_TP_PCT), 2)
-            entry_oid, _, _ = saxo_order.place_with_stop(
+            entry_oid, stop_oid, _ = saxo_order.place_with_stop(
                 post_fn=saxo_client.post,
                 account_key=saxo_client.get_account_key(),
                 uic=imap[ticker]["uic"], asset_type="Stock", amount=shares,
@@ -1356,6 +1444,7 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
             "stop_price": round(price * (1 - US_BLEND_STOP_PCT), 2),
             "trailing_stop_high": price, "regime_at_entry": "momentum",
             "paper": paper,
+            "stop_order_id": (stop_oid if not paper else None),
         })
         record_fill(-(shares * price_sek + comm))
         _append_trade_log("US Blend", "BUY", ticker, shares, price,
@@ -1859,6 +1948,7 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
                 "d6_smart_money": 0, "d7_mom_quality": 0, "d8_regime": 0,
                 "stop_price": stop_p, "trailing_stop_high": price, "regime_at_entry": "reversion",
                 "paper": paper,
+                "stop_order_id": (stop_oid if not paper else None),
             })
             ordered_tickers.add(ticker)
             _append_trade_log(
@@ -2100,6 +2190,7 @@ def run_intraday_cycle():
                 "d6_smart_money": 0, "d7_mom_quality": 0, "d8_regime": 0,
                 "stop_price": stop_p, "trailing_stop_high": price_usd, "regime_at_entry": "reversion",
                 "paper": paper,
+                "stop_order_id": (stop_oid if not paper else None),
             })
             _append_trade_log(
                 strategy="US Reversion",

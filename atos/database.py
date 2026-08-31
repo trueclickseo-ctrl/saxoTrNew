@@ -140,6 +140,11 @@ def migrate_schema():
         # trade was booked LOCALLY, managed by ATOS's own should_exit() logic.
         # It has no Saxo counterpart -- housekeeping's StocksAdapter skips it.
         "ALTER TABLE trades ADD COLUMN paper INTEGER DEFAULT 0",
+        # 2026-09-01: the broker-side protective stop's order id, or NULL if
+        # it was never placed / rejected (the "NotOwned" settlement race).
+        # NULL on an open non-paper row -> atos_runner._heal_missing_stock_stops
+        # re-attempts it each cycle.
+        "ALTER TABLE trades ADD COLUMN stop_order_id TEXT",
     ]
     with _conn() as conn:
         for sql in migrations:
@@ -153,22 +158,31 @@ def migrate_schema():
 def insert_trade(data: dict) -> int:
     """Insert a new open trade. Returns the trade id.
     `paper` (default 0): 1 == a locally-simulated fill because Saxo SIM
-    rejected the real order (see migrate_schema)."""
-    data = {"strategy": "ATOS_v1", "paper": 0, **data}  # defaults if caller omits
+    rejected the real order (see migrate_schema).
+    `stop_order_id` (default None): the broker stop's order id, or None if
+    it wasn't placed -- _heal_missing_stock_stops re-attempts a None one."""
+    data = {"strategy": "ATOS_v1", "paper": 0, "stop_order_id": None, **data}
     with _conn() as conn:
         cur = conn.execute("""
             INSERT INTO trades
               (strategy, market_group, ticker, direction, entry_date, entry_price, shares,
                commission_sek, entry_score, d1_trend, d2_momentum, d3_breakout,
                d4_mean_revert, d5_volume, d6_smart_money, d7_mom_quality, d8_regime,
-               trailing_stop_high, regime_at_entry, stop_price, paper)
+               trailing_stop_high, regime_at_entry, stop_price, paper, stop_order_id)
             VALUES
               (:strategy, :market_group, :ticker, :direction, :entry_date, :entry_price, :shares,
                :commission_sek, :entry_score, :d1_trend, :d2_momentum, :d3_breakout,
                :d4_mean_revert, :d5_volume, :d6_smart_money, :d7_mom_quality, :d8_regime,
-               :trailing_stop_high, :regime_at_entry, :stop_price, :paper)
+               :trailing_stop_high, :regime_at_entry, :stop_price, :paper, :stop_order_id)
         """, data)
         return cur.lastrowid
+
+
+def set_stop_order_id(trade_id: int, stop_order_id: str) -> None:
+    """Record that a broker-side protective stop now covers this trade."""
+    with _conn() as conn:
+        conn.execute("UPDATE trades SET stop_order_id = ? WHERE id = ?",
+                     (stop_order_id, trade_id))
 
 
 def close_trade(trade_id: int, exit_price: float, exit_reason: str, pnl_sek: float,

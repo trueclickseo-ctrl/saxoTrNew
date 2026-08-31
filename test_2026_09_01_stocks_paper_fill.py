@@ -123,8 +123,9 @@ def test_all_active_buy_paths_paper_fill_on_reject():
 
 def test_place_us_now_checks_the_order_return():
     src = inspect.getsource(ar._place_us)
-    # the latent phantom bug: place_with_stop return was discarded
-    assert "entry_oid, _, _ = saxo_order.place_with_stop(" in src
+    # the latent phantom bug: place_with_stop return was discarded entirely.
+    # Now the entry id AND the stop id are both captured + used.
+    assert "entry_oid, stop_oid, _ = saxo_order.place_with_stop(" in src
     assert "if entry_oid is None:" in src
     # rejected + no paper-fill -> return False BEFORE db.insert_trade
     i_reject = src.index("if entry_oid is None:")

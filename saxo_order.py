@@ -430,6 +430,45 @@ def _place_bracket(post_fn, account_key, uic, asset_type,
         return entry_oid, stop_oid, tp_oid
 
 
+def place_stop_only(post_fn, account_key, uic, asset_type, amount,
+                    entry_side, stop_price, symbol: str = "",
+                    price_decimals: int | None = None,
+                    tick_size: float | None = None) -> str | None:
+    """Place a STANDALONE protective stop for an ALREADY-OPEN position --
+    no entry order. Used to heal a position whose original bracket/stop was
+    rejected (e.g. the 2026-09-01 Saxo SIM "NotOwned" settlement race:
+    entry accepted, stop rejected microseconds later). `entry_side` is the
+    position's original "Buy"/"Sell"; the stop is placed on the closing
+    side. Returns the stop order id, or None on failure (logged, never
+    raises).
+    """
+    close = _close_side(entry_side, asset_type)
+    stype = _stop_type(entry_side, asset_type)
+    rstop = _round_price(stop_price, asset_type, symbol, price_decimals, tick_size)
+    slp = (_stop_limit_price(rstop, close, asset_type, symbol, price_decimals)
+           if stype == "StopLimit" else None)
+    body = {
+        "AccountKey":    account_key,
+        "Uic":           uic,
+        "AssetType":     asset_type,
+        "Amount":        amount,
+        "BuySell":       close,
+        "OrderType":     stype,
+        "OrderPrice":    rstop,
+        "OrderDuration": _stop_duration(asset_type),
+        "ManualOrder":   False,
+    }
+    if slp is not None:
+        body["StopLimitPrice"] = slp
+    try:
+        oid = _post_stop_order(post_fn, body).get("OrderId", "?")
+        logger.info(f"[stop-heal] {symbol or uic}  {stype}@{rstop}  stop_id={oid}")
+        return str(oid)
+    except Exception as exc:
+        logger.warning(f"[stop-heal] {symbol or uic}  stop FAILED: {exc}")
+        return None
+
+
 def _place_entry_then_stop(post_fn, account_key, uic, asset_type,
                             amount, buy_sell, close_side, stop_type,
                             stop_price, dur, label, stop_limit_price=None):
