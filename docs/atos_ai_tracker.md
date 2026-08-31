@@ -4,7 +4,7 @@ Running log of the AI layer's build. Update this file **whenever an AI change la
 
 - **Vision / governance:** [`docs/atos_ai_roadmap.md`](atos_ai_roadmap.md)
 - **Sprint plan / test gates:** [`docs/atos_ai_implementation_plan.md`](atos_ai_implementation_plan.md)
-- **Kill switch:** `ai/config.py` → `ai_enabled_for(account_env)`. Ships OFF. LIVE excluded in code (`_AI_ALLOWED_ACCOUNTS = {"sim"}`), not just config.
+- **Kill switch:** `ai/config.py`. `ai_enabled_for(env)` = may observe/log (sim + live shadow). `can_apply_decision(env)` = may change an order — hardcoded to `sim` only (`_AI_ACTING_ACCOUNTS = {"sim"}`). Set every `config/ai.json` flag to `false` (or delete the file) → every hook inert next cycle.
 
 ---
 
@@ -17,29 +17,48 @@ Running log of the AI layer's build. Update this file **whenever an AI change la
 | **Sprint 4 status** | **BLOCKED** — 2 open decisions + shadow-evidence sample now accumulating |
 | **AI live in production?** | **Shadow study RUNNING** (`327e204`, 2026-08-31) — `enabled_sim` + `enabled_live_shadow` + `agent_enabled` all true. `claude-sonnet-5` scores every RSI signal on SIM + both LIVE accounts and logs it. **Nothing applied** (`shadow_mode` true on SIM; `can_apply_decision` hardcoded False for LIVE). Pending: console spend cap + a reboot for the scheduled tasks to inherit `ANTHROPIC_API_KEY`. |
 | **AI touching LIVE money?** | No — impossible without a code change. LIVE can *shadow-log* (`enabled_live_shadow`) but `can_apply_decision("live")` / `("live_eur")` is hardcoded `False` (`_AI_ACTING_ACCOUNTS = {"sim"}`). |
-| **`anthropic` SDK** | Installed 2026-08-31 (`1.2.0`, `pip install` as admin). Still dormant — needs `ANTHROPIC_API_KEY` + config flags. |
+| **`anthropic` SDK** | `1.2.0`, installed 2026-08-31. `ANTHROPIC_API_KEY` set (User scope). End-to-end verified — `evaluate_proposal()` returned a real APPROVE. |
 
-### To start collecting shadow evidence
-1. Set `ANTHROPIC_API_KEY` as a User env var (key name on the console: `kashif-atos-api-key`).
-2. `config/ai.json`:
-   - `enabled_sim: true` — AI on for SIM (paper).
-   - `enabled_live_shadow: true` — AI **log-only** on the real LIVE accounts. It scores your real trades and records what it *would* have done; it can **never** change a LIVE order (`can_apply_decision("live")` is hardcoded `False`).
-   - `agent_enabled: true` — actually call the LLM (this is what costs money).
-   - keep `shadow_mode: true`.
-   - `agent_strategies: ["rsi"]` (default) — **the paid LLM call fires for RSI signals only.** Proposal logging (free) still covers every strategy. Set `["*"]` for all.
-   - `agent_dedup: true` (default) — each signal is scored once per day, not every 30-min rescan.
-3. Let it run. Decisions land in `data/ai_shadow_decisions.jsonl` — **never applied**.
-4. Review weekly: `python ai_shadow_report.py`.
-5. Gate to Sprint 4 = ~40+ resolved decisions **AND** the user explicitly agreeing the window contained a real adverse/volatile stretch.
+### ⏭️ NEXT STEP — right now
 
-### Cost controls in place (Sprint 3.5, `<pending commit>`)
+**Nothing to build.** The shadow study is running; it just needs to accumulate. Two operator tasks, then wait:
+
+1. **Anthropic console → Settings → Limits → set a monthly spend cap** (e.g. $10). Not done yet.
+2. **Reboot the PC** — so the scheduled scans inherit `ANTHROPIC_API_KEY` (interactive scans already have it; the scheduled ones don't until a restart / the 03:15 nightly reboot).
+3. **Wait ~1–3 weeks.** Every RSI signal on SIM + both LIVE accounts gets scored and logged to `data/ai_shadow_decisions.jsonl` (nothing applied).
+4. **Weekly:** `python ai_shadow_report.py`. It says "not enough" under 40 decisions, then shows APPROVE-vs-REJECT expectancy + flags candidate rough days.
+
+The next *build* is **Sprint 4**, and it stays blocked until:
+- ~40+ resolved shadow decisions on SIM **AND** the user confirms the window included a real adverse/volatile stretch (D2), and
+- the multiplier `FLOOR` is decided (D1).
+
+### Cost controls in place (`aace238`)
 | Lever | Effect |
 |---|---|
 | `agent_strategies: ["rsi"]` | paid call on ~1/20th of signals |
 | `agent_dedup: true` | ~10× fewer calls (no re-scoring standing signals every rescan) |
 | prompt caching on the system prompt | ~0.1× system-token cost within a scan |
-| Est. spend on SIM+LIVE shadow, rsi-only, deduped | **well under $1/day** — $5 lasts weeks |
-Plus: set a hard **monthly spend limit** on the Anthropic console (Settings → Limits).
+| `claude-sonnet-5` not opus (`997aedf`) | ~5× cheaper per token |
+| Est. spend, SIM+LIVE shadow, rsi-only, deduped | **cents/day** — $5 lasts weeks |
+Plus: set a hard **monthly spend limit** on the console.
+
+---
+
+## Milestones
+
+| # | Milestone | Status | Date | Evidence / gate |
+|---|---|---|---|---|
+| M0 | AI package exists, kill switch works, ships OFF | ✅ | 2026-08-28 | `test_ai_config` green, default-off confirmed |
+| M1 | Deterministic regime classifier, validated on real history | ✅ | 2026-08-30 | `test_ai_regime_classifier` + `ai_regime_spot_check` match tape |
+| M2 | Signal → structured proposal pipe, log-only, zero behaviour change | ✅ | 2026-08-31 | `test_ai_trade_proposal`, regression unchanged |
+| M3 | Trading Copilot agent returns a decision; any failure → HOLD, never raises | ✅ | 2026-08-31 | `test_ai_trading_copilot` incl. 20× unreachable-endpoint drill |
+| M3.5 | Cost controls + shadow-on-LIVE (log-only, can never act on LIVE) | ✅ | 2026-08-31 | `test_ai_config` two-tier gate asserts; live `evaluate_proposal()` verified |
+| **M4** | **Shadow evidence: ~40+ resolved decisions spanning a user-confirmed adverse stretch** | 🟡 **in progress** | — | `ai_shadow_report.py`; decisions accumulating from 2026-08-31 |
+| M5 | Review: does APPROVE beat REJECT on expectancy through a rough patch? | ⬜ | — | user + report, in conversation |
+| M6 | Sprint 4 — agent's `size_multiplier` changes SIM order size (Level 2, SIM only) | ⬜ blocked on M4/M5 + D1 | — | `test_ai_sizing_hook` + SIM A/B |
+| M7 | Sprint 5 — separate written go/no-go before anything further. LIVE acting is its own decision, not in this plan. | ⬜ | — | — |
+
+Autonomy ladder: currently **Level 1** (advisory, shadow). M6 = **Level 2** (semi-autonomous, SIM only). That is the ceiling of the current plan.
 
 ---
 
@@ -116,4 +135,5 @@ Not in the v1 sprint plan. Cheap interim version (hardcoded economic-calendar bl
 
 ## Change log for THIS file
 
-- **2026-08-31** — created. Sprints 0–3 recorded as ✅; Sprint 4 logged as blocked on D1/D2 + evidence. Import-hardening (`22b9f75`) noted under Sprint 3.
+- **2026-08-31** — created. Sprints 0–3 recorded ✅; Sprint 4 blocked on D1/D2 + evidence. Import-hardening (`22b9f75`).
+- **2026-08-31 (later)** — Sprint 3.5 (`aace238`): shadow-on-LIVE + cost controls. Model → `claude-sonnet-5` (`997aedf`). **Shadow study TURNED ON** for SIM + both LIVE (`327e204`) — `agent_enabled` true, `claude-sonnet-5` scoring every RSI signal, nothing applied. API key set + verified end-to-end. Added the Milestones table (M0–M7, currently at M4 "in progress", Level 1 autonomy). Next step = operator tasks (spend cap + reboot) then wait for evidence; next build = Sprint 4 (M6).

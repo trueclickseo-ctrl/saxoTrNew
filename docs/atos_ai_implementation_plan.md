@@ -1,6 +1,12 @@
 # ATOS AI — Implementation Plan (Sprints, Friday 2026-08-28 start)
 
-> **Status (2026-08-31):** Sprint 0 ✅ (`e5bbf9f`) · Sprint 1 ✅ (`fc0d5b5`) · Sprint 2 ✅ (`cc1a5b1`) · Sprint 3 ✅ (`80e8b04`, hardened in `22b9f75`). **Sprint 4 is NEXT but BLOCKED** on the two open decisions below + a real shadow-evidence sample (needs `pip install anthropic` done ✅ + `ANTHROPIC_API_KEY` + `config/ai.json` `enabled_sim`+`agent_enabled`=true, then ~40+ resolved shadow decisions spanning a user-confirmed adverse stretch). Also shipped adjacent to this plan: the exit-advisor Stage A shadow scorer (`fbc8f94`, roadmap #16/#8) and the RSI-signal-registry (threshold study + Trade-Probability data, roadmap #4) — both feed the same evidence base.
+> **Status (2026-08-31):** Sprint 0 ✅ (`e5bbf9f`) · Sprint 1 ✅ (`fc0d5b5`) · Sprint 2 ✅ (`cc1a5b1`) · Sprint 3 ✅ (`80e8b04`, hardened `22b9f75`) · Sprint 3.5 ✅ cost-controls + shadow-on-LIVE (`aace238`), model → `claude-sonnet-5` (`997aedf`).
+>
+> **The shadow study is RUNNING** (`327e204`) — `claude-sonnet-5` scores every RSI signal on SIM + both real LIVE accounts and logs APPROVE/REJECT/MODIFY next to the real outcome. Nothing is applied (shadow on SIM; `can_apply_decision` hardcoded False for LIVE). Now: accumulate ~40+ resolved decisions spanning a user-confirmed adverse stretch, review weekly with `ai_shadow_report.py`.
+>
+> **Sprint 4 is NEXT, BLOCKED** on: that evidence sample + the two open decisions below (multiplier `FLOOR`; who rules "volatile enough").
+>
+> Adjacent, feeding the same evidence base: exit-advisor Stage A shadow scorer (`fbc8f94`, roadmap #16/#8), RSI-signal-registry (`5646e30`, roadmap #4).
 >
 > **Live progress log: [`docs/atos_ai_tracker.md`](atos_ai_tracker.md)** — every AI commit, test count, decision, and the current blocker, kept current as work lands.
 >
