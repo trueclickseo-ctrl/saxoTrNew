@@ -2566,6 +2566,18 @@ def _apply_profit_ladder_stop(key: str, pos: dict, df, strat_name: str,
 
 # ── Per-strategy exit / entry helpers ─────────────────────────────────────────
 
+def _legacy_exit_strategies(active_strategies, positions) -> list:
+    """Strategies that have an OPEN position but are no longer in the entry
+    allowlist -- e.g. the SEK LIVE account's 4 `donchian:` positions after
+    it moved to rsi-only (2026-08-31). Without this they'd sit on a frozen
+    entry-day broker bracket with NO trailing / channel-break / time-stop
+    exit at all (the config table's "close manually" note was the stopgap).
+    Entries for these strategies stay blocked -- this is exits only."""
+    active = set(active_strategies)
+    held = {k.split(":", 1)[0] for k in positions if ":" in k}
+    return sorted((held - active) & set(STRATEGIES))
+
+
 def _run_exits(strat_name: str, strat_mod, positions: dict,
                market_data: dict, akey: str, dry_run: bool,
                today_str: str) -> int:
@@ -3784,6 +3796,21 @@ def run_exits_only(dry_run: bool = True,
             logger.info(f"  [{strat_name}] Closed {exits} position(s)")
         total_exits += exits
 
+    for strat_name in _legacy_exit_strategies(active_strategies, positions):
+        logger.info(f"  [{strat_name}] legacy position(s) held — running its own "
+                    f"exit rules (entries stay blocked)")
+        try:
+            n = _run_exits(strat_name, STRATEGIES[strat_name], positions,
+                           market_data, akey, dry_run, today_str)
+        except Exception as exc:
+            logger.error(f"  [{strat_name}] legacy exits pass crashed, continuing: {exc}")
+            n = 0
+        if not dry_run:
+            _save_state(state)
+        if n:
+            logger.info(f"  [{strat_name}] (legacy, exits only) Closed {n} position(s)")
+        total_exits += n
+
     logger.info("=" * 60)
     logger.info(f"  EXITS-ONLY complete — Closed: {total_exits}  "
                 f"|  Still holding: {len(positions)}")
@@ -4001,6 +4028,22 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
 
         total_exits   += exits
         total_entries += entries
+
+    # ── Legacy-position exit management (no entries) ──────────────────────────
+    for strat_name in _legacy_exit_strategies(active_strategies, positions):
+        logger.info(f"{'─'*60}")
+        logger.info(f"  Strategy: {strat_name.upper()}  (legacy positions — exit rules only, no entries)")
+        try:
+            n = _run_exits(strat_name, STRATEGIES[strat_name], positions,
+                           market_data, akey, dry_run, today_str)
+        except Exception as exc:
+            logger.error(f"  [{strat_name}] legacy exits pass crashed, continuing: {exc}")
+            n = 0
+        if not dry_run:
+            _save_state(state)
+        if n:
+            logger.info(f"  [{strat_name}] (legacy, exits only) Closed {n} position(s)")
+        total_exits += n
 
     # ── Summary ───────────────────────────────────────────────────────────────
     logger.info("=" * 60)
