@@ -116,7 +116,7 @@ every LIVE gate:
 |---|---|
 | `LIVE_RISK_PCT_OVERRIDE = 0.0075` | sizes off 0.75%, not 0.25% |
 | `risk_equity_eur = 8000` cap | sizing base is €8,000 (2026-08-30, raised from 6,000 ahead of an 18k SEK deposit). The real pooled Saxo balance is **~15,800 SEK ≈ €1,400** (→ ~€3,050 post-deposit), so €8,000 is ~2.5× — a deliberate leverage choice. |
-| **10k–100k lot ladder** (`_snap_rsi_live_lot`) | risk-sized qty snapped to the nearest 10,000, clamped [10k, 100k] |
+| **Fixed ~€45 per-trade risk** (`RSI_LIVE_FIXED_RISK_EUR = 45.0`, 2026-08-31) | sizes for a uniform ~€45 loss-if-stopped on every pair regardless of stop width (was: equity-% + a 10k-lot ladder that gave ~€8 on MXNUSD vs ~€73 on GBPUSD). qty rounds **up** to Saxo's 1,000-unit increment so realised risk is ≥ €45 (typically €45–55), capped at `RSI_LIVE_LOT_MAX = 100,000`. Set the constant to `None` to restore the old `_snap_rsi_live_lot` 10k-ladder behaviour. |
 | `LIVE_MAX_CURRENCY_EXPOSURE = 5` | ≤ 5 net positions per currency |
 | Cost gate `MIN_EDGE_TO_COST_RATIO = 3.0` | skip if target < 3× Saxo round-trip commission |
 | Weekend market-hours gate | no new entries Fri ~22:00 → Sun ~22:00 UTC; signals still emailed |

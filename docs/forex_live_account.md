@@ -21,10 +21,10 @@ redesign and the 2026-08-29/30/31 tuning. Where they disagree, this table wins.
 | Strategy | `rsi` only (`LIVE_ALLOWED_STRATEGIES`, changed `{"bb"}`→`{"rsi"}` on 2026-08-31 — both accounts run RSI now) | `rsi` only (`LIVE_EUR_ALLOWED_STRATEGIES`) — **active** |
 | Universe | 17-pair `HIGH_VOLUME_SYMBOLS` (deliberately **not** expanded to 49 — caps the extra exposure from running the same strategy twice to the highest-liquidity pairs) | 49-pair `CORE_SYMBOLS` |
 | Overlap | The 17 HIGH_VOLUME pairs are traded on **both** accounts → every signal on those is taken twice, ~2× per-signal real-money exposure on the shared Saxo margin pool (user-confirmed 2026-08-31). Attribution stays clean via per-record `AccountKey`. | |
-| Scheduler | `ATOS Forex LIVE Daily Run` / `Exit Check` — **enable manually** (admin) after the 2026-08-31 switch; they were Disabled while SEK ran `bb` | `ATOS Forex LIVE EUR Daily Run` / `Exit Check` — active |
+| Scheduler | `ATOS Forex LIVE Daily Run` / `Exit Check` — **enabled 2026-08-31** (Windows quota error on the enable was flaky, state changed anyway) | `ATOS Forex LIVE EUR Daily Run` / `Exit Check` — active |
 | Legacy positions | 4 open `donchian:` positions keep their broker GTC stops but get **no** ATOS trailing/time-stop management now that `donchian` isn't in the allowlist — close manually when convenient | legacy EXOTIC positions still tracked by `housekeeping_live_eur` |
 | Sizing cap | `risk_equity_sek: 15000` | `risk_equity_eur: 8000` (1,350 → 6,000 on 2026-08-29 → **8,000 on 2026-08-30**, ahead of an 18k SEK deposit). Real pooled balance is ~15,800 SEK ≈ €1,400, so €8,000 ≈ 2.5× — a deliberate leverage choice. |
-| Risk % per trade | `LIVE_RISK_PCT_OVERRIDE = 0.0075` (0.75%) — shared constant, both accounts | same |
+| Risk per trade | **RSI: fixed ~€45 loss-if-stopped** (`RSI_LIVE_FIXED_RISK_EUR = 45.0`, 2026-08-31), uniform across pairs — overrides the 0.75% for RSI. `LIVE_RISK_PCT_OVERRIDE = 0.0075` still applies to any non-RSI strategy. | same |
 | Trading halt | `LIVE_TRADING_HALTED = False` (lifted 2026-08-28 by explicit go-ahead) | same |
 
 **Gates between a signal and a real order (LIVE only; SIM has none of these):**
@@ -43,12 +43,17 @@ redesign and the 2026-08-29/30/31 tuning. Where they disagree, this table wins.
   `MIN_EDGE_TO_COST_RATIO = 3.0 ×` Saxo's real round-trip commission is
   skipped. Bigger position size (see the RSI lot ladder) makes more
   signals clear this.
-- **RSI real-money lot ladder** (2026-08-29) — RSI risk-sizes as normal,
-  then snaps the quantity to the nearest 10,000-unit rung, clamped to
-  [10,000, 100,000] (`_snap_rsi_live_lot`). Reason: at the 1,000-unit
-  minimum lot the flat ~5 EUR commission turned RSI's 2:1 reward:risk into
-  ~0.9:1 net. Trade-off: on tight-stop pairs the 10k floor pushes realised
-  risk above the 0.75% target (still inside the heat cap). SIM untouched.
+- **RSI fixed per-trade risk** (`RSI_LIVE_FIXED_RISK_EUR = 45.0`,
+  2026-08-31) — RSI on both real-money accounts sizes for a **uniform
+  ~€45 loss if the stop is hit**, on every pair regardless of stop width.
+  qty rounds **up** to Saxo's 1,000-unit increment (realised risk ≥ €45,
+  typically €45–55), capped at 100,000 units. Replaced the 2026-08-29
+  equity-% + `_snap_rsi_live_lot` 10k-ladder combo, which gave wildly
+  uneven realised risk (~€8 on MXNUSD vs ~€73 on GBPUSD). At €45 risk /
+  €90 target the flat ~€10 round-trip commission is ~11% of the target —
+  well clear of the cost gate. SIM untouched. Set the constant to `None`
+  to restore the 10k ladder (`_snap_rsi_live_lot` is unchanged, just the
+  fallback now).
 - **Portfolio heat cap** — 6% of the sizing base in combined open risk
   (re-enabled for LIVE/LIVE_EUR 2026-08-28). **2026-08-30: `rsi` gets an
   8% cap** (`_HEAT_LIMIT_BY_STRATEGY = {"rsi": 0.08}`) ≈ 10 concurrent RSI

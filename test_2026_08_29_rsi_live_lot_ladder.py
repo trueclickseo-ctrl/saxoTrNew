@@ -5,9 +5,14 @@ User instruction: "do not buy 1 quantity for RSI always buy 10, 20, 30,
 40, 50, 60, 70, 80, 90, or 100 units" (units = thousands). At the
 1,000-unit FX minimum lot, Saxo's flat ~5 EUR round-trip commission
 dominated the trade and turned RSI's designed 2:1 reward:risk into ~0.9:1
-net. RSI on live/live_eur now risk-sizes as before, then snaps the result
-to the nearest 10,000-unit rung, clamped to [10,000, 100,000]. SIM is
-untouched.
+net. RSI on live/live_eur risk-sized as before, then snapped the result
+to the nearest 10,000-unit rung, clamped to [10,000, 100,000].
+
+SUPERSEDED 2026-08-31 as the DEFAULT path (RSI_LIVE_FIXED_RISK_EUR = 45.0,
+see test_2026_08_31_rsi_live_fixed_risk.py): the 10k ladder is now only
+used when RSI_LIVE_FIXED_RISK_EUR is None. `_snap_rsi_live_lot` itself is
+unchanged and still unit-tested here; the entry-loop wiring tests below
+assert it is the fallback branch.
 """
 
 import inspect
@@ -68,11 +73,13 @@ def test_entry_loop_applies_ladder_only_for_live_rsi_before_cost_gate():
     # gated on live/live_eur AND strat_name == 'rsi'
     assert 'strat_name == "rsi"' in src
     assert '_snap_rsi_live_lot(qty)' in src
-    # must sit before the cost-gate call so the gate sees the real size
+    # 2026-08-31: the ladder is now the RSI_LIVE_FIXED_RISK_EUR-is-None
+    # fallback -- still gated to live RSI, still before the cost gate.
+    assert 'if RSI_LIVE_FIXED_RISK_EUR:' in src and 'else:' in src[src.index('if RSI_LIVE_FIXED_RISK_EUR:'):]
     snap_at = src.index("_snap_rsi_live_lot(qty)")
     cost_at = src.index("_round_trip_cost")
-    assert snap_at < cost_at, "ladder snap must run before the cost gate"
-_run("forex/runner: _run_entries applies the ladder for live RSI only, before the cost gate",
+    assert snap_at < cost_at, "lot sizing (ladder or fixed-risk cap) must run before the cost gate"
+_run("forex/runner: _run_entries sizes live RSI lots (fixed-risk primary, ladder fallback) before the cost gate",
      test_entry_loop_applies_ladder_only_for_live_rsi_before_cost_gate)
 
 
