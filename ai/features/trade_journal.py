@@ -16,6 +16,10 @@ places, amends or cancels an order, never mutates a position or a stop,
 never influences a strategy or sizing decision. It runs entirely after a
 trade has already closed. Enforced by test_2026_08_31_ai_trade_journal.py.
 
+Covers ALL forex accounts -- SIM and both real-money LIVE accounts (live,
+live_eur) -- since every forex trade writes an observation card regardless
+of account. There is no account filter; the account is on each journal row.
+
 Cost: batched LLM calls per trading day (a big day is split into
 CHUNK_SIZE-trade calls; ~1 call per 8 closed trades), not one call per
 trade. A truncated response is salvaged for whatever complete trade
@@ -57,15 +61,19 @@ advise on any live order; you write an honest retrospective so the operator can 
 You receive a JSON object: "narrate" is the list of closed trades to write up in \
 detail; "all_trades_today" (when present) is a compact list of every trade that day \
 for the day_summary; "partial_batch": true means narrate only, day_summary = null. \
-Each trade in "narrate" has: the strategy, \
+Each trade in "narrate" has: the account (account_env -- "sim" is paper, \
+"live"/"live_eur" are REAL money; weigh lessons on live trades more heavily), the \
+strategy, \
 symbol, direction, entry/stop/target prices, ATR at entry, position size, the market \
 REGIME at entry (from a deterministic classifier), any AI Copilot verdict on the \
 signal (APPROVE/REJECT/MODIFY + size multiplier, shadow-only -- it did not change the \
 trade), how many times the shadow Exit Advisor said EXIT or TIGHTEN while the trade \
 was open, and the outcome: net P&L in EUR, R-multiple, exit reason, holding hours, \
-and MAE/MFE in EUR (worst/best unrealised P&L seen -- these can occasionally be \
-corrupted by a bad SIM quote; if MAE/MFE is wildly inconsistent with net P&L and \
-risk, say so and don't over-read it).
+and MAE/MFE in EUR (worst/best unrealised P&L seen). MAE/MFE quality: if \
+"mae_mfe_note" is set the value was nulled (a known data bug) -- ignore MAE/MFE for \
+that trade; if "mae_mfe_coarse" is true it's a loose upper bound from a single daily \
+bar (intraday strategy) -- use it directionally only. Otherwise if MAE/MFE still \
+looks wildly inconsistent with net P&L and risk, say so and don't over-read it.
 
 For EACH trade return:
 - entry_quality: "excellent" | "good" | "fair" | "poor"  -- judged on regime fit, \
@@ -254,6 +262,11 @@ def build_dossiers(since: str | None = None, limit: int | None = None) -> list[d
             "r_multiple": t.get("r_multiple"),
             "mae_eur": t.get("mae_eur"),
             "mfe_eur": t.get("mfe_eur"),
+            # MAE/MFE quality flags (2026-09-01): coarse == taken from a
+            # single daily bar (intraday strategy, sub-day hold -> loose
+            # upper bound); invalidated == pre-fix corrupted value, nulled.
+            "mae_mfe_coarse": bool(t.get("mae_mfe_coarse")),
+            "mae_mfe_note": t.get("mae_mfe_invalidated"),
             "holding_hours": t.get("holding_hours"),
         })
         if len(dossiers) >= limit:
@@ -343,8 +356,9 @@ def _extract_json(text: str) -> dict | None:
 
 def _day_context_row(d: dict) -> dict:
     """Compact one-liner for the day_summary context (not the detailed narrate list)."""
-    return {"symbol": d.get("symbol"), "strategy": d.get("strategy"),
-            "direction": d.get("direction"), "regime": d.get("regime_at_entry"),
+    return {"account": d.get("account_env"), "symbol": d.get("symbol"),
+            "strategy": d.get("strategy"), "direction": d.get("direction"),
+            "regime": d.get("regime_at_entry"),
             "net_pnl_eur": d.get("net_pnl_eur"), "r_multiple": d.get("r_multiple"),
             "exit_reason": d.get("exit_reason")}
 

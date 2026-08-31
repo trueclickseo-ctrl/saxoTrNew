@@ -257,6 +257,20 @@ SLOTS_PER_STRATEGY = {
 # (SLOTS_PER_STRATEGY) which already limits maximum concurrent exposure.
 DAY_TRADE_STRATEGIES = {"london_breakout", "london_breakout_v2"}
 
+# Strategies that open AND close within a day -- their MAE/MFE can't be
+# measured honestly from DAILY bars (one bar's High/Low spans 24h, the trade
+# a few hours). For these the forward-observation excursion is taken from the
+# single most-recent daily bar only (bounded, but coarse -- flagged as such
+# on the exit card).
+_INTRADAY_STRATEGIES = DAY_TRADE_STRATEGIES | {"gap", "gap_weekend"}
+
+# An unrealised excursion more than this many times the trade's own entry
+# risk is not real -- it means the bar window wasn't bounded to the holding
+# period (the 2026-09-01 bug) or a quote/FX rate was bad on that cycle.
+# Reject the update rather than let one bad reading poison the running
+# MAE/MFE. 25R is far beyond any legitimate FX move over a normal hold.
+_MAE_MFE_SANE_R = 25.0
+
 # ── Session-aware pair groups ──────────────────────────────────────────────────
 # asian  : 06:20 PKT  — Tokyo/Sydney session (JPY crosses, AUD, NZD)
 # london : 18:00 PKT  — London-NY overlap (EUR, GBP, USD pairs; tightest spreads)
@@ -791,6 +805,34 @@ def _profit_ladder_target_stop(pos: dict, df, strat_name: str) -> float | None:
 # Limit order at the broker so a winning trade can be captured even if a
 # scheduled run is delayed or skipped.
 DEFAULT_TP_RR = 2.0
+
+
+def _bars_for_excursion(df: pd.DataFrame | None, pos: dict, strat_name: str) -> pd.DataFrame | None:
+    """The bars to measure a position's MAE/MFE over: its HOLDING PERIOD
+    only, not the whole ~1-year daily window `df` carries for signal
+    generation.
+
+    Bug fixed 2026-09-01: the caller used the full `df`, so MAE was the
+    lowest low in ~350 daily bars -- on trending/volatile crosses (gap on
+    ZARJPY/MXN/ILS, donchian, ml) that inflated MAE to tens of thousands of
+    EUR against a ~EUR80 risk. 53 of 63 closed trades in
+    trade_observation_cards.jsonl were affected.
+
+    Swing strategies: one bar per calendar day held + a 2-bar buffer.
+    Intraday strategies (_INTRADAY_STRATEGIES): just the latest daily bar --
+    still coarse for a sub-day hold, but bounded, and the exit card is
+    flagged `mae_mfe_coarse`.
+    """
+    if df is None or len(df) == 0:
+        return df
+    if strat_name in _INTRADAY_STRATEGIES:
+        return df.tail(1)
+    try:
+        ed = date.fromisoformat(str(pos.get("entry_date", ""))[:10])
+        held_days = max((date.today() - ed).days, 0)
+    except Exception:
+        held_days = 1
+    return df.tail(min(len(df), held_days + 2))
 
 
 def _resolve_tp_price(sig: dict, direction: str) -> float:
@@ -2496,22 +2538,32 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
         # ones that close this cycle.
         if df is not None and not dry_run:
             try:
-                entry_dt = pos.get("entry_date", today_str)
-                since_entry = df  # df is already just recent history; entry_date bounds it implicitly enough for daily bars
+                window = _bars_for_excursion(df, pos, strat_name)
                 is_long_pos = pos.get("direction", "Buy") == "Buy"
-                worst_price = float(since_entry["Low"].min()) if is_long_pos else float(since_entry["High"].max())
-                best_price  = float(since_entry["High"].max()) if is_long_pos else float(since_entry["Low"].min())
+                worst_price = float(window["Low"].min()) if is_long_pos else float(window["High"].max())
+                best_price  = float(window["High"].max()) if is_long_pos else float(window["Low"].min())
                 entry_px = float(pos.get("entry_price", 0))
                 qty_pos  = pos.get("quantity", 0)
                 sym_quote = sym[3:6] if len(sym) >= 6 else ""
                 rate_pos  = _eur_per_unit(sym_quote, akey)
+                if strat_name in _INTRADAY_STRATEGIES:
+                    pos["mae_mfe_coarse"] = True
                 if entry_px and rate_pos:
                     worst_pnl_eur = ((worst_price - entry_px) * qty_pos * rate_pos if is_long_pos
                                       else (entry_px - worst_price) * qty_pos * rate_pos)
                     best_pnl_eur = ((best_price - entry_px) * qty_pos * rate_pos if is_long_pos
                                      else (entry_px - best_price) * qty_pos * rate_pos)
-                    forward_observation.update_mae_mfe(pos, worst_pnl_eur)
-                    forward_observation.update_mae_mfe(pos, best_pnl_eur)
+                    # Reject an implausible reading (a bad quote / FX rate this
+                    # cycle) instead of letting it poison the running min/max.
+                    risk_ref = pos.get("risk_eur_at_entry")
+                    cap = _MAE_MFE_SANE_R * risk_ref if (risk_ref and risk_ref > 0) else None
+                    if cap and (abs(worst_pnl_eur) > cap or abs(best_pnl_eur) > cap):
+                        logger.debug(f"[obs] {sym} MAE/MFE update rejected — "
+                                     f"{worst_pnl_eur:.0f}/{best_pnl_eur:.0f} EUR exceeds "
+                                     f"{_MAE_MFE_SANE_R:.0f}R (EUR{cap:.0f})")
+                    else:
+                        forward_observation.update_mae_mfe(pos, worst_pnl_eur)
+                        forward_observation.update_mae_mfe(pos, best_pnl_eur)
             except Exception:
                 pass
 
@@ -2705,6 +2757,7 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
                     holding_hours=holding_hours,
                     ladder_rung=pos.get("ladder_rung"),
                     ladder_rung_r=pos.get("ladder_rung_r"),
+                    mae_mfe_coarse=bool(pos.get("mae_mfe_coarse")),
                 )
         del positions[key]
         exits += 1

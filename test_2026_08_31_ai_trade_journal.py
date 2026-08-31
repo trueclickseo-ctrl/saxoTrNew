@@ -203,6 +203,33 @@ def test_build_dossiers_pairs_and_joins():
     assert d1["net_pnl_eur"] == 50.0
 
 
+def test_journal_covers_sim_and_both_live_accounts():
+    # the journal has NO account filter -- SIM + live + live_eur forex trades
+    # all get journaled (every forex trade writes an observation card).
+    _clean()
+    cards = []
+    for acct in ("sim", "live", "live_eur"):
+        cid = f"{acct}:rsi:EURUSD:2026-08-31T09:00:00+00:00"
+        cards += [_entry(cid, acct=acct), _exit(cid)]
+    _w(_CARDS, cards)
+    ds = tj.build_dossiers()
+    assert {d["account_env"] for d in ds} == {"sim", "live", "live_eur"}
+    # a real LIVE trade carries through to the day context too
+    ctx = tj._day_context_row(next(d for d in ds if d["account_env"] == "live"))
+    assert ctx["account"] == "live"
+
+
+def test_dossier_carries_mae_mfe_quality_flags():
+    _clean()
+    e = _entry("c1"); x = _exit("c1")
+    x["mae_mfe_coarse"] = True
+    x["mae_mfe_invalidated"] = "unbounded-daily-window-bug-2026-09-01"
+    _w(_CARDS, [e, x])
+    d = tj.build_dossiers()[0]
+    assert d["mae_mfe_coarse"] is True
+    assert "2026-09-01" in d["mae_mfe_note"]
+
+
 def test_build_dossiers_skips_already_journaled():
     _clean()
     _w(_CARDS, [_entry("c1"), _exit("c1"), _entry("c2", sym="GBPUSD"), _exit("c2")])

@@ -141,11 +141,15 @@ def log_trade_exit_card(*, card_id: str, exit_price: float, exit_reason: str,
                          mae_eur: float | None, mfe_eur: float | None,
                          holding_hours: float | None,
                          ladder_rung: str | None = None,
-                         ladder_rung_r: float | None = None) -> None:
+                         ladder_rung_r: float | None = None,
+                         mae_mfe_coarse: bool = False) -> None:
     """Written once, at close, referencing the entry card's card_id.
     MAE/MFE are in EUR (worst/best unrealized excursion seen while the
     position was open) -- accumulated by update_mae_mfe() below on every
-    exits-check cycle, not reconstructed after the fact.
+    exits-check cycle, bounded to the holding window (fixed 2026-09-01).
+    `mae_mfe_coarse` = the excursion was taken from a single daily bar
+    because this is an intraday strategy (gap / london_breakout*) -- treat
+    it as a loose upper bound, not a precise figure.
 
     ladder_rung / ladder_rung_r (2026-08-31): the highest RSI profit-ladder
     rung this trade reached and at what R -- None if the ladder wasn't
@@ -164,6 +168,7 @@ def log_trade_exit_card(*, card_id: str, exit_price: float, exit_reason: str,
         "holding_hours": holding_hours,
         "ladder_rung": ladder_rung,
         "ladder_rung_r": ladder_rung_r,
+        "mae_mfe_coarse": bool(mae_mfe_coarse),
     })
 
 

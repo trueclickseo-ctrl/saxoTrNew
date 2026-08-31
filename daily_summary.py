@@ -188,7 +188,11 @@ def _ai_journal_section() -> str:
         lesson = t.get("lesson") or ""
         if lesson.lower() == "none":
             lesson = ""
+        acct = t.get("account_env") or "?"
+        acct_html = (f"<span class='neg'>{acct}</span>" if acct in ("live", "live_eur")
+                     else f"<span class='muted'>{acct}</span>")
         rows_html += f"""<tr>
+          <td>{acct_html}</td>
           <td class="sym">{t.get('symbol','?')}</td>
           <td class="muted">{t.get('strategy','?')}</td>
           <td class="muted">{t.get('regime_at_entry') or '—'}</td>
@@ -204,11 +208,12 @@ def _ai_journal_section() -> str:
     <h2>AI Trading Journal</h2>
     {summary_html}
     <table>
-      <thead><tr><th>Symbol</th><th>Strategy</th><th>Regime</th>
+      <thead><tr><th>Acct</th><th>Symbol</th><th>Strategy</th><th>Regime</th>
       <th>Entry/Exit</th><th>Net</th><th>Lesson</th></tr></thead>
       <tbody>{rows_html}</tbody>
     </table>
-    <p class="muted" style="margin:2px 0 0">Recurring themes: {tag_line or '—'} &nbsp;·&nbsp;
+    <p class="muted" style="margin:2px 0 0">Covers SIM + both LIVE forex accounts. Recurring
+    themes: {tag_line or '—'} &nbsp;·&nbsp;
     <code>python ai_trade_journal.py --report</code> for the full journal. Read-only retrospective,
     generated after each trade closed &mdash; nothing here influenced a trade.</p>
     """
