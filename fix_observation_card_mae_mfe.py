@@ -11,8 +11,14 @@ data/trade_observation_cards.jsonl carried a corrupted mae_eur/mfe_eur
 
 Those numbers cannot be recomputed accurately after the fact (no intrabar
 history for past trades, and the daily windows have since moved), so this
-script NULLS mae_eur / mfe_eur on every historical exit card and stamps
-`mae_mfe_invalidated`. Clean MAE/MFE accrues from the runner fix forward.
+script NULLS mae_eur / mfe_eur on every PRE-FIX exit card and stamps
+`mae_mfe_invalidated`.
+
+"Pre-fix" == the exit card has no `mae_mfe_coarse` key. The fixed
+`forex/forward_observation.log_trade_exit_card` always writes that key
+(True/False); the old one never did. So this script is SAFE TO RE-RUN --
+it can only ever touch cards written by the buggy code, never the clean
+ones that accrue from the runner fix forward.
 
 Read-only w.r.t. all trading state -- only rewrites the observation-card
 log (and a .bak beside it). Nothing here touches an order, position, or
@@ -50,12 +56,17 @@ def main() -> int:
 
     touched = 0
     already = 0
+    skipped_clean = 0
     out = []
     for r in rows:
-        if r.get("event") == "exit" and (r.get("mae_eur") is not None or r.get("mfe_eur") is not None):
+        if r.get("event") == "exit":
             if r.get("mae_mfe_invalidated"):
                 already += 1
-            else:
+            elif "mae_mfe_coarse" in r:
+                # written by the FIXED runner -- clean, leave it alone
+                skipped_clean += 1
+            elif r.get("mae_eur") is not None or r.get("mfe_eur") is not None:
+                # pre-fix card (no coarse key) carrying a corrupted excursion
                 r = {**r,
                      "mae_eur_raw": r.get("mae_eur"), "mfe_eur_raw": r.get("mfe_eur"),
                      "mae_eur": None, "mfe_eur": None,
@@ -63,8 +74,8 @@ def main() -> int:
                 touched += 1
         out.append(r)
 
-    print(f"{len(rows)} card rows | {touched} exit card(s) to invalidate "
-          f"| {already} already invalidated")
+    print(f"{len(rows)} card rows | {touched} pre-fix exit card(s) to invalidate "
+          f"| {already} already invalidated | {skipped_clean} clean (post-fix, kept)")
     if not apply:
         print("\ndry run -- re-run with --apply to rewrite "
               f"{os.path.relpath(CARDS, BASE)} (a .bak is made first)")

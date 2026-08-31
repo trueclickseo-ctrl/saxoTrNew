@@ -131,11 +131,17 @@ def test_invalidation_script_dry_run_and_apply(tmp=None):
     work = os.path.join(BASE_DIR, "data", "_test_mae_fix_cards.jsonl")
     entry = {"event": "entry", "card_id": "c1", "strategy": "gap", "symbol": "ZARJPY",
              "risk_eur": 80.0}
+    # pre-fix card: NO mae_mfe_coarse key -> gets invalidated
     ex_bad = {"event": "exit", "card_id": "c1", "mae_eur": -24000.0, "mfe_eur": 1100.0,
               "net_pnl_eur": 120.0, "r_multiple": 1.5}
+    # post-fix card: HAS mae_mfe_coarse key -> must be LEFT ALONE
+    entry2 = {"event": "entry", "card_id": "c2", "strategy": "rsi", "symbol": "EURUSD",
+              "risk_eur": 80.0}
+    ex_clean = {"event": "exit", "card_id": "c2", "mae_eur": -60.0, "mfe_eur": 25.0,
+                "net_pnl_eur": -10.0, "r_multiple": -0.13, "mae_mfe_coarse": False}
     with open(work, "w", encoding="utf-8") as f:
-        f.write(json.dumps(entry) + "\n")
-        f.write(json.dumps(ex_bad) + "\n")
+        for row in (entry, ex_bad, entry2, ex_clean):
+            f.write(json.dumps(row) + "\n")
 
     import importlib
     mod = importlib.import_module("fix_observation_card_mae_mfe")
@@ -147,23 +153,26 @@ def test_invalidation_script_dry_run_and_apply(tmp=None):
         mod.main()
         assert open(work, encoding="utf-8").read() == before
 
-        # apply: mae/mfe nulled, raw kept, marker added, .bak made
+        # apply: pre-fix card nulled (raw kept, marker added); post-fix card untouched
         mod.main.__globals__["sys"].argv = ["x", "--apply"]
         mod.main()
         rows = [json.loads(l) for l in open(work, encoding="utf-8")]
-        ex = next(r_ for r_ in rows if r_["event"] == "exit")
-        assert ex["mae_eur"] is None and ex["mfe_eur"] is None
-        assert ex["mae_eur_raw"] == -24000.0 and ex["mfe_eur_raw"] == 1100.0
-        assert "2026-09-01" in ex["mae_mfe_invalidated"]
-        assert ex["net_pnl_eur"] == 120.0 and ex["r_multiple"] == 1.5   # untouched
+        bad = next(r_ for r_ in rows if r_["card_id"] == "c1" and r_["event"] == "exit")
+        clean = next(r_ for r_ in rows if r_["card_id"] == "c2" and r_["event"] == "exit")
+        assert bad["mae_eur"] is None and bad["mfe_eur"] is None
+        assert bad["mae_eur_raw"] == -24000.0 and bad["mfe_eur_raw"] == 1100.0
+        assert "2026-09-01" in bad["mae_mfe_invalidated"]
+        assert bad["net_pnl_eur"] == 120.0 and bad["r_multiple"] == 1.5   # untouched
+        # the clean post-fix card is left EXACTLY as-is
+        assert clean["mae_eur"] == -60.0 and clean["mfe_eur"] == 25.0
+        assert "mae_mfe_invalidated" not in clean and "mae_eur_raw" not in clean
         assert any(p.startswith(os.path.basename(work) + ".bak_") for p in os.listdir(os.path.dirname(work)))
 
-        # idempotent: second apply does nothing
-        n_before = len(os.listdir(os.path.dirname(work)))
+        # safe to re-run: second apply invalidates nothing new
         mod.main()
-        assert len([r_ for r_ in
-                    [json.loads(l) for l in open(work, encoding="utf-8")]
-                    if r_.get("mae_mfe_invalidated")]) == 1
+        rows2 = [json.loads(l) for l in open(work, encoding="utf-8")]
+        assert sum(1 for r_ in rows2 if r_.get("mae_mfe_invalidated")) == 1
+        assert next(r_ for r_ in rows2 if r_["card_id"] == "c2" and r_["event"] == "exit")["mae_eur"] == -60.0
     finally:
         d = os.path.dirname(work)
         for p in os.listdir(d):
