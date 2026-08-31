@@ -3,7 +3,7 @@
 **File**: [`forex/strategy_bb.py`](../forex/strategy_bb.py)
 **Runner key**: `"bb"`
 **Type**: mean-reversion (fade the excursion)
-**Where it runs**: **SIM** *and* the real-money **SEK LIVE account** (`LIVE_ALLOWED_STRATEGIES = {"bb"}`) — though the SEK LIVE task is currently **Disabled** at the scheduler.
+**Where it runs**: **SIM only.** It was on the real-money SEK LIVE account until 2026-08-31, when `LIVE_ALLOWED_STRATEGIES` was changed `{"bb"}` → `{"rsi"}` (both live accounts now run RSI — explicit user decision). BB places no real-money orders on any account.
 **Momentum pre-filter**: **no** (in `_NO_MOMENTUM_FILTER`) — reversion strategy, scans the full universe.
 
 > Not to be changed. Described exactly as it runs today.

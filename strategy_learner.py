@@ -67,10 +67,11 @@ STRATEGY_NAMES = {
     # strategy) until LIVE accumulates its own closed-trade history.
     # 2026-08-27/28: {donchian, ema, rsi} -> {bb, rsi} (via a brief
     # {bb, rsi, pullback} step) -> {bb} once the two-account HIGH_VOLUME
-    # pilot moved rsi to the LIVE EUR account below -- matching
-    # forex/runner.py's LIVE_ALLOWED_STRATEGIES history, see that
-    # constant's comment.
-    "forex_live": ["bb"],
+    # pilot moved rsi to the LIVE EUR account below.
+    # 2026-08-31: {bb} -> {rsi} -- both real-money accounts now run RSI
+    # (explicit user decision). Matches forex/runner.py's
+    # LIVE_ALLOWED_STRATEGIES, see that constant's comment.
+    "forex_live": ["rsi"],
     # 2026-08-28: forex_live_eur's own registry entry -- previously missing
     # entirely (harmless in practice, since every get_weights() caller in
     # forex/runner.py falls back to .get(strat, 1.0), but left get_weights()

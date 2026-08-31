@@ -11,15 +11,18 @@ The rest of this document describes the SEK account in depth; the EUR account se
 
 ---
 
-## Current configuration (authoritative — updated 2026-08-30)
+## Current configuration (authoritative — updated 2026-08-31)
 
 Much of the prose below this section predates the 2026-08-28 two-account
-redesign and the 2026-08-29/30 tuning. Where they disagree, this table wins.
+redesign and the 2026-08-29/30/31 tuning. Where they disagree, this table wins.
 
 | Setting | SEK account (`--account live`) | EUR account (`--account live_eur`) |
 |---|---|---|
-| Strategy | `bb` only (`LIVE_ALLOWED_STRATEGIES`) — currently **Disabled** at the scheduler | `rsi` only (`LIVE_EUR_ALLOWED_STRATEGIES`) — **active** |
-| Universe | 17-pair `HIGH_VOLUME_SYMBOLS` | same 17 (49 after a later expansion — see scheduler doc) |
+| Strategy | `rsi` only (`LIVE_ALLOWED_STRATEGIES`, changed `{"bb"}`→`{"rsi"}` on 2026-08-31 — both accounts run RSI now) | `rsi` only (`LIVE_EUR_ALLOWED_STRATEGIES`) — **active** |
+| Universe | 17-pair `HIGH_VOLUME_SYMBOLS` (deliberately **not** expanded to 49 — caps the extra exposure from running the same strategy twice to the highest-liquidity pairs) | 49-pair `CORE_SYMBOLS` |
+| Overlap | The 17 HIGH_VOLUME pairs are traded on **both** accounts → every signal on those is taken twice, ~2× per-signal real-money exposure on the shared Saxo margin pool (user-confirmed 2026-08-31). Attribution stays clean via per-record `AccountKey`. | |
+| Scheduler | `ATOS Forex LIVE Daily Run` / `Exit Check` — **enable manually** (admin) after the 2026-08-31 switch; they were Disabled while SEK ran `bb` | `ATOS Forex LIVE EUR Daily Run` / `Exit Check` — active |
+| Legacy positions | 4 open `donchian:` positions keep their broker GTC stops but get **no** ATOS trailing/time-stop management now that `donchian` isn't in the allowlist — close manually when convenient | legacy EXOTIC positions still tracked by `housekeeping_live_eur` |
 | Sizing cap | `risk_equity_sek: 15000` | `risk_equity_eur: 8000` (1,350 → 6,000 on 2026-08-29 → **8,000 on 2026-08-30**, ahead of an 18k SEK deposit). Real pooled balance is ~15,800 SEK ≈ €1,400, so €8,000 ≈ 2.5× — a deliberate leverage choice. |
 | Risk % per trade | `LIVE_RISK_PCT_OVERRIDE = 0.0075` (0.75%) — shared constant, both accounts | same |
 | Trading halt | `LIVE_TRADING_HALTED = False` (lifted 2026-08-28 by explicit go-ahead) | same |

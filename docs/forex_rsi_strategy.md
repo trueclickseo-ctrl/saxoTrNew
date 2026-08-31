@@ -3,7 +3,7 @@
 **File**: [`forex/strategy_rsi.py`](../forex/strategy_rsi.py)
 **Runner key**: `"rsi"`
 **Type**: mean-reversion (buy-the-dip inside a trend)
-**Where it runs**: **SIM** *and* the real-money **LIVE_EUR account** (`LIVE_EUR_ALLOWED_STRATEGIES = {"rsi"}`). Not on the SEK LIVE account.
+**Where it runs**: **SIM** *and* **both** real-money accounts as of 2026-08-31 — the **EUR account** (`LIVE_EUR_ALLOWED_STRATEGIES = {"rsi"}`, 49 CORE pairs) and the **SEK account** (`LIVE_ALLOWED_STRATEGIES = {"rsi"}`, 17 HIGH_VOLUME pairs). The 17 HIGH_VOLUME pairs are traded on both accounts — every signal on those is taken twice (once per account), ~2× per-signal real-money exposure on the shared Saxo margin pool. Sizing stays per account (SEK off the 15,000 SEK cap, EUR off the 8,000 EUR cap); the 8% RSI heat cap is per account (~16% combined worst case).
 **Momentum pre-filter**: **no** (in `_NO_MOMENTUM_FILTER`) — RSI is a reversal strategy, so it scans the full universe, not just trending pairs.
 
 > Not to be changed. This is the strategy as it runs today, including the
