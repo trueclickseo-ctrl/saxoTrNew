@@ -645,10 +645,12 @@ def send_lbo_trade_opened(
 
 STRATEGY_LABELS = {
     "ema":             "EMA Trend",
-    "rsi":             "RSI Pullback",
+    # 2026-09-01 (user): rsi and pullback are two SEPARATE strategies -- the
+    # old "RSI Pullback" / "EMA Pullback" labels read as one combined thing.
+    "rsi":             "RSI (2)",
     "donchian":        "Donchian Break",
     "bb":              "BB Reversion",
-    "pullback":        "EMA Pullback",
+    "pullback":        "Pullback",
     "gap":             "Gap Fill",
     "supertrend":      "SuperTrend",
     "zscore":          "Z-Score Rev",

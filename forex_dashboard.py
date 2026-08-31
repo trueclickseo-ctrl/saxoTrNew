@@ -264,10 +264,14 @@ def _section_header(text: str, color: str, w: int) -> list:
 
 STRAT_LABELS_ALL = {
     "ema":        "EMA Trend",
-    "rsi":        "RSI Pullback",
+    # 2026-09-01 (user): "RSI Pullback" / "EMA Pullback" read as one combined
+    # RSI+Pullback strategy -- they are two SEPARATE strategies. Renamed so
+    # each row is unambiguous: rsi = the RSI(2) mean-reversion one, pullback
+    # = the EMA(20)-in-EMA(50) one.
+    "rsi":        "RSI (2)",
     "donchian":   "Donchian Break",
     "bb":         "BB Reversion",
-    "pullback":   "EMA Pullback ★",
+    "pullback":   "Pullback ★",
     "gap":        "Gap Fill ★★",
     "supertrend": "SuperTrend",
     "zscore":     "Z-Score Rev",
@@ -693,10 +697,10 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     # ── Strategy legend ───────────────────────────────────────────
     L.append(f"  {BD}STRATEGIES{W}   "
              f"{CY}{BD}■ EMA{W}  trend   "
-             f"{MG}{BD}■ RSI(2){W}  pullback   "
+             f"{MG}{BD}■ RSI(2){W}  mean-rev   "
              f"{GR}{BD}■ Donchian(30){W}  breakout   "
              f"{YL}{BD}■ BB(20,2){W}  fade   "
-             f"{BL}{BD}■ Pullback{W}  ~70% WR   "
+             f"{BL}{BD}■ Pullback{W}  EMA20-in-EMA50   "
              f"{WH}{BD}■ Gap Fill{W}  ~80% WR   "
              f"{OR}{BD}■ SuperTrend{W}  trend   "
              f"{LV}{BD}■ Z-Score{W}  mean-rev   "
