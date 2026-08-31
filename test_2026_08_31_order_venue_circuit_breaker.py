@@ -101,8 +101,12 @@ def test_notifies_once_per_run():
     r._reset_order_circuit()
     for _ in range(N + 5):   # keep rejecting after it's already open
         r._record_entry_result(rejected=True)
+    # the email is emitted once, at end of run, by _venue_down_email_if_needed
+    r._venue_down_email_if_needed()
+    r._venue_down_email_if_needed()   # idempotent -- 'notified' guard
     assert len(_email_calls) == 1, f"expected exactly one venue-down email, got {len(_email_calls)}"
-    assert _email_calls[0].get("consecutive") == N
+    assert _email_calls[0].get("consecutive") == N + 5
+    r._reset_order_circuit()
 _run("venue-down email is sent exactly once per run", test_notifies_once_per_run)
 
 
@@ -114,28 +118,37 @@ def test_notifier_exception_does_not_propagate():
     try:
         r._reset_order_circuit()
         for _ in range(N):
-            r._record_entry_result(rejected=True)   # must not raise
+            r._record_entry_result(rejected=True)
+        r._venue_down_email_if_needed()   # must not raise even if the email boom-s
         assert r._order_circuit_is_open(), "breaker still opens even if the email fails"
     finally:
         r.fx_notify.send_order_venue_down = old
-_run("a failing notifier never propagates out of _record_entry_result", test_notifier_exception_does_not_propagate)
+_run("a failing notifier never propagates out of the venue-down emitter", test_notifier_exception_does_not_propagate)
 
 
 # ═══════════════════════════════════════════════════════════════════════
 section("3. _run_entries early-returns 0 while the breaker is open (real fn)")
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_run_entries_bails_when_open():
-    r._reset_order_circuit()
-    for _ in range(N):
-        r._record_entry_result(rejected=True)
-    assert r._order_circuit_is_open()
-    # dry_run=False path must bail before any Saxo work. Pass obviously-bad
-    # args: if it does NOT early-return it will blow up touching them, which
-    # the assertion below would catch as a failure anyway.
-    out = r._run_entries("rsi", None, {}, {}, 1000.0, "acct", dry_run=False, today_str="2026-08-31")
-    assert out == 0, f"expected 0 entries while breaker open, got {out!r}"
-_run("_run_entries returns 0 immediately when the breaker is open", test_run_entries_bails_when_open)
+def test_run_entries_bails_when_open_and_no_paper_fill():
+    # With SIM paper-fill ON (the default), an open breaker does NOT stop
+    # entries -- signals are still generated and booked locally. The bail
+    # only applies when paper-fill is off (LIVE, or SIM with the flag off).
+    old_env, old_flag = r.ACCOUNT_ENV, r.SIM_PAPER_FILL_ON_REJECT
+    try:
+        r.SIM_PAPER_FILL_ON_REJECT = False
+        r.set_account_env("sim")
+        r._reset_order_circuit()
+        for _ in range(N):
+            r._record_entry_result(rejected=True)
+        assert r._order_circuit_is_open()
+        out = r._run_entries("rsi", None, {}, {}, 1000.0, "acct", dry_run=False, today_str="2026-08-31")
+        assert out == 0, f"expected 0 entries while breaker open + no paper-fill, got {out!r}"
+    finally:
+        r.SIM_PAPER_FILL_ON_REJECT = old_flag
+        r.set_account_env(old_env if old_env in ("sim", "live", "live_eur") else "sim")
+        r._reset_order_circuit()
+_run("_run_entries returns 0 when the breaker is open AND paper-fill is off", test_run_entries_bails_when_open_and_no_paper_fill)
 
 
 def test_dry_run_ignores_breaker():
@@ -146,8 +159,8 @@ def test_dry_run_ignores_breaker():
         r._record_entry_result(rejected=True)
     assert r._order_circuit_is_open()
     src = open(os.path.join(BASE_DIR, "forex", "runner.py"), encoding="utf-8").read()
-    assert "if not dry_run and _order_circuit_is_open():" in src, (
-        "the _run_entries early-return must be guarded on `not dry_run`"
+    assert "if not dry_run and _order_circuit_is_open() and not _sim_paper_fill_enabled():" in src, (
+        "the _run_entries early-return must be guarded on `not dry_run` (and now paper-fill)"
     )
 _run("dry-run entries are not gated by the breaker (guard is `not dry_run`)", test_dry_run_ignores_breaker)
 
@@ -172,11 +185,12 @@ _run("run_daily calls _reset_order_circuit; run_exits_only doesn't record entrie
 def test_entry_result_recorded_on_both_paths():
     src = open(os.path.join(BASE_DIR, "forex", "runner.py"), encoding="utf-8").read()
     i = src.find("entry_oid, stop_oid, tp_oid = saxo_order.place_with_stop")
-    seg = src[i: i + 2600]
-    assert "_record_entry_result(rejected=True)" in seg, "rejection must feed the breaker"
+    seg = src[i: i + 3200]
+    assert "_record_entry_result(rejected=True" in seg, "rejection must feed the breaker"
     assert "_record_entry_result(rejected=False)" in seg, "a fill must reset the breaker"
-    assert seg.find("_record_entry_result(rejected=True)") < seg.find("break"), (
-        "on the tripping rejection the loop must break out of the remaining signals"
+    # rejected=True is recorded before the (no-paper-fill) break
+    assert seg.find("_record_entry_result(rejected=True") < seg.find("break"), (
+        "on a rejection the breaker is fed before the loop breaks"
     )
 _run("both a rejection and a fill are reported to the breaker at the order call site",
      test_entry_result_recorded_on_both_paths)

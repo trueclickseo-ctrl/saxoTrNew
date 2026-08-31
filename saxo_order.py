@@ -36,6 +36,11 @@ import logging
 
 logger = logging.getLogger("saxo_order")
 
+# Set to the last entry-order rejection's error string (e.g. Saxo's
+# "CouldNotCompleteRequest (90)" body) so the caller can surface WHY without
+# re-parsing the log. Cleared to "" on a successful entry.
+LAST_ENTRY_ERROR: str = ""
+
 # ── Per-asset-type rules ───────────────────────────────────────────────────
 
 # ContractFutures are exchange-listed — GTC is often rejected; use DayOrder.
@@ -453,7 +458,9 @@ def _place_entry_then_stop(post_fn, account_key, uic, asset_type,
     try:
         entry_resp = post_fn("/trade/v2/orders", entry_body)
         entry_oid  = entry_resp.get("OrderId", "?")
+        globals()["LAST_ENTRY_ERROR"] = ""
     except Exception as exc:
+        globals()["LAST_ENTRY_ERROR"] = str(exc)[:300]
         logger.error(f"[entry] {label}  entry order REJECTED — no position opened: {exc}")
         return None, None
 

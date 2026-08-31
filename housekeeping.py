@@ -213,6 +213,12 @@ class ForexAdapter(BaseAdapter):
         state = r._load_state()
         out = []
         for key, v in state.get("positions", {}).items():
+            if v.get("paper"):
+                # ATOS-simulated fill (Saxo SIM order engine was down) --
+                # no Saxo counterpart, managed entirely by forex/runner.py's
+                # own exit logic. Reconciliation must not see it or it flags
+                # a phantom and deletes it. See runner._sim_paper_fill_enabled.
+                continue
             symbol = key.split(":", 1)[1] if ":" in key else key
             out.append(LocalPosition(
                 module=self.module, key=key, uic=v["uic"], symbol=symbol,
