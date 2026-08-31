@@ -47,6 +47,7 @@ _DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 COST_GATE_LOG     = os.path.join(_DATA_DIR, "cost_gate_decisions.jsonl")
 EXPOSURE_LOG      = os.path.join(_DATA_DIR, "currency_exposure_snapshots.jsonl")
 TRADE_CARDS_LOG   = os.path.join(_DATA_DIR, "trade_observation_cards.jsonl")
+EXIT_ADVISOR_LOG  = os.path.join(_DATA_DIR, "exit_advisor_shadow.jsonl")
 
 
 def _append_jsonl(path: str, record: dict) -> None:
@@ -163,6 +164,26 @@ def log_trade_exit_card(*, card_id: str, exit_price: float, exit_reason: str,
         "holding_hours": holding_hours,
         "ladder_rung": ladder_rung,
         "ladder_rung_r": ladder_rung_r,
+    })
+
+
+def log_exit_advisor_shadow(*, account_env: str, strategy: str, symbol: str,
+                            card_id: str | None, score: float, recommendation: str,
+                            r_now: float, mfe_r: float, signals: dict,
+                            cur_stop: float) -> None:
+    """One row per open position per exits-check cycle, recording what the
+    Stage-A exit advisor (forex/exit_advisor.py) WOULD recommend. SHADOW
+    ONLY -- nothing acts on it. report_exit_advisor.py joins these against
+    the eventual real exit (trade_observation_cards.jsonl) to measure
+    whether acting on 'EXIT'/'TIGHTEN' would have beaten the real outcome.
+    Best-effort -- never raises into a trading run."""
+    _append_jsonl(EXIT_ADVISOR_LOG, {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "account_env": account_env, "strategy": strategy, "symbol": symbol,
+        "card_id": card_id,
+        "score": score, "recommendation": recommendation,
+        "r_now": r_now, "mfe_r": mfe_r, "cur_stop": cur_stop,
+        "signals": signals,
     })
 
 

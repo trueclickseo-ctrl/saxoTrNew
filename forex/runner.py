@@ -83,6 +83,7 @@ import strategy_learner
 import forex.notifier      as fx_notify
 import forex.signal_filter as signal_filter
 import forex.forward_observation as forward_observation
+import forex.exit_advisor  as exit_advisor
 
 logging.basicConfig(
     level=logging.INFO,
@@ -656,6 +657,18 @@ PROFIT_LADDER_LOCK_ACTIVATE_R    = 1.00
 PROFIT_LADDER_LOCK_R             = 0.50
 PROFIT_LADDER_TRAIL_ACTIVATE_R   = 1.25
 PROFIT_LADDER_TRAIL_ATR_MULT     = 1.00
+
+# ── Exit advisor — the "AI profit scan" for open positions ───────────────────
+# Stage A (2026-08-31): forex/exit_advisor.py is a deterministic give-back-
+# risk scorer (HOLD / TIGHTEN / EXIT). It runs every exits-check cycle for
+# EVERY open position on EVERY account and logs what it WOULD recommend to
+# data/exit_advisor_shadow.jsonl -- it never touches a stop or an order.
+# report_exit_advisor.py joins that shadow log against the real exit
+# outcome per trade to answer: would acting on it have beaten the plain
+# ladder / RSI-recovery exits? Only "shadow" is implemented -- there is
+# deliberately no "active" path yet; promoting it needs weeks of shadow
+# evidence AND an explicit decision (and, for Stage B, a trained model).
+EXIT_ADVISOR_MODE = "shadow"   # "shadow" | (future: "active")
 
 
 def _profit_ladder_active(strat_name: str) -> bool:
@@ -2371,6 +2384,28 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
                                      else (entry_px - best_price) * qty_pos * rate_pos)
                     forward_observation.update_mae_mfe(pos, worst_pnl_eur)
                     forward_observation.update_mae_mfe(pos, best_pnl_eur)
+            except Exception:
+                pass
+
+        # Exit advisor -- Stage A (2026-08-31): SHADOW ONLY. Score the
+        # position's give-back risk and LOG what it would recommend; never
+        # act on it. See forex/exit_advisor.py and EXIT_ADVISOR_MODE. Runs
+        # after the MAE/MFE update above so pos["mfe_eur"] is current.
+        if EXIT_ADVISOR_MODE == "shadow" and not dry_run:
+            try:
+                adv = exit_advisor.score(pos, df, strat_name)
+                if adv is not None:
+                    forward_observation.log_exit_advisor_shadow(
+                        account_env=ACCOUNT_ENV, strategy=strat_name, symbol=sym,
+                        card_id=pos.get("observation_card_id"),
+                        score=adv["score"], recommendation=adv["recommendation"],
+                        r_now=adv["r_now"], mfe_r=adv["mfe_r"], signals=adv["signals"],
+                        cur_stop=float(pos.get("stop_price", 0) or 0),
+                    )
+                    if adv["recommendation"] != "HOLD":
+                        logger.info(f"  [exit-advisor:SHADOW] {key}: {adv['recommendation']} "
+                                    f"(score {adv['score']}, {adv['r_now']}R now / {adv['mfe_r']}R peak) "
+                                    f"— not acted on")
             except Exception:
                 pass
 
