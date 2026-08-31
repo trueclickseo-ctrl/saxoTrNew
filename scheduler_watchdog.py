@@ -63,6 +63,43 @@ FOREX_STATE_FILE = os.path.join(DATA_DIR, "forex_watchdog_state.json")
 # "Has not run yet" placeholder result code — not a real failure.
 TASK_NEVER_RUN = 267011
 
+# "Currently executing" status code — SCHED_S_TASK_RUNNING, 0x00041301,
+# decimal 267009. Task Scheduler reports this as LastTaskResult for the
+# ENTIRE duration of a run that is still in progress. It is a status, not
+# an error. See _check_windows_task for why this needs its own branch.
+TASK_CURRENTLY_RUNNING = 267009
+
+# 0x800710E0 — HRESULT_FROM_WIN32(ERROR_TASK_ALREADY_RUNNING). Task
+# Scheduler records this against an occurrence it refused to start because
+# the previous instance was still running (multiple-instances policy =
+# "do not start a new instance"). Same meaning as the code above for our
+# purposes — the task is busy, not broken — and it can linger as
+# LastTaskResult after that instance finishes, so it's treated as benign
+# on the result-code path too.
+TASK_ALREADY_RUNNING = 0x800710E0  # 2147947744
+
+# 0x00041316 — SCHED_S_TASK_TERMINATED, decimal 267014. Task Scheduler
+# killed the run itself: it exceeded the task's own ExecutionTimeLimit, or
+# an overlapping trigger stopped it. For a task that relaunches on a tight
+# cadence this is self-healing and expected under load — confirmed live
+# 2026-08-31: "SaxoTr Intraday Monitor" (60 s trigger, PT2M kill limit,
+# IgnoreNew) was terminated every cycle because the ongoing Saxo SIM
+# order-rejection outage made each protective-stop retry slow, and the
+# next launch 60 s later started clean. Benign while the task is still
+# relaunching; a task that was terminated and then never came back is
+# still caught by the staleness / never-run checks further down.
+TASK_TERMINATED_BY_SCHEDULER = 267014
+
+# How long a task may sit in the Running state before the watchdog treats
+# it as a genuine hang rather than a slow run. No legitimate task in
+# WINDOWS_TASKS runs anywhere near this long: the slowest is a full
+# 184-pair × ~18-strategy forex scan, ~13 min normally and still well
+# under an hour even on a bad-network day when every Saxo call eats its
+# full 15 s timeout — plus up to a 15 min wait on a contended module lock.
+# A task still Running past 90 min is stuck, and (for the forex family) is
+# holding forex_runner.lock against every other forex task behind it.
+RUNNING_HANG_CEILING_MIN = 90
+
 # Suppress re-alerting the same task within this window once it's been
 # flagged, so a still-broken task doesn't spam an email every 30 minutes —
 # but it WILL alert again after this window if still unresolved.
@@ -489,6 +526,40 @@ def _check_windows_task(name: str, task_name: str, log_file: str, grace_min: int
         return None  # deliberately disabled — not a failure
 
     now = datetime.now()
+
+    # A task that is executing RIGHT NOW is not a failure. Task Scheduler
+    # reports LastTaskResult 267009 (SCHED_S_TASK_RUNNING) for the whole
+    # duration of an in-progress run, and a slow run's (often shared) log
+    # legitimately goes stale meanwhile — which defeats the "trust the log
+    # if it's fresh" escape hatch on the result-code path further down.
+    # Confirmed live 2026-08-31: a transient DNS/network blip to
+    # gateway.saxobank.com (getaddrinfo failed → every Saxo call stalling
+    # its full 15 s timeout + retries) made all four 12:00/12:05 forex
+    # tasks overrun their windows, and the watchdog flagged every one as
+    # "returned error code 267009 and <log> isn't fresh either" when
+    # nothing had failed — the runners were still grinding through the
+    # backlog and finished fine. Only escalate if the run has been going
+    # far longer than any legitimate run could take: that IS a real hang,
+    # and a stuck forex run also holds forex_runner.lock and blocks every
+    # other forex task.
+    if info["state"] == "Running" or result in (TASK_CURRENTLY_RUNNING, TASK_ALREADY_RUNNING):
+        if info["state"] == "Running" and last_run and \
+                now - last_run > timedelta(minutes=RUNNING_HANG_CEILING_MIN):
+            hrs = (now - last_run).total_seconds() / 3600
+            return (f"'{task_name}' has been in the Running state since "
+                    f"{last_run:%Y-%m-%d %H:%M} ({hrs:.1f}h) — far longer than any normal "
+                    f"run, so the process is very likely hung (a stuck forex run also holds "
+                    f"forex_runner.lock and blocks every other forex task). Kill the process "
+                    f"and let the next trigger start it clean. {_remediation(task_name)}")
+        return None
+
+    # Scheduler-terminated run (exceeded ExecutionTimeLimit / stopped by an
+    # overlapping trigger). Benign as long as the task is still relaunching
+    # on its normal cadence — a genuinely dead task is caught below once
+    # last_run ages past grace. See TASK_TERMINATED_BY_SCHEDULER.
+    if result == TASK_TERMINATED_BY_SCHEDULER and last_run and \
+            now - last_run <= timedelta(minutes=grace_min):
+        return None
 
     if last_run is None:
         # Never run yet — legitimate for a brand-new task, but if its own

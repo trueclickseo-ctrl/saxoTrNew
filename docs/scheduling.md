@@ -463,6 +463,47 @@ alert email now includes the exact `Start-ScheduledTask` command to fire
 the task manually right away, since a missed run's window is otherwise gone
 until the next scheduled occurrence.
 
+**Also fixed 2026-08-31**: a task that is *currently executing* is no
+longer mistaken for a failure. Task Scheduler reports `LastTaskResult`
+`267009` (`SCHED_S_TASK_RUNNING`, `0x00041301`) — and `0x800710E0`
+(`ERROR_TASK_ALREADY_RUNNING`) for a rejected overlapping occurrence — for
+the whole duration of an in-progress run, and a slow run's log
+legitimately goes stale meanwhile, which defeated the "trust a fresh log"
+escape hatch. A transient DNS blip to `gateway.saxobank.com` (every Saxo
+call then eating its full 15 s timeout) made all four 12:00/12:05 forex
+tasks overrun their windows and the watchdog alerted on every one, though
+nothing had failed. The watchdog now treats `state == "Running"` (or
+either running-status code) as in-progress and only escalates once a task
+has been `Running` past `RUNNING_HANG_CEILING_MIN` (90 min — well beyond
+any legitimate run, so this is a genuine hang, and a stuck forex run also
+holds `forex_runner.lock` against every other forex task). It likewise no
+longer alarms on `267014` (`SCHED_S_TASK_TERMINATED` — Windows killed the
+run for exceeding its `ExecutionTimeLimit`; `SaxoTr Intraday Monitor`, 2
+min limit + 60 s cadence, was terminated every cycle while Saxo SIM order
+placement was slow) as long as the task is still relaunching normally.
+Same incident: `proc_lock.acquire()` now clears a lock whose recorded
+holder PID is dead instead of waiting out the full 15 min `WAIT_TIMEOUT`
+(a crashed `intraday_monitor` had left `forex_runner.lock` held, taxing
+every subsequent forex run 15 min).
+
+Underlying trigger for all of the above on 2026-08-31: **Saxo SIM was
+rejecting essentially every order operation** (`CouldNotCompleteRequest
+(90)`) from ~00:00 PKT onward — a Saxo-side execution outage, same class
+as 2026-08-28 — so every scan spent 10–15 s per signal retrying rejected
+orders and massively overran its window. Auth/token/read endpoints stayed
+healthy throughout; nothing in ATOS was broken.
+
+**Mitigation added 2026-08-31** (`forex/runner.py`): an order-venue circuit
+breaker. `_record_entry_result()` counts *consecutive* entry-order
+rejections across one run; after `CIRCUIT_BREAKER_MAX_CONSECUTIVE_REJECTS`
+(8) it opens, `_run_entries()` returns immediately for every remaining
+strategy, and one `send_order_venue_down` email goes out. Exits and
+stop-loss healing are deliberately untouched — a protective action is
+still worth retrying mid-outage. `run_daily()` calls
+`_reset_order_circuit()` so the state is per-run; the next scheduled scan
+retries from scratch. This keeps a scan against a dead venue to ~2 min
+instead of 60–90 and stops the orphan-order pileup.
+
 **Also fixed 2026-08-21**: a task that has genuinely never run was
 previously treated as "nothing to check" unconditionally — which is exactly
 how the PnL Sync misconfiguration (weekly instead of daily) went

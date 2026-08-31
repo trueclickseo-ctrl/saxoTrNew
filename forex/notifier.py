@@ -162,6 +162,51 @@ def send_token_expired(scheduled_time: str = "", live: bool = False) -> None:
     _send(subject, _wrap(f"{'LIVE — ' if live else ''}Saxo Token Expired — Refresh Required", body))
 
 
+def send_order_venue_down(account_env: str = "sim", consecutive: int = 0) -> None:
+    """Sent once per run when the order-venue circuit breaker trips: Saxo has
+    rejected `consecutive` entry orders in a row (the "CouldNotCompleteRequest
+    (90)" outage pattern seen 2026-08-28 and 2026-08-31), so the runner has
+    stopped attempting NEW entries for the rest of this scan. Exits and
+    stop-loss healing keep running. Best-effort — never raises."""
+    try:
+        now      = datetime.now()
+        run_time = now.strftime("%H:%M")
+        today    = now.strftime("%Y-%m-%d")
+        env_name = {"live": "LIVE (real money)", "live_eur": "LIVE EUR (real money)"}.get(
+            account_env, "SIM")
+        body = f"""
+        <span class="badge warn">⚠ ORDER VENUE DOWN</span>
+        <p style="color:#d29922; margin-top:14px">
+          Saxo rejected <strong>{consecutive} entry orders in a row</strong> on the
+          {env_name} account (<code>CouldNotCompleteRequest</code>). The
+          <strong>{run_time} PKT</strong> scan has <strong>stopped placing new
+          entries</strong> for the rest of this run to avoid piling up stranded
+          working orders against a dead endpoint.
+        </p>
+        <div class="metric-row" style="margin-top:14px">
+          <div class="metric"><div class="lbl">Run</div>
+            <div class="val" style="font-size:14px">{run_time} PKT</div></div>
+          <div class="metric"><div class="lbl">Date</div>
+            <div class="val" style="font-size:14px">{today}</div></div>
+          <div class="metric"><div class="lbl">Rejections</div>
+            <div class="val" style="font-size:14px">{consecutive} in a row</div></div>
+        </div>
+        <h3>What still ran</h3>
+        <p class="muted">Exits and stop-loss healing continue every cycle — open
+          positions stay managed. Only NEW entries are paused, and only for this
+          run; the next scheduled scan retries from scratch.</p>
+        <h3>Action</h3>
+        <p class="muted">Usually nothing — this clears when Saxo's order endpoint
+          recovers. If it persists for hours, check Saxo service status and the
+          count of orphaned working orders on the account.</p>
+        """
+        tag = "[LIVE] " if account_env in ("live", "live_eur") else ""
+        subject = f"{tag}FX Autopilot ⚠ ORDER VENUE DOWN — entries paused [{today} {run_time}]"
+        _send(subject, _wrap(f"{env_name} — Saxo Order Venue Down — Entries Paused", body))
+    except Exception as exc:  # notifier must never crash the runner
+        print(f"  [fx_notifier] send_order_venue_down FAILED: {exc}", file=sys.stderr)
+
+
 def send_run_summary(
     session:       str,
     entries:       int,
