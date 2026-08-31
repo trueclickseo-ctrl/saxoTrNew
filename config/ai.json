@@ -17,5 +17,10 @@
 
   "_cost_controls_comment": "agent_strategies: which strategies the paid agent evaluates -- ['*'] for all, or a list. Default ['rsi'] keeps the bill tiny during the shadow study (one strategy is enough to prove edge, and rsi is the one that runs on both LIVE accounts). agent_dedup: evaluate each signal (account|strategy|symbol|date) ONCE per day, not every 30-min rescan.",
   "agent_strategies": ["rsi"],
-  "agent_dedup": true
+  "agent_dedup": true,
+
+  "_journal_comment": "AI Trading Journal (roadmap #18): an LLM retrospective on each CLOSED trade (entry/exit quality, why it won/lost, the lesson) + a daily pattern summary. READ-ONLY -- ai/features/trade_journal.py only reads closed-trade logs (observation cards, AI shadow decisions, exit-advisor shadow) and writes data/ai_trade_journal.jsonl. It never places/amends/cancels an order, never touches a position or stop, never influences a strategy or sizing decision. Cost: ONE batched LLM call per trading day (not per trade). Runs from daily_summary.py; also `python ai_trade_journal.py`.",
+  "journal_enabled": true,
+  "journal_model": "claude-sonnet-5",
+  "journal_max_trades_per_run": 40
 }

@@ -678,7 +678,7 @@ Then news/sentiment (#14/#15) and strategy discovery (#19) after those ten.
 - [ ] #12 Anomaly Detection (feeds a "defensive mode" concept, most relevant to LIVE)
 - [ ] #16 Open Position AI / Trade Management (continuous monitoring of held positions, not just entry-time scoring)
 - [ ] #13 Portfolio Correlation AI (exposure concentration across instruments, not just position count)
-- [ ] #18 AI Trading Journal (cheapest to ship — no model needed, pure summarization over `pnl_tracker`/`trade_logger`; candidate to pull forward earlier in the sequence)
+- [x] **#18 AI Trading Journal — SHIPPED 2026-08-31.** `ai/features/trade_journal.py`: one batched LLM call per trading day over that day's CLOSED trades (paired entry+exit observation cards + AI shadow verdict + exit-advisor flags) → per-trade entry/exit quality, why-won/lost, one lesson, tags + a daily pattern summary. **Strictly read-only** w.r.t. all trading state (user requirement; locked by tests). Runs from `daily_summary.py`; `python ai_trade_journal.py --report`. `config/ai.json journal_enabled`. See `docs/atos_ai_tracker.md`.
 - [ ] #6 Dynamic Position Sizing, #9 Stop-Loss Intelligence, #10 Take-Profit Intelligence (once regime detection exists to condition on)
 - [ ] #7 AI Entry Optimization
 - [ ] #17 AI Portfolio Manager (whole-book view, builds on #13)

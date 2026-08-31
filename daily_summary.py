@@ -152,6 +152,68 @@ def _strategy_rows(strategies: list[dict]) -> str:
     </table>"""
 
 
+def _ai_journal_section() -> str:
+    """AI Trading Journal roll-up (roadmap #18, added 2026-08-31). Reads
+    data/ai_trade_journal.jsonl -- the generation (one LLM call) happens in
+    send_daily_summary() before this, best-effort. Read-only, never raises
+    into the email."""
+    try:
+        import ai.features.trade_journal as tj
+        rows = tj._load_jsonl(tj.JOURNAL_LOG)
+    except Exception:
+        return ""
+    if not rows:
+        return ""
+    trades = [r for r in rows if r.get("event") == "trade"]
+    if not trades:
+        return ""
+    # latest real day_summary (re-runs can append; "None" strings are skipped)
+    day_map = {}
+    for r in sorted((x for x in rows if x.get("event") == "day_summary"),
+                    key=lambda x: x.get("ts") or ""):
+        if tj._real_summary(r.get("summary")):
+            day_map[r.get("day")] = r
+    latest = day_map[max(day_map)] if day_map else None
+    summary_html = ""
+    if latest:
+        summary_html = (f"<p style='margin:2px 0 12px'><span class='muted'>"
+                        f"{latest.get('day')}</span> &mdash; {latest.get('summary','')}</p>")
+
+    from collections import Counter
+    recent = sorted(trades, key=lambda r: r.get("ts") or "")[-8:]
+    rows_html = ""
+    for t in recent:
+        net = t.get("net_pnl_eur") or 0
+        col = "pos" if net >= 0 else "neg"
+        lesson = t.get("lesson") or ""
+        if lesson.lower() == "none":
+            lesson = ""
+        rows_html += f"""<tr>
+          <td class="sym">{t.get('symbol','?')}</td>
+          <td class="muted">{t.get('strategy','?')}</td>
+          <td class="muted">{t.get('regime_at_entry') or '—'}</td>
+          <td>{t.get('entry_quality') or '—'}/{t.get('exit_quality') or '—'}</td>
+          <td class="{col}">{'+' if net>=0 else ''}€{net:,.0f}</td>
+          <td class="muted">{lesson}</td>
+        </tr>"""
+
+    tags = Counter(tag for t in trades for tag in (t.get("tags") or []))
+    tag_line = ", ".join(f"{k} ({v})" for k, v in tags.most_common(6))
+
+    return f"""
+    <h2>AI Trading Journal</h2>
+    {summary_html}
+    <table>
+      <thead><tr><th>Symbol</th><th>Strategy</th><th>Regime</th>
+      <th>Entry/Exit</th><th>Net</th><th>Lesson</th></tr></thead>
+      <tbody>{rows_html}</tbody>
+    </table>
+    <p class="muted" style="margin:2px 0 0">Recurring themes: {tag_line or '—'} &nbsp;·&nbsp;
+    <code>python ai_trade_journal.py --report</code> for the full journal. Read-only retrospective,
+    generated after each trade closed &mdash; nothing here influenced a trade.</p>
+    """
+
+
 def _profit_ladder_section() -> str:
     """RSI profit-protection ladder forward-test roll-up (added 2026-08-31).
     Shows ladder (rsi) vs control (advanced_rsi_master) per account and a
@@ -204,8 +266,30 @@ def _profit_ladder_section() -> str:
     """
 
 
+def _generate_ai_journal() -> None:
+    """Best-effort: write AI Trading Journal entries for every closed trade
+    not yet journaled (one batched LLM call per day, capped by
+    config/ai.json journal_max_trades_per_run), before the email is
+    composed. No `since` filter -- dedup is by card_id, so this naturally
+    catches late US-session closers and any day a prior run missed. Gated
+    by journal_enabled. Read-only w.r.t. all trading state --
+    ai/features/trade_journal.py only reads closed-trade logs and writes
+    its own file. Never raises into the summary run."""
+    try:
+        import ai.features.trade_journal as tj
+        res = tj.run()
+        if res.get("journaled"):
+            print(f"[daily_summary] AI journal: {res['journaled']} trade(s), "
+                  f"{res['days']} day(s)")
+        for e in res.get("errors", []):
+            print(f"[daily_summary] AI journal error -- {e}")
+    except Exception as exc:
+        print(f"[daily_summary] AI journal generation skipped: {exc}")
+
+
 def send_daily_summary(since: str | None = None) -> bool:
     since = since or date.today().isoformat()
+    _generate_ai_journal()
     sections = []
     total_trades = 0
     total_pnl = 0.0
@@ -256,7 +340,7 @@ def send_daily_summary(since: str | None = None) -> bool:
     mutate live state, which this report doesn't do. See the Housekeeping/Safeguard emails (every 30 min) for that.</p>
     """
 
-    body = header + "".join(sections) + _profit_ladder_section()
+    body = header + "".join(sections) + _ai_journal_section() + _profit_ladder_section()
     subject = f"Daily Summary — {total_trades} trades | {day_sign}${total_pnl:,.0f} | {since}"
     html = _wrap(f"Trading Day — {since}", body)
     return _send_email(subject, html)

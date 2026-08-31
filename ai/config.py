@@ -63,6 +63,16 @@ _DEFAULTS = {
     #     ONCE per day, not once every 30-min rescan while it still stands.
     "agent_strategies": ["rsi"],
     "agent_dedup": True,
+    # AI Trading Journal (2026-08-31, roadmap #18): an LLM retrospective on
+    # each CLOSED trade -- read-only, never touches an order/position/stop.
+    #   journal_enabled -- master switch for ai/features/trade_journal.py.
+    #   journal_model    -- kept separate from agent_model so the journal can
+    #     use a different model without disturbing the shadow study.
+    #   journal_max_trades_per_run -- hard cap on how many un-journaled
+    #     closed trades one run will feed the model (one batched call).
+    "journal_enabled": False,
+    "journal_model": "claude-sonnet-5",
+    "journal_max_trades_per_run": 40,
 }
 
 
@@ -144,6 +154,25 @@ def agent_dedup_enabled() -> bool:
 
 def agent_model() -> str:
     return str(_load().get("agent_model") or "claude-sonnet-5")
+
+
+def journal_enabled() -> bool:
+    """True if the AI Trading Journal (ai/features/trade_journal.py) should
+    run. Independent of the shadow study's switches -- the journal only
+    READS closed-trade logs and writes its own file, it never evaluates a
+    live signal or touches an order."""
+    return bool(_load().get("journal_enabled", False))
+
+
+def journal_model() -> str:
+    return str(_load().get("journal_model") or "claude-sonnet-5")
+
+
+def journal_max_trades_per_run() -> int:
+    try:
+        return max(1, int(_load().get("journal_max_trades_per_run", 40)))
+    except (TypeError, ValueError):
+        return 40
 
 
 def config_path() -> str:
