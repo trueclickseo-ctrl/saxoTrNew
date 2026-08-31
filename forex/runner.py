@@ -1699,6 +1699,102 @@ def _position_net_pnl_quote_ccy(uic: int, qty: float, direction: str,
     return float(pnl) + float(costs)   # costs is already negative-signed
 
 
+# ── Fill confirmation ───────────────────────────────────────────────────────
+# Saxo's order POST (/trade/v2/orders) returns ONLY an OrderId -- never a
+# fill confirmation and never a fill price. Until 2026-09-01 the code took
+# "got an OrderId back" to mean "filled at sig['close']" -- sig['close']
+# being the scan chart's last bar close, routinely 10-60 min stale by the
+# time the order actually executes. Confirmed live on the EUR account:
+# MXNUSD booked at entry 0.058876 / exit 0.0588435, the real Saxo fills
+# were 0.058687 / 0.058811 -- a 0.32% entry error, a third of that trade's
+# stop distance, and enough to flip the recorded P&L sign. That stale price
+# then poisons the R-multiple, MAE/MFE, the observation cards and every
+# downstream analysis (P2 give-back etc).
+#
+# After every real (non-paper) entry we now poll positions/me for the
+# position this order opened (PositionBase.SourceOrderId == our OrderId),
+# take its OpenPrice as the true average fill, and -- if no such position
+# ever appears -- treat the order as accepted-but-unfilled (LIVE: cancel it
+# and its bracket legs, record nothing; SIM: keep it at a live quote).
+_FILL_CONFIRM_ATTEMPTS = 3
+_FILL_CONFIRM_DELAY_S   = 1.5
+_FILL_RECENT_OPEN_S     = 180
+_FILL_LOG_THRESHOLD     = 0.0005   # 5 bp: log the correction when it matters
+
+
+def _confirm_entry_fill(entry_oid: str, uic: int) -> tuple[bool, float]:
+    """(filled, real_average_fill_price) for the position `entry_oid` opened.
+
+    Primary match: PositionBase.SourceOrderId == entry_oid. Fallback: a
+    position on the same Uic whose ExecutionTimeOpen is within the last
+    _FILL_RECENT_OPEN_S seconds (covers Saxo re-iding the source order on an
+    aggregated/partial fill). positions/me is already scoped to this
+    account by _get()'s env-aware headers. Never raises."""
+    want = str(entry_oid)
+    now = datetime.now(timezone.utc)
+    for attempt in range(_FILL_CONFIRM_ATTEMPTS):
+        if attempt:
+            time.sleep(_FILL_CONFIRM_DELAY_S)
+        try:
+            data = _get("/port/v1/positions/me").get("Data", [])
+        except Exception:
+            continue
+        fallback_px = None
+        for p in data:
+            pb = p.get("PositionBase", {})
+            op = pb.get("OpenPrice")
+            if str(pb.get("SourceOrderId", "")) == want and op:
+                return True, float(op)
+            if pb.get("Uic") == uic and op and fallback_px is None:
+                opened = pb.get("ExecutionTimeOpen", "")
+                try:
+                    dt = datetime.fromisoformat(opened.replace("Z", "+00:00"))
+                    if (now - dt).total_seconds() <= _FILL_RECENT_OPEN_S:
+                        fallback_px = float(op)
+                except (ValueError, AttributeError):
+                    pass
+        if fallback_px is not None:
+            return True, fallback_px
+    return False, 0.0
+
+
+def _confirm_exit_fill(uic: int, qty: float, direction: str) -> float | None:
+    """True ClosingPrice for the position just closed on `uic` (best-effort,
+    2 quick attempts). Matches the most recently closed position on this Uic
+    whose ExecutionTimeClose is within the last _FILL_RECENT_OPEN_S seconds
+    and whose Amount matches. Returns None if nothing suitable -- caller
+    keeps its live-quote estimate. Never raises."""
+    now = datetime.now(timezone.utc)
+    want_amt = abs(qty)
+    for attempt in range(2):
+        if attempt:
+            time.sleep(_FILL_CONFIRM_DELAY_S)
+        try:
+            data = _get("/port/v1/closedpositions/me",
+                        {"FieldGroups": "ClosedPosition"}).get("Data", [])
+        except Exception:
+            continue
+        best, best_dt = None, None
+        for c in data:
+            cp = c.get("ClosedPosition", {})
+            if cp.get("Uic") != uic:
+                continue
+            if abs(abs(cp.get("Amount") or 0) - want_amt) > max(1.0, want_amt * 0.02):
+                continue
+            closed = cp.get("ExecutionTimeClose", "")
+            try:
+                dt = datetime.fromisoformat(closed.replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                continue
+            if (now - dt).total_seconds() > _FILL_RECENT_OPEN_S:
+                continue
+            if best_dt is None or dt > best_dt:
+                best, best_dt = cp.get("ClosingPrice"), dt
+        if best:
+            return float(best)
+    return None
+
+
 def _live_price(uic: int, account_key: str) -> float | None:
     try:
         params = {"Uic": uic, "AssetType": ASSET_TYPE, "FieldGroups": "Quote"}
@@ -2674,6 +2770,17 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
             resp = _post("/trade/v2/orders", order)
             logger.info(f"  {close_side} {resp.get('OrderId','?')}: {qty:,}x {sym}[{tag}] "
                         f"({strat_name}) — {reason}  P&L {pnl_pct:+.2f}%")
+            # Record the TRUE close fill, not live_px (a quote taken just
+            # before the order). net_pnl_quote above is already Saxo's
+            # authoritative P&L; this only corrects the price the ledger /
+            # observation card store for exit_price and pnl_pct.
+            _real_exit = _confirm_exit_fill(uic, qty, direction)
+            if _real_exit:
+                if abs(_real_exit - live_px) / max(abs(live_px), 1e-9) > _FILL_LOG_THRESHOLD:
+                    logger.info(f"  [{strat_name}] {sym} real close {_real_exit:.5f} vs "
+                                f"quote {live_px:.5f} ({(_real_exit/live_px-1)*100:+.2f}%)")
+                live_px = _real_exit
+                pnl_pct = ((live_px - entry) / entry * 100) if is_long else ((entry - live_px) / entry * 100)
 
         _log_order({"side": close_side, "symbol": sym, "strategy": strat_name,
                     "uic": uic, "quantity": qty, "exit_price": live_px,
@@ -3263,6 +3370,37 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                     continue
             else:
                 _record_entry_result(rejected=False)
+                # Saxo's order POST returned an OrderId but no fill/price.
+                # Confirm the position actually opened and record its REAL
+                # average fill, not sig["close"] (a stale scan-bar close).
+                _filled, _fill_px = _confirm_entry_fill(entry_oid, uic)
+                if _filled:
+                    if abs(_fill_px - sig["close"]) / max(abs(sig["close"]), 1e-9) > _FILL_LOG_THRESHOLD:
+                        logger.info(
+                            f"  [{strat_name}] {sym} real fill {_fill_px:.5f} vs scan "
+                            f"close {sig['close']:.5f} ({(_fill_px/sig['close']-1)*100:+.2f}%)")
+                    sig["close"] = _fill_px
+                elif ACCOUNT_ENV in ("live", "live_eur"):
+                    # Real money: an accepted-but-unfilled entry becomes a
+                    # phantom position the moment we record it. Pull the
+                    # order + its bracket legs and record nothing -- missing
+                    # a trade beats tracking one that isn't real.
+                    for _oid in (entry_oid, stop_oid, tp_oid):
+                        if _oid and not str(_oid).startswith("PAPER"):
+                            _cancel_order(_oid, akey)
+                    logger.warning(
+                        f"  [{strat_name}] LIVE {sym}[{direction}] entry {entry_oid} "
+                        f"accepted but NOT filled after {_FILL_CONFIRM_ATTEMPTS} checks "
+                        f"— cancelled entry+brackets, no position recorded")
+                    _note_blocked_signal(strat_name, sym, direction, False)
+                    continue
+                else:
+                    _q = _live_price(uic, akey)
+                    if _q:
+                        sig["close"] = _q
+                    logger.warning(
+                        f"  [{strat_name}] {sym}[{direction}] entry accepted but fill "
+                        f"unconfirmed — recording at live quote {sig['close']:.5f}")
             tp_info = f"  tp_order={tp_oid}" if tp_oid else ""
             logger.info(f"  {direction} {entry_oid}: {qty:,}x {sym}[{tag}] "
                         f"({strat_name})  @ {sig['close']:.5f}  stop={sig['stop_price']:.5f}"

@@ -285,6 +285,48 @@ def _heal_missing_stock_stops(open_trades: list) -> None:
         print(f"  [stop-heal] restored {healed} missing broker stop(s)")
 
 
+# ── Fill confirmation ───────────────────────────────────────────────────────
+# Same bug class as forex/runner.py: saxo_order.place_with_stop() returns an
+# OrderId but no fill and no price, so a buy was recorded at the scan price
+# (`price`), not what actually filled -- and an accepted-but-unfilled order
+# recorded a phantom DB row anyway (this is what feeds the WSM/MTB/GEV
+# hourly re-buy loop -- reconcile closes the phantom, the scan re-signals).
+_STOCK_FILL_ATTEMPTS = 3
+_STOCK_FILL_DELAY_S  = 1.5
+
+
+def _confirm_stock_fill(entry_oid: str, uic: int) -> tuple[bool, float]:
+    """(filled, real_average_fill_price) for the stock position `entry_oid`
+    opened. Matches PositionBase.SourceOrderId == entry_oid, else a position
+    on the same Uic opened in the last ~3 min. Never raises. (False, 0.0)
+    means accepted-but-unfilled -- caller books it paper on SIM."""
+    import time as _t
+    want = str(entry_oid)
+    for attempt in range(_STOCK_FILL_ATTEMPTS):
+        if attempt:
+            _t.sleep(_STOCK_FILL_DELAY_S)
+        try:
+            data = saxo_client.get_positions().get("Data", [])
+        except Exception:
+            continue
+        for p in data:
+            b = p.get("PositionBase", {})
+            op = b.get("OpenPrice")
+            if not op:
+                continue
+            if str(b.get("SourceOrderId", "")) == want:
+                return True, float(op)
+            if b.get("Uic") == uic and (b.get("Amount") or 0) != 0:
+                opened = str(b.get("ExecutionTimeOpen", ""))
+                try:
+                    dt = datetime.fromisoformat(opened.replace("Z", "+00:00"))
+                    if (datetime.now(dt.tzinfo) - dt).total_seconds() <= 180:
+                        return True, float(op)
+                except (ValueError, AttributeError):
+                    pass
+    return False, 0.0
+
+
 # ── Signal caches — written by run_us_momentum/run_us_reversion, read by dashboard ──
 _blend_signal: dict  = {}   # keys: targets, risk_off, reason, momentum, lowvol
 _rev_signals:  list  = []   # list of candidate dicts from USR.scan()
@@ -1422,6 +1464,27 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
                 paper = 1
                 print(f"  [US momentum] PAPER-FILL {ticker}: {shares} @ ${price:.2f} — "
                       f"Saxo SIM rejected the order; booked locally")
+            else:
+                _ok, _fp = _confirm_stock_fill(entry_oid, imap[ticker]["uic"])
+                if _ok:
+                    if _fp > 0 and abs(_fp - price) / max(price, 1e-9) > 0.001:
+                        print(f"  [US momentum] {ticker} real fill ${_fp:.2f} "
+                              f"(scan ${price:.2f})")
+                    price = _fp or price
+                else:
+                    for _o in (entry_oid, stop_oid):
+                        try:
+                            _o and saxo_client.cancel_order(str(_o))
+                        except Exception:
+                            pass
+                    if _stocks_paper_fill_enabled():
+                        paper = 1
+                        print(f"  [US momentum] {ticker}: entry {entry_oid} accepted but "
+                              f"unfilled — cancelled, booking paper (no phantom row)")
+                    else:
+                        print(f"  [US momentum] BUY {ticker} entry {entry_oid} unfilled — "
+                              f"cancelled, no DB row recorded")
+                        return False
         else:
             cur_is_paper = bool(cur_trade and cur_trade.get("paper"))
             if not cur_is_paper:
@@ -1935,6 +1998,25 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
                 paper = 1
                 print(f"  {tag} PAPER-FILL {ticker}: {shares} @ ${price:.2f} — Saxo SIM "
                       f"rejected the order; booked locally, managed by ATOS should_exit() logic")
+            else:
+                _ok, _fp = _confirm_stock_fill(entry_oid, uic)
+                if _ok:
+                    if _fp > 0 and abs(_fp - price) / max(price, 1e-9) > 0.001:
+                        print(f"  {tag} {ticker} real fill ${_fp:.2f} (scan ${price:.2f})")
+                    price = _fp or price
+                else:
+                    for _o in (entry_oid, stop_oid):
+                        try:
+                            _o and saxo_client.cancel_order(str(_o))
+                        except Exception:
+                            pass
+                    if not _stocks_paper_fill_enabled():
+                        print(f"  {tag} buy {ticker} entry {entry_oid} unfilled — "
+                              f"cancelled, no DB row recorded")
+                        continue
+                    paper = 1
+                    print(f"  {tag} {ticker}: entry {entry_oid} accepted but unfilled — "
+                          f"cancelled, booking paper (no phantom row)")
             comm = commission_sek(shares, cost_sek)
             db.insert_trade({
                 "strategy": "US Reversion", "market_group": "US Equities",
@@ -2177,6 +2259,24 @@ def run_intraday_cycle():
                 paper = 1
                 print(f"  {ticker}: PAPER-FILL {shares} @ ${price_usd:.2f} — Saxo SIM "
                       f"rejected the order; booked locally, managed by ATOS exit logic")
+            else:
+                _ok, _fp = _confirm_stock_fill(entry_oid, uic)
+                if _ok:
+                    if _fp > 0 and abs(_fp - price_usd) / max(price_usd, 1e-9) > 0.001:
+                        print(f"  {ticker} real fill ${_fp:.2f} (scan ${price_usd:.2f})")
+                    price_usd = _fp or price_usd
+                else:
+                    for _o in (entry_oid, stop_oid):
+                        try:
+                            _o and saxo_client.cancel_order(str(_o))
+                        except Exception:
+                            pass
+                    if not _stocks_paper_fill_enabled():
+                        print(f"  {ticker}: entry {entry_oid} unfilled — cancelled, no DB row")
+                        continue
+                    paper = 1
+                    print(f"  {ticker}: entry {entry_oid} accepted but unfilled — "
+                          f"cancelled, booking paper (no phantom row)")
             comm = commission_sek(shares, value_sek)
             db.insert_trade({
                 "strategy": "US Reversion", "market_group": "US Equities",
