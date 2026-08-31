@@ -4,5 +4,9 @@
   "enabled_sim": false,
 
   "_shadow_mode_comment": "When enabled_sim is true, shadow_mode:true means every AI hook still only OBSERVES and LOGS -- it never changes an order. A later sprint flips this to false, gated on its own shadow-evidence review.",
-  "shadow_mode": true
+  "shadow_mode": true,
+
+  "_agent_comment": "Sprint 3. enabled_sim=true alone just LOGS trade proposals (free). agent_enabled=true additionally calls the LLM (agent_model) to evaluate each proposal -- costs money per signal, needs ANTHROPIC_API_KEY. The agent's decision is still only LOGGED (shadow) until Sprint 4.",
+  "agent_enabled": false,
+  "agent_model": "claude-opus-5"
 }

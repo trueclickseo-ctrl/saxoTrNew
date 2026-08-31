@@ -32,6 +32,11 @@ _AI_ALLOWED_ACCOUNTS = {"sim"}
 _DEFAULTS = {
     "enabled_sim": False,
     "shadow_mode": True,     # even when enabled, only observe -- until a sprint flips it
+    # Sprint 3: the trade-proposal LOG (enabled_sim) is free; actually calling
+    # the LLM agent to evaluate each proposal costs money per signal. Kept a
+    # separate switch so proposal logging can run without paid agent calls.
+    "agent_enabled": False,
+    "agent_model": "claude-opus-5",
 }
 
 
@@ -71,6 +76,17 @@ def shadow_mode(account_env: str = "sim") -> bool:
     if not ai_enabled_for(account_env):
         return True
     return bool(_load().get("shadow_mode", True))
+
+
+def agent_enabled_for(account_env: str) -> bool:
+    """True only if the paid LLM agent (ai/agent/trading_copilot) should be
+    called this run. Requires ai_enabled_for() AND config agent_enabled.
+    The agent itself still degrades to HOLD if credentials are missing."""
+    return ai_enabled_for(account_env) and bool(_load().get("agent_enabled", False))
+
+
+def agent_model() -> str:
+    return str(_load().get("agent_model") or "claude-opus-5")
 
 
 def config_path() -> str:

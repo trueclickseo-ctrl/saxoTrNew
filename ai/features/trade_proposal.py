@@ -24,6 +24,7 @@ from ai.regime.classifier import classify_regime
 _DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), "data")
 PROPOSALS_LOG = os.path.join(_DATA_DIR, "ai_trade_proposals.jsonl")
+SHADOW_DECISIONS_LOG = os.path.join(_DATA_DIR, "ai_shadow_decisions.jsonl")
 
 # strategies whose signals are computed on H1 bars, not daily
 _H1_STRATEGIES = {"london_breakout", "london_breakout_v2", "gap", "gap_weekend"}
@@ -86,14 +87,49 @@ def build_proposal(*, account_env: str, strategy: str, symbol: str, direction: s
     }
 
 
-def log_proposal(proposal: dict) -> None:
-    """Append one proposal to data/ai_trade_proposals.jsonl. Best-effort."""
+def _append(path: str, row: dict) -> None:
     try:
         os.makedirs(_DATA_DIR, exist_ok=True)
-        with open(PROPOSALS_LOG, "a", encoding="utf-8") as f:
-            f.write(json.dumps(proposal, default=str) + "\n")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, default=str) + "\n")
     except Exception:
         pass
+
+
+def log_proposal(proposal: dict) -> None:
+    """Append one proposal to data/ai_trade_proposals.jsonl. Best-effort."""
+    _append(PROPOSALS_LOG, proposal)
+
+
+def trade_id(proposal: dict) -> str:
+    """Stable key for joining a shadow decision to the eventual real trade
+    outcome: account | strategy | symbol | UTC date."""
+    return "|".join((
+        str(proposal.get("account_env")), str(proposal.get("strategy_name")),
+        str(proposal.get("symbol")),
+        str(proposal.get("ts", ""))[:10],
+    ))
+
+
+def log_shadow_decision(proposal: dict, decision: dict, entered: bool) -> None:
+    """Sprint 3: proposal + the agent's decision, logged together. The
+    decision is NEVER applied here -- `entered` records what ATOS actually
+    did so ai_shadow_report.py can compare."""
+    _append(SHADOW_DECISIONS_LOG, {
+        "trade_id": trade_id(proposal),
+        "ts": proposal.get("ts"),
+        "account_env": proposal.get("account_env"),
+        "strategy": proposal.get("strategy_name"),
+        "symbol": proposal.get("symbol"),
+        "side": proposal.get("side"),
+        "regime": (proposal.get("regime") or {}).get("label"),
+        "signal_strength": proposal.get("signal_strength"),
+        "entered_by_atos": bool(entered),
+        "agent_action": decision.get("action"),
+        "agent_size_multiplier": decision.get("size_multiplier"),
+        "agent_comment": decision.get("comment"),
+        "agent_meta": decision.get("_agent"),
+    })
 
 
 # Fields every proposal must carry (Sprint 2 test gate checks this exactly).

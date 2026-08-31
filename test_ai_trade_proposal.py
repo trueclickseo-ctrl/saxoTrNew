@@ -100,7 +100,7 @@ print(f"\n{BOLD}2. the runner hook is inert unless AI is enabled{RESET}")
 def test_hook_is_guarded_and_cannot_change_entries():
     src = inspect.getsource(r._run_entries)
     start = src.index("if ai_config.ai_enabled_for(ACCOUNT_ENV):")
-    hook = src[start: src.index("logger.warning(f\"  [ai] trade-proposal", start) + 80]
+    hook = src[start: src.index("if not _currency_ok")]
     assert "ai_config.ai_enabled_for(ACCOUNT_ENV)" in hook, "hook must be behind the kill switch"
     assert "try:" in hook and "except Exception" in hook, "hook must never raise into the loop"
     # it comes AFTER the signal_filter pass and BEFORE sizing/order placement
@@ -108,8 +108,9 @@ def test_hook_is_guarded_and_cannot_change_entries():
     hk = src.index("_ai_log_proposal(")
     sz = src.index("strat_mod.size_position(")
     assert sf < hk < sz, "hook must sit after the filter gate and before sizing"
-    # the hook block must not touch entries/qty/positions mutation
-    assert "entries +=" not in hook and "positions[" not in hook
+    # the hook block must not touch order flow / position mutation
+    for forbidden in ("entries += 1", "positions[pos_key]", "place_with_stop", "_post(", "size_position"):
+        assert forbidden not in hook, f"hook must not contain {forbidden!r}"
 _run("the _run_entries hook is kill-switch-guarded, wrapped in try/except, and downstream-inert",
      test_hook_is_guarded_and_cannot_change_entries)
 

@@ -4,6 +4,11 @@ yfinance
 requests
 openpyxl        # pandas .to_excel engine — the 4 data/*_performance_tracker.xlsx daily trackers
 
+# AI advisory layer (ai/). OPTIONAL — only needed when config/ai.json
+# "agent_enabled" is true (Sprint 3+). Without it, ai/agent/trading_copilot
+# degrades every call to a HOLD no-op. Also needs ANTHROPIC_API_KEY.
+anthropic
+
 # Binance bot dependencies (not needed for the Saxo bot)
 python-binance
 python-dotenv

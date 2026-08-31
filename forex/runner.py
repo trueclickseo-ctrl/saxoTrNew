@@ -90,7 +90,10 @@ import forex.rsi_signal_registry as rsi_signal_registry
 # default). Every touchpoint is guarded by that call. Import is cheap and
 # side-effect-free; nothing here runs unless config/ai.json enables it.
 import ai.config as ai_config
-from ai.features.trade_proposal import build_proposal as _ai_build_proposal, log_proposal as _ai_log_proposal
+import ai.agent.trading_copilot as ai_trading_copilot
+from ai.features.trade_proposal import (build_proposal as _ai_build_proposal,
+                                        log_proposal as _ai_log_proposal,
+                                        log_shadow_decision as _ai_log_shadow)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -2818,6 +2821,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
 
     entries = 0
     entered_syms: list[str] = []
+    _ai_shadow_pending: list = []   # (sym, proposal, decision) -- flushed after the loop
     for sig in signals:
         if entries >= slots_free:
             break
@@ -2835,23 +2839,30 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         agrees = features["agreement_count"]
         ml_info = (f"  ml_prob={features['ml_prob']}" if features.get("ml_prob") else "")
 
-        # ── AI trade-proposal log (Sprint 2) — INERT, log-only ─────────────
-        # For a signal that passed every deterministic filter above, write a
-        # structured candidate to data/ai_trade_proposals.jsonl. Guarded by
-        # the AI kill switch (OFF by default). Cannot change entries / qty /
-        # anything downstream; any exception is swallowed here.
+        # ── AI advisory layer (Sprints 2-3) — INERT, log-only ─────────────
+        # For a signal that passed every deterministic filter above:
+        #   Sprint 2: write a structured candidate to ai_trade_proposals.jsonl
+        #   Sprint 3: if agent_enabled, also call the Trading Copilot and
+        #             stash (proposal, decision) -- logged with the real
+        #             entered/skipped outcome after this loop.
+        # Guarded by the AI kill switch (OFF by default). Cannot change
+        # entries / qty / anything downstream; any exception is swallowed.
         if ai_config.ai_enabled_for(ACCOUNT_ENV):
             try:
-                _ai_log_proposal(_ai_build_proposal(
+                _prop = _ai_build_proposal(
                     account_env=ACCOUNT_ENV, strategy=strat_name, symbol=sym,
                     direction=direction, sig=sig, features=features,
                     positions=positions, equity=equity,
                     take_profit=_resolve_tp_price(sig, direction),
                     n_strategies=len(STRATEGIES),
                     regime_bars=(regime_data or {}).get(sym),
-                ))
+                )
+                _ai_log_proposal(_prop)
+                if ai_config.agent_enabled_for(ACCOUNT_ENV):
+                    _dec = ai_trading_copilot.evaluate_proposal(_prop)
+                    _ai_shadow_pending.append((sym, _prop, _dec))
             except Exception as exc:
-                logger.warning(f"  [ai] trade-proposal log failed for {sym}: {exc}")
+                logger.warning(f"  [ai] advisory hook failed for {sym}: {exc}")
 
         if not _currency_ok(sym, direction, exposure):
             logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] "
@@ -3194,6 +3205,19 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                                             account_env=ACCOUNT_ENV, market_closed=False)
         except Exception as exc:
             logger.warning(f"  [{strat_name}] signals-detected email failed: {exc}")
+
+    # ── AI Sprint 3: flush shadow decisions with the real entered/skipped
+    # outcome. Decision was already computed above; it is LOGGED, never
+    # applied (Sprint 4 is where a decision can affect SIM sizing).
+    for _s, _p, _d in _ai_shadow_pending:
+        try:
+            _ai_log_shadow(_p, _d, entered=(_s in entered_syms))
+            if _d.get("action") not in ("APPROVE", "HOLD"):
+                logger.info(f"  [ai:SHADOW] {strat_name}:{_s} — agent said "
+                            f"{_d['action']} (x{_d.get('agent_size_multiplier', _d.get('size_multiplier'))}) "
+                            f"— not acted on")
+        except Exception as exc:
+            logger.warning(f"  [ai] shadow-decision log failed for {_s}: {exc}")
 
     # RSI-threshold study registry: log every RSI(2) trigger in the study
     # band (incl. the 11-15 the live threshold rejects) + resolve past ones
