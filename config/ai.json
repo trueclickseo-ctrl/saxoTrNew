@@ -1,0 +1,8 @@
+{
+  "_comment": "ATOS AI layer config. See docs/atos_ai_implementation_plan.md. Ships fully OFF. LIVE accounts are excluded in ai/config.py's code (not just here) and cannot be enabled from this file. Changes take effect on the next scan cycle (config is read fresh each call).",
+
+  "enabled_sim": false,
+
+  "_shadow_mode_comment": "When enabled_sim is true, shadow_mode:true means every AI hook still only OBSERVES and LOGS -- it never changes an order. A later sprint flips this to false, gated on its own shadow-evidence review.",
+  "shadow_mode": true
+}
