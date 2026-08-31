@@ -84,6 +84,7 @@ import forex.notifier      as fx_notify
 import forex.signal_filter as signal_filter
 import forex.forward_observation as forward_observation
 import forex.exit_advisor  as exit_advisor
+import forex.rsi_signal_registry as rsi_signal_registry
 
 logging.basicConfig(
     level=logging.INFO,
@@ -3164,6 +3165,19 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                                             account_env=ACCOUNT_ENV, market_closed=False)
         except Exception as exc:
             logger.warning(f"  [{strat_name}] signals-detected email failed: {exc}")
+
+    # RSI-threshold study registry: log every RSI(2) trigger in the study
+    # band (incl. the 11-15 the live threshold rejects) + resolve past ones
+    # against today's bars. Observe-only -- the live entry threshold is
+    # unchanged. See forex/rsi_signal_registry.py + report_rsi_thresholds.py.
+    if strat_name == "rsi" and not dry_run:
+        try:
+            fired = {s["symbol"] for s in signals}
+            rsi_signal_registry.observe(ACCOUNT_ENV, market_data,
+                                        fired_syms=fired, taken_syms=set(entered_syms))
+            rsi_signal_registry.resolve(ACCOUNT_ENV, market_data)
+        except Exception as exc:
+            logger.warning(f"  [rsi] signal-registry logging failed: {exc}")
     return entries
 
 

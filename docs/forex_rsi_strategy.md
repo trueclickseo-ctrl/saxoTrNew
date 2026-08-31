@@ -140,3 +140,25 @@ See [forex_live_account.md](forex_live_account.md) for the full LIVE picture.
 ## Inspect
 
 `python forex/runner.py --scan` → `[RSI]` panel.
+
+---
+
+## RSI(2) threshold study — the signal registry (2026-08-31)
+
+`forex/rsi_signal_registry.py` logs **every** RSI(2) trigger (SIM + LIVE) whose
+RSI(2) is in the *study band* — `<= 15` in an uptrend / `>= 85` in a downtrend —
+including the 11–15 the live threshold (`RSI_OVERSOLD = 10`) rejects. Each row
+is then forward-resolved against the daily bars: first-touch of the 1.5×ATR
+stop / 2R TP / RSI recovery / 12-day time stop → `{outcome, r_multiple, days_held}`.
+
+**Observe-only.** The live entry threshold is unchanged — the runner still only
+acts on `RSI(2) <= 10`. Wired into `_run_entries` for the `rsi` strategy
+(`observe()` + `resolve()` once per scan). `data/rsi_signal_registry.jsonl`.
+
+`python report_rsi_thresholds.py [account] [--cost 0.03]` buckets the resolved
+rows cumulatively (≤5 / ≤7 / ≤10 / ≤12 / ≤15) and reports, **after a modelled
+round-trip cost**: trades · WR · avg win/loss R · profit factor · max DD ·
+**expectancy (R/trade)**. The best threshold is the highest-*expectancy* bucket,
+not the highest win rate. Needs ~40–80 resolved triggers per account before it's
+actionable (paper-fill keeps SIM flowing through Saxo outages). Also feeds AI
+roadmap #4 (Trade Probability).
