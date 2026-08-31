@@ -32,6 +32,11 @@ data/us_momentum_state.json
 data/atos_scan_state.json
 # Binance equity stop state (peak equity + halt status; machine-local, gitignored)
 data/binance_equity_state.json
+# AI advisory layer -- runtime logs (shadow decisions / proposals / advisor), machine-local
+data/ai_shadow_decisions.jsonl
+data/ai_trade_proposals.jsonl
+data/exit_advisor_shadow.jsonl
+data/rsi_signal_registry.jsonl
 # strategy monitor state
 data/strategy_monitor.json
 # gap strategy cooldown — per-week, per-pair re-entry block (runtime state, machine-local)
