@@ -100,7 +100,8 @@ try:
     import ai.agent.trading_copilot as ai_trading_copilot
     from ai.features.trade_proposal import (build_proposal as _ai_build_proposal,
                                             log_proposal as _ai_log_proposal,
-                                            log_shadow_decision as _ai_log_shadow)
+                                            log_shadow_decision as _ai_log_shadow,
+                                            already_evaluated as _ai_already_evaluated)
 except Exception as _ai_import_exc:                      # pragma: no cover
     logging.getLogger(__name__).warning(
         "  [ai] advisory layer unavailable, running deterministic-only: %s", _ai_import_exc)
@@ -109,6 +110,7 @@ except Exception as _ai_import_exc:                      # pragma: no cover
     def _ai_build_proposal(*a, **k): return {}
     def _ai_log_proposal(*a, **k): return None
     def _ai_log_shadow(*a, **k): return None
+    def _ai_already_evaluated(*a, **k): return False
 
 logging.basicConfig(
     level=logging.INFO,
@@ -2860,8 +2862,12 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         #   Sprint 3: if agent_enabled, also call the Trading Copilot and
         #             stash (proposal, decision) -- logged with the real
         #             entered/skipped outcome after this loop.
-        # Guarded by the AI kill switch (OFF by default). Cannot change
-        # entries / qty / anything downstream; any exception is swallowed.
+        # Guarded by the AI kill switch (OFF by default). On the LIVE
+        # accounts this is log-only forever (ai.config.can_apply_decision is
+        # hardcoded False for them). Cannot change entries / qty / anything
+        # downstream; any exception is swallowed. Cost controls: the paid
+        # LLM call is scoped to config agent_strategies and de-duped so each
+        # signal is evaluated once per day, not every rescan.
         if ai_config is not None and ai_config.ai_enabled_for(ACCOUNT_ENV):
             try:
                 _prop = _ai_build_proposal(
@@ -2873,7 +2879,10 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                     regime_bars=(regime_data or {}).get(sym),
                 )
                 _ai_log_proposal(_prop)
-                if ai_config.agent_enabled_for(ACCOUNT_ENV):
+                if (ai_config.agent_enabled_for(ACCOUNT_ENV)
+                        and ai_config.agent_strategy_allowed(strat_name)
+                        and not (ai_config.agent_dedup_enabled()
+                                 and _ai_already_evaluated(_prop))):
                     _dec = ai_trading_copilot.evaluate_proposal(_prop)
                     _ai_shadow_pending.append((sym, _prop, _dec))
             except Exception as exc:

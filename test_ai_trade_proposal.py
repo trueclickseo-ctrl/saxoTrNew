@@ -156,6 +156,43 @@ def test_hook_is_only_hook_in_runner():
 _run("Sprint 2 adds exactly ONE proposal hook to forex/runner.py", test_hook_is_only_hook_in_runner)
 
 
+def test_already_evaluated_dedup():
+    import ai.features.trade_proposal as tp
+    p = os.path.join(BASE_DIR, "data", "_test_shadow_dedup.jsonl")
+    old_log, old_seen = tp.SHADOW_DECISIONS_LOG, tp._evaluated_today
+    tp.SHADOW_DECISIONS_LOG = p
+    tp._evaluated_today = None
+    try:
+        if os.path.exists(p):
+            os.remove(p)
+        prop = build_proposal(account_env="sim", strategy="rsi", symbol="EURUSD", direction="Buy",
+                              sig=_SIG, features=_FEAT, positions={}, equity=1000,
+                              take_profit=1.17, n_strategies=18, regime_bars=_daily_uptrend())
+        assert tp.already_evaluated(prop) is False, "first sight of a signal -> not yet evaluated"
+        tp.log_shadow_decision(prop, {"action": "APPROVE", "size_multiplier": 1.0}, entered=True)
+        # a fresh process would reload from the log; simulate that
+        tp._evaluated_today = None
+        assert tp.already_evaluated(prop) is True, "after logging, the same signal is deduped today"
+        # a different symbol / direction / strategy is still fresh
+        prop2 = build_proposal(account_env="sim", strategy="rsi", symbol="GBPUSD", direction="Buy",
+                               sig={**_SIG, "symbol": "GBPUSD"}, features=_FEAT, positions={},
+                               equity=1000, take_profit=1.3, n_strategies=18, regime_bars=_daily_uptrend())
+        assert tp.already_evaluated(prop2) is False
+    finally:
+        tp.SHADOW_DECISIONS_LOG, tp._evaluated_today = old_log, old_seen
+        if os.path.exists(p):
+            os.remove(p)
+_run("already_evaluated(): a signal is scored once per day, not every rescan", test_already_evaluated_dedup)
+
+
+def test_runner_hook_applies_scope_and_dedup():
+    src = inspect.getsource(r._run_entries)
+    hook = src[src.index("ai_config.ai_enabled_for(ACCOUNT_ENV):"): src.index("if not _currency_ok")]
+    assert "agent_strategy_allowed(strat_name)" in hook, "paid call must respect the strategy scope"
+    assert "_ai_already_evaluated(" in hook and "agent_dedup_enabled()" in hook, "paid call must be de-duped"
+_run("the paid-agent call is scoped to config strategies and de-duped per day", test_runner_hook_applies_scope_and_dedup)
+
+
 print(f"\n{BOLD}{'='*66}{RESET}")
 failed = [(n, e) for n, ok, e in _results if not ok]
 for name, ok, err in _results:

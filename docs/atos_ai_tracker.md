@@ -16,15 +16,30 @@ Running log of the AI layer's build. Update this file **whenever an AI change la
 | **Next sprint** | Sprint 4 — wire the agent's `size_multiplier` into SIM sizing (Level 2, SIM only) |
 | **Sprint 4 status** | **BLOCKED** — 2 open decisions + no shadow-evidence sample yet |
 | **AI live in production?** | No. `config/ai.json`: `enabled_sim=false`, `agent_enabled=false`. Every hook is a no-op. |
-| **AI touching LIVE money?** | No — impossible without a code change (`_AI_ALLOWED_ACCOUNTS`). |
+| **AI touching LIVE money?** | No — impossible without a code change. LIVE can *shadow-log* (`enabled_live_shadow`) but `can_apply_decision("live")` / `("live_eur")` is hardcoded `False` (`_AI_ACTING_ACCOUNTS = {"sim"}`). |
 | **`anthropic` SDK** | Installed 2026-08-31 (`1.2.0`, `pip install` as admin). Still dormant — needs `ANTHROPIC_API_KEY` + config flags. |
 
-### To start collecting Sprint 3/4 evidence (when ready)
-1. Set `ANTHROPIC_API_KEY` as a User env var.
-2. `config/ai.json`: `enabled_sim: true`, `agent_enabled: true` (keep `shadow_mode: true`).
-3. Let SIM run. Each RSI/other signal now logs a proposal + an LLM decision to `data/ai_shadow_decisions.jsonl` — **decision is never applied**.
+### To start collecting shadow evidence
+1. Set `ANTHROPIC_API_KEY` as a User env var (key name on the console: `kashif-atos-api-key`).
+2. `config/ai.json`:
+   - `enabled_sim: true` — AI on for SIM (paper).
+   - `enabled_live_shadow: true` — AI **log-only** on the real LIVE accounts. It scores your real trades and records what it *would* have done; it can **never** change a LIVE order (`can_apply_decision("live")` is hardcoded `False`).
+   - `agent_enabled: true` — actually call the LLM (this is what costs money).
+   - keep `shadow_mode: true`.
+   - `agent_strategies: ["rsi"]` (default) — **the paid LLM call fires for RSI signals only.** Proposal logging (free) still covers every strategy. Set `["*"]` for all.
+   - `agent_dedup: true` (default) — each signal is scored once per day, not every 30-min rescan.
+3. Let it run. Decisions land in `data/ai_shadow_decisions.jsonl` — **never applied**.
 4. Review weekly: `python ai_shadow_report.py`.
 5. Gate to Sprint 4 = ~40+ resolved decisions **AND** the user explicitly agreeing the window contained a real adverse/volatile stretch.
+
+### Cost controls in place (Sprint 3.5, `<pending commit>`)
+| Lever | Effect |
+|---|---|
+| `agent_strategies: ["rsi"]` | paid call on ~1/20th of signals |
+| `agent_dedup: true` | ~10× fewer calls (no re-scoring standing signals every rescan) |
+| prompt caching on the system prompt | ~0.1× system-token cost within a scan |
+| Est. spend on SIM+LIVE shadow, rsi-only, deduped | **well under $1/day** — $5 lasts weeks |
+Plus: set a hard **monthly spend limit** on the Anthropic console (Settings → Limits).
 
 ---
 

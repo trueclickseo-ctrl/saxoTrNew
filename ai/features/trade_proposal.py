@@ -127,10 +127,53 @@ def trade_id(proposal: dict) -> str:
     ))
 
 
+# ── paid-agent dedup (cost control) ─────────────────────────────────────────
+# The runner re-evaluates every standing signal on every 30-min rescan. With
+# a paid LLM call per signal that's ~10-30x the necessary spend. This caches
+# the trade_ids already evaluated *today* (loaded once per process from the
+# shadow log) so the agent is called once per signal per day.
+_evaluated_today: set[str] | None = None
+
+
+def _load_evaluated_today() -> set[str]:
+    today = datetime.now(timezone.utc).date().isoformat()
+    seen: set[str] = set()
+    try:
+        if os.path.exists(SHADOW_DECISIONS_LOG):
+            with open(SHADOW_DECISIONS_LOG, encoding="utf-8") as f:
+                for ln in f:
+                    ln = ln.strip()
+                    if not ln:
+                        continue
+                    row = json.loads(ln)
+                    if str(row.get("ts", ""))[:10] == today and row.get("trade_id"):
+                        seen.add(row["trade_id"])
+    except Exception:
+        pass
+    return seen
+
+
+def already_evaluated(proposal: dict) -> bool:
+    """True if a shadow decision for this proposal's trade_id is already
+    logged today -- so the paid agent isn't re-run on every rescan."""
+    global _evaluated_today
+    if _evaluated_today is None:
+        _evaluated_today = _load_evaluated_today()
+    return trade_id(proposal) in _evaluated_today
+
+
+def _mark_evaluated(proposal: dict) -> None:
+    global _evaluated_today
+    if _evaluated_today is None:
+        _evaluated_today = _load_evaluated_today()
+    _evaluated_today.add(trade_id(proposal))
+
+
 def log_shadow_decision(proposal: dict, decision: dict, entered: bool) -> None:
     """Sprint 3: proposal + the agent's decision, logged together. The
     decision is NEVER applied here -- `entered` records what ATOS actually
     did so ai_shadow_report.py can compare."""
+    _mark_evaluated(proposal)
     _append(SHADOW_DECISIONS_LOG, {
         "trade_id": trade_id(proposal),
         "ts": proposal.get("ts"),

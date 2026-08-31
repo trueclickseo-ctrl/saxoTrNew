@@ -87,16 +87,70 @@ def test_enabled_sim_true_enables_only_sim():
 _run("enabled_sim:true -> ON for sim only; live/live_eur stay OFF", test_enabled_sim_true_enables_only_sim)
 
 
-def test_live_hard_off_even_if_config_tries():
+def test_live_can_shadow_but_never_act():
     try:
-        # a config that maliciously/accidentally tries to turn LIVE on
-        _point_at(json.dumps({"enabled_sim": True, "enabled_live": True, "enabled_live_eur": True}))
-        assert aic.ai_enabled_for("live") is False
-        assert aic.ai_enabled_for("live_eur") is False
-        assert "sim" in aic._AI_ALLOWED_ACCOUNTS and "live" not in aic._AI_ALLOWED_ACCOUNTS
+        # config turns on LIVE shadow AND tries to take it out of shadow_mode
+        # AND enables the agent -- LIVE must still be log-only.
+        _point_at(json.dumps({"enabled_live_shadow": True, "shadow_mode": False,
+                              "agent_enabled": True}))
+        # observe/log: allowed
+        assert aic.ai_enabled_for("live") is True
+        assert aic.ai_enabled_for("live_eur") is True
+        # act: NEVER, hardcoded -- not in _AI_ACTING_ACCOUNTS
+        assert aic.shadow_mode("live") is True, "LIVE is always shadow, config cannot flip it"
+        assert aic.shadow_mode("live_eur") is True
+        assert aic.can_apply_decision("live") is False
+        assert aic.can_apply_decision("live_eur") is False
+        assert "sim" in aic._AI_ACTING_ACCOUNTS
+        assert "live" not in aic._AI_ACTING_ACCOUNTS and "live_eur" not in aic._AI_ACTING_ACCOUNTS
+        # a totally unknown account is off for everything
+        assert aic.ai_enabled_for("futures") is False
+        assert aic.can_apply_decision("futures") is False
     finally:
         _restore()
-_run("LIVE is hard-off in code -- config cannot enable it", test_live_hard_off_even_if_config_tries)
+_run("LIVE may shadow-log (enabled_live_shadow) but can NEVER act -- hardcoded", test_live_can_shadow_but_never_act)
+
+
+def test_live_shadow_off_by_default():
+    try:
+        _point_at(json.dumps({"enabled_sim": True}))   # enabled_live_shadow omitted
+        assert aic.ai_enabled_for("live") is False
+        assert aic.ai_enabled_for("live_eur") is False
+    finally:
+        _restore()
+_run("enabled_live_shadow defaults False -- LIVE shadow is opt-in", test_live_shadow_off_by_default)
+
+
+def test_can_apply_decision_sim_gating():
+    try:
+        # sim, agent on, shadow off -> the ONLY True case
+        _point_at(json.dumps({"enabled_sim": True, "agent_enabled": True, "shadow_mode": False}))
+        assert aic.can_apply_decision("sim") is True
+        # shadow back on -> False
+        _point_at(json.dumps({"enabled_sim": True, "agent_enabled": True, "shadow_mode": True}))
+        assert aic.can_apply_decision("sim") is False
+        # agent off -> False even out of shadow
+        _point_at(json.dumps({"enabled_sim": True, "agent_enabled": False, "shadow_mode": False}))
+        assert aic.can_apply_decision("sim") is False
+    finally:
+        _restore()
+_run("can_apply_decision(sim) is True only with agent on AND shadow_mode off", test_can_apply_decision_sim_gating)
+
+
+def test_agent_cost_controls():
+    try:
+        _point_at(json.dumps({"enabled_sim": True}))   # defaults
+        assert aic.agent_strategy_allowed("rsi") is True
+        assert aic.agent_strategy_allowed("ema") is False, "default scope is rsi only"
+        assert aic.agent_dedup_enabled() is True
+        _point_at(json.dumps({"enabled_sim": True, "agent_strategies": ["*"], "agent_dedup": False}))
+        assert aic.agent_strategy_allowed("ema") is True
+        assert aic.agent_dedup_enabled() is False
+        _point_at(json.dumps({"enabled_sim": True, "agent_strategies": ["rsi", "bb"]}))
+        assert aic.agent_strategy_allowed("bb") is True and aic.agent_strategy_allowed("gap") is False
+    finally:
+        _restore()
+_run("agent_strategies scope + agent_dedup switch behave", test_agent_cost_controls)
 
 
 def test_shadow_mode_defaults_true_when_enabled():
