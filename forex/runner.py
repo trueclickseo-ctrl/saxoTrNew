@@ -342,11 +342,23 @@ RSI_LIVE_LOT_RUNG = 10_000
 RSI_LIVE_LOT_MIN  = 10_000
 RSI_LIVE_LOT_MAX  = 100_000
 
+# 2026-08-31: explicit user decision -- "one pair minimum 45 Euro" = target a
+# FIXED ~EUR45 loss if the stop is hit, UNIFORM across pairs regardless of
+# stop width, instead of the equity-% + 10k-lot-ladder combo above (which
+# gave wildly uneven realised risk: ~EUR8 on MXNUSD vs ~EUR73 on GBPUSD for
+# the same nominal sizing). When this is set, RSI on the real-money accounts
+# sizes for exactly this EUR risk (via strategy_rsi.size_position's
+# risk_amount param), floors to Saxo's 1,000-unit increment, and skips
+# _snap_rsi_live_lot -- only RSI_LIVE_LOT_MAX still applies, as a ceiling so a
+# very tight-stop pair can't build an oversized notional. Set to None to fall
+# back to the equity-% + 10k-ladder behaviour. SIM is never affected.
+RSI_LIVE_FIXED_RISK_EUR: float | None = 45.0
+
 
 def _snap_rsi_live_lot(raw_qty: int) -> int:
     """Snap a risk-sized RSI quantity to the nearest 10k rung, clamped to
     [10k, 100k]. Caller gates on ACCOUNT_ENV in ('live','live_eur') and
-    strategy == 'rsi'."""
+    strategy == 'rsi'. Only used when RSI_LIVE_FIXED_RISK_EUR is None."""
     rung = int(round(raw_qty / RSI_LIVE_LOT_RUNG)) * RSI_LIVE_LOT_RUNG
     return max(RSI_LIVE_LOT_MIN, min(RSI_LIVE_LOT_MAX, rung))
 
@@ -2639,6 +2651,17 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         # clears 1,000 units for most pairs anyway).
         if ACCOUNT_ENV in ("live", "live_eur"):
             rp_kw["block_below_min"] = True
+        # 2026-08-31: fixed ~EUR45 per-trade risk for RSI on the real-money
+        # accounts (see RSI_LIVE_FIXED_RISK_EUR). Express it in the pair's
+        # quote currency (size_position's risk_amount and atr are both quote-
+        # ccy) and drop risk_pct -- an absolute budget overrides the %.
+        if (ACCOUNT_ENV in ("live", "live_eur") and strat_name == "rsi"
+                and RSI_LIVE_FIXED_RISK_EUR):
+            _q_ccy   = sig["symbol"][3:6] if len(sig["symbol"]) >= 6 else ""
+            _eur_per = _eur_per_unit(_q_ccy, akey)
+            if _eur_per:
+                rp_kw["risk_amount"] = RSI_LIVE_FIXED_RISK_EUR / _eur_per
+                rp_kw.pop("risk_pct", None)
         if "units" in sig:
             qty = sig["units"]   # london_breakout pre-computes sizing from SEK capital
         else:
@@ -2671,11 +2694,22 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             # be safe) keeps its normal floored size.
             if (ACCOUNT_ENV in ("live", "live_eur") and strat_name == "rsi"
                     and pair_info["min_units"] <= RSI_LIVE_LOT_RUNG):
-                snapped = _snap_rsi_live_lot(qty)
-                if snapped != qty:
-                    logger.info(f"  [{strat_name}] {sym}: risk-sized {qty:,} → "
-                                f"{snapped:,} (LIVE 10k–100k lot ladder)")
-                qty = snapped
+                if RSI_LIVE_FIXED_RISK_EUR:
+                    # Fixed-EUR-risk mode: size_position already floored qty
+                    # to 1,000-unit increments for the ~EUR45 target. Only
+                    # apply the ceiling so a very tight-stop pair can't build
+                    # an oversized notional.
+                    capped = min(qty, RSI_LIVE_LOT_MAX)
+                    if capped != qty:
+                        logger.info(f"  [{strat_name}] {sym}: risk-sized {qty:,} → "
+                                    f"{capped:,} (LIVE max-lot cap {RSI_LIVE_LOT_MAX:,})")
+                    qty = capped
+                else:
+                    snapped = _snap_rsi_live_lot(qty)
+                    if snapped != qty:
+                        logger.info(f"  [{strat_name}] {sym}: risk-sized {qty:,} → "
+                                    f"{snapped:,} (LIVE 10k–100k lot ladder)")
+                    qty = snapped
 
         # london_breakout/gap provide their own session-range-based target;
         # every other strategy gets a broker-side TP at DEFAULT_TP_RR times
