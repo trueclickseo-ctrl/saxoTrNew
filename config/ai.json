@@ -2,16 +2,16 @@
   "_comment": "ATOS AI layer config. See docs/atos_ai_implementation_plan.md and docs/atos_ai_tracker.md. Ships fully OFF. Changes take effect on the next scan cycle (config is read fresh each call).",
 
   "_enabled_sim_comment": "Turn on AI observe+log for the SIM account (paper). Free by itself -- just writes trade proposals to data/ai_trade_proposals.jsonl.",
-  "enabled_sim": false,
+  "enabled_sim": true,
 
   "_enabled_live_shadow_comment": "Turn on AI observe+log for the REAL LIVE accounts (live = SEK, live_eur = EUR). LOG ONLY -- the agent's decision is recorded next to the real trade, never applied. AI physically cannot change a LIVE order: 'live'/'live_eur' are not in ai/config.py's _AI_ACTING_ACCOUNTS, so can_apply_decision() is always False for them regardless of this file. Use this to check whether the AI's calls line up with the real winners/losers before spending more.",
-  "enabled_live_shadow": false,
+  "enabled_live_shadow": true,
 
   "_shadow_mode_comment": "SIM only. true = every AI hook still only OBSERVES and LOGS. A later sprint flips this to false (SIM sizing), gated on its own shadow-evidence review. Has no effect on LIVE (LIVE is always shadow).",
   "shadow_mode": true,
 
   "_agent_comment": "enabled_sim / enabled_live_shadow alone just LOG trade proposals (free). agent_enabled=true additionally calls the LLM (agent_model) to evaluate each proposal -- costs money per signal, needs ANTHROPIC_API_KEY. The decision is still only LOGGED until Sprint 4 (SIM only).",
-  "agent_enabled": false,
+  "agent_enabled": true,
   "_agent_model_comment": "claude-sonnet-5 for the shadow study (~5x cheaper per token than opus). Switch to claude-opus-5 if Sonnet's calls look weak in ai_shadow_report.py.",
   "agent_model": "claude-sonnet-5",
 
