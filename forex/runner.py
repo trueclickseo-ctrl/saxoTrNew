@@ -629,8 +629,8 @@ BREAKEVEN_GAP_FILL_PCT  = 0.50
 # Ratchet only (a rung never loosens the stop). Primary exit is still RSI
 # recovery / 2 R broker TP / 12-day time stop / hard stop -- unchanged.
 #
-# 2026-08-31: turned ON for both real-money accounts ({"live","live_eur"}) at
-# the user's explicit, repeated request -- the exact 3-stage design they
+# 2026-08-31: turned ON for both real-money accounts, then SIM too, at the
+# user's explicit repeated request -- the exact 3-stage design they
 # specified (+0.75 R breakeven+costs / +1.0 R lock +0.5 R / +1.25 R 1xATR
 # trail), after a GBPPLN position gave back +30 -> -24 PLN. The backtest
 # (backtests/rsi_exit_ladder_backtest.py, 17 pairs / 12 y / 2365 trades)
@@ -639,9 +639,16 @@ BREAKEVEN_GAP_FILL_PCT  = 0.50
 # ever TIGHTENS a stop (pure ratchet, never loosens), the primary RSI-
 # recovery / 2 R TP / 12-day exits are unchanged, and the user accepts the
 # "may clip some winners a touch early" trade-off to stop the give-back.
-# SIM stays OFF (not in the set) -- byte-for-byte unchanged. Empty the set
-# to revert both accounts to the plain breakeven + 1.5xATR trail.
-PROFIT_LADDER_ACCOUNTS: set[str] = {"live", "live_eur"}
+#
+# SIM added 2026-08-31 to forward-test it live: it applies ONLY to the "rsi"
+# strategy (PROFIT_LADDER_STRATEGIES), so "advanced_rsi_master" -- rsi's
+# untouched A/B twin -- keeps the plain breakeven + 1.5xATR trail and is a
+# clean control. report_profit_ladder.py compares the two. Every rung move
+# is logged ([PROFIT-LADDER ... rung=...]) and stamped on the position
+# (pos["ladder_rung"]) so the give-back-prevented vs winner-clipped
+# trade-off is measurable, not guessed. Empty the set to revert everything
+# to the plain breakeven + 1.5xATR trail.
+PROFIT_LADDER_ACCOUNTS: set[str] = {"sim", "live", "live_eur"}
 PROFIT_LADDER_STRATEGIES         = {"rsi"}
 PROFIT_LADDER_BREAKEVEN_R        = 0.75
 PROFIT_LADDER_COST_BUFFER_R      = 0.10
@@ -1159,8 +1166,24 @@ def _account() -> tuple[float, str]:
 
 # ── Price data ────────────────────────────────────────────────────────────────
 
+# A single FX chart bar whose Ask/Bid spread is wider than this fraction of
+# the Bid is not a real market -- it's a stale/frozen quote on one side.
+# Confirmed live 2026-08-31: GBPPLN daily bars came back CloseAsk 5.13695 /
+# CloseBid 5.01086 (a 2.5% "spread") with the Ask identical bar-to-bar,
+# while the Bid tracked the real ~5.05 market. Taking the mid there put the
+# close ~0.5% high and, worse, distorted ATR and every R-based decision.
+# Real FX spreads -- even wide exotics -- are well under 0.5%. When a bar
+# trips this, build its OHLC from the trustworthy Bid side alone (Bid is
+# also what a long actually exits at, so it's the honest + conservative
+# choice); a genuinely two-sided-bad bar just gets a slightly conservative
+# read, which is fine.
+_MAX_SANE_BAR_SPREAD = 0.02
+
+
 def _fetch_history(uic: int, count: int = CHART_BARS) -> pd.DataFrame | None:
-    """Fetch daily OHLC for an FxSpot instrument. Mid = (Ask+Bid)/2.
+    """Fetch daily OHLC for an FxSpot instrument. Mid = (Ask+Bid)/2, except
+    bars with a pathological Ask/Bid spread (see _MAX_SANE_BAR_SPREAD) fall
+    back to Bid-only OHLC.
 
     Each strategy enforces its own MIN_BARS; we just need at least a few rows
     here to confirm the instrument responded with real data.
@@ -1171,15 +1194,24 @@ def _fetch_history(uic: int, count: int = CHART_BARS) -> pd.DataFrame | None:
             "Horizon": 1440, "Count": count + 5,
         })
         rows = []
+        bad_spread_bars = 0
         for bar in resp.get("Data", []):
             if not isinstance(bar, dict):
                 continue
             if "CloseAsk" in bar and "CloseBid" in bar:
                 ask_c = float(bar["CloseAsk"]); bid_c = float(bar["CloseBid"])
-                o = (float(bar.get("OpenAsk",  ask_c)) + float(bar.get("OpenBid",  bid_c))) / 2
-                h = (float(bar.get("HighAsk",  ask_c)) + float(bar.get("HighBid",  bid_c))) / 2
-                l = (float(bar.get("LowAsk",   ask_c)) + float(bar.get("LowBid",   bid_c))) / 2
-                c = (ask_c + bid_c) / 2
+                if bid_c > 0 and (ask_c - bid_c) / bid_c > _MAX_SANE_BAR_SPREAD:
+                    # Ask side is untrustworthy on this bar -- use Bid only.
+                    bad_spread_bars += 1
+                    o = float(bar.get("OpenBid",  bid_c))
+                    h = float(bar.get("HighBid",  bid_c))
+                    l = float(bar.get("LowBid",   bid_c))
+                    c = bid_c
+                else:
+                    o = (float(bar.get("OpenAsk",  ask_c)) + float(bar.get("OpenBid",  bid_c))) / 2
+                    h = (float(bar.get("HighAsk",  ask_c)) + float(bar.get("HighBid",  bid_c))) / 2
+                    l = (float(bar.get("LowAsk",   ask_c)) + float(bar.get("LowBid",   bid_c))) / 2
+                    c = (ask_c + bid_c) / 2
             elif "Close" in bar:
                 o = float(bar.get("Open",  bar["Close"]))
                 h = float(bar.get("High",  bar["Close"]))
@@ -1189,6 +1221,10 @@ def _fetch_history(uic: int, count: int = CHART_BARS) -> pd.DataFrame | None:
                 continue
             if c > 0:
                 rows.append({"Open": o, "High": h, "Low": l, "Close": c})
+        if bad_spread_bars:
+            logger.warning(f"UIC {uic}: {bad_spread_bars}/{len(rows)} bars had a "
+                           f">{_MAX_SANE_BAR_SPREAD:.0%} Ask/Bid spread — used Bid-only "
+                           f"OHLC for those (stale Ask on the chart feed)")
         if len(rows) >= 5:
             return pd.DataFrame(rows)
         logger.debug(f"UIC {uic}: only {len(rows)} bars returned")
@@ -2218,8 +2254,17 @@ def _apply_profit_ladder_stop(key: str, pos: dict, df, strat_name: str,
     R = abs(entry - float(init_stop)) if init_stop else strat_rsi.ATR_STOP_MULT * float(pos.get("atr_at_entry", 0) or 0)
     r_now = ((float(df["Close"].iloc[-1]) - entry) if is_long
              else (entry - float(df["Close"].iloc[-1]))) / R if R > 0 else 0.0
-    logger.info(f"  {tag}[PROFIT-LADDER] {key}: {r_now:.2f}R in profit — "
+    rung = ("trail-1ATR"     if r_now >= PROFIT_LADDER_TRAIL_ACTIVATE_R
+            else "lock+0.5R"  if r_now >= PROFIT_LADDER_LOCK_ACTIVATE_R
+            else "breakeven+costs")
+    logger.info(f"  {tag}[PROFIT-LADDER] {key}: {r_now:.2f}R in profit, rung={rung} — "
                 f"stop {cur_stop:.5f} → {new_stop:.5f}")
+
+    # Stamp the position so the exit record / report_profit_ladder.py can
+    # show which rung each trade reached and at what R (highest wins).
+    if r_now > float(pos.get("ladder_rung_r", -9e9)):
+        pos["ladder_rung"]   = rung
+        pos["ladder_rung_r"] = round(r_now, 2)
 
     pos["stop_price"] = round(new_stop, 6)
     if dry_run:
@@ -2254,11 +2299,13 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
         ed        = pos.get("entry_date", today_str)
         cal_days  = (date.today() - date.fromisoformat(ed)).days
 
-        # RSI profit-protection ladder (opt-in, OFF by default): when active
-        # for this account+strategy it OWNS this position's stop management
-        # and REPLACES both the generic trailing block below and
-        # _apply_breakeven_stop -- so the two systems can never fight. Every
-        # other strategy / account is completely unaffected.
+        # RSI profit-protection ladder: when active for this account+strategy
+        # (PROFIT_LADDER_ACCOUNTS x PROFIT_LADDER_STRATEGIES -- as of
+        # 2026-08-31 all three accounts, "rsi" only) it OWNS this position's
+        # stop management and REPLACES both the generic trailing block below
+        # and _apply_breakeven_stop -- so the two systems can never fight.
+        # Every other strategy (incl. rsi's A/B twin advanced_rsi_master)
+        # and any account not in the set is completely unaffected.
         _ladder_active = _profit_ladder_active(strat_name)
 
         # Trail stop
@@ -2481,6 +2528,8 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
                     net_pnl_eur=net_pnl_eur, r_multiple=r_multiple,
                     mae_eur=pos.get("mae_eur"), mfe_eur=pos.get("mfe_eur"),
                     holding_hours=holding_hours,
+                    ladder_rung=pos.get("ladder_rung"),
+                    ladder_rung_r=pos.get("ladder_rung_r"),
                 )
         del positions[key]
         exits += 1
