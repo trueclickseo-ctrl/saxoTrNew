@@ -12,10 +12,10 @@ Running log of the AI layer's build. Update this file **whenever an AI change la
 
 | | |
 |---|---|
-| **Last sprint shipped** | Sprint 3 — Trading Copilot agent, shadow mode (`80e8b04`), import-hardened (`22b9f75`) |
+| **Last sprint shipped** | Sprint 3 (`80e8b04`) + 3.5 cost-controls / shadow-on-LIVE (`aace238`), model → sonnet (`997aedf`) |
 | **Next sprint** | Sprint 4 — wire the agent's `size_multiplier` into SIM sizing (Level 2, SIM only) |
-| **Sprint 4 status** | **BLOCKED** — 2 open decisions + no shadow-evidence sample yet |
-| **AI live in production?** | No. `config/ai.json`: `enabled_sim=false`, `agent_enabled=false`. Every hook is a no-op. |
+| **Sprint 4 status** | **BLOCKED** — 2 open decisions + shadow-evidence sample now accumulating |
+| **AI live in production?** | **Shadow study RUNNING** (`327e204`, 2026-08-31) — `enabled_sim` + `enabled_live_shadow` + `agent_enabled` all true. `claude-sonnet-5` scores every RSI signal on SIM + both LIVE accounts and logs it. **Nothing applied** (`shadow_mode` true on SIM; `can_apply_decision` hardcoded False for LIVE). Pending: console spend cap + a reboot for the scheduled tasks to inherit `ANTHROPIC_API_KEY`. |
 | **AI touching LIVE money?** | No — impossible without a code change. LIVE can *shadow-log* (`enabled_live_shadow`) but `can_apply_decision("live")` / `("live_eur")` is hardcoded `False` (`_AI_ACTING_ACCOUNTS = {"sim"}`). |
 | **`anthropic` SDK** | Installed 2026-08-31 (`1.2.0`, `pip install` as admin). Still dormant — needs `ANTHROPIC_API_KEY` + config flags. |
 
