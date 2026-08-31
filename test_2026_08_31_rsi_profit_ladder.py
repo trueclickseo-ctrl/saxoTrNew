@@ -64,36 +64,38 @@ def _target(pos, r_mult):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-section("1. ON for both real-money accounts, OFF for SIM")
+section("1. ON for all three accounts, rsi book only")
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_on_for_live_off_for_sim():
-    assert r.PROFIT_LADDER_ACCOUNTS == {"live", "live_eur"}, (
-        "ladder is ON for both real-money accounts as of 2026-08-31"
+def test_on_for_all_three_accounts():
+    assert r.PROFIT_LADDER_ACCOUNTS == {"sim", "live", "live_eur"}, (
+        "ladder is ON for both real-money accounts AND SIM (forward test) as of 2026-08-31"
     )
     old_env = r.ACCOUNT_ENV
     try:
-        r.ACCOUNT_ENV = "sim"
-        assert not r._profit_ladder_active("rsi"), "SIM must stay OFF"
-        for env in ("live", "live_eur"):
+        for env in ("sim", "live", "live_eur"):
             r.ACCOUNT_ENV = env
             assert r._profit_ladder_active("rsi"), f"{env} rsi book must be on the ladder"
     finally:
         r.ACCOUNT_ENV = old_env
-_run("PROFIT_LADDER_ACCOUNTS == {live, live_eur}; active for live/live_eur rsi, not SIM", test_on_for_live_off_for_sim)
+_run("PROFIT_LADDER_ACCOUNTS == {sim, live, live_eur}; active for the rsi book on each", test_on_for_all_three_accounts)
 
 
-def test_activation_is_account_and_strategy_scoped():
+def test_activation_is_strategy_scoped_not_just_account():
     old_env = r.ACCOUNT_ENV
     try:
-        r.ACCOUNT_ENV = "live_eur"
-        assert r._profit_ladder_active("rsi")
-        assert not r._profit_ladder_active("bb"), "only the rsi book, never another strategy"
-        r.ACCOUNT_ENV = "sim"
-        assert not r._profit_ladder_active("rsi"), "SIM never, regardless of strategy"
+        for env in ("sim", "live", "live_eur"):
+            r.ACCOUNT_ENV = env
+            assert r._profit_ladder_active("rsi"), f"{env}: rsi on"
+            # rsi's A/B twin and every other strategy stay OFF -> clean control
+            assert not r._profit_ladder_active("advanced_rsi_master"), f"{env}: advanced_rsi_master must stay OFF"
+            assert not r._profit_ladder_active("bb"), f"{env}: bb must stay OFF"
+        r.ACCOUNT_ENV = "futures"  # a made-up env not in the set
+        assert not r._profit_ladder_active("rsi"), "an account not in the set is OFF even for rsi"
     finally:
         r.ACCOUNT_ENV = old_env
-_run("activation is gated on BOTH account and strategy", test_activation_is_account_and_strategy_scoped)
+_run("activation is gated on strategy too: only 'rsi', never advanced_rsi_master / bb / others",
+     test_activation_is_strategy_scoped_not_just_account)
 
 
 # ═══════════════════════════════════════════════════════════════════════

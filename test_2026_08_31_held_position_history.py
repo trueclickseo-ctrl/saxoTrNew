@@ -100,7 +100,34 @@ _run("no open positions -> no fetches, market_data unchanged", test_no_held_posi
 
 
 # ═══════════════════════════════════════════════════════════════════════
-section("2. wired into both run entry points, before the exit loop")
+section("2. _fetch_history: a pathological Ask/Bid spread falls back to Bid-only")
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_bad_ask_spread_uses_bid_only():
+    # GBPPLN's real 2026-08-31 shape: Bid tracks the ~5.05 market, Ask is a
+    # frozen ~5.137 -> a 2.5% "spread". Mid would be ~5.09; Bid-only is right.
+    good = {"CloseAsk": 1.1002, "CloseBid": 1.1000, "HighAsk": 1.1010, "HighBid": 1.1008,
+            "LowAsk": 1.0995, "LowBid": 1.0993, "OpenAsk": 1.1001, "OpenBid": 1.0999}
+    bad  = {"CloseAsk": 5.13695, "CloseBid": 5.01086, "HighAsk": 5.13806, "HighBid": 5.07634,
+            "LowAsk": 5.05068, "LowBid": 5.00419, "OpenAsk": 5.13695, "OpenBid": 5.01086}
+    orig = r._get
+    r._get = lambda path, params=None: {"Data": [good] * 5 + [bad]}
+    try:
+        df = r._fetch_history(999999)
+        assert df is not None and len(df) == 6
+        # last (bad) bar: close must be the Bid, NOT the ~5.074 mid
+        assert abs(df["Close"].iloc[-1] - 5.01086) < 1e-6, df["Close"].iloc[-1]
+        assert abs(df["High"].iloc[-1] - 5.07634) < 1e-6, "High from HighBid, not the mid"
+        # a normal bar is still a mid
+        assert abs(df["Close"].iloc[0] - 1.1001) < 1e-6
+    finally:
+        r._get = orig
+_run("_fetch_history: a >2% Ask/Bid bar uses Bid-only OHLC; normal bars still use the mid",
+     test_bad_ask_spread_uses_bid_only)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+section("3. wired into both run entry points, before the exit loop")
 # ═══════════════════════════════════════════════════════════════════════
 
 def test_called_in_run_daily_and_run_exits_only():

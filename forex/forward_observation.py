@@ -138,11 +138,18 @@ def log_trade_exit_card(*, card_id: str, exit_price: float, exit_reason: str,
                          gross_pnl_eur: float | None, commission_eur: float | None,
                          net_pnl_eur: float | None, r_multiple: float | None,
                          mae_eur: float | None, mfe_eur: float | None,
-                         holding_hours: float | None) -> None:
+                         holding_hours: float | None,
+                         ladder_rung: str | None = None,
+                         ladder_rung_r: float | None = None) -> None:
     """Written once, at close, referencing the entry card's card_id.
     MAE/MFE are in EUR (worst/best unrealized excursion seen while the
     position was open) -- accumulated by update_mae_mfe() below on every
-    exits-check cycle, not reconstructed after the fact."""
+    exits-check cycle, not reconstructed after the fact.
+
+    ladder_rung / ladder_rung_r (2026-08-31): the highest RSI profit-ladder
+    rung this trade reached and at what R -- None if the ladder wasn't
+    active for it or it never got far enough. Lets report_profit_ladder.py
+    measure give-back-prevented vs winner-clipped per rung."""
     _append_jsonl(TRADE_CARDS_LOG, {
         "card_id": card_id, "event": "exit",
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -154,6 +161,8 @@ def log_trade_exit_card(*, card_id: str, exit_price: float, exit_reason: str,
         "mae_eur": round(mae_eur, 2) if mae_eur is not None else None,
         "mfe_eur": round(mfe_eur, 2) if mfe_eur is not None else None,
         "holding_hours": holding_hours,
+        "ladder_rung": ladder_rung,
+        "ladder_rung_r": ladder_rung_r,
     })
 
 

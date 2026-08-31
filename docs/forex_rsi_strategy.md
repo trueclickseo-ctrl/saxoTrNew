@@ -64,10 +64,10 @@ and — every scheduled cycle, in `_run_exits` — the stop is tightened by:
 - **`_apply_breakeven_stop()`** — one-shot move to exact `entry_price` once unrealised profit ≥ `1.0 × ATR_at_entry` (≈ +0.67 R).
 - **All exit management needs a price bar.** `_run_exits` pulls `df` from `market_data`, which is built for the account's *scanned* universe. A held position on a pair since dropped from that universe (e.g. a legacy exotic on the EUR account, which now trades CORE only) had `df = None` → trailing, breakeven, the ladder, `should_exit` (RSI recovery **and** the 12-day time stop) all silently no-op'd, leaving it on its entry-day broker stop/TP alone. Fixed 2026-08-31: `_add_held_position_history()` tops up `market_data` with daily history for every held symbol, in both `run_daily` and `run_exits_only`.
 
-### Profit-protection ladder (2026-08-31, **ON for both real-money accounts**; SIM OFF)
+### Profit-protection ladder (2026-08-31, **ON for `sim` + `live` + `live_eur`**)
 
 `forex/runner.py` `_profit_ladder_target_stop()` — replaces the two
-lines above for the RSI book on `live` + `live_eur`, staging the stop
+lines above for the RSI book on all three accounts, staging the stop
 instead of one jump to entry:
 
 | Unrealised profit | Stop moves to |
@@ -81,11 +81,18 @@ When active it **replaces** both `trailing_stop_update` and `_apply_breakeven_st
 for RSI positions so the two systems never fight. New positions store
 `initial_stop_price` as the frozen R reference.
 
-**Gating:** `PROFIT_LADDER_ACCOUNTS = {"live", "live_eur"}` × `PROFIT_LADDER_STRATEGIES = {"rsi"}`.
-Empty the set to revert both accounts to the plain breakeven + 1.5×ATR trail. SIM is never on it.
-Turned on 2026-08-31 at the user's explicit request after a GBPPLN position gave back +30 → −24 PLN;
-the backtest below shows only a small net edge and that it doesn't fully close the give-back
-(avg MFE ~0.51 R < the 0.75 R first rung), but the ladder only ever *tightens* a stop.
+**Gating:** `PROFIT_LADDER_ACCOUNTS = {"sim", "live", "live_eur"}` × `PROFIT_LADDER_STRATEGIES = {"rsi"}`.
+Empty the set to revert everything to the plain breakeven + 1.5×ATR trail.
+Only the `rsi` strategy is affected — `advanced_rsi_master` (rsi's untouched A/B twin) keeps the plain
+policy and is the **control** on SIM. Turned on 2026-08-31 at the user's explicit request after a
+GBPPLN position gave back +30 → −24 PLN; the backtest shows only a small net edge and that it
+doesn't fully close the give-back (avg MFE ~0.51 R < the 0.75 R first rung), but the ladder only ever
+*tightens* a stop.
+
+**Watching it:** every rung move is logged `[PROFIT-LADDER … rung=breakeven+costs|lock+0.5R|trail-1ATR]`
+and stamped on the position (`pos["ladder_rung"]`, carried into the exit observation card).
+`python report_profit_ladder.py` compares `rsi` (ladder) vs `advanced_rsi_master` (control) per
+account — capture ratio (net P&L / MFE), give-back EUR, avg R, exit-reason and rung breakdown.
 Backtest: `python backtests/rsi_exit_ladder_backtest.py`.
 
 2026-08-31 run — 17 pairs, 12 y, 2,365 trades, cost = 0.03 R/trade:
