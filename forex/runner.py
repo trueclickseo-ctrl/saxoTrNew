@@ -86,6 +86,12 @@ import forex.forward_observation as forward_observation
 import forex.exit_advisor  as exit_advisor
 import forex.rsi_signal_registry as rsi_signal_registry
 
+# AI advisory layer (Sprint 0+). Ships OFF (ai_enabled_for -> False by
+# default). Every touchpoint is guarded by that call. Import is cheap and
+# side-effect-free; nothing here runs unless config/ai.json enables it.
+import ai.config as ai_config
+from ai.features.trade_proposal import build_proposal as _ai_build_proposal, log_proposal as _ai_log_proposal
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-7s  %(message)s",
@@ -2660,7 +2666,12 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                  dry_run: bool, today_str: str,
                  live_prices: dict | None = None,
                  agreement: dict | None = None,
-                 weight: float = 1.0) -> int:
+                 weight: float = 1.0,
+                 regime_data: dict | None = None) -> int:
+    # regime_data: the FULL daily-bar market_data dict (unfiltered), used
+    # only to fold a regime label into the AI trade-proposal log (Sprint 2).
+    # `market_data` (4th arg) may be a momentum-filtered subset for some
+    # strategies, so regime is read from regime_data instead.
     # Order-venue circuit breaker (2026-08-31): a prior strategy in this same
     # run already hit the consecutive-rejection threshold, so Saxo's order
     # endpoint is down. Skip ALL entry work for every remaining strategy --
@@ -2823,6 +2834,24 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             continue
         agrees = features["agreement_count"]
         ml_info = (f"  ml_prob={features['ml_prob']}" if features.get("ml_prob") else "")
+
+        # ── AI trade-proposal log (Sprint 2) — INERT, log-only ─────────────
+        # For a signal that passed every deterministic filter above, write a
+        # structured candidate to data/ai_trade_proposals.jsonl. Guarded by
+        # the AI kill switch (OFF by default). Cannot change entries / qty /
+        # anything downstream; any exception is swallowed here.
+        if ai_config.ai_enabled_for(ACCOUNT_ENV):
+            try:
+                _ai_log_proposal(_ai_build_proposal(
+                    account_env=ACCOUNT_ENV, strategy=strat_name, symbol=sym,
+                    direction=direction, sig=sig, features=features,
+                    positions=positions, equity=equity,
+                    take_profit=_resolve_tp_price(sig, direction),
+                    n_strategies=len(STRATEGIES),
+                    regime_bars=(regime_data or {}).get(sym),
+                ))
+            except Exception as exc:
+                logger.warning(f"  [ai] trade-proposal log failed for {sym}: {exc}")
 
         if not _currency_ok(sym, direction, exposure):
             logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] "
@@ -3613,7 +3642,7 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
                 entries = _run_entries(strat_name, strat_mod, positions,
                                        _edata, equity, akey, dry_run, today_str,
                                        live_prices=live_prices, agreement=agreement,
-                                       weight=w)
+                                       weight=w, regime_data=market_data)
         except Exception as exc:
             # 2026-08-25: a single rejected order (e.g. WouldExceedMargin)
             # used to crash out of this entire function uncaught, which
