@@ -1,18 +1,22 @@
 """
-Regression test -- 2026-08-31 RSI real-money FIXED per-trade risk.
+Regression test -- 2026-08-31 RSI real-money FIXED per-trade risk CAP.
 
-User: "one pair minimum 45 Euro" -- each RSI trade on the real-money
-accounts should risk AT LEAST ~EUR45 if the stop is hit, uniform across
-pairs regardless of stop width, instead of the equity-% + 10k-lot-ladder
-combo (which gave ~EUR8 on MXNUSD vs ~EUR73 on GBPUSD).
+User's explicit rules (a correction of the first cut, which treated €45 as
+a minimum and rounded up):
+  1. €45 = the MAXIMUM risk-if-stopped, uniform across pairs. Never a
+     floor or a target.
+  2. Round the lot DOWN to Saxo's 1,000-unit increment.
+  3. If even one min-lot would risk more than €45 -> SKIP the trade
+     (size_position returns 0).
+  4. The round-trip commission stays a SEPARATE edge/cost filter
+     (MIN_EDGE_TO_COST_RATIO) -- not folded into sizing.
 
-- forex/runner.py: RSI_LIVE_FIXED_RISK_EUR = 45.0. When set, the entry
-  loop passes strategy_rsi.size_position(risk_amount=<EUR45 in quote ccy>)
-  and skips _snap_rsi_live_lot (only RSI_LIVE_LOT_MAX still caps).
-- forex/strategy_rsi.py: size_position gains a `risk_amount` param; in
-  that mode it rounds the qty UP to the 1,000-unit lot increment so the
-  realised risk is >= the budget, never systematically under it.
-- SIM is never affected (it passes neither risk_amount nor the live gate).
+- forex/strategy_rsi.py: size_position(risk_amount=<€45 in quote ccy>)
+  rounds DOWN and returns 0 below one lot.
+- forex/runner.py: RSI_LIVE_FIXED_RISK_EUR = 45.0; the live-RSI entry path
+  converts it to the pair's quote ccy via _eur_per_unit and SKIPS the
+  trade if that rate is unavailable (no %-based fallback on real money).
+- SIM is never affected (passes neither risk_amount nor the live gate).
 """
 
 import inspect
@@ -48,24 +52,40 @@ ATR_MULT = srsi.ATR_STOP_MULT  # 1.5
 
 
 # ═══════════════════════════════════════════════════════════════════════
-section("1. size_position(risk_amount=...) targets the absolute budget, rounds UP")
+section("1. size_position(risk_amount=...) is a CEILING: rounds down, skips if a lot exceeds it")
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_risk_amount_hits_budget_and_never_under():
-    # quote-ccy budget 45, atr 0.006 -> stop_dist 0.009 -> raw 5000
-    qty = srsi.size_position(0, 0.006, min_units=1000, risk_amount=45.0)
-    realised = ATR_MULT * 0.006 * qty
-    assert qty % 1000 == 0
-    assert realised >= 45.0 - 1e-9, f"realised risk {realised} must be >= the 45 budget"
-    assert realised < 45.0 + ATR_MULT * 0.006 * 1000, "should not overshoot by more than one lot"
-_run("risk_amount mode: realised risk >= budget, within one lot increment", test_risk_amount_hits_budget_and_never_under)
+def test_realised_risk_never_exceeds_the_cap():
+    # budget 45 quote-ccy, atr 0.006 -> stop_dist 0.009 -> raw 5000 exactly
+    for atr in (0.006, 0.0061, 0.0075, 0.004, 0.011):
+        qty = srsi.size_position(0, atr, min_units=1000, risk_amount=45.0)
+        realised = ATR_MULT * atr * qty
+        assert qty % 1000 == 0
+        assert realised <= 45.0 + 1e-9, f"atr={atr}: realised {realised:.2f} exceeds the 45 cap"
+_run("risk_amount mode: realised risk is always <= the cap", test_realised_risk_never_exceeds_the_cap)
 
 
-def test_risk_amount_rounds_up_not_down():
-    # raw = 45 / (1.5 * 0.007) = 4285.7 -> must round UP to 5000, not down to 4000
+def test_risk_amount_rounds_down_not_up():
+    # raw = 45 / (1.5 * 0.007) = 4285.7 -> must floor to 4000, not ceil to 5000
     qty = srsi.size_position(0, 0.007, min_units=1000, risk_amount=45.0)
-    assert qty == 5000, f"expected ceil to 5000, got {qty}"
-_run("risk_amount mode rounds the lot UP (a floor would under-risk the trade)", test_risk_amount_rounds_up_not_down)
+    assert qty == 4000, f"expected floor to 4000, got {qty}"
+_run("risk_amount mode rounds the lot DOWN (a ceil would breach the cap)", test_risk_amount_rounds_down_not_up)
+
+
+def test_one_lot_over_cap_is_skipped():
+    # wide stop: raw = 45 / (1.5 * 0.05) = 600 < 1000 -> one lot risks
+    # 1.5*0.05*1000 = 75 > 45 -> must return 0 (skip), never floor up
+    qty = srsi.size_position(0, 0.05, min_units=1000, risk_amount=45.0)
+    assert qty == 0, f"a pair whose min lot risks > €45 must be skipped, got {qty}"
+_run("risk_amount mode returns 0 when even one min-lot would breach the cap", test_one_lot_over_cap_is_skipped)
+
+
+def test_exactly_one_lot_fits():
+    # raw = 45 / (1.5 * 0.030) = 1000.0 exactly -> one lot, realised == 45
+    qty = srsi.size_position(0, 0.030, min_units=1000, risk_amount=45.0)
+    assert qty == 1000
+    assert abs(ATR_MULT * 0.030 * qty - 45.0) < 1e-9
+_run("risk_amount mode keeps a trade whose single lot lands exactly on the cap", test_exactly_one_lot_fits)
 
 
 def test_risk_amount_ignores_equity_and_pct():
@@ -75,23 +95,16 @@ def test_risk_amount_ignores_equity_and_pct():
 _run("risk_amount overrides account_equity and risk_pct entirely", test_risk_amount_ignores_equity_and_pct)
 
 
-def test_wide_stop_still_clears_one_lot():
-    # very wide stop: raw < 1000 -> still returns the 1,000 minimum, never 0
-    qty = srsi.size_position(0, 5.0, min_units=1000, risk_amount=45.0, block_below_min=True)
-    assert qty == 1000
-_run("risk_amount mode floors at the 1,000-unit Saxo minimum (never 0, never below)", test_wide_stop_still_clears_one_lot)
-
-
 def test_sim_default_sizing_unchanged():
-    # no risk_amount -> old behaviour exactly (floors down)
+    # no risk_amount -> old behaviour exactly (floors down off equity * pct)
     q_old = srsi.size_position(100_000, 0.006, min_units=1000, risk_pct=0.0025)
     raw = 100_000 * 0.0025 / (ATR_MULT * 0.006)
-    assert q_old == int(raw / 1000) * 1000, "SIM/default path must still floor, not ceil"
-_run("default (no risk_amount) sizing is byte-for-byte unchanged -- still floors", test_sim_default_sizing_unchanged)
+    assert q_old == int(raw / 1000) * 1000, "SIM/default path must still floor off equity*pct"
+_run("default (no risk_amount) sizing is byte-for-byte unchanged", test_sim_default_sizing_unchanged)
 
 
 # ═══════════════════════════════════════════════════════════════════════
-section("2. runner wiring: fixed-risk for live RSI, ladder is the fallback")
+section("2. runner wiring: fixed-risk cap for live RSI, ladder is the fallback")
 # ═══════════════════════════════════════════════════════════════════════
 
 def test_constant_present_and_set():
@@ -100,56 +113,72 @@ def test_constant_present_and_set():
 _run("RSI_LIVE_FIXED_RISK_EUR is 45.0", test_constant_present_and_set)
 
 
-def test_entry_loop_uses_fixed_risk_before_sizing():
+def test_entry_loop_sets_risk_amount_before_sizing():
     src = inspect.getsource(r._run_entries)
     assert 'RSI_LIVE_FIXED_RISK_EUR' in src
     assert 'rp_kw["risk_amount"] = RSI_LIVE_FIXED_RISK_EUR / _eur_per' in src
-    # the fixed-risk block must sit before size_position() is called
     fr_at = src.index('rp_kw["risk_amount"] = RSI_LIVE_FIXED_RISK_EUR')
     size_at = src.index('strat_mod.size_position(')
-    assert fr_at < size_at
-_run("entry loop sets risk_amount from RSI_LIVE_FIXED_RISK_EUR before size_position()", test_entry_loop_uses_fixed_risk_before_sizing)
+    assert fr_at < size_at, "risk_amount must be set before size_position() is called"
+_run("entry loop sets risk_amount from RSI_LIVE_FIXED_RISK_EUR before size_position()",
+     test_entry_loop_sets_risk_amount_before_sizing)
 
 
-def test_ladder_is_the_else_branch_now():
+def test_missing_eur_rate_skips_the_trade():
     src = inspect.getsource(r._run_entries)
-    # _snap_rsi_live_lot only runs when RSI_LIVE_FIXED_RISK_EUR is falsy
+    seg = src[src.index('_eur_per = _eur_per_unit('): src.index('rp_kw["risk_amount"] = RSI_LIVE_FIXED_RISK_EUR')]
+    assert 'if not _eur_per' in seg and 'continue' in seg, (
+        "a missing EUR conversion rate must SKIP the live-RSI trade, not fall back to %-based sizing"
+    )
+_run("live RSI trade is skipped when the €45 cap can't be converted to the quote currency",
+     test_missing_eur_rate_skips_the_trade)
+
+
+def test_ladder_is_the_fallback_branch():
+    src = inspect.getsource(r._run_entries)
     seg = src[src.index('if RSI_LIVE_FIXED_RISK_EUR:'): src.index('_snap_rsi_live_lot(qty)') + 40]
     assert 'else:' in seg, "the 10k ladder must be the RSI_LIVE_FIXED_RISK_EUR-is-None fallback"
-    assert 'min(qty, RSI_LIVE_LOT_MAX)' in seg, "fixed-risk mode still applies the max-lot ceiling"
-_run("_snap_rsi_live_lot is now the fallback branch; fixed-risk mode still caps at RSI_LIVE_LOT_MAX", test_ladder_is_the_else_branch_now)
+    assert 'min(qty, RSI_LIVE_LOT_MAX)' in seg, "fixed-risk mode still keeps the max-lot sanity backstop"
+_run("_snap_rsi_live_lot is the fallback branch; fixed-risk mode keeps only the RSI_LIVE_LOT_MAX backstop",
+     test_ladder_is_the_fallback_branch)
 
 
 def test_fixed_risk_gated_to_live_rsi_only():
     src = inspect.getsource(r._run_entries)
-    block = src[src.index('fixed ~EUR45 per-trade risk'): src.index('strat_mod.size_position(')]
-    assert 'ACCOUNT_ENV in ("live", "live_eur")' in block
-    assert 'strat_name == "rsi"' in block
-_run("fixed-risk sizing is gated on live/live_eur AND strat_name=='rsi' (SIM + other strategies untouched)", test_fixed_risk_gated_to_live_rsi_only)
+    end = src.index('RSI_LIVE_FIXED_RISK_EUR):')
+    block = src[src.rindex('if (', 0, end): end + len('RSI_LIVE_FIXED_RISK_EUR):')]
+    assert 'ACCOUNT_ENV in ("live", "live_eur")' in block, block
+    assert 'strat_name == "rsi"' in block, block
+_run("fixed-risk sizing is gated on live/live_eur AND strat_name=='rsi' (SIM + other strategies untouched)",
+     test_fixed_risk_gated_to_live_rsi_only)
 
 
 # ═══════════════════════════════════════════════════════════════════════
-section("3. end-to-end: uniform ~EUR45 risk across a spread of pairs")
+section("3. end-to-end: per-trade EUR risk stays at or below €45 across a pair spread")
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_uniform_risk_across_pairs():
+def test_risk_capped_across_pairs():
     # (eur_per_quote_unit, atr_quote) for a spread of real pairs
     cases = {
         "EURUSD": (0.92, 0.0060), "GBPUSD": (0.92, 0.0075), "USDJPY": (0.0059, 0.90),
         "EURGBP": (1.17, 0.0035), "GBPJPY": (0.0059, 1.45), "EURCHF": (1.06, 0.0030),
         "GBPAUD": (0.60, 0.0130),
     }
-    risks = []
+    kept = []
     for sym, (epq, atr) in cases.items():
         budget_quote = 45.0 / epq
-        qty = srsi.size_position(0, atr, min_units=1000, risk_amount=budget_quote, block_below_min=True)
+        qty = srsi.size_position(0, atr, min_units=1000, risk_amount=budget_quote)
+        if qty == 0:
+            continue  # legitimately skipped -- one lot would breach the cap
         qty = min(qty, r.RSI_LIVE_LOT_MAX)
         realised_eur = ATR_MULT * atr * qty * epq
-        risks.append((sym, realised_eur))
-        assert 45.0 <= realised_eur <= 60.0, f"{sym}: realised EUR risk {realised_eur:.1f} outside [45, 60]"
-    spread = max(x for _, x in risks) - min(x for _, x in risks)
-    assert spread < 12.0, f"per-trade EUR risk spread across pairs is {spread:.1f}, expected tight (<12)"
-_run("realised per-trade EUR risk is uniform (all in [45, 60], spread < EUR12) across a pair spread", test_uniform_risk_across_pairs)
+        kept.append((sym, realised_eur))
+        assert realised_eur <= 45.0 + 1e-6, f"{sym}: realised €{realised_eur:.1f} exceeds the €45 cap"
+    assert kept, "at least some pairs should still be tradeable under the cap"
+    # kept trades cluster just under the cap (within one lot's worth of risk)
+    assert all(x > 20.0 for _, x in kept), f"kept trades should still be meaningful: {kept}"
+_run("realised per-trade EUR risk is <= €45 for every kept pair; over-cap pairs are skipped",
+     test_risk_capped_across_pairs)
 
 
 print(f"\n{BOLD}{'='*70}{RESET}")

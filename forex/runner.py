@@ -342,16 +342,28 @@ RSI_LIVE_LOT_RUNG = 10_000
 RSI_LIVE_LOT_MIN  = 10_000
 RSI_LIVE_LOT_MAX  = 100_000
 
-# 2026-08-31: explicit user decision -- "one pair minimum 45 Euro" = target a
-# FIXED ~EUR45 loss if the stop is hit, UNIFORM across pairs regardless of
-# stop width, instead of the equity-% + 10k-lot-ladder combo above (which
-# gave wildly uneven realised risk: ~EUR8 on MXNUSD vs ~EUR73 on GBPUSD for
-# the same nominal sizing). When this is set, RSI on the real-money accounts
-# sizes for exactly this EUR risk (via strategy_rsi.size_position's
-# risk_amount param), floors to Saxo's 1,000-unit increment, and skips
-# _snap_rsi_live_lot -- only RSI_LIVE_LOT_MAX still applies, as a ceiling so a
-# very tight-stop pair can't build an oversized notional. Set to None to fall
-# back to the equity-% + 10k-ladder behaviour. SIM is never affected.
+# 2026-08-31: explicit user decision -- cap RSI's per-trade risk on the
+# real-money accounts at a FIXED EUR45 MAXIMUM loss-if-stopped, uniform
+# across pairs regardless of stop width, instead of the equity-% +
+# 10k-lot-ladder combo above (which gave wildly uneven realised risk:
+# ~EUR8 on MXNUSD vs ~EUR73 on GBPUSD -- the ladder snaps SIZE, not RISK).
+# Rules the user set explicitly:
+#   1. EUR45 = MAXIMUM risk, never a floor/target.
+#   2. Round the lot DOWN to Saxo's 1,000-unit increment.
+#   3. If even one min-lot would risk more than EUR45 -> SKIP the trade.
+#   4. The round-trip commission stays a SEPARATE edge/cost filter
+#      (MIN_EDGE_TO_COST_RATIO, unchanged) -- not folded into sizing.
+# Implemented via strategy_rsi.size_position's `risk_amount` param (an
+# absolute ceiling; it floors down and returns 0 below one lot). The
+# EUR45 is converted to the pair's quote currency with _eur_per_unit; if
+# that rate is unavailable the trade is skipped (no looser %-based
+# fallback on real money). _snap_rsi_live_lot is bypassed entirely.
+# RSI_LIVE_LOT_MAX still applies as a pure sanity backstop (it never binds
+# at EUR45 risk). Set to None to revert to the equity-% + 10k-ladder path.
+# SIM is never affected.
+#
+# History: the first cut this same day rounded UP and treated EUR45 as a
+# minimum -- user corrected it to the max/round-down/skip rules above.
 RSI_LIVE_FIXED_RISK_EUR: float | None = 45.0
 
 
@@ -2659,9 +2671,13 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 and RSI_LIVE_FIXED_RISK_EUR):
             _q_ccy   = sig["symbol"][3:6] if len(sig["symbol"]) >= 6 else ""
             _eur_per = _eur_per_unit(_q_ccy, akey)
-            if _eur_per:
-                rp_kw["risk_amount"] = RSI_LIVE_FIXED_RISK_EUR / _eur_per
-                rp_kw.pop("risk_pct", None)
+            if not _eur_per:
+                logger.warning(f"  [{strat_name}] SKIP {sym}: no live EUR rate for "
+                               f"{_q_ccy} — can't enforce the €{RSI_LIVE_FIXED_RISK_EUR:.0f} "
+                               f"risk cap, not falling back to %-based sizing on real money")
+                continue
+            rp_kw["risk_amount"] = RSI_LIVE_FIXED_RISK_EUR / _eur_per
+            rp_kw.pop("risk_pct", None)
         if "units" in sig:
             qty = sig["units"]   # london_breakout pre-computes sizing from SEK capital
         else:
@@ -2680,9 +2696,14 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             qty = strat_mod.size_position(eq_quote, sig["atr"],
                                           pair_info["min_units"], **rp_kw)
             if qty <= 0:
-                logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] — risk budget "
-                            f"doesn't naturally justify even the {pair_info['min_units']:,.0f}-unit "
-                            f"minimum at current capital; not forcing an oversized trade")
+                if rp_kw.get("risk_amount") is not None:
+                    logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] — one "
+                                f"{pair_info['min_units']:,.0f}-unit lot would risk more than the "
+                                f"€{RSI_LIVE_FIXED_RISK_EUR:.0f} cap (stop too wide for this pair)")
+                else:
+                    logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] — risk budget "
+                                f"doesn't naturally justify even the {pair_info['min_units']:,.0f}-unit "
+                                f"minimum at current capital; not forcing an oversized trade")
                 continue
 
             # 2026-08-29: RSI on a real-money account snaps to a 10k-100k
@@ -2695,14 +2716,16 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             if (ACCOUNT_ENV in ("live", "live_eur") and strat_name == "rsi"
                     and pair_info["min_units"] <= RSI_LIVE_LOT_RUNG):
                 if RSI_LIVE_FIXED_RISK_EUR:
-                    # Fixed-EUR-risk mode: size_position already floored qty
-                    # to 1,000-unit increments for the ~EUR45 target. Only
-                    # apply the ceiling so a very tight-stop pair can't build
-                    # an oversized notional.
+                    # Fixed-EUR-risk-CEILING mode: size_position already
+                    # rounded qty DOWN to 1,000-unit increments so realised
+                    # risk <= €45 (and returned 0 -> skipped above if one
+                    # lot already exceeded it). RSI_LIVE_LOT_MAX is only a
+                    # sanity backstop here; it never binds at €45 risk.
                     capped = min(qty, RSI_LIVE_LOT_MAX)
                     if capped != qty:
-                        logger.info(f"  [{strat_name}] {sym}: risk-sized {qty:,} → "
-                                    f"{capped:,} (LIVE max-lot cap {RSI_LIVE_LOT_MAX:,})")
+                        logger.warning(f"  [{strat_name}] {sym}: {qty:,} → {capped:,} "
+                                       f"(LIVE max-lot backstop {RSI_LIVE_LOT_MAX:,} hit — "
+                                       f"unexpected at €45 risk, check ATR/stop)")
                     qty = capped
                 else:
                     snapped = _snap_rsi_live_lot(qty)
