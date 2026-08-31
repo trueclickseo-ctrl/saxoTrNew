@@ -896,6 +896,49 @@ running (not just silence-means-fine) · sent every {HEARTBEAT_EVERY_HOURS}h</di
         print(f"[{label}] HEARTBEAT EMAIL FAILED to send: {exc}", file=sys.stderr)
 
 
+_VENUE_DOWN_FLAG = os.path.join(DATA_DIR, "forex_venue_down.flag")
+
+
+def _venue_down_fast_retry(verbose: bool = False) -> None:
+    """forex/runner.py writes data/forex_venue_down.flag when its order-venue
+    circuit breaker trips (Saxo's order endpoint rejecting everything). While
+    that flag is fresh, re-fire "ATOS Forex Intraday Scan" ahead of its
+    normal 30-45 min cadence so real fills resume as soon as Saxo answers --
+    a rejected/paper-filled run clears nothing, a clean run deletes the flag.
+    SIM-only (the scan task), no LIVE task is ever started here."""
+    try:
+        if not os.path.exists(_VENUE_DOWN_FLAG):
+            return
+        age_min = (datetime.now().timestamp() - os.path.getmtime(_VENUE_DOWN_FLAG)) / 60
+        if age_min > 180:   # stale flag (>3h) -- runner should have cleared it; don't spin
+            if verbose:
+                print(f"[venue-retry] flag is {age_min:.0f} min old, ignoring")
+            return
+        info = _query_task_info("ATOS Forex Intraday Scan")
+        if not info or "error" in info:
+            return
+        if info.get("state") == "Running":
+            if verbose:
+                print("[venue-retry] Intraday Scan already running, not re-firing")
+            return
+        last_run = info.get("last_run")
+        if last_run and (datetime.now() - last_run) < timedelta(minutes=12):
+            if verbose:
+                print("[venue-retry] Intraday Scan ran <12 min ago, letting it be")
+            return
+        subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+             "Start-ScheduledTask -TaskName 'ATOS Forex Intraday Scan'"],
+            capture_output=True, text=True, timeout=30,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        print(f"[venue-retry] re-fired 'ATOS Forex Intraday Scan' "
+              f"(venue-down flag {age_min:.0f} min old, last scan "
+              f"{(datetime.now() - last_run).total_seconds()/60:.0f} min ago)")
+    except Exception as exc:
+        print(f"[venue-retry] failed: {exc}", file=sys.stderr)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Verify scheduled trading tasks actually ran")
     ap.add_argument("--verbose", action="store_true", help="print status for every task, not just failures")
@@ -969,6 +1012,8 @@ def main() -> None:
         if args.verbose:
             for f in auto_fixed:
                 print(f"[{label}] AUTO-FIXED: {f}")
+
+    _venue_down_fast_retry(verbose=args.verbose)
 
     # Heartbeat: positive confirmation the scans actually ran, independent of
     # whether anything failed -- see _send_heartbeat's docstring. Due when

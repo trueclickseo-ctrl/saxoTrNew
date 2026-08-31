@@ -671,6 +671,34 @@ PROFIT_LADDER_TRAIL_ATR_MULT     = 1.00
 EXIT_ADVISOR_MODE = "shadow"   # "shadow" | (future: "active")
 
 
+# ── SIM paper-fill fallback (2026-08-31) ─────────────────────────────────────
+# Saxo's SIM order engine has had two multi-hour outages in a week
+# (2026-08-28, 2026-08-31 -- both "CouldNotCompleteRequest (90)" on every
+# POST /trade/v2/orders while reads/quotes kept working fine). During those
+# the whole SIM forward-test stalls: strategies generate signals, none fill.
+#
+# When enabled and ACCOUNT_ENV == "sim", a rejected SIM ENTRY is booked
+# LOCALLY instead of dropped -- at the live Saxo quote, with a "PAPER-"
+# order id and pos["paper"] = True. From then on it is managed entirely by
+# ATOS's own exit logic (trailing / breakeven / profit-ladder / should_exit)
+# marked against real Saxo quotes, and closed locally too. No broker order
+# is ever placed, amended, or cancelled for it. housekeeping/safeguard skip
+# PAPER- positions (they have no Saxo counterpart, by design).
+#
+# LIVE is NEVER paper-filled -- _sim_paper_fill_enabled() hard-checks
+# ACCOUNT_ENV == "sim". This is a testing-continuity tool, not a trading
+# feature.
+SIM_PAPER_FILL_ON_REJECT = True
+
+
+def _sim_paper_fill_enabled() -> bool:
+    return SIM_PAPER_FILL_ON_REJECT and ACCOUNT_ENV == "sim"
+
+
+def _is_paper_position(pos: dict) -> bool:
+    return bool(pos.get("paper"))
+
+
 def _profit_ladder_active(strat_name: str) -> bool:
     return (ACCOUNT_ENV in PROFIT_LADDER_ACCOUNTS
             and strat_name in PROFIT_LADDER_STRATEGIES)
@@ -772,20 +800,42 @@ def _resolve_tp_price(sig: dict, direction: str) -> float:
 # (tests, a manual loop) start clean.
 CIRCUIT_BREAKER_MAX_CONSECUTIVE_REJECTS = 8
 
-_order_circuit = {"consecutive_rejects": 0, "open": False, "notified": False}
+# Written when the circuit trips; scheduler_watchdog.py sees it and re-fires
+# "ATOS Forex Intraday Scan" ahead of its normal cadence (a "fast retry" so
+# real fills resume sooner once Saxo recovers). Cleared by a clean run.
+VENUE_DOWN_FLAG = os.path.join(DATA_DIR, "forex_venue_down.flag")
+
+_order_circuit = {
+    "consecutive_rejects": 0, "open": False, "notified": False,
+    "blocked": [],        # [(strategy, sym, direction, paper_filled)] this run
+    "last_saxo_error": "",
+}
 
 
 def _reset_order_circuit() -> None:
-    _order_circuit["consecutive_rejects"] = 0
-    _order_circuit["open"] = False
-    _order_circuit["notified"] = False
+    _order_circuit.update({"consecutive_rejects": 0, "open": False,
+                           "notified": False, "blocked": [], "last_saxo_error": ""})
 
 
 def _order_circuit_is_open() -> bool:
     return _order_circuit["open"]
 
 
-def _record_entry_result(rejected: bool) -> None:
+def _note_blocked_signal(strategy: str, sym: str, direction: str, paper_filled: bool) -> None:
+    """Record a signal that Saxo couldn't fill this run (for the venue-down
+    email). `paper_filled` = it was booked locally instead of dropped."""
+    _order_circuit["blocked"].append((strategy, sym, direction, paper_filled))
+
+
+def _clear_venue_down_flag() -> None:
+    try:
+        if os.path.exists(VENUE_DOWN_FLAG):
+            os.remove(VENUE_DOWN_FLAG)
+    except Exception:
+        pass
+
+
+def _record_entry_result(rejected: bool, saxo_error: str = "") -> None:
     """Feed one entry-order outcome to the circuit breaker. `rejected` True
     means Saxo returned no entry order id (nothing opened). Any success
     resets the consecutive-rejection count."""
@@ -793,23 +843,41 @@ def _record_entry_result(rejected: bool) -> None:
         _order_circuit["consecutive_rejects"] = 0
         return
     _order_circuit["consecutive_rejects"] += 1
+    if saxo_error:
+        _order_circuit["last_saxo_error"] = saxo_error
     if (not _order_circuit["open"] and
             _order_circuit["consecutive_rejects"] >= CIRCUIT_BREAKER_MAX_CONSECUTIVE_REJECTS):
         _order_circuit["open"] = True
         logger.error(
             f"  [circuit-breaker] {_order_circuit['consecutive_rejects']} consecutive entry "
-            f"rejections — Saxo's order endpoint looks down. Halting NEW entries for the rest "
-            f"of this run (exits and stop-loss healing continue). Next scheduled scan retries."
+            f"rejections — Saxo's order endpoint looks down. "
+            + ("Paper-filling the rest this run (SIM). " if _sim_paper_fill_enabled()
+               else "Halting NEW entries for the rest of this run (exits/stop-heal continue). ")
+            + "Watchdog will retry the scan ahead of schedule."
         )
-        if not _order_circuit["notified"]:
-            _order_circuit["notified"] = True
-            try:
-                fx_notify.send_order_venue_down(
-                    account_env=ACCOUNT_ENV,
-                    consecutive=_order_circuit["consecutive_rejects"],
-                )
-            except Exception as exc:
-                logger.warning(f"  [circuit-breaker] venue-down email failed: {exc}")
+        try:
+            with open(VENUE_DOWN_FLAG, "w", encoding="utf-8") as f:
+                f.write(datetime.now().isoformat())
+        except Exception:
+            pass
+
+
+def _venue_down_email_if_needed() -> None:
+    """Called once at the end of a run: if the circuit tripped, send ONE
+    email naming every blocked/paper-filled signal + the real Saxo error."""
+    if not _order_circuit["open"] or _order_circuit["notified"]:
+        return
+    _order_circuit["notified"] = True
+    try:
+        fx_notify.send_order_venue_down(
+            account_env=ACCOUNT_ENV,
+            consecutive=_order_circuit["consecutive_rejects"],
+            saxo_error=_order_circuit["last_saxo_error"],
+            blocked=list(_order_circuit["blocked"]),
+            paper_fill=_sim_paper_fill_enabled(),
+        )
+    except Exception as exc:
+        logger.warning(f"  [circuit-breaker] venue-down email failed: {exc}")
 
 
 # ── Saxo HTTP helpers ─────────────────────────────────────────────────────────
@@ -2210,7 +2278,10 @@ def _apply_breakeven_stop(key: str, pos: dict, df, strat_name: str,
 
     pos["stop_price"] = entry_price
 
-    if dry_run:
+    if dry_run or _is_paper_position(pos):
+        # paper position: no broker order to amend, the local stop_price
+        # (just set) is the whole stop -- _run_exits marks it against real
+        # quotes and closes locally when it's hit.
         pos["breakeven_triggered"] = True
         return True
 
@@ -2280,8 +2351,8 @@ def _apply_profit_ladder_stop(key: str, pos: dict, df, strat_name: str,
         pos["ladder_rung_r"] = round(r_now, 2)
 
     pos["stop_price"] = round(new_stop, 6)
-    if dry_run:
-        return True
+    if dry_run or _is_paper_position(pos):
+        return True   # local stop_price is the whole stop for a paper position
 
     stop_oid = pos.get("stop_order_id")
     if stop_oid and stop_oid not in ("synced", None, "") and \
@@ -2460,7 +2531,8 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
         # own quote currency, right before closing it — captured while the
         # position still exists to look up. Falls back to our own rate
         # estimate below if this lookup fails (network hiccup, no match).
-        net_pnl_quote = None if dry_run else _position_net_pnl_quote_ccy(uic, qty, direction, entry)
+        _paper = _is_paper_position(pos)
+        net_pnl_quote = None if (dry_run or _paper) else _position_net_pnl_quote_ccy(uic, qty, direction, entry)
 
         order = {"AccountKey": akey, "Uic": uic, "AssetType": ASSET_TYPE,
                  "Amount": qty, "BuySell": close_side, "OrderType": "Market",
@@ -2470,6 +2542,12 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
         if dry_run:
             logger.info(f"  [DRY] {close_side:<4} {qty:,}x {sym}[{tag}] "
                         f"({strat_name}) — {reason}  P&L {pnl_pct:+.2f}%")
+        elif _paper:
+            # paper position -- no broker order to cancel or send; the close
+            # is booked locally at the live quote. P&L below falls back to
+            # the raw price calc (no Saxo cost -- there was no real fill).
+            logger.info(f"  [PAPER] CLOSE {qty:,}x {sym}[{tag}] "
+                        f"({strat_name}) — {reason}  P&L {pnl_pct:+.2f}%  @ {live_px:.5f}")
         else:
             # This close is happening because OUR should_exit() logic fired
             # (hard-stop/time-stop/trailing), not because the broker's own
@@ -2529,15 +2607,20 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
                        else (pos["entry_price"] - live_px) * qty)
             won_for_ml = (net_pnl_quote > 0) if net_pnl_quote is not None else (raw_pnl > 0)
             signal_filter.label_outcome(key, won=won_for_ml, module=_pnl_module())
-            fx_notify.send_trade_closed(
-                strategy=strat_name, symbol=sym, direction=direction,
-                entry=float(pos.get("entry_price", live_px)),
-                exit_px=live_px, pnl_pct=pnl_pct, units=qty,
-                reason=reason,
-                session=pos.get("lbo_session", "") if strat_name in ("london_breakout", "london_breakout_v2") else "",
-                live=(ACCOUNT_ENV in ("live", "live_eur")),
-                net_pnl_native=net_pnl_quote,
-            )
+            if not _paper:
+                # paper closes are silent (like paper entries) -- they'd be
+                # dozens of emails during a Saxo outage. Visibility is via
+                # the [PAPER] log line, the ledger (order_id LIKE 'PAPER-%'),
+                # the observation cards, and the daily summary.
+                fx_notify.send_trade_closed(
+                    strategy=strat_name, symbol=sym, direction=direction,
+                    entry=float(pos.get("entry_price", live_px)),
+                    exit_px=live_px, pnl_pct=pnl_pct, units=qty,
+                    reason=reason,
+                    session=pos.get("lbo_session", "") if strat_name in ("london_breakout", "london_breakout_v2") else "",
+                    live=(ACCOUNT_ENV in ("live", "live_eur")),
+                    net_pnl_native=net_pnl_quote,
+                )
 
             # Forward-SIM observation exit card (2026-08-27) -- only if this
             # position had an entry card (older positions opened before
@@ -2583,10 +2666,13 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
     # the expensive H1 fetches / generate_signals below included -- and let
     # the next scheduled scan retry. Exits/stop-heal are unaffected (separate
     # call path). See _record_entry_result.
-    if not dry_run and _order_circuit_is_open():
+    if not dry_run and _order_circuit_is_open() and not _sim_paper_fill_enabled():
         logger.info(f"  [{strat_name}] entries skipped — order-venue circuit breaker open "
                     f"(Saxo rejected {CIRCUIT_BREAKER_MAX_CONSECUTIVE_REJECTS}+ entries in a row this run)")
         return 0
+    # With paper-fill on (SIM), the circuit being open does NOT stop entries
+    # -- every signal is still generated and booked locally; the real order
+    # attempt is just skipped for speed (see the place_with_stop call site).
 
     # Gap strategy (and its "gap_weekend" A/B sibling, 2026-08-29): only run
     # during defined session windows (weekly/london/newyork/tokyo).
@@ -2920,37 +3006,56 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                         f"({strat_name})  @ {sig['close']:.5f}  "
                         f"stop={sig['stop_price']:.5f}  tp={tp:.5f}  {detail}{agree_tag}")
         else:
-            entry_oid, stop_oid, tp_oid = saxo_order.place_with_stop(
-                post_fn           = _post,
-                account_key       = akey,
-                uic               = uic,
-                asset_type        = ASSET_TYPE,
-                amount            = qty,
-                buy_sell          = direction,
-                stop_price        = sig["stop_price"],
-                label             = f"{strat_name}:{sym}",
-                take_profit_price = tp,
-                symbol            = sym,
-                price_decimals    = get_price_decimals(sym),
-                tick_size         = _metals_tick_size(sym),
-            )
+            if _sim_paper_fill_enabled() and _order_circuit_is_open():
+                # Venue already confirmed down this run — don't waste the
+                # ~4 API calls + timeouts per signal; go straight to paper.
+                entry_oid = stop_oid = tp_oid = None
+            else:
+                entry_oid, stop_oid, tp_oid = saxo_order.place_with_stop(
+                    post_fn           = _post,
+                    account_key       = akey,
+                    uic               = uic,
+                    asset_type        = ASSET_TYPE,
+                    amount            = qty,
+                    buy_sell          = direction,
+                    stop_price        = sig["stop_price"],
+                    label             = f"{strat_name}:{sym}",
+                    take_profit_price = tp,
+                    symbol            = sym,
+                    price_decimals    = get_price_decimals(sym),
+                    tick_size         = _metals_tick_size(sym),
+                )
             if entry_oid is None:
-                # Order rejected by Saxo — nothing was opened. Must not fall
-                # through to the pos_record block below (that would record a
-                # phantom position that doesn't exist at the broker). Skip
-                # this signal and keep going — one rejection must not stop
-                # the rest of this strategy's signals or any strategy queued
-                # after it (see saxo_order._place_entry_then_stop docstring).
-                logger.warning(f"  [{strat_name}] SKIP {sym}[{direction}] "
-                                f"— entry order rejected, no position opened")
-                _record_entry_result(rejected=True)
-                if _order_circuit_is_open():
-                    # Threshold hit on this rejection — stop this strategy's
-                    # remaining signals now; every later strategy is skipped
-                    # at the top of _run_entries.
-                    break
-                continue
-            _record_entry_result(rejected=False)
+                # Order rejected by Saxo — nothing was opened at the broker.
+                _saxo_err = getattr(saxo_order, "LAST_ENTRY_ERROR", "") or "order endpoint rejection"
+                _record_entry_result(rejected=True, saxo_error=_saxo_err)
+                _note_blocked_signal(strat_name, sym, direction, _sim_paper_fill_enabled())
+                if _sim_paper_fill_enabled():
+                    # SIM only: book the fill LOCALLY so the forward-test
+                    # keeps running through a Saxo SIM order-engine outage.
+                    # PAPER- ids + pos["paper"]=True make every downstream
+                    # broker touch a no-op; the position is managed by
+                    # ATOS's own exit logic against real quotes.
+                    fill_px = _live_price(uic, akey) or float(sig["close"])
+                    entry_oid = "PAPER-" + uuid.uuid4().hex[:12]
+                    stop_oid  = "PAPER-STOP"
+                    tp_oid    = "PAPER-TP"
+                    sig["close"] = fill_px   # record the position at the real fill price
+                    logger.warning(f"  [{strat_name}] PAPER-FILL {sym}[{direction}] "
+                                   f"{qty:,} @ {fill_px:.5f} — Saxo SIM rejected the order; "
+                                   f"booked locally, managed by ATOS stop/TP/exit logic")
+                    # falls through to the pos_record block, tagged paper below
+                else:
+                    # Not paper-filling: skip this signal and keep going —
+                    # one rejection must not stop the rest of this strategy's
+                    # signals or any strategy queued after it.
+                    logger.warning(f"  [{strat_name}] SKIP {sym}[{direction}] "
+                                    f"— entry order rejected, no position opened")
+                    if _order_circuit_is_open():
+                        break
+                    continue
+            else:
+                _record_entry_result(rejected=False)
             tp_info = f"  tp_order={tp_oid}" if tp_oid else ""
             logger.info(f"  {direction} {entry_oid}: {qty:,}x {sym}[{tag}] "
                         f"({strat_name})  @ {sig['close']:.5f}  stop={sig['stop_price']:.5f}"
@@ -2972,6 +3077,8 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             "tp_order_id":    tp_oid if not dry_run else None,
             "sized_under_cap": True,
         }
+        if isinstance(entry_oid, str) and entry_oid.startswith("PAPER-"):
+            pos_record["paper"] = True   # ATOS-simulated fill; see _sim_paper_fill_enabled()
         if "gap_target" in sig:
             pos_record["gap_target"]   = sig["gap_target"]
             pos_record["friday_close"] = sig.get("friday_close", sig["gap_target"])
@@ -3549,6 +3656,13 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
     else:
         state["last_run"] = datetime.now().isoformat()
         _save_state(state)
+
+    # ── Order-venue circuit breaker: one email at end of run + retry flag ─────
+    if not dry_run:
+        if _order_circuit_is_open():
+            _venue_down_email_if_needed()
+        else:
+            _clear_venue_down_flag()   # a clean run -> Saxo is answering again
 
     # ── Strategy learning pass — update weights from today's closed trades ────
     try:

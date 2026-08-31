@@ -162,47 +162,72 @@ def send_token_expired(scheduled_time: str = "", live: bool = False) -> None:
     _send(subject, _wrap(f"{'LIVE — ' if live else ''}Saxo Token Expired — Refresh Required", body))
 
 
-def send_order_venue_down(account_env: str = "sim", consecutive: int = 0) -> None:
+def send_order_venue_down(account_env: str = "sim", consecutive: int = 0,
+                          saxo_error: str = "", blocked: list | None = None,
+                          paper_fill: bool = False) -> None:
     """Sent once per run when the order-venue circuit breaker trips: Saxo has
     rejected `consecutive` entry orders in a row (the "CouldNotCompleteRequest
-    (90)" outage pattern seen 2026-08-28 and 2026-08-31), so the runner has
-    stopped attempting NEW entries for the rest of this scan. Exits and
-    stop-loss healing keep running. Best-effort — never raises."""
+    (90)" outage pattern, 2026-08-28 / 2026-08-31). `saxo_error` is the real
+    error string from the last rejection; `blocked` is
+    [(strategy, sym, direction, paper_filled), ...] for every signal Saxo
+    couldn't fill this run; `paper_fill` = SIM booked them locally instead of
+    dropping them. Best-effort — never raises."""
     try:
         now      = datetime.now()
         run_time = now.strftime("%H:%M")
         today    = now.strftime("%Y-%m-%d")
         env_name = {"live": "LIVE (real money)", "live_eur": "LIVE EUR (real money)"}.get(
             account_env, "SIM")
+        blocked = blocked or []
+        n_paper = sum(1 for b in blocked if len(b) > 3 and b[3])
+        n_drop  = len(blocked) - n_paper
+
+        if paper_fill:
+            headline = (f"Saxo's SIM order engine rejected every entry this run "
+                        f"(<code>{saxo_error or 'CouldNotCompleteRequest'}</code>). "
+                        f"ATOS <strong>paper-filled {n_paper} signal(s)</strong> locally at the "
+                        f"live quote so the forward-test keeps running — they are managed by "
+                        f"ATOS's own stop/TP/exit logic, no broker order exists for them.")
+        else:
+            headline = (f"Saxo rejected <strong>{consecutive} entry orders in a row</strong> on the "
+                        f"{env_name} account (<code>{saxo_error or 'CouldNotCompleteRequest'}</code>). "
+                        f"The scan <strong>stopped placing new entries</strong> for the rest of this "
+                        f"run; {n_drop} signal(s) were not taken.")
+
+        rows = "".join(
+            f"<tr><td class='sym'>{s}</td><td>{sy}</td><td>{d}</td>"
+            f"<td class='{'pos' if (len(b) > 3 and b[3]) else 'neg'}'>"
+            f"{'PAPER-FILLED' if (len(b) > 3 and b[3]) else 'not taken'}</td></tr>"
+            for b in blocked for (s, sy, d) in [(b[0], b[1], b[2])]
+        ) or "<tr><td colspan='4' class='muted'>(none recorded)</td></tr>"
+
         body = f"""
         <span class="badge warn">⚠ ORDER VENUE DOWN</span>
-        <p style="color:#d29922; margin-top:14px">
-          Saxo rejected <strong>{consecutive} entry orders in a row</strong> on the
-          {env_name} account (<code>CouldNotCompleteRequest</code>). The
-          <strong>{run_time} PKT</strong> scan has <strong>stopped placing new
-          entries</strong> for the rest of this run to avoid piling up stranded
-          working orders against a dead endpoint.
-        </p>
+        <p style="color:#d29922; margin-top:14px">{headline}</p>
         <div class="metric-row" style="margin-top:14px">
           <div class="metric"><div class="lbl">Run</div>
-            <div class="val" style="font-size:14px">{run_time} PKT</div></div>
-          <div class="metric"><div class="lbl">Date</div>
-            <div class="val" style="font-size:14px">{today}</div></div>
-          <div class="metric"><div class="lbl">Rejections</div>
-            <div class="val" style="font-size:14px">{consecutive} in a row</div></div>
+            <div class="val" style="font-size:14px">{run_time} PKT · {today}</div></div>
+          <div class="metric"><div class="lbl">Consecutive rejects</div>
+            <div class="val" style="font-size:14px">{consecutive}</div></div>
+          <div class="metric"><div class="lbl">Signals this run</div>
+            <div class="val" style="font-size:14px">{n_paper} paper · {n_drop} dropped</div></div>
         </div>
+        <h3>Signals Saxo couldn't fill</h3>
+        <table><thead><tr><th>Strategy</th><th>Pair</th><th>Side</th><th>Outcome</th></tr></thead>
+        <tbody>{rows}</tbody></table>
         <h3>What still ran</h3>
-        <p class="muted">Exits and stop-loss healing continue every cycle — open
-          positions stay managed. Only NEW entries are paused, and only for this
-          run; the next scheduled scan retries from scratch.</p>
+        <p class="muted">Exits and stop-loss healing run every cycle — open positions
+          stay managed. The watchdog re-fires the scan ahead of its normal cadence so
+          real fills resume as soon as Saxo answers.</p>
         <h3>Action</h3>
-        <p class="muted">Usually nothing — this clears when Saxo's order endpoint
-          recovers. If it persists for hours, check Saxo service status and the
-          count of orphaned working orders on the account.</p>
+        <p class="muted">Usually nothing — clears when Saxo's order endpoint recovers.
+          {'Paper positions convert to normal SIM once fills resume (new entries only; existing paper trades keep being managed locally).' if paper_fill else ''}</p>
         """
         tag = "[LIVE] " if account_env in ("live", "live_eur") else ""
-        subject = f"{tag}FX Autopilot ⚠ ORDER VENUE DOWN — entries paused [{today} {run_time}]"
-        _send(subject, _wrap(f"{env_name} — Saxo Order Venue Down — Entries Paused", body))
+        subject = (f"{tag}FX Autopilot ⚠ ORDER VENUE DOWN — "
+                   f"{n_paper} paper-filled [{today} {run_time}]" if paper_fill
+                   else f"{tag}FX Autopilot ⚠ ORDER VENUE DOWN — entries paused [{today} {run_time}]")
+        _send(subject, _wrap(f"{env_name} — Saxo Order Venue Down", body))
     except Exception as exc:  # notifier must never crash the runner
         print(f"  [fx_notifier] send_order_venue_down FAILED: {exc}", file=sys.stderr)
 
