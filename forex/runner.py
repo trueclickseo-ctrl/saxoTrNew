@@ -805,6 +805,36 @@ def _resolve_tp_price(sig: dict, direction: str) -> float:
             else sig["close"] - DEFAULT_TP_RR * stop_distance)
 
 
+def _ai_apply_decision_to_qty(qty: int, decision: dict, min_units: float,
+                              floor: float = 0.25) -> tuple[int, str | None]:
+    """AI Sprint 4: turn a Trading Copilot decision into a (possibly reduced)
+    order quantity. Pure -- no I/O, no globals.
+
+      REJECT           -> (0, reason)   caller treats qty<=0 as a skip
+      MODIFY (m < 1.0) -> (max(int(qty*m), min_units), note)   m clamped to [floor, 1.0]
+      APPROVE / HOLD / anything else / m>=1.0 -> (qty, None)   unchanged
+
+    The agent can only ever REDUCE size (multiplier <= 1.0, enforced here
+    AND in ai/agent/trading_copilot._coerce_decision). This never runs
+    unless ai_config.can_apply_decision(env) is True -- sim only, shadow
+    mode off."""
+    act = decision.get("action")
+    note = (decision.get("comment") or "")[:120]
+    if act == "REJECT":
+        return 0, f"AI Copilot REJECT: {note}"
+    if act == "MODIFY":
+        try:
+            m = max(float(floor), min(1.0, float(decision.get("size_multiplier", 1.0))))
+        except (TypeError, ValueError):
+            m = 1.0
+        if m < 1.0:
+            scaled = max(int(qty * m), int(min_units))
+            if scaled != qty:
+                return scaled, (f"AI Copilot MODIFY x{m:.2f} — "
+                                f"{qty:,} → {scaled:,} units ({note})")
+    return qty, None
+
+
 # ── Order-venue circuit breaker (2026-08-31) ─────────────────────────────────
 # When Saxo's order endpoint has an outage it rejects EVERY order with
 # "CouldNotCompleteRequest (90)" (seen 2026-08-28, and all day 2026-08-31:
@@ -2839,6 +2869,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
     entries = 0
     entered_syms: list[str] = []
     _ai_shadow_pending: list = []   # (sym, proposal, decision) -- flushed after the loop
+    _ai_decision_by_sym: dict = {}  # AI Sprint 4: latest decision per symbol, for the sizing hook
     for sig in signals:
         if entries >= slots_free:
             break
@@ -2880,11 +2911,20 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 )
                 _ai_log_proposal(_prop)
                 if (ai_config.agent_enabled_for(ACCOUNT_ENV)
-                        and ai_config.agent_strategy_allowed(strat_name)
-                        and not (ai_config.agent_dedup_enabled()
-                                 and _ai_already_evaluated(_prop))):
-                    _dec = ai_trading_copilot.evaluate_proposal(_prop)
-                    _ai_shadow_pending.append((sym, _prop, _dec))
+                        and ai_config.agent_strategy_allowed(strat_name)):
+                    # Sprint 4: when the agent may actually act on this
+                    # account (can_apply_decision -- sim only, agent on,
+                    # shadow_mode OFF), evaluate on EVERY rescan so the
+                    # sizing hook below always has a fresh decision. In pure
+                    # shadow mode the daily dedup still applies (cost).
+                    _ai_acting = ai_config.can_apply_decision(ACCOUNT_ENV)
+                    _ai_already = (ai_config.agent_dedup_enabled()
+                                   and _ai_already_evaluated(_prop))
+                    if _ai_acting or not _ai_already:
+                        _dec = ai_trading_copilot.evaluate_proposal(_prop)
+                        _ai_decision_by_sym[sym] = _dec
+                        if not _ai_already:
+                            _ai_shadow_pending.append((sym, _prop, _dec))
             except Exception as exc:
                 logger.warning(f"  [ai] advisory hook failed for {sym}: {exc}")
 
@@ -3004,6 +3044,32 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                         logger.info(f"  [{strat_name}] {sym}: risk-sized {qty:,} → "
                                     f"{snapped:,} (LIVE 10k–100k lot ladder)")
                     qty = snapped
+
+        # ── AI Sprint 4: apply the Trading Copilot's decision to sizing ──────
+        # Live ONLY when ai_config.can_apply_decision(ACCOUNT_ENV) is True:
+        # sim account + agent_enabled + shadow_mode OFF (config/ai.json). On
+        # main today shadow_mode is ON, so can_apply_decision("sim") is False
+        # and this whole block is inert -- it ships exactly as dormant as the
+        # Sprint 2/3 hooks did. LIVE can never reach here (can_apply_decision
+        # is hardcoded False for live/live_eur in ai/config.py).
+        #
+        # REJECT -> skip with the same `continue` shape as every deterministic
+        # skip above. MODIFY -> scale qty by size_multiplier (the agent has
+        # already clamped it to [MULTIPLIER_FLOOR, 1.0] and can only ever
+        # REDUCE), then floor back to the pair minimum. APPROVE/HOLD -> no
+        # change. Runs after every deterministic gate and BEFORE the cost
+        # gate so the commission check sees the real (reduced) order size.
+        if (ai_config is not None and ai_trading_copilot is not None
+                and ai_config.can_apply_decision(ACCOUNT_ENV)
+                and sym in _ai_decision_by_sym and "units" not in sig):
+            _ai_qty, _ai_note = _ai_apply_decision_to_qty(
+                qty, _ai_decision_by_sym[sym], pair_info["min_units"],
+                floor=ai_trading_copilot.MULTIPLIER_FLOOR)
+            if _ai_note:
+                logger.info(f"  [{strat_name}] {sym}[{direction}] {_ai_note}")
+            if _ai_qty <= 0:
+                continue
+            qty = _ai_qty
 
         # london_breakout/gap provide their own session-range-based target;
         # every other strategy gets a broker-side TP at DEFAULT_TP_RR times
@@ -3233,9 +3299,13 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
     # ── AI Sprint 3: flush shadow decisions with the real entered/skipped
     # outcome. Decision was already computed above; it is LOGGED, never
     # applied (Sprint 4 is where a decision can affect SIM sizing).
+    _ai_acted_this_run = bool(ai_config is not None
+                              and ai_config.can_apply_decision(ACCOUNT_ENV))
     for _s, _p, _d in _ai_shadow_pending:
         try:
-            _ai_log_shadow(_p, _d, entered=(_s in entered_syms))
+            _ai_log_shadow(_p, _d, entered=(_s in entered_syms),
+                           applied=(_ai_acted_this_run
+                                    and _d.get("action") in ("APPROVE", "REJECT", "MODIFY")))
             if _d.get("action") not in ("APPROVE", "HOLD"):
                 logger.info(f"  [ai:SHADOW] {strat_name}:{_s} — agent said "
                             f"{_d['action']} (x{_d.get('agent_size_multiplier', _d.get('size_multiplier'))}) "

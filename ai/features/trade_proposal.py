@@ -169,10 +169,14 @@ def _mark_evaluated(proposal: dict) -> None:
     _evaluated_today.add(trade_id(proposal))
 
 
-def log_shadow_decision(proposal: dict, decision: dict, entered: bool) -> None:
-    """Sprint 3: proposal + the agent's decision, logged together. The
-    decision is NEVER applied here -- `entered` records what ATOS actually
-    did so ai_shadow_report.py can compare."""
+def log_shadow_decision(proposal: dict, decision: dict, entered: bool,
+                        applied: bool = False) -> None:
+    """Sprint 3: proposal + the agent's decision, logged together.
+    `entered` records what ATOS actually did so ai_shadow_report.py can
+    compare. `applied` (Sprint 4) is True only when the decision actually
+    influenced sizing/entry this run -- i.e. can_apply_decision(env) was
+    True (sim, agent on, shadow_mode OFF). In pure shadow mode it stays
+    False and the decision was purely observational."""
     _mark_evaluated(proposal)
     _append(SHADOW_DECISIONS_LOG, {
         "trade_id": trade_id(proposal),
@@ -188,6 +192,7 @@ def log_shadow_decision(proposal: dict, decision: dict, entered: bool) -> None:
         "agent_size_multiplier": decision.get("size_multiplier"),
         "agent_comment": decision.get("comment"),
         "agent_meta": decision.get("_agent"),
+        "applied": bool(applied),
     })
 
 

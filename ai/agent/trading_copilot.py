@@ -25,10 +25,10 @@ import time
 
 import ai.config as ai_config
 
-# Hard bounds on the multiplier. FLOOR is the one number Sprint 4 leaves
-# open (a business call) -- until it's decided, the agent may propose down
-# to this, and the report will show whether it ever wanted to go lower.
-MULTIPLIER_FLOOR = 0.10
+# Hard bounds on the multiplier. FLOOR = 0.25 (D1, decided by the user
+# 2026-08-31): a MODIFY can cut a position to at most a quarter of the
+# mechanical size -- a true veto is a REJECT, not a near-zero multiplier.
+MULTIPLIER_FLOOR = 0.25
 MULTIPLIER_CEIL  = 1.00
 EVAL_TIMEOUT_S   = 25.0
 MAX_TOKENS       = 1024
@@ -51,9 +51,10 @@ relative to normal, and the quality/agreement of the signal itself.
 YOUR THREE ACTIONS
 - APPROVE  -- take the trade at the size the bot computed (size_multiplier = 1.0).
 - REJECT   -- skip it entirely (the bot treats this exactly like any other skip).
-- MODIFY   -- take it but REDUCE the size (size_multiplier strictly between 0.1 and
-             1.0). Use this when the trade is reasonable but the context argues for
-             less exposure than the mechanical size.
+- MODIFY   -- take it but REDUCE the size (size_multiplier between 0.25 and 1.0,
+             exclusive of 1.0). Use this when the trade is reasonable but the
+             context argues for less exposure than the mechanical size. If you
+             think it should be smaller than a quarter, that is a REJECT.
 
 HOW TO WEIGH THE INPUTS (guidance, not a formula -- use judgement)
 - regime.label: a mean-reversion (rsi/bb/pullback) signal in a strong TRENDING_* \
@@ -82,7 +83,7 @@ HARD RULES
 OUTPUT -- respond with ONLY this JSON object, no prose before or after:
 {
   "action": "APPROVE" | "REJECT" | "MODIFY",
-  "size_multiplier": number in (0, 1],   // 1.0 for APPROVE and REJECT
+  "size_multiplier": number in [0.25, 1.0],   // 1.0 for APPROVE and REJECT
   "adjusted_stop_loss": null,
   "adjusted_take_profit": null,
   "comment": "one sentence, <=200 chars: the single main reason for this call"

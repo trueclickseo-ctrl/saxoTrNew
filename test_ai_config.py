@@ -47,13 +47,22 @@ def _restore():
         os.remove(_TMP)
 
 
-def test_ships_off_on_clean_checkout():
-    # the real committed config/ai.json must have AI disabled
-    with open(_REAL, encoding="utf-8") as f:
-        cfg = json.load(f)
-    assert cfg.get("enabled_sim") is False, "config/ai.json must ship with enabled_sim=false"
-    assert aic.ai_enabled_for("sim") is False, "AI must be OFF for sim on a clean checkout"
-_run("ships OFF: committed config/ai.json disables AI for sim", test_ships_off_on_clean_checkout)
+def test_killswitch_defaults_are_off_in_code():
+    # The FAIL-SAFE DEFAULTS in code must stay OFF, independent of whatever
+    # the (deliberately mutable) committed config/ai.json currently sets --
+    # since 2026-08-31 that file is ENABLED for the live shadow study. The
+    # contract that must never regress is: no config, or a config missing a
+    # key, falls back to disabled + shadow.
+    assert aic._DEFAULTS["enabled_sim"] is False
+    assert aic._DEFAULTS["enabled_live_shadow"] is False
+    assert aic._DEFAULTS["agent_enabled"] is False
+    assert aic._DEFAULTS["shadow_mode"] is True
+    # and LIVE can never be an acting account no matter the config
+    assert "live" not in aic._AI_ACTING_ACCOUNTS
+    assert "live_eur" not in aic._AI_ACTING_ACCOUNTS
+    assert aic._AI_ACTING_ACCOUNTS == {"sim"}
+_run("kill-switch fail-safe defaults are OFF in code (config file is mutable)",
+     test_killswitch_defaults_are_off_in_code)
 
 
 def test_missing_file_is_disabled():

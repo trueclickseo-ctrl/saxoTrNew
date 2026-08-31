@@ -997,6 +997,37 @@ def main() -> None:
             else:
                 alerted_at.pop(name, None)
 
+        # AI shadow-study data-pipeline health. Separate concern from "did the
+        # task run": the AI hook inside the forex scan degrades silently to
+        # HOLD on any agent failure (dead ANTHROPIC_API_KEY, hit spend cap,
+        # broken import, network) and STILL writes a shadow row, so neither
+        # the result-code nor the log-freshness checks above can see it. This
+        # check reads data/ai_*.jsonl + config/ai.json and reports a
+        # degraded-rate / silent-hook / total-silence problem. Fully wrapped:
+        # a bug in here must never take down the real watchdog. Main watchdog
+        # only (not --only-forex). One dedup key for the whole group so a
+        # multi-problem pass emails all of them, not just the first.
+        try:
+            import ai_shadow_health
+            ai_problems = ai_shadow_health.check()
+        except Exception as exc:
+            ai_problems = []
+            if args.verbose:
+                print(f"[Scheduler Watchdog] ai_shadow_health check skipped: {exc}")
+        if args.verbose:
+            print(f"[{'FAIL' if ai_problems else 'ok  '}] AI Shadow Health: "
+                  f"{'; '.join(ai_problems) or 'healthy'}")
+        if ai_problems:
+            key = "AI Shadow Health"
+            unhealthy.append(key)
+            last_alert = alerted_at.get(key)
+            if not (last_alert and (datetime.now() - datetime.fromisoformat(last_alert))
+                    < timedelta(hours=REALERT_AFTER_HOURS)):
+                failures.extend(ai_problems)
+                alerted_at[key] = now_iso
+        else:
+            alerted_at.pop("AI Shadow Health", None)
+
     label = "Forex Watchdog" if args.only_forex else "Scheduler Watchdog"
     if failures:
         _send_alert(failures, label)

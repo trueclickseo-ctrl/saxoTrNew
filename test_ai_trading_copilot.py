@@ -184,9 +184,16 @@ _run("_run_entries: agent behind agent_enabled_for, decision logged not applied,
 
 
 def test_agent_default_off():
-    assert aic.agent_enabled_for("sim") is False
-    assert aic.agent_enabled_for("live") is False and aic.agent_enabled_for("live_eur") is False
-_run("agent_enabled_for is False by default for every account", test_agent_default_off)
+    # "default" = the fail-safe when config/ai.json is absent, NOT whatever
+    # the live committed file sets (it is ENABLED now for the shadow study).
+    _real = aic._CONFIG_PATH
+    aic._CONFIG_PATH = os.path.join(BASE_DIR, "config", "_test_copilot_missing.json")
+    try:
+        assert aic.agent_enabled_for("sim") is False
+        assert aic.agent_enabled_for("live") is False and aic.agent_enabled_for("live_eur") is False
+    finally:
+        aic._CONFIG_PATH = _real
+_run("agent_enabled_for is False when config/ai.json is absent (fail-safe)", test_agent_default_off)
 
 
 def test_shadow_decision_row_shape():

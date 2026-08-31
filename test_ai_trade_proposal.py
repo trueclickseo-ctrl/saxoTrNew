@@ -116,14 +116,21 @@ _run("the _run_entries hook is kill-switch-guarded, wrapped in try/except, and d
 
 
 def test_default_off_writes_nothing():
-    assert aic.ai_enabled_for("sim") is False, "AI ships OFF"
-    before = os.path.getsize(PROPOSALS_LOG) if os.path.exists(PROPOSALS_LOG) else -1
-    # simulate what the hook does when disabled: nothing
-    if aic.ai_enabled_for("sim"):
-        log_proposal({"x": 1})
-    after = os.path.getsize(PROPOSALS_LOG) if os.path.exists(PROPOSALS_LOG) else -1
-    assert before == after
-_run("with AI off (default), the proposal log is never written", test_default_off_writes_nothing)
+    # fail-safe: with config/ai.json absent, ai_enabled_for is False and the
+    # hook is a no-op. (The committed file is deliberately ENABLED now for
+    # the live shadow study -- this tests the mechanism, not that file.)
+    _real = aic._CONFIG_PATH
+    aic._CONFIG_PATH = os.path.join(BASE_DIR, "config", "_test_tp_missing.json")
+    try:
+        assert aic.ai_enabled_for("sim") is False, "missing config => AI off"
+        before = os.path.getsize(PROPOSALS_LOG) if os.path.exists(PROPOSALS_LOG) else -1
+        if aic.ai_enabled_for("sim"):
+            log_proposal({"x": 1})
+        after = os.path.getsize(PROPOSALS_LOG) if os.path.exists(PROPOSALS_LOG) else -1
+        assert before == after
+    finally:
+        aic._CONFIG_PATH = _real
+_run("with config absent (fail-safe), the proposal log is never written", test_default_off_writes_nothing)
 
 
 def test_log_proposal_appends_when_called():

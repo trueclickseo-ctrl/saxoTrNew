@@ -4,13 +4,13 @@
 >
 > **The shadow study is RUNNING** (`327e204`) — `claude-sonnet-5` scores every RSI signal on SIM + both real LIVE accounts and logs APPROVE/REJECT/MODIFY next to the real outcome. Nothing is applied (shadow on SIM; `can_apply_decision` hardcoded False for LIVE). Now: accumulate ~40+ resolved decisions spanning a user-confirmed adverse stretch, review weekly with `ai_shadow_report.py`.
 >
-> **Sprint 4 is NEXT, BLOCKED** on: that evidence sample + the two open decisions below (multiplier `FLOOR`; who rules "volatile enough").
+> **Sprint 4 CODE is shipped inert** (2026-08-31) — the SIM sizing hook exists but `can_apply_decision("sim")` is False under the committed `config/ai.json` (`shadow_mode:true`), so it is a no-op on `main`. Activation = flip `shadow_mode → false`, still **BLOCKED** on the evidence sample + the M5 adverse-window review. Run the SIM A/B + kill-switch drill at activation.
 >
-> Adjacent, feeding the same evidence base: exit-advisor Stage A shadow scorer (`fbc8f94`, roadmap #16/#8), RSI-signal-registry (`5646e30`, roadmap #4).
+> Adjacent, feeding the same evidence base: exit-advisor Stage A shadow scorer (`fbc8f94`, roadmap #16/#8), RSI-signal-registry (`5646e30`, roadmap #4). Pipeline health: `ai_shadow_health.py` (wired into `scheduler_watchdog.py`).
 >
 > **Live progress log: [`docs/atos_ai_tracker.md`](atos_ai_tracker.md)** — every AI commit, test count, decision, and the current blocker, kept current as work lands.
 >
-> **Open decisions still owed (Sprint 4):** (1) the multiplier `FLOOR` in `[FLOOR, 1.0]` — placeholder `MULTIPLIER_FLOOR = 0.10` in `ai/agent/trading_copilot.py`; (2) who rules a review window "volatile enough" — the plan says the user, explicitly, each time.
+> **Open decisions:** (1) multiplier `FLOOR` — ✅ **RESOLVED → `0.25`** (`MULTIPLIER_FLOOR` in `ai/agent/trading_copilot.py`); (2) who rules a review window "volatile enough" — still the user, explicitly, at the M5 review.
 
 Companion to [`docs/atos_ai_roadmap.md`](atos_ai_roadmap.md), which owns the *vision/governance* (v1 scope, autonomy levels, Trade Constitution, JSON schemas). This doc owns the *how and in what order* — six sprints, each with its own deliverable, its own test gate, and its own go/no-go before the next one starts. No sprint begins until the previous one's test gate is green. Nothing here touches LIVE; Sprint 5 (SIM A/B) is the ceiling for this plan, and rolling to LIVE is explicitly out of scope — it requires the separate written decision already mandated in the roadmap doc's governance rules.
 

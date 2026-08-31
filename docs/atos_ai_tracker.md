@@ -12,21 +12,31 @@ Running log of the AI layer's build. Update this file **whenever an AI change la
 
 | | |
 |---|---|
-| **Last sprint shipped** | Sprint 3 (`80e8b04`) + 3.5 cost-controls / shadow-on-LIVE (`aace238`), model → sonnet (`997aedf`) |
-| **Next sprint** | Sprint 4 — wire the agent's `size_multiplier` into SIM sizing (Level 2, SIM only) |
-| **Sprint 4 status** | **BLOCKED** — 2 open decisions + shadow-evidence sample now accumulating |
+| **Last sprint shipped** | Sprint 4 **code** — SIM sizing hook, ships **inert** (`shadow_mode:true` ⇒ `can_apply_decision("sim")` False). Sprint 3 (`80e8b04`) + 3.5 (`aace238`) + model → sonnet (`997aedf`) before it. |
+| **Next step** | Accumulate shadow evidence (M4), then the M5 review, then **flip `config/ai.json` `shadow_mode` → `false`** to activate Sprint 4 on SIM. |
+| **Sprint 4 status** | **Code shipped inert 2026-08-31.** D1 decided (`FLOOR = 0.25`). Activation still gated on M4 (~40 decisions) + M5 (user confirms an adverse window). Flipping `shadow_mode` is the whole activation — no further code. |
 | **AI live in production?** | **Shadow study RUNNING** (`327e204`, 2026-08-31) — `enabled_sim` + `enabled_live_shadow` + `agent_enabled` all true. `claude-sonnet-5` scores every RSI signal on SIM + both LIVE accounts and logs it. **Nothing applied** (`shadow_mode` true on SIM; `can_apply_decision` hardcoded False for LIVE). Pending: console spend cap + a reboot for the scheduled tasks to inherit `ANTHROPIC_API_KEY`. |
 | **AI touching LIVE money?** | No — impossible without a code change. LIVE can *shadow-log* (`enabled_live_shadow`) but `can_apply_decision("live")` / `("live_eur")` is hardcoded `False` (`_AI_ACTING_ACCOUNTS = {"sim"}`). |
 | **`anthropic` SDK** | `1.2.0`, installed 2026-08-31. `ANTHROPIC_API_KEY` set (User scope). End-to-end verified — `evaluate_proposal()` returned a real APPROVE. |
 
 ### ⏭️ NEXT STEP — right now
 
-**Nothing to build.** The shadow study is running; it just needs to accumulate. Two operator tasks, then wait:
+**Nothing to build.** The shadow study is running; it just needs to accumulate. One operator task left, then wait:
 
-1. **Anthropic console → Settings → Limits → set a monthly spend cap** (e.g. $10). Not done yet.
-2. **Reboot the PC** — so the scheduled scans inherit `ANTHROPIC_API_KEY` (interactive scans already have it; the scheduled ones don't until a restart / the 03:15 nightly reboot).
+1. **Anthropic console → Settings → Limits → set a monthly spend cap** (e.g. $10). **Still not done.**
+2. ✅ **Reboot done (2026-08-31).** Scheduled scans now inherit `ANTHROPIC_API_KEY` — verified: the 16:29 UTC SIM shadow decision has `agent_meta.ok=true` (real `claude-sonnet-5` call).
 3. **Wait ~1–3 weeks.** Every RSI signal on SIM + both LIVE accounts gets scored and logged to `data/ai_shadow_decisions.jsonl` (nothing applied).
 4. **Weekly:** `python ai_shadow_report.py`. It says "not enough" under 40 decisions, then shows APPROVE-vs-REJECT expectancy + flags candidate rough days.
+
+### Pipeline health monitoring (`ai_shadow_health.py`, 2026-08-31)
+
+The AI layer is wrapped in try/except everywhere: a broken `ANTHROPIC_API_KEY` / hit spend cap / import break makes `evaluate_proposal()` return `HOLD` silently **and a shadow row is still written** — so the file grows at the normal rate while nothing is actually evaluated. `scheduler_watchdog.py` only checks the *task ran*, not the AI sub-layer.
+
+`ai_shadow_health.check()` closes that gap — called every watchdog pass (main watchdog only, under one dedup key "AI Shadow Health", same 4h re-alert + email path). Flags:
+- **degraded rate** — >30% of the last 7d of decisions came back HOLD/degraded on a ≥8 sample;
+- **silent hook** — ≥3 distinct agent-eligible signals logged as proposals in 48h, none ever got a decision;
+- **total silence** — neither `data/ai_*.jsonl` written in >96h while the study is on.
+Runnable by hand: `python ai_shadow_health.py`. Tests: `test_2026_08_31_ai_shadow_health.py` (16 ✅). Only fires when `config/ai.json` has the study on; silent otherwise.
 
 The next *build* is **Sprint 4**, and it stays blocked until:
 - ~40+ resolved shadow decisions on SIM **AND** the user confirms the window included a real adverse/volatile stretch (D2), and
@@ -55,7 +65,7 @@ Plus: set a hard **monthly spend limit** on the console.
 | M3.5 | Cost controls + shadow-on-LIVE (log-only, can never act on LIVE) | ✅ | 2026-08-31 | `test_ai_config` two-tier gate asserts; live `evaluate_proposal()` verified |
 | **M4** | **Shadow evidence: ~40+ resolved decisions spanning a user-confirmed adverse stretch** | 🟡 **in progress** | — | `ai_shadow_report.py`; decisions accumulating from 2026-08-31 |
 | M5 | Review: does APPROVE beat REJECT on expectancy through a rough patch? | ⬜ | — | user + report, in conversation |
-| M6 | Sprint 4 — agent's `size_multiplier` changes SIM order size (Level 2, SIM only) | ⬜ blocked on M4/M5 + D1 | — | `test_ai_sizing_hook` + SIM A/B |
+| M6 | Sprint 4 — agent's `size_multiplier` changes SIM order size (Level 2, SIM only) | 🟡 **code shipped inert** 2026-08-31; activation blocked on M4/M5 | — | `test_2026_08_31_ai_sprint4_sizing_hook` (14 ✅); SIM A/B pending activation |
 | M7 | Sprint 5 — separate written go/no-go before anything further. LIVE acting is its own decision, not in this plan. | ⬜ | — | — |
 
 Autonomy ladder: currently **Level 1** (advisory, shadow). M6 = **Level 2** (semi-autonomous, SIM only). That is the ceiling of the current plan.
@@ -64,10 +74,10 @@ Autonomy ladder: currently **Level 1** (advisory, shadow). M6 = **Level 2** (sem
 
 ## Open decisions (owed by the user)
 
-| # | Decision | Where it bites | Current placeholder | Options |
-|---|---|---|---|---|
-| D1 | Multiplier **`FLOOR`** in `[FLOOR, 1.0]` — how far the agent may shrink a trade | `ai/agent/trading_copilot.py` `MULTIPLIER_FLOOR`; consumed by Sprint 4 sizing hook | `0.10` | `0.25` (can only quarter) · `0.10` (near-zero without a full REJECT) · "never below the pair's `min_units`" |
-| D2 | Who rules a shadow-review window **"volatile enough"** to pass the evidence gate | Sprints 3 & 4 exit criteria | Plan says: the **user**, explicitly, each review, in conversation — `ai_shadow_report.py` only surfaces candidate rough days | Confirm the plan's answer, or define a numeric rule instead |
+| # | Decision | Where it bites | Status |
+|---|---|---|---|
+| D1 | Multiplier **`FLOOR`** in `[FLOOR, 1.0]` — how far the agent may shrink a trade | `ai/agent/trading_copilot.py` `MULTIPLIER_FLOOR` + `forex/runner._ai_apply_decision_to_qty` | ✅ **RESOLVED 2026-08-31 → `0.25`** (a MODIFY can cut to at most a quarter; smaller = REJECT). Prompt + coerce clamp + runner helper all updated. |
+| D2 | Who rules a shadow-review window **"volatile enough"** to pass the evidence gate | M4/M5 exit criteria | ⬜ Open. Plan's answer stands: the **user**, explicitly, each review, in conversation — `ai_shadow_report.py` only surfaces candidate rough days. Confirm at the M5 review. |
 
 ---
 
@@ -108,10 +118,16 @@ Autonomy ladder: currently **Level 1** (advisory, shadow). M6 = **Level 2** (sem
 - **Enable = costs money per signal:** `config/ai.json` `enabled_sim:true` + `agent_enabled:true` + `ANTHROPIC_API_KEY`.
 - **Hardening (`22b9f75`, 2026-08-31):** the 19:05 intraday run logged `forex reconciliation failed: cannot import name 'log_shadow_decision'` — a partial-module import race (runner runs as a script, then is re-imported by the post-run safeguard/housekeeping pass; the AI import chain `trade_proposal → regime.classifier → forex.strategy` created a re-entrant edge). Fixed: `classify_regime` now imported **lazily inside `build_proposal()`**; `runner.py`'s `ai.*` imports wrapped in try/except → no-op stubs + `ai_config=None` guard on the hook. The deterministic engine now loads and reconciles even if the AI package fails to import entirely.
 
-### Sprint 4 — wire the multiplier into SIM sizing (Level 2) ⏳ NEXT, BLOCKED
-- **Not started.** Blocked on D1 + D2 above and a real shadow-evidence sample.
-- **Plan:** when `ai_enabled_for(env)` and `shadow_mode==false`, multiply the Risk-Engine `qty` by `size_multiplier` (clamp `[FLOOR,1.0]`); on `REJECT` → `continue` (same skip shape as spread/exposure/opposing-position skips). Strictly additive, runs after every deterministic check. SIM only.
-- **Test gate:** `test_ai_sizing_hook.py` (multiplier applies + clamps; REJECT → `place_with_stop` not called; shadow/off → qty byte-for-byte identical); SIM A/B (Version A off vs Version B Level 2) on WR/PF/expectancy/DD over a window incl. a user-agreed volatile stretch; kill-switch mid-run drill.
+### Sprint 4 — wire the multiplier into SIM sizing (Level 2) 🟡 CODE SHIPPED INERT
+- **Code shipped 2026-08-31, dormant.** `can_apply_decision("sim")` is False under the committed `config/ai.json` (`shadow_mode:true`), so the hook is a no-op on `main` — same "ships inert" property as Sprints 2 & 3. Activation = flip `shadow_mode` → `false`, gated on M4 evidence + the M5 review.
+- **D1 resolved → `FLOOR = 0.25`.** `ai/agent/trading_copilot.py` `MULTIPLIER_FLOOR = 0.25`; system prompt + `_coerce_decision` clamp updated to match.
+- **What shipped:**
+  - `forex/runner._ai_apply_decision_to_qty(qty, decision, min_units, floor=0.25)` — pure helper. `REJECT → (0, reason)`; `MODIFY → (max(int(qty*m), min_units), note)` with `m` clamped `[floor, 1.0]`; `APPROVE`/`HOLD`/`m≥1.0` → unchanged. Agent can only ever **reduce**.
+  - Runner hook in `_run_entries`, **after** `size_position()` and **before** the cost-clearance gate (so the commission check sees the real reduced size). `REJECT` → `continue`, the same skip shape as every deterministic gate. Guarded by `ai_config.can_apply_decision(ACCOUNT_ENV)` + `ai_trading_copilot is not None`.
+  - **Dedup bypass when acting:** in shadow mode the paid call is still de-duped once/day/signal; when `can_apply_decision` is True the agent is evaluated on **every rescan** so sizing always has a fresh decision (`_ai_acting` in `_run_entries`). Shadow-log rows stay de-duped (one/day).
+  - `log_shadow_decision(..., applied: bool)` — new field, `true` only when `can_apply_decision` was True this run and the action was APPROVE/REJECT/MODIFY. Lets `ai_shadow_report.py` separate "would have" from "did".
+- **Test gate:** `test_2026_08_31_ai_sprint4_sizing_hook.py` — 14 ✅ (FLOOR=0.25; helper REJECT/MODIFY/clamp/floor/no-amplify/bad-input; ships inert under committed config; `can_apply` sim-only & out-of-shadow-only; hook placement after sizing / before cost gate; `applied` flag logged; prompt reflects 0.25).
+- **Still owed before activation:** SIM A/B (Version A off vs B Level 2) on WR/PF/expectancy/DD over a window incl. a user-agreed volatile stretch; a kill-switch mid-run drill. Run these once there's a real shadow sample and `shadow_mode` is about to flip.
 
 ### Sprint 5 — decision checkpoint (not a build) ⬜
 Separate written go/no-go before anything past Sprint 4. LIVE is out of scope for this plan entirely.
@@ -137,3 +153,5 @@ Not in the v1 sprint plan. Cheap interim version (hardcoded economic-calendar bl
 
 - **2026-08-31** — created. Sprints 0–3 recorded ✅; Sprint 4 blocked on D1/D2 + evidence. Import-hardening (`22b9f75`).
 - **2026-08-31 (later)** — Sprint 3.5 (`aace238`): shadow-on-LIVE + cost controls. Model → `claude-sonnet-5` (`997aedf`). **Shadow study TURNED ON** for SIM + both LIVE (`327e204`) — `agent_enabled` true, `claude-sonnet-5` scoring every RSI signal, nothing applied. API key set + verified end-to-end. Added the Milestones table (M0–M7, currently at M4 "in progress", Level 1 autonomy). Next step = operator tasks (spend cap + reboot) then wait for evidence; next build = Sprint 4 (M6).
+- **2026-08-31 (later still)** — reboot done, scheduled-scan API key inheritance verified live. **`ai_shadow_health.py`** added + wired into `scheduler_watchdog.py` (degraded-rate / silent-hook / total-silence alerting for the shadow pipeline — the try/except-everywhere AI layer would otherwise hide a dead key / hit cap). 3 stale `test_ai_*` "ships OFF" assertions repaired (the committed `config/ai.json` is deliberately enabled now — they test the code-level fail-safe defaults instead). User confirmed **keep `agent_strategies` at `rsi`-only until the M5 review**, then consider adding `pullback` (+ `bb`) as the second wave.
+- **2026-08-31 (Sprint 4)** — D1 resolved → **`FLOOR = 0.25`**. **Sprint 4 code shipped inert**: `forex/runner._ai_apply_decision_to_qty` + the `_run_entries` sizing hook (after sizing, before the cost gate), gated by `can_apply_decision` which is False under the committed config. Dedup bypass when acting. `log_shadow_decision` gains an `applied` field. `test_2026_08_31_ai_sprint4_sizing_hook.py` (14 ✅). **Activation = flip `config/ai.json` `shadow_mode` → `false`** once M4 evidence + M5 review clear — no further code, but run the SIM A/B + kill-switch drill first.
