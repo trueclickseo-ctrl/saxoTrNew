@@ -598,6 +598,68 @@ def _resolve_tp_price(sig: dict, direction: str) -> float:
             else sig["close"] - DEFAULT_TP_RR * stop_distance)
 
 
+# ── Order-venue circuit breaker (2026-08-31) ─────────────────────────────────
+# When Saxo's order endpoint has an outage it rejects EVERY order with
+# "CouldNotCompleteRequest (90)" (seen 2026-08-28, and all day 2026-08-31:
+# ~4,000 rejections, 0 fills, 769 stranded working orders on SIM by noon).
+# Each rejected entry still costs ~4 API calls (bracket + fallback entry +
+# separate stop + separate TP) plus rate-limit backoff, so a full scan
+# against a dead venue runs 60-90 min instead of ~13, overruns its Task
+# Scheduler window (the 2026-08-31 watchdog false-alarm incident), and every
+# failed bracket leaves working orders piling up on the account.
+#
+# This breaker counts CONSECUTIVE entry-order rejections across one whole
+# run. Once it hits the threshold it stops attempting any further NEW
+# ENTRIES for the rest of the run (all remaining signals, every later
+# strategy) and _run_entries returns immediately. It deliberately does NOT
+# touch exits or stop-loss healing: protecting an open position is worth
+# retrying even mid-outage, and on a real-money account a protective action
+# is never skipped to save time. One fresh process per scheduled run makes
+# module-level state naturally per-run; _reset_order_circuit() is still
+# called at the top of every run entrypoint so repeated in-process calls
+# (tests, a manual loop) start clean.
+CIRCUIT_BREAKER_MAX_CONSECUTIVE_REJECTS = 8
+
+_order_circuit = {"consecutive_rejects": 0, "open": False, "notified": False}
+
+
+def _reset_order_circuit() -> None:
+    _order_circuit["consecutive_rejects"] = 0
+    _order_circuit["open"] = False
+    _order_circuit["notified"] = False
+
+
+def _order_circuit_is_open() -> bool:
+    return _order_circuit["open"]
+
+
+def _record_entry_result(rejected: bool) -> None:
+    """Feed one entry-order outcome to the circuit breaker. `rejected` True
+    means Saxo returned no entry order id (nothing opened). Any success
+    resets the consecutive-rejection count."""
+    if not rejected:
+        _order_circuit["consecutive_rejects"] = 0
+        return
+    _order_circuit["consecutive_rejects"] += 1
+    if (not _order_circuit["open"] and
+            _order_circuit["consecutive_rejects"] >= CIRCUIT_BREAKER_MAX_CONSECUTIVE_REJECTS):
+        _order_circuit["open"] = True
+        logger.error(
+            f"  [circuit-breaker] {_order_circuit['consecutive_rejects']} consecutive entry "
+            f"rejections — Saxo's order endpoint looks down. Halting NEW entries for the rest "
+            f"of this run (exits and stop-loss healing continue). Next scheduled scan retries."
+        )
+        if not _order_circuit["notified"]:
+            _order_circuit["notified"] = True
+            try:
+                fx_notify.send_order_venue_down(
+                    account_env=ACCOUNT_ENV,
+                    consecutive=_order_circuit["consecutive_rejects"],
+                )
+            except Exception as exc:
+                logger.warning(f"  [circuit-breaker] venue-down email failed: {exc}")
+
+
 # ── Saxo HTTP helpers ─────────────────────────────────────────────────────────
 
 def _hdrs(idempotent_id: str | None = None) -> dict:
@@ -2207,6 +2269,17 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                  live_prices: dict | None = None,
                  agreement: dict | None = None,
                  weight: float = 1.0) -> int:
+    # Order-venue circuit breaker (2026-08-31): a prior strategy in this same
+    # run already hit the consecutive-rejection threshold, so Saxo's order
+    # endpoint is down. Skip ALL entry work for every remaining strategy --
+    # the expensive H1 fetches / generate_signals below included -- and let
+    # the next scheduled scan retry. Exits/stop-heal are unaffected (separate
+    # call path). See _record_entry_result.
+    if not dry_run and _order_circuit_is_open():
+        logger.info(f"  [{strat_name}] entries skipped — order-venue circuit breaker open "
+                    f"(Saxo rejected {CIRCUIT_BREAKER_MAX_CONSECUTIVE_REJECTS}+ entries in a row this run)")
+        return 0
+
     # Gap strategy (and its "gap_weekend" A/B sibling, 2026-08-29): only run
     # during defined session windows (weekly/london/newyork/tokyo).
     # Outside those windows, any overnight move ≥ 0.10% would generate false signals
@@ -2529,7 +2602,14 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 # after it (see saxo_order._place_entry_then_stop docstring).
                 logger.warning(f"  [{strat_name}] SKIP {sym}[{direction}] "
                                 f"— entry order rejected, no position opened")
+                _record_entry_result(rejected=True)
+                if _order_circuit_is_open():
+                    # Threshold hit on this rejection — stop this strategy's
+                    # remaining signals now; every later strategy is skipped
+                    # at the top of _run_entries.
+                    break
                 continue
+            _record_entry_result(rejected=False)
             tp_info = f"  tp_order={tp_oid}" if tp_oid else ""
             logger.info(f"  {direction} {entry_oid}: {qty:,}x {sym}[{tag}] "
                         f"({strat_name})  @ {sig['close']:.5f}  stop={sig['stop_price']:.5f}"
@@ -2918,6 +2998,8 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
     # mode if the boundary assumption is ever wrong.
     if active_strategies is None:
         active_strategies = list(STRATEGIES)
+
+    _reset_order_circuit()   # per-run state; explicit reset for in-process re-calls
 
     session_filter = SESSION_PAIRS.get(session) if session != "all" else None
     active_pairs   = [p for p in PAIRS

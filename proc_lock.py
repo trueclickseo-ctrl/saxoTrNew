@@ -52,6 +52,58 @@ STALE_SECONDS = 20 * 60   # generous vs. observed ~3-4 min full scans
 WAIT_TIMEOUT  = 15 * 60   # give up waiting and proceed rather than deadlock forever
 
 
+def _lock_holder_pid(lock_path: str) -> int | None:
+    """The PID recorded in the lock file (first whitespace-delimited token),
+    or None if it can't be read/parsed -- e.g. the file is mid-rewrite or
+    uses an older format. Callers must treat None as "unknown, fall back to
+    the age/timeout behaviour," never as "not held.\""""
+    try:
+        with open(lock_path) as f:
+            return int(f.read().split()[0])
+    except Exception:
+        return None
+
+
+def _pid_alive(pid: int) -> bool:
+    """Best-effort: is `pid` still a live process? Deliberately conservative
+    -- returns True on ANY uncertainty (access denied, unexpected error,
+    non-Windows without os.kill support), so a lock is never stolen from a
+    holder that might still be running. Found live 2026-08-31: a holder
+    (intraday_monitor) crashed without releasing forex_runner.lock and,
+    because acquire() only ever checked the lock file's AGE, every
+    subsequent forex run then burned the full 15 min WAIT_TIMEOUT before
+    proceeding -- compounding a transient network slowdown into four
+    watchdog alerts."""
+    if not pid or pid <= 0:
+        return True
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        ERROR_INVALID_PARAMETER = 87
+        k32 = ctypes.windll.kernel32
+        handle = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        if not handle:
+            # No such PID -> ERROR_INVALID_PARAMETER. Anything else
+            # (e.g. ERROR_ACCESS_DENIED) means it exists -> assume alive.
+            return k32.GetLastError() != ERROR_INVALID_PARAMETER
+        try:
+            code = wintypes.DWORD()
+            if k32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return code.value == STILL_ACTIVE
+            return True
+        finally:
+            k32.CloseHandle(handle)
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except Exception:
+        return True
+    return True
+
+
 def acquire(lock_path: str, label: str = "", logger=None) -> bool:
     """Blocks (polling) until no other process holds `lock_path`, then
     claims it. Never skips the caller's work -- only serializes concurrent
@@ -69,8 +121,12 @@ def acquire(lock_path: str, label: str = "", logger=None) -> bool:
         try:
             if os.path.exists(lock_path):
                 age = time.time() - os.path.getmtime(lock_path)
+                holder_pid = _lock_holder_pid(lock_path)
                 if age >= STALE_SECONDS:
                     _log(f"[lock] Stale lock ({age:.0f}s old) at {lock_path} — clearing")
+                elif holder_pid is not None and not _pid_alive(holder_pid):
+                    _log(f"[lock] Holder PID {holder_pid} is gone ({age:.0f}s old) at "
+                         f"{lock_path} — clearing without waiting")
                 elif time.time() < deadline:
                     time.sleep(5)
                     continue
