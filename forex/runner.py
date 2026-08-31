@@ -417,7 +417,23 @@ ACCOUNT_ENV = "sim"
 # (History: a HIGH_VOLUME_GROUP_A/B 9+8 pair-split, and later a brief
 # "EUR gets zero pairs" pause, were both built then explicitly superseded
 # same-day before ever being committed.)
-LIVE_ALLOWED_STRATEGIES = {"bb"}
+#
+# 2026-08-31: changed {bb} -> {rsi} -- explicit user decision (via
+# AskUserQuestion, presented with the double-exposure consequence and the
+# margin-gate state: "both EUR and SEK enable and take order for RSI").
+# Both real-money accounts now run RSI(2). Pair universes differ (see
+# _filter_pairs_for_account): SEK LIVE stays on the 17 HIGH_VOLUME_SYMBOLS,
+# EUR LIVE is on the 49 CORE_SYMBOLS -- so the 17 HIGH_VOLUME pairs are
+# taken on BOTH accounts (double real-money exposure per signal), the
+# other 32 CORE pairs on EUR alone. Sizing is per account (SEK off the
+# 15,000 SEK cap, EUR off the 8,000 EUR cap -- _sizing_equity() /
+# capital_config); the 8% rsi heat cap is PER account, so ~16% combined
+# worst case. BB is no longer traded live on any account. The 4 legacy
+# `donchian:` positions still open on the SEK account keep their
+# broker-side GTC stops but get no ATOS trailing / time-stop management
+# now that donchian isn't in the allowlist (same as while the task was
+# disabled) -- close them manually when convenient.
+LIVE_ALLOWED_STRATEGIES = {"rsi"}
 
 # 2026-08-26: a SECOND, genuinely separate real-money account -- the EUR
 # sub-account under the same Saxo LIVE login (see _account()'s Currency
@@ -512,11 +528,13 @@ def _pnl_module() -> str:
 
 
 def _filter_pairs_for_account(pairs: list) -> list:
-    """2026-08-28 two-account LIVE design: SEK LIVE (bb) and EUR LIVE (rsi)
-    both traded the SAME full 17-pair HIGH_VOLUME_SYMBOLS universe (narrowed
-    from all 34 CORE_SYMBOLS on 2026-08-27) -- explicit user decision, "I
-    want to test both strategies BB and RSI ... on 17 Pairs". No exotic
-    pairs on either LIVE account.
+    """2026-08-28 two-account LIVE design: SEK LIVE and EUR LIVE (originally
+    bb and rsi respectively; both rsi since 2026-08-31) traded the SAME
+    17-pair HIGH_VOLUME_SYMBOLS universe (narrowed from all 34 CORE_SYMBOLS
+    on 2026-08-27) -- explicit user decision, "I want to test both
+    strategies BB and RSI ... on 17 Pairs". No exotic pairs on either LIVE
+    account. (EUR later expanded to 49 CORE pairs, SEK kept at 17 -- see
+    below.)
 
     Sharing pairs across two accounts is only safe because of a same-day
     finding: Saxo's pooled /port/v1/positions/me and /port/v1/orders/me
@@ -530,15 +548,18 @@ def _filter_pairs_for_account(pairs: list) -> list:
 
     2026-08-28 (later, same day): EUR LIVE (rsi) expanded 17 -> all 49
     CORE_SYMBOLS pairs (HIGH_VOLUME_SYMBOLS + CORE_STANDARD_SYMBOLS),
-    explicit user request ("add these pairs too only for RSI") --
-    RSI-only, SEK LIVE (bb) deliberately stays at the original 17
-    (bb wasn't part of this request, and its tasks are Disabled anyway,
-    see forex_live_trading_halted_lifted_2026-08-28.md). Verified with
-    real live Saxo ATR/cost before this change: 17/49 CORE pairs clear
-    both the risk gate and cost gate at the current 1,350 EUR cap /
-    0.75% risk -- the other 32 candidate pairs are still scanned every
-    cycle (so they trade automatically once conditions/capital change)
-    but won't place an order until they naturally clear both gates."""
+    explicit user request ("add these pairs too only for RSI"). Verified
+    with real live Saxo ATR/cost before this change: 17/49 CORE pairs
+    clear both the risk gate and cost gate at the current cap / 0.75%
+    risk -- the other 32 candidate pairs are still scanned every cycle
+    (so they trade automatically once conditions/capital change) but
+    won't place an order until they naturally clear both gates.
+
+    2026-08-31: SEK LIVE switched from bb to rsi (LIVE_ALLOWED_STRATEGIES),
+    but its pair universe deliberately stays at the 17 HIGH_VOLUME_SYMBOLS
+    -- NOT expanded to 49 -- so the extra real-money exposure from running
+    the same strategy on two accounts is limited to the 17 highest-liquidity
+    pairs. EUR keeps its 49."""
     if ACCOUNT_ENV == "live_eur":
         return [p for p in pairs if p["symbol"] in CORE_SYMBOLS]
     if ACCOUNT_ENV == "live":
@@ -550,11 +571,13 @@ def _filter_pairs_for_account(pairs: list) -> list:
 PORTFOLIO_HEAT_LIMIT  = 0.06   # pause new entries when heat ≥ 6% of equity
 
 # 2026-08-30: per-strategy heat-cap override, explicit user decision
-# (AskUserQuestion: "raise to 8% for RSI only"). The RSI(2) pullback book on
-# the LIVE_EUR account is meant to run ~10 concurrent positions; at 0.75%
-# risk/trade that needs ~8% heat, not the shared 6%. Scoped to strat_name so
-# every other strategy — and the SEK LIVE account (bb) sharing the same real
-# pooled balance — keeps the 6% guardrail. Saxo's real 50% margin gate
+# (AskUserQuestion: "raise to 8% for RSI only"). The RSI(2) pullback book is
+# meant to run ~10 concurrent positions; at 0.75% risk/trade that needs ~8%
+# heat, not the shared 6%. Scoped to strat_name, so every non-rsi strategy
+# keeps the 6% guardrail. NB (2026-08-31): the cap is evaluated per account
+# from that account's own positions state -- with rsi now live on BOTH the
+# SEK and EUR accounts, the effective combined ceiling is ~16% across the
+# two on the shared Saxo balance. Saxo's real 50% margin gate
 # (_margin_allows_entry) is still the hard backstop above all of this.
 _HEAT_LIMIT_BY_STRATEGY = {"rsi": 0.08}
 DRAWDOWN_PAUSE_PCT    = 0.10   # pause entries when drawdown > 10% from rolling peak
@@ -3405,15 +3428,16 @@ if __name__ == "__main__":
     ap.add_argument("--account", default="sim", choices=["sim", "live", "live_eur"],
                     help="Which Saxo account to run against (default: sim). "
                          "'live' is the real-money SEK account -- restricted to "
-                         "LIVE_ALLOWED_STRATEGIES (bb only) and HIGH_VOLUME_SYMBOLS "
-                         "(17 pairs) only, and requires SAXO_LIVE_CONFIRMED=1 to "
-                         "place real orders. 'live_eur' is the real-money EUR sub-"
-                         "account (added 2026-08-26) -- restricted to "
-                         "LIVE_EUR_ALLOWED_STRATEGIES (rsi only), on the SAME "
-                         "17-pair HIGH_VOLUME_SYMBOLS universe as 'live' (safe "
-                         "pair overlap via AccountKey-based reconciliation, see "
-                         "housekeeping_live.py), requires "
-                         "SAXO_LIVE_EUR_CONFIRMED=1 to place real orders.")
+                         "LIVE_ALLOWED_STRATEGIES (rsi since 2026-08-31) and the "
+                         "17-pair HIGH_VOLUME_SYMBOLS universe, requires "
+                         "SAXO_LIVE_CONFIRMED=1 to place real orders. 'live_eur' is "
+                         "the real-money EUR sub-account (added 2026-08-26) -- "
+                         "restricted to LIVE_EUR_ALLOWED_STRATEGIES (rsi only), on "
+                         "the 49-pair CORE_SYMBOLS universe. Both accounts run RSI, "
+                         "so the 17 HIGH_VOLUME pairs are taken on both (safe pair "
+                         "overlap via AccountKey-based reconciliation, see "
+                         "housekeeping_live.py); requires SAXO_LIVE_EUR_CONFIRMED=1 "
+                         "to place real orders.")
     ap.add_argument("--status",   action="store_true",
                     help="Print open positions and exit")
     ap.add_argument("--scan",     action="store_true",
