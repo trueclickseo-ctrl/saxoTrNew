@@ -1373,15 +1373,32 @@ def _fetch_history(uic: int, count: int = CHART_BARS) -> pd.DataFrame | None:
             "Uic": uic, "AssetType": ASSET_TYPE,
             "Horizon": 1440, "Count": count + 5,
         })
+        raw = resp.get("Data", [])
         rows = []
         bad_spread_bars = 0
-        for bar in resp.get("Data", []):
+        for _idx, bar in enumerate(raw):
             if not isinstance(bar, dict):
                 continue
+            _is_last = _idx == len(raw) - 1
             if "CloseAsk" in bar and "CloseBid" in bar:
                 ask_c = float(bar["CloseAsk"]); bid_c = float(bar["CloseBid"])
-                if bid_c > 0 and (ask_c - bid_c) / bid_c > _MAX_SANE_BAR_SPREAD:
-                    # Ask side is untrustworthy on this bar -- use Bid only.
+                # Historical bars: Close spread only (unchanged -- a
+                # completed bar's intraday High/Low legitimately carry a
+                # wide spread on a thin pair and rewriting 100+ of them
+                # would shift that pair's indicators). The still-forming
+                # LAST bar also gets its Open/High/Low checked -- a stale
+                # Ask there (NZDPLN 08-31: OpenAsk 2.2481 / OpenBid 2.2078,
+                # a 1.8% spread -> mid Open 2.22795, ~1% above the real
+                # market) is what every rsi/pullback scan then entered at.
+                _legs = [(ask_c, bid_c)]
+                if _is_last:
+                    _legs += [(bar.get("OpenAsk"), bar.get("OpenBid")),
+                              (bar.get("HighAsk"), bar.get("HighBid")),
+                              (bar.get("LowAsk"),  bar.get("LowBid"))]
+                _wide = any(a is not None and b is not None and float(b) > 0
+                            and (float(a) - float(b)) / float(b) > _MAX_SANE_BAR_SPREAD
+                            for a, b in _legs)
+                if _wide:
                     bad_spread_bars += 1
                     o = float(bar.get("OpenBid",  bid_c))
                     h = float(bar.get("HighBid",  bid_c))
@@ -1412,6 +1429,44 @@ def _fetch_history(uic: int, count: int = CHART_BARS) -> pd.DataFrame | None:
     except Exception as exc:
         logger.warning(f"Chart fetch failed for UIC {uic}: {exc}")
         return None
+
+
+# The last daily bar is still forming -- on a thin instrument Saxo's SIM
+# chart feed can leave its Close frozen at an early print (hours old, and
+# up to ~1% from the live tradable quote) while /trade/v1/infoprices stays
+# real-time. A strategy then enters at that stale Close and the position is
+# born ~1% underwater vs the price it can actually be closed at, so it
+# stops straight out -- and, because the chart stays frozen, the same
+# signal re-fires every scan (the NZDPLN pullback/advanced_pullback_master
+# re-entry loop, 2026-09-01). Repair the forming bar to the live mid
+# whenever they diverge by more than this.
+_STALE_FORMING_BAR_TOL = 0.004   # 0.4%
+
+
+def _repair_stale_forming_bars(market_data: dict, live_prices: dict) -> int:
+    """Overwrite the last (still-forming) daily bar's Close with the live
+    tradable mid when the chart feed has left it stale. Clamps High/Low so
+    the bar stays internally consistent. Returns the number repaired."""
+    n = 0
+    for sym, df in market_data.items():
+        live = live_prices.get(sym)
+        if df is None or not live or len(df) == 0:
+            continue
+        try:
+            last = float(df["Close"].iloc[-1])
+        except (KeyError, IndexError, ValueError):
+            continue
+        if last <= 0 or abs(last - live) / live <= _STALE_FORMING_BAR_TOL:
+            continue
+        i = df.index[-1]
+        df.at[i, "Close"] = live
+        df.at[i, "High"] = max(float(df.at[i, "High"]), live)
+        df.at[i, "Low"] = min(float(df.at[i, "Low"]), live)
+        n += 1
+        logger.warning(
+            f"  [chart] {sym}: forming-bar close {last:.5f} was {(last/live-1)*100:+.2f}% "
+            f"off the live quote {live:.5f} — repaired to live (stale SIM chart feed)")
+    return n
 
 
 def _add_held_position_history(market_data: dict, positions: dict) -> None:
@@ -1622,20 +1677,32 @@ def _spread_pct(uic: int) -> float | None:
 
 
 def _fetch_live_prices(pairs: list) -> dict:
-    """Fetch current bid/ask mid prices for a list of pairs (used by gap strategy)."""
-    prices = {}
-    for pair in pairs:
+    """Current bid/ask mid for a list of pairs, {symbol: mid}.
+
+    Uses Saxo's BATCH endpoint (/trade/v1/infoprices/list, many Uics per
+    call) -- the per-pair loop this replaced was ~184 sequential calls on a
+    full scan (>2 min). Chunked at 50 Uics; a failed chunk just omits those
+    pairs (caller treats a missing symbol as "no live price")."""
+    by_uic = {p["uic"]: p["symbol"] for p in pairs if p.get("uic")}
+    uics = list(by_uic)
+    prices: dict = {}
+    for i in range(0, len(uics), 50):
+        chunk = uics[i:i + 50]
         try:
-            resp = _get("/trade/v1/infoprices", {
-                "Uic": pair["uic"], "AssetType": ASSET_TYPE, "FieldGroups": "Quote"
+            resp = _get("/trade/v1/infoprices/list", {
+                "Uics": ",".join(str(u) for u in chunk),
+                "AssetType": ASSET_TYPE, "FieldGroups": "Quote",
             })
-            q   = resp.get("Quote", {})
-            bid = float(q.get("Bid", 0))
-            ask = float(q.get("Ask", 0))
-            if bid > 0 and ask > 0:
-                prices[pair["symbol"]] = (bid + ask) / 2
+            for row in resp.get("Data", []):
+                q = row.get("Quote", {})
+                mid = q.get("Mid")
+                if mid is None and q.get("Ask") and q.get("Bid"):
+                    mid = (float(q["Ask"]) + float(q["Bid"])) / 2
+                sym = by_uic.get(row.get("Uic"))
+                if sym and mid and float(mid) > 0:
+                    prices[sym] = float(mid)
         except Exception as exc:
-            logger.debug(f"Live price fetch failed for {pair['symbol']}: {exc}")
+            logger.debug(f"Batch live-price fetch failed for {len(chunk)} uics: {exc}")
     return prices
 
 
@@ -3107,6 +3174,21 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         sym       = sig["symbol"]
         direction = sig["direction"]
 
+        # ── Stale-price guard ─────────────────────────────────────────────
+        # Even after _repair_stale_forming_bars, refuse to open a position
+        # when the signal's own price still disagrees with the live tradable
+        # quote by more than the tolerance -- the strategy is acting on a
+        # frozen SIM chart print and the position would be born underwater
+        # vs the price it can actually be closed at (the NZDPLN re-entry
+        # loop, 2026-09-01).
+        _lq = (live_prices or {}).get(sym) or _live_price(get_pair(sym)["uic"], akey)
+        _sc = float(sig.get("close", 0) or 0)
+        if _lq and _sc and abs(_sc - _lq) / _lq > _STALE_FORMING_BAR_TOL:
+            logger.warning(
+                f"  [{strat_name}] SKIP {sym}[{direction}] — signal price {_sc:.5f} is "
+                f"{(_sc/_lq-1)*100:+.2f}% off the live quote {_lq:.5f} (stale chart bar)")
+            continue
+
         # ── Signal filter: consensus + ML meta-filter ──────────────────────
         passes, features, reason = signal_filter.evaluate(
             sym, direction, sig, agreement, STRATEGIES, firing_strategy=strat_name,
@@ -3835,6 +3917,15 @@ def run_exits_only(dry_run: bool = True,
         market_data[pair["symbol"]] = _fetch_history(pair["uic"])
     _add_held_position_history(market_data, positions)
 
+    # Repair any stale forming bar (see _repair_stale_forming_bars) so
+    # should_exit() sees the same price the close order will execute at.
+    # Only the HELD pairs matter here -- no need to price all 184.
+    _held_syms = {k.split(":", 1)[1] for k in positions if ":" in k}
+    _held_pairs = [_PAIRS_BY_SYMBOL[s] for s in _held_syms if s in _PAIRS_BY_SYMBOL]
+    _rep = _repair_stale_forming_bars(market_data, _fetch_live_prices(_held_pairs))
+    if _rep:
+        logger.warning(f"  [chart] repaired {_rep} stale forming bar(s) to the live quote")
+
     total_exits = 0
     for strat_name in active_strategies:
         strat_mod = STRATEGIES[strat_name]
@@ -3985,19 +4076,30 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
         market_data[pair["symbol"]] = _fetch_history(pair["uic"])
     _add_held_position_history(market_data, positions)
 
+    # ── Live prices for EVERY active/held pair, then repair stale chart bars ──
+    # Always fetched now (was gated on the gap strategy): every strategy's
+    # entry/exit decision must be made on a forming bar that matches the
+    # price it can actually trade at, not a frozen SIM chart print.
+    live_prices: dict = _fetch_live_prices(active_pairs)
+    for _sym in list(market_data):
+        if _sym not in live_prices:
+            _pi = _PAIRS_BY_SYMBOL.get(_sym)
+            if _pi:
+                _lp = _live_price(_pi["uic"], akey)
+                if _lp:
+                    live_prices[_sym] = _lp
+    if live_prices:
+        logger.info(f"Live prices fetched : {len(live_prices)} pairs")
+    _repaired = _repair_stale_forming_bars(market_data, live_prices)
+    if _repaired:
+        logger.warning(f"  [chart] repaired {_repaired} stale forming bar(s) to the live quote")
+
     # ── Momentum pre-filter: restrict NEW entries to top trending pairs ────────
     # Exits always run on the full market_data (we never suppress stop-checks).
     # Entries only fire on the top 60% of pairs ranked by 20-day momentum / ATR.
     _top_n_entry = max(8, round(len(active_pairs) * 0.6))
     top_pairs    = _momentum_rank(market_data, top_n=_top_n_entry)
     entry_market_data = {k: v for k, v in market_data.items() if k in top_pairs}
-
-    # ── Fetch live prices if any strategy needs them (gap strategy) ───────────
-    needs_live = any(getattr(STRATEGIES[s], "NEEDS_LIVE_PRICES", False)
-                     for s in active_strategies)
-    live_prices: dict = _fetch_live_prices(active_pairs) if needs_live else {}
-    if live_prices:
-        logger.info(f"Live prices fetched : {len(live_prices)} pairs")
 
     # ── Pre-compute cross-strategy agreement map for signal filter ────────────
     agreement = signal_filter.compute_agreement(market_data, live_prices, STRATEGIES)
