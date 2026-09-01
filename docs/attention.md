@@ -35,8 +35,8 @@ State lives in `data/attention_state.json`.
 
 | Source | Key | Behaviour |
 |---|---|---|
-| `safeguard.py` (SIM) — `fully_untracked` position | `safeguard-sim:mismatch:<mod>:<sym>:auto_close_untracked` | SIM is paper: safeguard **flat-closes** the position (opposing Market order). Only escalates if Saxo **rejects** the close. |
-| `safeguard.py` (SIM) — any NOT-FIXED outcome | `safeguard-sim:<cat>:<mod>:<sym>:<action>` | grace 180 min (~6 runs) — a genuinely stuck auto-fix pages once, then daily. |
+| `safeguard.py` (SIM) — `fully_untracked` position | — | SIM is paper: safeguard **flat-closes** the position (opposing Market order). No escalation on success. |
+| `safeguard.py` (SIM) — untracked position ATOS **failed to close** | `safeguard-sim:untracked:<mod>:<sym>` | grace 120 min. The only SIM case that pages — the forward-test data for that pair is skewed. Chronic SIM stop-replace / quote-restriction failures do **not** page (nothing a human does about them; the routine safeguard email still lists them). |
 | `safeguard_live.py` / `safeguard_live_eur.py` — `fully_untracked` | `safeguard-live[-eur]:<sym>:needs_human_review` | Real money: **never auto-closed**. Escalates immediately (`grace_minutes=0`). |
 | `safeguard_live[_eur].py` — NOT-FIXED outcome | `safeguard-live[-eur]:<sym>:<action>` | grace 45 min. |
 | `forex/runner.py` `_note_operational_blocks()` (LIVE only, end of `run_daily`) | `<env>:margin-block` | Saxo shared-margin utilization ≥ 50% (no LIVE entry can be placed). grace 120 min. |

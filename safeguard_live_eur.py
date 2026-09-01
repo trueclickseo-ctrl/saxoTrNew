@@ -152,7 +152,7 @@ def run_safeguard_live_eur() -> list[FixOutcomeLiveEur]:
                 attention.raise_attention(
                     key, source="safeguard (LIVE EUR forex)",
                     title=f"{o.symbol}: {o.action} keeps failing on real money",
-                    detail=o.detail, severity="critical", grace_minutes=45, recheck_minutes=180)
+                    detail=o.detail, severity="critical", grace_minutes=90, recheck_minutes=180)
         attention.flush()
     except Exception as exc:
         logger.warning(f"[safeguard_live_eur] attention routing failed: {exc}")

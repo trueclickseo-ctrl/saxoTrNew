@@ -172,11 +172,16 @@ def _escalate_live(outcomes: list[FixOutcomeLive]) -> None:
             elif o.fixed:
                 attention.clear_attention(key, note=o.detail[:200])
             else:
+                # 90-min grace: a genuine unprotected real-money position
+                # that safeguard can't fix for 90 min+ absolutely needs a
+                # human; a one-run artifact (e.g. a cross-account position
+                # this agent shouldn't have touched, or a mid-fill snapshot)
+                # clears before it pages.
                 attention.raise_attention(
                     key, source="safeguard (LIVE forex)",
                     title=f"{o.symbol}: {o.action} keeps failing on real money",
                     detail=o.detail, severity="critical",
-                    grace_minutes=45, recheck_minutes=180)
+                    grace_minutes=90, recheck_minutes=180)
         attention.flush()
     except Exception as exc:
         logger.warning(f"[safeguard_live] attention routing failed: {exc}")

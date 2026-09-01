@@ -341,23 +341,30 @@ def run_safeguard(modules: list[str] | None = None) -> list[FixOutcome]:
 
 
 def _escalate_unfixed(outcomes: list[FixOutcome]) -> None:
-    """Route safeguard's own outcomes into the one 'ATOS needs a human'
-    channel: a NOT-FIXED outcome that persists past attention's grace
-    period (~1.5h => ~3 safeguard runs) escalates to one email + a daily
-    nag until it clears; a fixed / auto-resolved one clears its alert.
-    Then flush the consolidated digest."""
+    """SIM is PAPER money -- ATOS resolves what it can and the routine
+    safeguard email already lists every NOT-FIXED item. The one thing
+    worth a human's attention on SIM is an unattributable position ATOS
+    tried and FAILED to flat-close (the forward-test data is then
+    corrupted): that alone routes to the shared attention channel.
+    Everything else (Saxo SIM stop-replace flakiness, quote-restricted
+    naked positions -- chronic, nothing a human does about them) does not.
+    flush() still runs here every cycle -- it's the 30-min heartbeat that
+    also delivers items raised by the LIVE agents and the runner."""
     try:
         for o in outcomes:
-            key = f"safeguard-sim:{o.category}:{o.module}:{o.symbol}:{o.action}"
+            if o.action != "auto_close_untracked":
+                continue
+            key = f"safeguard-sim:untracked:{o.module}:{o.symbol}"
             if o.fixed or o.auto_resolved:
-                attention.clear_attention(key, note=o.detail[:200])
+                attention.clear_attention(key, note="ATOS flat-closed it")
             else:
-                # SIM is paper -- a longer grace so only a genuinely stuck
-                # failure (3h+ / ~6 runs) pages, not a transient one.
                 attention.raise_attention(
                     key, source="safeguard (SIM)",
-                    title=f"{o.module}/{o.symbol}: {o.action} keeps failing",
-                    detail=o.detail, grace_minutes=180, recheck_minutes=120)
+                    title=f"{o.module}/{o.symbol}: SIM position ATOS could not flat-close",
+                    detail=o.detail + " — the SIM forward-test data for this pair is skewed "
+                                      "until this is cleared (close it manually in the SIM "
+                                      "platform, or ignore if the pair is not under study).",
+                    grace_minutes=120, recheck_minutes=120)
         attention.flush()
     except Exception as exc:
         logger.warning(f"[safeguard] attention routing failed: {exc}")
