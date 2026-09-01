@@ -87,8 +87,17 @@ Nothing here is started. Each is gated on the evidence above and follows the gov
 | 7 | **Add `pullback` (then `bb`) to the shadow agent** | after M5 | One-line `config/ai.json agent_strategies` change. Second-wave A/B once rsi has proven the Copilot has edge. |
 | 8 | **Exit Advisor Stage B** | after P2 | ML on the observation cards (Stage A deterministic scorer already shadow-logging). |
 | — | **SuperTrend V2** (user-provided, prior session — **file not in repo**, must be re-shared) | after P2 | Do not build against corrupted give-back evidence. Decision comes out of module #2. |
+| — | **Autochartist pattern signals** — PARKED 2026-09-02 | not reachable + paid | See "Autochartist" note below. Public perf-stats saved as a reference prior (`reports/autochartist_pattern_stats.py`); the live signal feed needs a paid Autochartist data subscription, not our Saxo credentials. Revisit only if a pattern-based strategy idea makes the 56–89% hit-rates worth a real backtest. |
 
 Deferred to the roadmap's later-phase list: full news/sentiment agent, strategy discovery (#19), the 6-agent split, adaptive scan cadence.
+
+### Autochartist pattern signals — investigated + parked (2026-09-02)
+
+User shared `component.autochartist.com/performancestats-v2/?broker_id=492` and asked whether ATOS could ingest Autochartist's chart-pattern signals. Findings:
+
+- **The public page is aggregate stats, not a feed.** One unauthenticated JSON (`resources/broker/v2?broker_id=492`, ~105 KB) — a rolling ~12-month pattern hit-rate table by asset class / pattern / interval / direction / hour / quality score. No instrument-level entries/targets/stops/timestamps. Forex: 72% overall, 56% (Pennant) → 89% (Triple Top, n=19) by pattern, ~flat long/short, 64–72% by interval. Saved: `reports/autochartist_pattern_stats.py` + `data/reference/autochartist_broker492_perfstats_2026-09-02.json`.
+- **Not reachable with our Saxo credentials.** Saxo OpenAPI has no trade-signals/Autochartist service group (Value Add = Price Alerts only; `/vas/v1/pricealerts/definitions` → 200, `/vas/v1/tradesignals` etc. → 404). Autochartist's own API (`api.autochartist.com`) needs a broker onboarding pack (`BrokerID` + `SecretKey`, MD5-signed tokens) issued to the broker, not to clients. The embedded web component (`component.autochartist.com/to/`) returns **403 "LOGIN FAILED"** on every data endpoint without a SaxoTraderGO SSO session.
+- **To pursue later:** a direct paid Autochartist data subscription (their own BrokerID/SecretKey), then a proper backtest against our universe — governance rule unchanged (observe → hypothesise → code → backtest → validate → deploy). Not worth the cost until a specific pattern-based idea justifies it. Reference memory: `autochartist_pattern_stats_reference.md`.
 
 ---
 
