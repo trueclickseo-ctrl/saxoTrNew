@@ -514,7 +514,15 @@ LIVE_ALLOWED_STRATEGIES = {"rsi"}
 # open EXOTIC_SYMBOLS positions from this account's original design are
 # still tracked/protected by housekeeping_live_eur.py/safeguard_live_eur.py
 # alongside any new HIGH_VOLUME positions.
-LIVE_EUR_ALLOWED_STRATEGIES = {"rsi"}
+#
+# 2026-09-01: CONSOLIDATION. User is moving all funds to the SEK account
+# and running RSI there only (the EUR sub-account was only ~EUR893 of its
+# own cash, 9x its EUR8,000 cap -- see config/capital.json's forex_live_eur
+# comment). Empty allowlist = this account takes NO new entries, but the
+# open positions it still holds ARE exit-managed: _run_daily/_run_exits_only
+# call _legacy_exit_strategies(active=[], positions) -> ['rsi'] -> _run_exits
+# runs. Once its positions close, disable the scheduled task entirely.
+LIVE_EUR_ALLOWED_STRATEGIES: set[str] = set()
 
 # 2026-08-26: EMERGENCY HALT, both real-money accounts (SEK "live" and EUR
 # "live_eur") -- explicit user instruction after the P&L base-currency bug

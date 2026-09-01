@@ -322,17 +322,21 @@ _run("forex/runner: _filter_pairs_for_account() is a no-op under SIM (all pairs 
      test_filter_pairs_for_account_noop_under_sim)
 
 
-def test_live_allowed_strategies_is_exactly_rsi():
+def test_live_allowed_strategies():
     import forex.runner as r
     assert r.LIVE_ALLOWED_STRATEGIES == {"rsi"}, (
-        "2026-08-27/28: {donchian, ema, rsi} -> {bb, rsi} -> {bb, rsi, pullback} "
-        "-> {bb, rsi} -> {bb}; then 2026-08-31: {bb} -> {rsi} (both real-money "
-        "accounts now run RSI, explicit user decision) -- this must be a "
-        "deliberate value, not an accident"
+        "history: {donchian,ema,rsi} -> {bb,rsi} -> ... -> {bb} -> {rsi} "
+        "(2026-08-31). RSI is the one live strategy -- deliberate, not an accident"
     )
-    assert r.LIVE_EUR_ALLOWED_STRATEGIES == {"rsi"}
-_run("forex/runner: LIVE_ALLOWED_STRATEGIES is exactly {rsi}, LIVE_EUR_ALLOWED_STRATEGIES is exactly {rsi}",
-     test_live_allowed_strategies_is_exactly_rsi)
+    # 2026-09-01: CONSOLIDATION -- funds moved to the SEK ('live') account,
+    # the EUR sub-account takes NO new entries (empty allowlist) but its
+    # open positions are still exit-managed via _legacy_exit_strategies.
+    assert r.LIVE_EUR_ALLOWED_STRATEGIES == set(), (
+        "EUR sub-account consolidated into SEK 2026-09-01 -- empty allowlist "
+        "= no new entries, exits still managed until its positions close"
+    )
+_run("forex/runner: LIVE_ALLOWED_STRATEGIES == {rsi}; LIVE_EUR_ALLOWED_STRATEGIES == set() (consolidated)",
+     test_live_allowed_strategies)
 
 
 # ═══════════════════════════════════════════════════════════════════════
