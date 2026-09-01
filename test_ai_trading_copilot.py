@@ -164,8 +164,9 @@ def test_prompt_does_not_penalise_mean_reversion_for_lone_agreement():
     # rsi/bb/pullback (contrarian) agreement_count is structurally ~1.
     s = tc._SYSTEM
     assert "STRATEGY FAMILIES" in s
-    assert "agreement_count is almost always 1" in s or "agreement_count == 1" in s
-    assert "Never penalise a mean-reversion signal for agreement_count" in s
+    assert "agreement_count is almost always 1" in s
+    assert "agreement_count == 1" in s          # the "never penalise" bullet
+    assert "Never penalise a" in s and "mean-reversion signal" in s
     assert "START FROM APPROVE" in s
     # the old blanket rule must be gone
     assert "lone low-agreement signal in a hostile regime is the clearest REJECT" not in s
