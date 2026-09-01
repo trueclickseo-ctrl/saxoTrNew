@@ -1934,6 +1934,26 @@ def _live_price(uic: int, account_key: str) -> float | None:
 # discipline: validate against SIM history before this gates anything LIVE.
 MIN_EDGE_TO_COST_RATIO = 3.0
 
+# 2026-09-01 (user): LIVE gets a STRICTER version of the two viability
+# checks after MXNUSD closed a real -EUR3.05 loss whose only problem was
+# size -- +EUR2.13 gross price move, -EUR5.19 flat commission. On real
+# money:
+#   * the edge-to-cost ratio is 5x, not 3x (bigger safety margin);
+#   * a position below MIN_LIVE_NOTIONAL_EUR of notional is skipped
+#     outright -- at EUR5,000 the flat ~EUR5 round-trip commission is
+#     <= ~0.1% (vs 0.48% on the ~EUR1,090 MXNUSD position);
+#   * an UNKNOWN round-trip cost (the infoprices Commissions lookup
+#     failed) blocks the trade on LIVE instead of passing -- don't gamble
+#     real money on a transient API hiccup. SIM still treats unknown as
+#     "don't block" (forward-test continuity).
+MIN_LIVE_EDGE_TO_COST_RATIO = 5.0
+MIN_LIVE_NOTIONAL_EUR       = 5000.0
+
+
+def _min_edge_ratio() -> float:
+    return (MIN_LIVE_EDGE_TO_COST_RATIO if ACCOUNT_ENV in ("live", "live_eur")
+            else MIN_EDGE_TO_COST_RATIO)
+
 
 _COMMISSION_CACHE: dict[tuple[int, float], float] = {}
 
@@ -3486,23 +3506,49 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         round_trip_cost = _round_trip_cost_quote_ccy(uic, qty, akey)
         quote_ccy_for_log = sym[3:6] if len(sym) >= 6 else ""
         eur_rate_for_log = _eur_per_unit(quote_ccy_for_log, akey)
-        blocked = (round_trip_cost is not None and
-                   expected_target_profit < round_trip_cost * MIN_EDGE_TO_COST_RATIO)
+        _is_live = ACCOUNT_ENV in ("live", "live_eur")
+        _edge_ratio = _min_edge_ratio()
+
+        # LIVE: this trade's EUR notional (qty is in the pair's BASE ccy).
+        notional_eur = None
+        if _is_live:
+            _base_rate = _eur_per_unit(sym[:3], akey)
+            if _base_rate:
+                notional_eur = qty * _base_rate
+
+        blocked = False
+        block_reason = ""
+        if round_trip_cost is not None and expected_target_profit < round_trip_cost * _edge_ratio:
+            blocked, block_reason = True, "cost_not_cleared"
+        elif _is_live and round_trip_cost is None:
+            blocked, block_reason = True, "cost_unknown_live"
+        elif _is_live and notional_eur is not None and notional_eur < MIN_LIVE_NOTIONAL_EUR:
+            blocked, block_reason = True, "below_min_notional"
+
         forward_observation.log_cost_gate_decision(
             account_env=ACCOUNT_ENV, strategy=strat_name, symbol=sym, direction=direction,
             entry_price=sig["close"], stop_price=sig["stop_price"], tp_price=tp, qty=qty,
             expected_target_profit_quote=expected_target_profit, round_trip_cost_quote=round_trip_cost,
             expected_target_profit_eur=(expected_target_profit * eur_rate_for_log) if eur_rate_for_log else None,
             round_trip_cost_eur=(round_trip_cost * eur_rate_for_log) if (round_trip_cost is not None and eur_rate_for_log) else None,
-            min_edge_to_cost_ratio=MIN_EDGE_TO_COST_RATIO,
+            min_edge_to_cost_ratio=_edge_ratio,
             decision="BLOCKED" if blocked else "PASS",
-            reason="cost_not_cleared" if blocked else ("cost_unknown" if round_trip_cost is None else ""),
+            reason=block_reason or ("cost_unknown" if round_trip_cost is None else ""),
+            notional_eur=notional_eur,
         )
         if blocked:
-            logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] "
-                        f"— target profit {expected_target_profit:.2f} doesn't clear "
-                        f"{MIN_EDGE_TO_COST_RATIO}x round-trip cost ({round_trip_cost:.2f}) "
-                        f"at {qty:,} units — too small to be worth the fixed commission")
+            if block_reason == "below_min_notional":
+                logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] — LIVE notional "
+                            f"€{notional_eur:,.0f} ({qty:,} units) below the €{MIN_LIVE_NOTIONAL_EUR:,.0f} "
+                            f"minimum — too small vs the flat ~€5 commission")
+            elif block_reason == "cost_unknown_live":
+                logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] — round-trip cost "
+                            f"lookup failed on a LIVE account; not opening a real position blind")
+            else:
+                logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] "
+                            f"— target profit {expected_target_profit:.2f} doesn't clear "
+                            f"{_edge_ratio}x round-trip cost ({round_trip_cost:.2f}) "
+                            f"at {qty:,} units — too small to be worth the fixed commission")
             continue
 
         # Everything below only runs for a cost-cleared signal -- labels/

@@ -128,23 +128,23 @@ _run("forex/runner: _run_entries() calls the cost-clearance gate with the "
      test_cost_gate_wired_into_entry_loop)
 
 
-def test_cost_gate_skip_condition_requires_both_values_present():
+def test_cost_gate_fails_open_on_sim_closed_on_live():
     import inspect
     import forex.runner as r
     src = inspect.getsource(r._run_entries)
-    # Must be gated on "round_trip_cost is not None" -- a None (lookup
-    # failed) must never block the entry, matching the spread check's
-    # existing fail-open pattern just above it in the same loop.
-    # 2026-08-27: this condition moved into a named `blocked = (...)`
-    # variable when forward-observation logging was added, so both the
-    # log call and the skip check share one source of truth.
-    assert "blocked = (round_trip_cost is not None and" in src
-    assert "expected_target_profit < round_trip_cost * MIN_EDGE_TO_COST_RATIO)" in src, (
-        "an unknown cost (lookup failure) must fail OPEN (don't block the "
-        "entry), not closed -- same discipline as the existing spread check")
-_run("forex/runner: the cost gate fails OPEN (does not block entries) when "
-     "the live commission lookup itself fails",
-     test_cost_gate_skip_condition_requires_both_values_present)
+    # 2026-09-01 (user A): SIM still fails OPEN on an unknown cost (a None
+    # lookup never blocks -- forward-test continuity), but LIVE now fails
+    # CLOSED -- don't open a real position when the commission lookup
+    # failed. The "cost_not_cleared" branch still needs both values.
+    assert 'block_reason = True, "cost_not_cleared"' in src
+    assert "round_trip_cost is not None and expected_target_profit < round_trip_cost * _edge_ratio" in src
+    # the LIVE-only fail-closed branch
+    assert 'elif _is_live and round_trip_cost is None:' in src
+    assert 'block_reason = True, "cost_unknown_live"' in src
+    # ...and it is an ELIF (never reached for sim -> sim stays fail-open)
+    assert src.index('elif _is_live and round_trip_cost is None') > src.index('block_reason = True, "cost_not_cleared"')
+_run("forex/runner: cost gate fails OPEN on SIM, CLOSED on LIVE, when the commission lookup fails",
+     test_cost_gate_fails_open_on_sim_closed_on_live)
 
 
 def test_min_edge_to_cost_ratio_is_a_named_constant_not_a_bare_number():
