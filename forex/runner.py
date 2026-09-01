@@ -1948,14 +1948,23 @@ MIN_EDGE_TO_COST_RATIO = 3.0
 # money:
 #   * the edge-to-cost ratio is 5x, not 3x (bigger safety margin);
 #   * a position below MIN_LIVE_NOTIONAL_EUR of notional is skipped
-#     outright -- at EUR5,000 the flat ~EUR5 round-trip commission is
-#     <= ~0.1% (vs 0.48% on the ~EUR1,090 MXNUSD position);
+#     outright;
 #   * an UNKNOWN round-trip cost (the infoprices Commissions lookup
 #     failed) blocks the trade on LIVE instead of passing -- don't gamble
 #     real money on a transient API hiccup. SIM still treats unknown as
 #     "don't block" (forward-test continuity).
+#
+# MIN_LIVE_NOTIONAL_EUR = 3,500 (was first cut at 5,000): the per-pair
+# analysis (reports/live_pair_commission_analysis.py) showed that at the
+# EUR45 FIXED-risk sizing every LIVE HIGH_VOLUME pair already nets +EUR13
+# to +EUR17 on a modest 0.5R bounce after the ~EUR5.18 flat commission --
+# R is pinned at EUR45, so commission is only ~12% of it (the MXNUSD loss
+# was a legacy 1,000-lot trade where R had collapsed to ~EUR5). 5,000
+# dropped 7 economically-fine pairs (NZDUSD/USDCHF/AUDJPY/AUDUSD/GBPAUD/
+# GBPCHF/GBPJPY, notional EUR3,560-4,934); 3,500 blocks only the genuinely
+# tiny (the ~EUR1,090 MXNUSD class) and keeps all 17.
 MIN_LIVE_EDGE_TO_COST_RATIO = 5.0
-MIN_LIVE_NOTIONAL_EUR       = 5000.0
+MIN_LIVE_NOTIONAL_EUR       = 3500.0
 
 
 def _min_edge_ratio() -> float:

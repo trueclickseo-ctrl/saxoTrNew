@@ -45,7 +45,10 @@ def test_min_edge_ratio_is_stricter_on_live():
 
 
 def test_min_live_notional_constant():
-    assert fr.MIN_LIVE_NOTIONAL_EUR == 5000.0
+    # 2026-09-01: 5,000 -> 3,500 after the per-pair analysis (option X).
+    # At EUR45 fixed risk every LIVE pair already nets +EUR13-17 on a 0.5R
+    # bounce; 3,500 blocks only the MXNUSD-class (~EUR1,090) and keeps all 17.
+    assert fr.MIN_LIVE_NOTIONAL_EUR == 3500.0
 
 
 def test_gate_block_logic_in_source():
