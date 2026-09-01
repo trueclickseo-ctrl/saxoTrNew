@@ -47,6 +47,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
+import attention
 import saxo_client
 import saxo_order
 
@@ -69,6 +70,7 @@ class FixOutcomeLive:
     fixed:    bool
     detail:   str
     uic:      int = 0
+    needs_human: bool = False   # LIVE never auto-closes an unattributable position -- a human decides
 
 
 def _fix_naked_position_live(n: "hk_live.NakedPositionLive") -> FixOutcomeLive:
@@ -119,8 +121,17 @@ def run_safeguard_live() -> list[FixOutcomeLive]:
     mismatch_findings = hk_live.reconcile_live_forex(aggressive=True, send_email=False,
                                                      snapshot=snapshot)
     for f in mismatch_findings:
-        outcomes.append(FixOutcomeLive(f.symbol, f.kind, f.kind != "stop_replace_failed",
-                                       f.detail))
+        if f.kind == "fully_untracked":
+            # real money -- ATOS never auto-closes a position it can't
+            # attribute to a strategy. Escalate to the human-decision
+            # channel (attention.py) instead of claiming "FIXED".
+            outcomes.append(FixOutcomeLive(f.symbol, "needs_human_review", False,
+                                           f.detail + " — LIVE: not auto-closed. A human must "
+                                           f"decide what this position is.",
+                                           uic=getattr(f, "uic", 0), needs_human=True))
+        else:
+            outcomes.append(FixOutcomeLive(f.symbol, f.kind, f.kind != "stop_replace_failed",
+                                           f.detail))
 
     if not outcomes:
         logger.info("[safeguard_live] nothing to fix")
@@ -136,11 +147,39 @@ def run_safeguard_live() -> list[FixOutcomeLive]:
             o.detail += " -- VERIFICATION FAILED: still shows naked/under-protected after the fix"
 
     for o in outcomes:
-        logger.info(f"[safeguard_live] {'FIXED' if o.fixed else 'NOT FIXED'} "
-                    f"{o.symbol} ({o.action}): {o.detail}")
+        _tag = "NEEDS HUMAN" if o.needs_human else ("FIXED" if o.fixed else "NOT FIXED")
+        logger.info(f"[safeguard_live] {_tag} {o.symbol} ({o.action}): {o.detail}")
 
+    _escalate_live(outcomes)
     _send_safeguard_email_live(outcomes)
     return outcomes
+
+
+def _escalate_live(outcomes: list[FixOutcomeLive]) -> None:
+    """Route LIVE outcomes into the one 'ATOS needs a human' channel:
+    an unattributable position, or a fix that keeps failing, escalates to
+    one email + a daily nag until it clears. A resolved item clears its
+    alert. Then flush the consolidated digest."""
+    try:
+        for o in outcomes:
+            key = f"safeguard-live:{o.symbol}:{o.action}"
+            if o.needs_human:
+                attention.raise_attention(
+                    key, source="safeguard (LIVE forex)",
+                    title=f"{o.symbol}: unattributable real-money position",
+                    detail=o.detail, severity="critical",
+                    grace_minutes=0, recheck_minutes=180)   # LIVE -> escalate immediately
+            elif o.fixed:
+                attention.clear_attention(key, note=o.detail[:200])
+            else:
+                attention.raise_attention(
+                    key, source="safeguard (LIVE forex)",
+                    title=f"{o.symbol}: {o.action} keeps failing on real money",
+                    detail=o.detail, severity="critical",
+                    grace_minutes=45, recheck_minutes=180)
+        attention.flush()
+    except Exception as exc:
+        logger.warning(f"[safeguard_live] attention routing failed: {exc}")
 
 
 def _send_safeguard_email_live(outcomes: list[FixOutcomeLive]) -> None:

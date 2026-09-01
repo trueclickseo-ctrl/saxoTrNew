@@ -91,6 +91,9 @@ class Finding:
     symbol:  str
     detail:  str
     estimate: bool = False
+    uic:     int = 0              # populated for KIND_FULLY_UNTRACKED (so it can be auto-closed on SIM)
+    net_amount: float = 0.0      # signed live net for that uic (+long / -short)
+    asset_type: str = ""
 
 
 KIND_REMOVED_ORPHAN   = "removed_orphan"       # local tracked, no live backing -> removed
@@ -886,6 +889,7 @@ def _scan_fully_untracked(live: LiveSnapshot, modules: list[str]) -> list[Findin
             f"(not even a mismatched one) — reconcile_module() cannot see this uic "
             f"at all; only scan_naked_positions() would ever have flagged it, and "
             f"only while it happens to be unprotected",
+            uic=uic, net_amount=net, asset_type=asset_type,
         ))
     return findings
 

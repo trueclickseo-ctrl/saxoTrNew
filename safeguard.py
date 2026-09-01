@@ -50,6 +50,7 @@ from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+import attention
 import housekeeping
 import saxo_client
 import saxo_order
@@ -116,6 +117,7 @@ class FixOutcome:
     uic:      int = 0   # naked outcomes only -- stable identity for verification,
                         # since a mismatch-fix earlier in the same run can change
                         # which module a shared instrument gets classified under
+    auto_resolved: bool = False   # SIM: an untracked position ATOS flat-closed itself
 
 
 def _stop_pct(asset_type: str) -> float:
@@ -174,6 +176,37 @@ def _fix_naked_position(n: "housekeeping.NakedPosition") -> FixOutcome:
                       f"({pct:.0%} from current price {n.current_price:.5f})", uic=n.uic)
 
 
+def _close_untracked_sim(f: "housekeeping.Finding") -> FixOutcome:
+    """SIM only: flat-close a live position with zero local record in any
+    module. It's paper money and nothing is managing it -- send an opposing
+    Market order for the full net size. If Saxo rejects it, report NOT
+    FIXED so run_safeguard() escalates via attention."""
+    net = float(getattr(f, "net_amount", 0) or 0)
+    uic = int(getattr(f, "uic", 0) or 0)
+    asset_type = getattr(f, "asset_type", "") or "FxSpot"
+    if not (uic and net):
+        return FixOutcome("mismatch", f.module, f.symbol, "auto_close_untracked", False,
+                          f.detail + " — could not auto-close: missing uic/net on the finding")
+    side = "Sell" if net > 0 else "Buy"
+    order = {"AccountKey": saxo_client.get_account_key(), "Uic": uic, "AssetType": asset_type,
+             "Amount": abs(int(net)), "BuySell": side, "OrderType": "Market",
+             "OrderDuration": {"DurationType": "DayOrder"}, "ManualOrder": False}
+    try:
+        resp = saxo_client.post("/trade/v2/orders", order)
+        oid = (resp or {}).get("OrderId")
+        if not oid:
+            raise RuntimeError(f"no OrderId in response: {str(resp)[:160]}")
+        return FixOutcome("mismatch", f.module, f.symbol, "auto_close_untracked", True,
+                          f"SIM: flat-closed an unattributable {side.lower()} of {abs(net):,.0f} "
+                          f"(uic {uic}) — order {oid}. Was invisible to every strategy; paper "
+                          f"money, so ATOS closed it rather than paging a human.",
+                          uic=uic, auto_resolved=True)
+    except Exception as exc:
+        return FixOutcome("mismatch", f.module, f.symbol, "auto_close_untracked", False,
+                          f"SIM: tried to flat-close an unattributable {side.lower()} of "
+                          f"{abs(net):,.0f} (uic {uic}) but Saxo rejected it: {exc}", uic=uic)
+
+
 def _fix_mismatches(modules: list[str], snapshot: "housekeeping.LiveSnapshot") -> list[FixOutcome]:
     findings = housekeeping.reconcile_all(modules, aggressive=True, snapshot=snapshot,
                                           send_email=False)
@@ -197,16 +230,13 @@ def _fix_mismatches(modules: list[str], snapshot: "housekeeping.LiveSnapshot") -
                                        f"the naked-position fix pass, not this one"))
         elif f.kind == housekeeping.KIND_FULLY_UNTRACKED:
             # 2026-08-24: a live position with zero local record in any
-            # module (the EURCHF/stocks-UIC-202 blind spot). Nothing local
-            # to remove or fix here either — same reasoning as
-            # KIND_UNTRACKED_LIVE, protection is the naked-fix pass's job.
-            # This finding's whole purpose is to make sure a human sees it,
-            # since no automated check before it existed ever would have.
-            outcomes.append(FixOutcome("mismatch", f.module, f.symbol,
-                                       "no_local_record_needs_human_review", True,
-                                       f.detail + " — protection (if needed) is handled by "
-                                       f"the naked-position fix pass; this finding exists so "
-                                       f"a human decides what this position actually is"))
+            # module. On SIM (this module -- safeguard.py) it's paper money
+            # and the position is already unmanaged by any strategy, so
+            # ATOS just FLAT-CLOSES it and moves on (user decision
+            # 2026-09-01: "minimum human interaction"). LIVE
+            # (safeguard_live.py / _eur) never auto-closes -- it escalates
+            # via attention.raise_attention so a human decides.
+            outcomes.append(_close_untracked_sim(f))
         elif f.kind == housekeeping.KIND_PENDING_ENTRY:
             # 2026-08-24: nothing IS wrong here — the entry just hasn't
             # filled yet (e.g. market closed). Before this case existed
@@ -299,6 +329,8 @@ def run_safeguard(modules: list[str] | None = None) -> list[FixOutcome]:
         logger.info(f"[safeguard] {'FIXED' if o.fixed else 'NOT FIXED'} "
                     f"{o.category}/{o.module}/{o.symbol} ({o.action}): {o.detail}")
 
+    _escalate_unfixed(outcomes)
+
     to_email = _dedup_for_email(outcomes)
     if to_email:
         _send_safeguard_email(to_email)
@@ -306,6 +338,29 @@ def run_safeguard(modules: list[str] | None = None) -> list[FixOutcome]:
         logger.info(f"[safeguard] {len(outcomes)} outcome(s), all already reported "
                     f"within the last {REALERT_AFTER_HOURS}h — not re-emailing")
     return outcomes
+
+
+def _escalate_unfixed(outcomes: list[FixOutcome]) -> None:
+    """Route safeguard's own outcomes into the one 'ATOS needs a human'
+    channel: a NOT-FIXED outcome that persists past attention's grace
+    period (~1.5h => ~3 safeguard runs) escalates to one email + a daily
+    nag until it clears; a fixed / auto-resolved one clears its alert.
+    Then flush the consolidated digest."""
+    try:
+        for o in outcomes:
+            key = f"safeguard-sim:{o.category}:{o.module}:{o.symbol}:{o.action}"
+            if o.fixed or o.auto_resolved:
+                attention.clear_attention(key, note=o.detail[:200])
+            else:
+                # SIM is paper -- a longer grace so only a genuinely stuck
+                # failure (3h+ / ~6 runs) pages, not a transient one.
+                attention.raise_attention(
+                    key, source="safeguard (SIM)",
+                    title=f"{o.module}/{o.symbol}: {o.action} keeps failing",
+                    detail=o.detail, grace_minutes=180, recheck_minutes=120)
+        attention.flush()
+    except Exception as exc:
+        logger.warning(f"[safeguard] attention routing failed: {exc}")
 
 
 def _dedup_for_email(outcomes: list[FixOutcome]) -> list[FixOutcome]:

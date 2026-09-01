@@ -80,6 +80,10 @@ import forex.strategy_london_breakout_v2 as strat_lbo_v2
 import pnl_tracker
 import trade_logger
 import strategy_learner
+try:
+    import attention          # the one "ATOS needs a human" channel; optional
+except Exception:
+    attention = None
 import forex.notifier      as fx_notify
 import forex.signal_filter as signal_filter
 import forex.forward_observation as forward_observation
@@ -2459,6 +2463,46 @@ _MARGIN_CACHE_TTL_SECONDS  = 20     # avoid hammering balances/me once per signa
 _margin_cache: dict = {"utilization": None, "checked_at": 0.0}
 
 
+def _note_operational_blocks() -> None:
+    """LIVE only, best-effort. Declare/clear the operational conditions that
+    silently stop new entries so attention.py can escalate them: the 50%
+    shared-margin cap, and the order-venue circuit breaker. attention.py
+    only emails once a block has persisted past its grace period, then
+    nags once a day until it clears -- so a transient spike is not a page."""
+    try:
+        env = ACCOUNT_ENV
+        util = _margin_cache.get("utilization")
+        if util is None:
+            try:
+                util = _get("/port/v1/balances/me").get("InitialMargin", {}).get("MarginUtilizationPct")
+            except Exception:
+                util = None
+        if util is not None and util >= MAX_MARGIN_UTILIZATION_PCT:
+            attention.raise_attention(
+                f"{env}:margin-block", source=f"forex {env}",
+                title=f"Shared Saxo margin at {util:.0f}% — new entries blocked",
+                detail=(f"Margin utilization {util:.1f}% ≥ the {MAX_MARGIN_UTILIZATION_PCT:.0f}% cap, so "
+                        f"NO new LIVE forex entry can be placed on any account (the pool is shared). "
+                        f"Free margin by closing a position, or the block persists."),
+                severity="warn", grace_minutes=120, recheck_minutes=1500)
+        else:
+            attention.clear_attention(f"{env}:margin-block",
+                                      note=f"margin back under {MAX_MARGIN_UTILIZATION_PCT:.0f}%")
+
+        if _order_circuit_is_open():
+            attention.raise_attention(
+                f"{env}:venue-circuit-open", source=f"forex {env}",
+                title="Order-venue circuit breaker OPEN — entries halted",
+                detail=(f"{CIRCUIT_BREAKER_MAX_CONSECUTIVE_REJECTS}+ consecutive Saxo order rejections; "
+                        f"last error: {_order_circuit.get('last_saxo_error','?')}. New entries are "
+                        f"halted until a scan completes cleanly."),
+                severity="critical", grace_minutes=30, recheck_minutes=1500)
+        else:
+            attention.clear_attention(f"{env}:venue-circuit-open", note="venue answering again")
+    except Exception as exc:
+        logger.warning(f"  [attention] operational-block note failed: {exc}")
+
+
 def _margin_allows_entry() -> bool:
     """True if Saxo's own live margin utilization is still below
     MAX_MARGIN_UTILIZATION_PCT. Cached briefly so a strategy placing many
@@ -4538,6 +4582,12 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
             _venue_down_email_if_needed()
         else:
             _clear_venue_down_flag()   # a clean run -> Saxo is answering again
+
+    # ── Operational-block escalation (LIVE): if something has silently been
+    # stopping new entries for hours, route it to the one human-decision
+    # channel (attention.py) so it emails once + nags daily until cleared.
+    if not dry_run and ACCOUNT_ENV in ("live", "live_eur") and attention is not None:
+        _note_operational_blocks()
 
     # ── Strategy learning pass — update weights from today's closed trades ────
     try:

@@ -407,3 +407,13 @@ just the ETF case that surfaced it.
 The 2026-08-25 fix (`3a72d8c`) checkpoints state after each *strategy pass* — but `_run_entries`/`_run_exits` fire several real orders per pass. A kill/watchdog-restart mid-pass (common on the SIM box) still loses the entries/closes made so far, so the next scan re-enters a pair it already holds (4 stacked SIM RSI EURCAD longs + 7 other combos) or re-closes an already-flat position into a naked flip (a 46,000 EURCAD short, flagged `fully_untracked … needs_human_review` every cycle).
 
 **Fix (`604ab2a`):** `_run_entries`/`_run_exits` take `state=` and `_save_state(state)` after **every** entry/exit, not just at pass end. `_run_entries` also folds every `(strategy, symbol)` with an open `pnl_ledger.db` row into `open_symbols` (the ledger row is written the instant an order is placed, so it survives a mid-pass kill even when the state file does not). One-time `dedup_stacked_reentries_2026-09-01.py` closed the 26 already-stacked rows (kept the one matching current state per key; `realized_pnl` NULL). `_close_orphan_ledger_rows()` still handles "no state key at all"; this fills the gap it cannot — "state key exists but ledger has several open rows for it". LIVE was clean throughout (`reconcile_live_forex: no mismatches` every cycle).
+
+## 2026-09-01: unattributable positions now escalate properly (attention.py)
+
+The `KIND_FULLY_UNTRACKED` finding used to be reported by safeguard as `fixed=True` / `no_local_record_needs_human_review` — one green line in a routine digest that nobody acts on (two `futures` ones sat unseen for 6 days). User: "minimum human interaction; if a human is needed, email."
+
+- **SIM** (`safeguard.py`): `_close_untracked_sim()` — paper money, position unmanaged by any strategy → ATOS sends an opposing Market order and flat-closes it. Only escalates if Saxo rejects the close. `Finding` gained `uic` / `net_amount` / `asset_type` so the closer has what it needs.
+- **LIVE** (`safeguard_live.py`, `safeguard_live_eur.py`): never auto-closed. `FixOutcomeLive.needs_human=True`, `fixed=False`, and `attention.raise_attention(...)` escalates immediately.
+- New **`attention.py`** — the one "ATOS needs a human" email channel (`docs/attention.md`). Also fed by `forex/runner._note_operational_blocks()`: the 50% shared-margin cap and the venue circuit breaker. Emails once past a grace period, then nags daily until `clear_attention`. `flush()` runs from every safeguard cycle.
+
+`test_2026_09_01_attention_channel.py` (14). `test_housekeeping.py` updated for the SIM auto-close.

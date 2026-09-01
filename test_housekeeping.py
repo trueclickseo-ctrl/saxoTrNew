@@ -512,18 +512,32 @@ def test_fully_untracked_scan_ignores_uics_with_any_local_record():
         hk.ADAPTERS.update(orig_adapters)
 
 
-def test_fully_untracked_reported_fixed_not_error_by_safeguard():
+def test_fully_untracked_sim_is_auto_closed_by_safeguard():
+    # 2026-09-01 (user: "minimum human interaction"): on SIM, safeguard
+    # FLAT-CLOSES an unattributable position rather than paging a human.
+    # If Saxo rejects the close it's reported NOT FIXED so it escalates.
     import safeguard as sg
     orig_adapters = dict(hk.ADAPTERS)
+    real_post, real_key = sg.saxo_client.post, sg.saxo_client.get_account_key
+    calls = []
     try:
         hk.ADAPTERS.clear()
         hk.ADAPTERS["stocks"] = FakeAdapter("stocks", [])
         snap = make_snapshot(positions=[make_position(999, -20000, asset_type="Stock")])
+
+        sg.saxo_client.get_account_key = lambda: "AK"
+        sg.saxo_client.post = lambda p, b: (calls.append(b) or {"OrderId": "SIMX"})
         outcomes = sg._fix_mismatches(["stocks"], snap)
         assert len(outcomes) == 1
-        assert outcomes[0].fixed is True, "must not be reported as NOT FIXED -- this finding exists to surface, not to fail"
-        assert outcomes[0].action == "no_local_record_needs_human_review"
+        o = outcomes[0]
+        assert o.action == "auto_close_untracked" and o.fixed is True and o.auto_resolved is True
+        assert calls[-1]["BuySell"] == "Buy" and calls[-1]["Amount"] == 20000   # closing a short
+
+        sg.saxo_client.post = lambda p, b: (_ for _ in ()).throw(RuntimeError("nope"))
+        bad = sg._fix_mismatches(["stocks"], snap)
+        assert bad[0].fixed is False and bad[0].auto_resolved is False
     finally:
+        sg.saxo_client.post, sg.saxo_client.get_account_key = real_post, real_key
         hk.ADAPTERS.clear()
         hk.ADAPTERS.update(orig_adapters)
 
@@ -552,8 +566,8 @@ _run("a live position with ZERO local record in any module is flagged fully_untr
      test_fully_untracked_live_position_is_flagged)
 _run("a uic with ANY local record (even mismatched) is left to reconcile_module(), not double-flagged",
      test_fully_untracked_scan_ignores_uics_with_any_local_record)
-_run("safeguard reports a fully_untracked finding as fixed/informational, not an error",
-     test_fully_untracked_reported_fixed_not_error_by_safeguard)
+_run("safeguard flat-closes a SIM fully_untracked position (or reports NOT FIXED if Saxo rejects it)",
+     test_fully_untracked_sim_is_auto_closed_by_safeguard)
 _run("reconcile_all() includes the fully-untracked sweep and still emails on any finding",
      test_fully_untracked_included_in_reconcile_all)
 

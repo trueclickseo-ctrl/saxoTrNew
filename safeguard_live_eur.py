@@ -39,6 +39,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
+import attention
 import saxo_client
 import saxo_order
 
@@ -60,6 +61,7 @@ class FixOutcomeLiveEur:
     fixed:    bool
     detail:   str
     uic:      int = 0
+    needs_human: bool = False
 
 
 def _fix_naked_position_live_eur(n: "hk_live_eur.NakedPositionLiveEur") -> FixOutcomeLiveEur:
@@ -110,8 +112,14 @@ def run_safeguard_live_eur() -> list[FixOutcomeLiveEur]:
     mismatch_findings = hk_live_eur.reconcile_live_eur_forex(aggressive=True, send_email=False,
                                                              snapshot=snapshot)
     for f in mismatch_findings:
-        outcomes.append(FixOutcomeLiveEur(f.symbol, f.kind, f.kind != "stop_replace_failed",
-                                          f.detail))
+        if f.kind == "fully_untracked":
+            outcomes.append(FixOutcomeLiveEur(f.symbol, "needs_human_review", False,
+                                              f.detail + " — LIVE: not auto-closed. A human must "
+                                              f"decide what this position is.",
+                                              uic=getattr(f, "uic", 0), needs_human=True))
+        else:
+            outcomes.append(FixOutcomeLiveEur(f.symbol, f.kind, f.kind != "stop_replace_failed",
+                                              f.detail))
 
     if not outcomes:
         logger.info("[safeguard_live_eur] nothing to fix")
@@ -127,8 +135,27 @@ def run_safeguard_live_eur() -> list[FixOutcomeLiveEur]:
             o.detail += " -- VERIFICATION FAILED: still shows naked/under-protected after the fix"
 
     for o in outcomes:
-        logger.info(f"[safeguard_live_eur] {'FIXED' if o.fixed else 'NOT FIXED'} "
-                    f"{o.symbol} ({o.action}): {o.detail}")
+        _tag = "NEEDS HUMAN" if o.needs_human else ("FIXED" if o.fixed else "NOT FIXED")
+        logger.info(f"[safeguard_live_eur] {_tag} {o.symbol} ({o.action}): {o.detail}")
+
+    try:
+        for o in outcomes:
+            key = f"safeguard-live-eur:{o.symbol}:{o.action}"
+            if o.needs_human:
+                attention.raise_attention(
+                    key, source="safeguard (LIVE EUR forex)",
+                    title=f"{o.symbol}: unattributable real-money position",
+                    detail=o.detail, severity="critical", grace_minutes=0, recheck_minutes=180)
+            elif o.fixed:
+                attention.clear_attention(key, note=o.detail[:200])
+            else:
+                attention.raise_attention(
+                    key, source="safeguard (LIVE EUR forex)",
+                    title=f"{o.symbol}: {o.action} keeps failing on real money",
+                    detail=o.detail, severity="critical", grace_minutes=45, recheck_minutes=180)
+        attention.flush()
+    except Exception as exc:
+        logger.warning(f"[safeguard_live_eur] attention routing failed: {exc}")
 
     _send_safeguard_email_live_eur(outcomes)
     return outcomes
