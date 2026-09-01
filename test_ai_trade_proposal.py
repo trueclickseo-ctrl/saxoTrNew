@@ -209,16 +209,19 @@ def test_proposal_carries_trade_economics_and_pair_history():
         sig={"close": 1.16, "stop_price": 1.153, "atr": 0.007, "rsi": 6.0},
         features={"agreement_count": 1}, positions={}, equity=35000,
         take_profit=1.174, n_strategies=20,
-        est_commission_eur=5.18, fixed_risk_eur=45.0,
+        est_commission_eur=5.18, est_all_in_cost_eur=6.10, fixed_risk_eur=45.0,
         pair_stats={"n_closed": 22, "win_rate_pct": 63.0, "avg_pnl_eur": 1.4,
                     "profit_factor": 1.3, "source": "forex (SIM proxy)"})
     te = p["trade_economics"]
     assert te["commission_eur"] == 5.18
+    assert te["all_in_cost_eur"] == 6.10
     assert te["reward_risk_ratio"] == 2.0
     assert te["risk_eur"] == 45.0
-    assert te["tp_net_after_commission_eur"] == round(90.0 - 5.18, 1)
-    assert te["small_win_0p5R_net_eur"] == round(22.5 - 5.18, 1)
-    assert te["breakeven_bounce_R"] == round(5.18 / 45.0, 3)
+    # economics net of the ALL-IN cost now, not commission alone
+    assert te["tp_net_after_cost_eur"] == round(90.0 - 6.10, 1)
+    assert te["small_win_0p5R_net_eur"] == round(22.5 - 6.10, 1)
+    assert te["breakeven_bounce_R"] == round(6.10 / 45.0, 3)
+    assert te["recovery_0p5R_to_cost_ratio"] == round(22.5 / 6.10, 2)
     assert p["pair_history"]["win_rate_pct"] == 63.0
     assert "SIM proxy" in p["pair_history"]["source"]
     # graceful with nothing supplied
@@ -237,7 +240,8 @@ def test_copilot_prompt_weighs_economics_and_pair_history():
     s = tc._SYSTEM
     assert "trade_economics" in s and "small_win_0p5R_net_eur" in s
     assert "pair_history" in s and "win_rate_pct" in s
-    assert "commission-dominated" in s
+    assert "cost-dominated" in s
+    assert "recovery_0p5R_to_cost_ratio" in s and "3.0" in s
 _run("copilot prompt tells the agent to weigh net-of-commission economics + pair history",
      test_copilot_prompt_weighs_economics_and_pair_history)
 

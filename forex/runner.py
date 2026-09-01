@@ -3379,13 +3379,21 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         if ai_config is not None and ai_config.ai_enabled_for(ACCOUNT_ENV):
             try:
                 # give the agent the trade's real economics: the flat Saxo
-                # round-trip commission (in EUR) and this pair/strategy's
-                # closed-trade track record. Commission is size-flat, so a
-                # nominal 10k-lot quote is representative.
+                # round-trip commission AND the all-in transaction cost (the
+                # number the deterministic recovery-vs-cost gate uses), plus
+                # this pair/strategy's closed-trade track record. Commission
+                # is size-flat; a nominal 10k lot is representative for the
+                # spread term too.
                 _uic_ai = get_pair(sym)["uic"]
                 _rt_q = _round_trip_cost_quote_ccy(_uic_ai, 10_000, akey)
                 _q_rate = _eur_per_unit(sym[3:6] if len(sym) >= 6 else "", akey)
+                _b_rate = _eur_per_unit(sym[:3], akey)
                 _comm_eur = round(_rt_q * _q_rate, 2) if (_rt_q and _q_rate) else None
+                _all_in_eur = _live_all_in_cost_eur(
+                    commission_eur=_comm_eur, spread_pct=_spread_pct(_uic_ai),
+                    entry_px=float(sig.get("close") or 0),
+                    notional_eur=(10_000 * _b_rate) if _b_rate else None,
+                    quote_ccy=sym[3:6] if len(sym) >= 6 else "")
                 _prop = _ai_build_proposal(
                     account_env=ACCOUNT_ENV, strategy=strat_name, symbol=sym,
                     direction=direction, sig=sig, features=features,
@@ -3394,6 +3402,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                     n_strategies=len(STRATEGIES),
                     regime_bars=(regime_data or {}).get(sym),
                     est_commission_eur=_comm_eur,
+                    est_all_in_cost_eur=(round(_all_in_eur, 2) if _all_in_eur else None),
                     fixed_risk_eur=(RSI_LIVE_FIXED_RISK_EUR if strat_name == "rsi" else None),
                     pair_stats=_pair_history_stats(sym, strat_name),
                 )

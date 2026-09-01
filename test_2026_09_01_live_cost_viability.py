@@ -137,6 +137,53 @@ def test_cost_gate_log_carries_recovery_fields():
     assert "realised_r_eur=_realised_r_eur" in src and "all_in_cost_eur=_all_in_cost_eur" in src
 
 
+# ── black-box: the whole decision, realistic numbers, no mocks ────────────
+def _gate_decision(entry, stop, qty, eur_per_quote, commission_quote, spread_pct):
+    """Reproduce exactly what _run_entries computes for the recovery gate."""
+    commission_eur = commission_quote * eur_per_quote
+    quote_ccy = "USD"
+    notional_eur = qty * entry * eur_per_quote          # base≈quote for a ~1.0 pair
+    all_in = fr._live_all_in_cost_eur(commission_eur=commission_eur, spread_pct=spread_pct,
+                                      entry_px=entry, notional_eur=notional_eur, quote_ccy=quote_ccy)
+    realised_r_eur = abs(entry - stop) * qty * eur_per_quote
+    blocked = (fr.RSI_LIVE_ASSUMED_EXIT_R * realised_r_eur
+               < fr.RSI_LIVE_MIN_RECOVERY_MULT * all_in)
+    return blocked, realised_r_eur, all_in
+
+
+def test_blackbox_healthy_e45_trade_passes():
+    # EURUSD-ish: entry 1.16, 1.5*ATR stop ~74 pips, qty 7,000 => R ≈ €48,
+    # commission €5.18, spread 0.7 bp.
+    blocked, R, cost = _gate_decision(entry=1.16, stop=1.1526, qty=7000,
+                                      eur_per_quote=0.92, commission_quote=5.63,
+                                      spread_pct=0.007)
+    assert not blocked
+    assert 3.0 <= (0.5 * R) / cost < 6.0          # comfortably above the 3.0 floor
+
+
+def test_blackbox_mxnusd_legacy_1000lot_rejected():
+    # the actual failure: a 1,000-unit legacy trade whose stop had crept in
+    # to ~50 pips of price move => R collapsed to ~€4-5. 0.5R ≈ €2.4 < 3x cost.
+    blocked, R, cost = _gate_decision(entry=0.0588, stop=0.0583, qty=1000,
+                                      eur_per_quote=0.92, commission_quote=5.63,
+                                      spread_pct=0.02)
+    assert blocked
+    assert R < 10                                  # R really did collapse
+
+
+def test_blackbox_boundary_is_monotonic_in_qty():
+    # bigger position (bigger R at fixed stop distance) can only help the
+    # ratio -- the gate must never flip a passing trade to blocked as qty grows.
+    prev_ratio = 0.0
+    for qty in (2000, 4000, 6000, 8000, 12000):
+        _, R, cost = _gate_decision(entry=1.16, stop=1.1526, qty=qty,
+                                    eur_per_quote=0.92, commission_quote=5.63,
+                                    spread_pct=0.007)
+        ratio = (0.5 * R) / cost
+        assert ratio >= prev_ratio - 1e-9, f"ratio dropped at qty={qty}"
+        prev_ratio = ratio
+
+
 def test_modules_parse():
     ast.parse(inspect.getsource(fr))
     import forex.forward_observation as fo

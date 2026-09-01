@@ -43,6 +43,7 @@ def build_proposal(*, account_env: str, strategy: str, symbol: str, direction: s
                    sig: dict, features: dict, positions: dict, equity: float,
                    take_profit: float | None, n_strategies: int,
                    regime_bars=None, est_commission_eur: float | None = None,
+                   est_all_in_cost_eur: float | None = None,
                    fixed_risk_eur: float | None = None,
                    pair_stats: dict | None = None) -> dict:
     """Assemble one trade-proposal dict. `sig` is the strategy's signal dict
@@ -109,7 +110,8 @@ def build_proposal(*, account_env: str, strategy: str, symbol: str, direction: s
         # A typical RSI(2) exit is a SMALL bounce, not the full TP -- the
         # 0.5R figure is the realistic-win check.
         "trade_economics": _economics(entry, sig.get("stop_price"), take_profit,
-                                      est_commission_eur, fixed_risk_eur),
+                                      est_commission_eur, fixed_risk_eur,
+                                      est_all_in_cost_eur),
         # this pair+strategy's own closed-trade record (win_rate_pct, n,
         # avg_pnl_eur, profit_factor). `source` says whether it's this
         # account's history or the SIM 'forex' proxy (LIVE has too few
@@ -119,7 +121,7 @@ def build_proposal(*, account_env: str, strategy: str, symbol: str, direction: s
     }
 
 
-def _economics(entry, stop, tp, commission_eur, risk_eur):
+def _economics(entry, stop, tp, commission_eur, risk_eur, all_in_cost_eur=None):
     try:
         entry = float(entry or 0)
         stop = float(stop or 0)
@@ -128,14 +130,23 @@ def _economics(entry, stop, tp, commission_eur, risk_eur):
             return {"commission_eur": commission_eur}
         rr = abs(tp - entry) / abs(entry - stop)
         out = {"commission_eur": commission_eur, "reward_risk_ratio": round(rr, 2)}
+        # all-in transaction cost = commission + spread + slippage (the number
+        # the deterministic LIVE recovery-vs-cost gate uses). Falls back to
+        # commission alone when the caller could not estimate it.
+        cost = all_in_cost_eur if all_in_cost_eur is not None else commission_eur
+        if all_in_cost_eur is not None:
+            out["all_in_cost_eur"] = round(all_in_cost_eur, 2)
         if risk_eur:
             tp_gross = risk_eur * rr
             out["risk_eur"] = risk_eur
             out["tp_gross_eur"] = round(tp_gross, 1)
-            if commission_eur is not None:
-                out["tp_net_after_commission_eur"] = round(tp_gross - commission_eur, 1)
-                out["small_win_0p5R_net_eur"] = round(0.5 * risk_eur - commission_eur, 1)
-                out["breakeven_bounce_R"] = round(commission_eur / risk_eur, 3)
+            if cost is not None:
+                out["tp_net_after_cost_eur"] = round(tp_gross - cost, 1)
+                out["small_win_0p5R_net_eur"] = round(0.5 * risk_eur - cost, 1)
+                out["breakeven_bounce_R"] = round(cost / risk_eur, 3)
+                # the LIVE gate rejects when this ratio < 3.0 (a signal that
+                # reached the agent already passed it -- near 3.0 = thin).
+                out["recovery_0p5R_to_cost_ratio"] = round((0.5 * risk_eur) / cost, 2) if cost else None
         return out
     except Exception:
         return {"commission_eur": commission_eur}
