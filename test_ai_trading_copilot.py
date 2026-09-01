@@ -158,6 +158,22 @@ def test_max_tokens_headroom():
 _run("MAX_TOKENS raised to >= 2048", test_max_tokens_headroom)
 
 
+def test_prompt_does_not_penalise_mean_reversion_for_lone_agreement():
+    # 2026-09-01: the live shadow log was 21/21 MODIFY -- the agent was
+    # told a low agreement_count is "the clearest REJECT case", but for
+    # rsi/bb/pullback (contrarian) agreement_count is structurally ~1.
+    s = tc._SYSTEM
+    assert "STRATEGY FAMILIES" in s
+    assert "agreement_count is almost always 1" in s or "agreement_count == 1" in s
+    assert "Never penalise a mean-reversion signal for agreement_count" in s
+    assert "START FROM APPROVE" in s
+    # the old blanket rule must be gone
+    assert "lone low-agreement signal in a hostile regime is the clearest REJECT" not in s
+
+
+_run("prompt: mean-reversion not penalised for structural low agreement", test_prompt_does_not_penalise_mean_reversion_for_lone_agreement)
+
+
 def test_no_sdk_is_hold():
     # force `import anthropic` to fail even if the real SDK is installed
     _uninstall_fake()
