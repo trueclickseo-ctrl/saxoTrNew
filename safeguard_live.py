@@ -129,6 +129,15 @@ def run_safeguard_live() -> list[FixOutcomeLive]:
                                            f.detail + " — LIVE: not auto-closed. A human must "
                                            f"decide what this position is.",
                                            uic=getattr(f, "uic", 0), needs_human=True))
+        elif f.kind == "suspect_orphan":
+            # live shows 0 net but a stop order is still "Working" -- reconcile
+            # (correctly, after the 2026-08-26 ZC false-positive) refuses to
+            # remove it on one snapshot. But if it STAYS suspect for hours
+            # (attention's 2h grace), the position really did close and a
+            # stop order is dangling -- a human should close the loop
+            # (2026-09-01: a SEK donchian:GBPUSD stop-out sat "suspect" ~3.5h).
+            outcomes.append(FixOutcomeLive(f.symbol, "suspect_orphan_persisting", False,
+                                           f.detail, needs_human=True))
         else:
             outcomes.append(FixOutcomeLive(f.symbol, f.kind, f.kind != "stop_replace_failed",
                                            f.detail))
@@ -163,7 +172,15 @@ def _escalate_live(outcomes: list[FixOutcomeLive]) -> None:
     try:
         for o in outcomes:
             key = f"safeguard-live:{o.symbol}:{o.action}"
-            if o.needs_human:
+            if o.action == "suspect_orphan_persisting":
+                attention.raise_attention(
+                    key, source="safeguard (LIVE forex)",
+                    title=f"{o.symbol}: position looks closed but a stop order is dangling",
+                    detail=o.detail + " — if this has been showing for 2h+ the position "
+                                      "really did close; cancel the leftover stop / confirm flat "
+                                      "in SaxoTrader.",
+                    severity="warn", grace_minutes=120, recheck_minutes=180)
+            elif o.needs_human:
                 attention.raise_attention(
                     key, source="safeguard (LIVE forex)",
                     title=f"{o.symbol}: unattributable real-money position",

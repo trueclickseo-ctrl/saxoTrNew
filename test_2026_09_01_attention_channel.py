@@ -214,6 +214,18 @@ def test_live_untracked_is_needs_human_not_fixed():
         assert "needs_human" in inspect.getsource(fo)
 
 
+def test_suspect_orphan_persisting_escalates_with_grace():
+    # 2026-09-01: a position that shows 0 net but a still-"Working" stop
+    # order -- reconcile won't remove it on one snapshot (2026-08-26 ZC
+    # false-positive), but if it STAYS suspect for 2h+ the position really
+    # closed -> escalate (a SEK donchian:GBPUSD sat suspect ~3.5h).
+    for mod in (safeguard_live, safeguard_live_eur):
+        src = inspect.getsource(mod)
+        assert 'f.kind == "suspect_orphan"' in src
+        assert '"suspect_orphan_persisting"' in src
+        assert "grace_minutes=120" in src   # 2h grace -> a stale one-snapshot blip clears first
+
+
 def test_live_escalation_routes_to_attention():
     raised = []
     real = attention.raise_attention

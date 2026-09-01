@@ -117,6 +117,9 @@ def run_safeguard_live_eur() -> list[FixOutcomeLiveEur]:
                                               f.detail + " — LIVE: not auto-closed. A human must "
                                               f"decide what this position is.",
                                               uic=getattr(f, "uic", 0), needs_human=True))
+        elif f.kind == "suspect_orphan":
+            outcomes.append(FixOutcomeLiveEur(f.symbol, "suspect_orphan_persisting", False,
+                                              f.detail, needs_human=True))
         else:
             outcomes.append(FixOutcomeLiveEur(f.symbol, f.kind, f.kind != "stop_replace_failed",
                                               f.detail))
@@ -141,7 +144,14 @@ def run_safeguard_live_eur() -> list[FixOutcomeLiveEur]:
     try:
         for o in outcomes:
             key = f"safeguard-live-eur:{o.symbol}:{o.action}"
-            if o.needs_human:
+            if o.action == "suspect_orphan_persisting":
+                attention.raise_attention(
+                    key, source="safeguard (LIVE EUR forex)",
+                    title=f"{o.symbol}: position looks closed but a stop order is dangling",
+                    detail=o.detail + " — if this has been showing for 2h+ the position really "
+                                      "did close; cancel the leftover stop / confirm flat.",
+                    severity="warn", grace_minutes=120, recheck_minutes=180)
+            elif o.needs_human:
                 attention.raise_attention(
                     key, source="safeguard (LIVE EUR forex)",
                     title=f"{o.symbol}: unattributable real-money position",
