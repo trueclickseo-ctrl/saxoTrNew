@@ -226,6 +226,11 @@ WINDOWS_TASKS = {
     # rationale as the LIVE keepalive above. This is a SIM-named task, so
     # unlike the LIVE one the watchdog IS allowed to auto-restart it.
     "Saxo SIM Token Keepalive": ("ATOS Saxo SIM Token Keepalive", "saxo_sim_keepalive.log", 20, 1),
+    # AI shadow-study heartbeat email, 09:00 + 21:00 PKT (2026-09-01). The
+    # log is written the same minute the task runs, so grace=20 is fine
+    # even though there's a ~12h gap between the two daily runs. first-run
+    # wait 13h covers "registered just after 09:00, first fire is 21:00".
+    "AI Health Email": ("ATOS AI Health Email", "ai_health_email.log", 20, 13),
 }
 
 # ── Registry: Claude-native scheduled tasks (no Windows entry) ──────────────
