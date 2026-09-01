@@ -24,6 +24,17 @@ Account-level, once at the top:
 - **Naked position count** (live, read-only check via
   `housekeeping.scan_naked_positions()`) — a quick pre-live health signal
 
+Extra sections (appended after the per-module tables):
+
+- **AI Shadow Study** (`_ai_health_section()`, 2026-09-01) — a GREEN/RED
+  "the AI bot is up and scoring" banner + decisions-24h / proposals-24h /
+  LLM-ok-rate (7d) / last-decision age / 7d verdict mix. Driven by
+  `ai_shadow_health.check()`. Also sent standalone twice a day by the
+  "ATOS AI Health Email" task (09:00 + 21:00 PKT).
+- **AI Trading Journal** (`_ai_journal_section()`) — the read-only
+  per-trade retrospective roll-up (roadmap #18).
+- **RSI profit-ladder** forward-test (`_profit_ladder_section()`).
+
 Deliberately **not** included: a "mismatch count" from
 `housekeeping.reconcile_all()`. That function mutates live state
 (cancels/replaces orders) as it corrects what it finds — the right

@@ -14,14 +14,15 @@ Running log of the AI layer's build. Update this file **whenever an AI change la
 |---|---|
 | **AI live in production?** | **Shadow study RUNNING** (`327e204`) — `enabled_sim` + `enabled_live_shadow` + `agent_enabled` all true. `claude-sonnet-5` scores every RSI signal on SIM + both LIVE accounts, logs it, **applies nothing** (`shadow_mode` true on SIM; `can_apply_decision` hardcoded False for LIVE). **AI Trading Journal** also live (`journal_enabled:true`) — read-only per-trade retrospective, all forex accounts. |
 | **AI touching money (SIM or LIVE)?** | **No.** Sprint 4 code (SIM sizing) is shipped but inert. LIVE acting is impossible without a code change (`_AI_ACTING_ACCOUNTS = {"sim"}`). |
-| **Last thing shipped** | Fill-price confirmation (`2aa38c0`) — real Saxo fill recorded, not the stale scan close · P2 give-back report (`b252cd7`) · MAE/MFE window-bug fix + journal LIVE coverage (`4e2edb8`) · AI Trading Journal (`738364a`) · Sprint 4 inert + `ai_shadow_health.py` (`5e71c49`) |
-| **Operator tasks** | ✅ Reboot done · ✅ Anthropic console monthly spend cap set (**$10**, ~$0.05 used) |
-| **`anthropic` SDK** | `1.2.0`. `ANTHROPIC_API_KEY` set (User scope), inherited by scheduled tasks post-reboot — verified with real `agent_meta.ok=true` calls on SIM + `live` + `live_eur`. |
+| **Last thing shipped** | Copilot prompt fix — was 21/21 MODIFY, now APPROVE/MODIFY/REJECT contrast (`2a554f3`, live A/B 4 APPROVE / 1 MODIFY) · `MAX_TOKENS`→2048 + truncation salvage (`d00c019`) · shadow-study **green heartbeat email** 09:00 + 21:00 PKT + daily-digest section (`bcf5407`) · AI-data integrity sweep — net-P&L gate, stale-chart-bar repair, `verify_ai_data.py`, MAE/MFE write-time cap, ledger dedup (`e292ce4`→`c9751e1`) · fill-price confirmation + Saxo closed-trade reconciliation (`2aa38c0`, `7bd1f31`) |
+| **Operator tasks** | ✅ Reboot · ✅ Anthropic console monthly spend cap **$10** · ✅ "ATOS AI Health Email" task registered (09:00 + 21:00 PKT) |
+| **`anthropic` SDK** | `1.2.0`. `ANTHROPIC_API_KEY` set (User scope), inherited by scheduled tasks — verified with real `agent_meta.ok=true` calls on SIM + `live` + `live_eur` (2026-09-01: 21 real timed decisions, 5–28 s latency). |
+| **Data the AI reads** | Post the 2026-09-01 sweep: entry/exit = **real Saxo fills** (LIVE re-verified vs `closedpositions` every run); net P&L sanity-gated for the unreliable SIM feed; stale SIM chart bars repaired to the live quote; MAE/MFE capped at write time; ledger deduped. `python verify_ai_data.py` = repeatable audit (currently 3 pre-fix historical rows, flagged). |
 
 ### ⏭️ NEXT — nothing to build; two things accumulating
 
-1. **Shadow evidence (M4)** — ~3 decisions logged so far (SIM+LIVE), target ~40. Weekly: `python ai_shadow_report.py`. Then the **M5 review** (does APPROVE beat REJECT through a rough patch?), then flip `config/ai.json shadow_mode → false` to activate Sprint 4 on SIM.
-2. **Clean give-back data (P2)** — the 2026-09-01 MAE/MFE fix **and** the same-day fill-price fix (`2aa38c0`) mean clean excursion *and* entry/exit-price data only starts now (~15–30 SIM closes/day). Weekly: `python report_giveback.py`. When mature (~1 week, ≥10–15 clean trades/strategy), it drives the exit-improvement / SuperTrend-V2 decision.
+1. **Shadow evidence (M4)** — **21 decisions** logged (SIM+LIVE) as of 2026-09-01, target ~40. The prompt fix (`2a554f3`) means decisions from here carry real APPROVE/MODIFY/REJECT variety (before, 21/21 were MODIFY). Weekly: `python ai_shadow_report.py`. Then the **M5 review**, then flip `config/ai.json shadow_mode → false` to activate Sprint 4 on SIM.
+2. **Clean give-back data (P2)** — the 2026-09-01 MAE/MFE + fill-price + net-P&L fixes mean clean data only starts now (~15–30 SIM closes/day). Weekly: `python report_giveback.py`. When mature (~1 week, ≥10–15 clean trades/strategy), it drives the exit-improvement / SuperTrend-V2 decision.
 
 Everything else (opportunity ranking, calendar blackout, correlation gate, PLN-slippage measurement) is queued — see **Next modules queue** below.
 
@@ -34,6 +35,8 @@ The AI layer is wrapped in try/except everywhere: a broken `ANTHROPIC_API_KEY` /
 - **silent hook** — ≥3 distinct agent-eligible signals logged as proposals in 48h, none ever got a decision;
 - **total silence** — neither `data/ai_*.jsonl` written in >96h while the study is on.
 Runnable by hand: `python ai_shadow_health.py`. Tests: `test_2026_08_31_ai_shadow_health.py` (16 ✅). Only fires when `config/ai.json` has the study on; silent otherwise.
+
+**Positive heartbeat (2026-09-01, `bcf5407`)** — the watchdog only emails on *problems*, so a healthy bot was silent. Added: `daily_summary._ai_health_section()` (GREEN/RED banner + decisions-24h / proposals-24h / LLM-ok-rate / last-decision-age / 7d-verdict-mix, in the 23:30 digest) and `ai_shadow_health.py --email` / `heartbeat_html()` — a standalone status email scheduled as **"ATOS AI Health Email", 09:00 + 21:00 PKT** (`setup_ai_health_email.ps1`, in `scheduler_watchdog.WINDOWS_TASKS`). `test_2026_09_01_ai_health_email.py` (7 ✅).
 
 ### Cost controls in place (`aace238`)
 | Lever | Effect |
@@ -58,7 +61,7 @@ Plus: set a hard **monthly spend limit** on the console.
 | M3.5 | Cost controls + shadow-on-LIVE (log-only, can never act on LIVE) | ✅ | 2026-08-31 | `test_ai_config` two-tier gate asserts; live `evaluate_proposal()` verified |
 | M3.6 | **AI Trading Journal** — read-only per-trade retrospective, SIM + both LIVE | ✅ | 2026-08-31 | `test_2026_08_31_ai_trade_journal` (24 ✅); first run found the MAE/MFE bug |
 | M3.7 | MAE/MFE measurement fixed + 68 corrupted historical cards invalidated | ✅ | 2026-09-01 | `test_2026_09_01_mae_mfe_window_fix` (10 ✅) |
-| **M4** | **Shadow evidence: ~40+ resolved decisions spanning a user-confirmed adverse stretch** | 🟡 **in progress** (~3 so far) | — | `ai_shadow_report.py`; accumulating SIM + LIVE since 2026-08-31 |
+| **M4** | **Shadow evidence: ~40+ resolved decisions spanning a user-confirmed adverse stretch** | 🟡 **in progress** (21 so far; prompt fixed `2a554f3` so verdicts now vary) | — | `ai_shadow_report.py`; accumulating SIM + LIVE since 2026-08-31 |
 | M4b | **Clean give-back evidence** — ≥10–15 clean (post-MAE-fix) closed trades per strategy | 🟡 **in progress** (0 so far) | — | `report_giveback.py`; accrues ~15–30/day from 2026-09-01 |
 | M5 | Review: does APPROVE beat REJECT on expectancy through a rough patch? | ⬜ | — | user + report, in conversation |
 | M5b | Review the give-back distribution — which strategies (if any) systematically fail to monetise favorable excursions? | ⬜ | — | user + `report_giveback.py`, in conversation |
