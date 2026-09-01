@@ -27,7 +27,7 @@ redesign and the 2026-08-29/30/31 tuning. Where they disagree, this table wins.
 | Sizing cap | `risk_equity_sek: 35000` (15,000 → 35,000 on 2026-09-01, after the deposit — `_risk_equity()` returns `min(real, cap)`, so it sizes off the consolidated ~35,800 SEK) | `risk_equity_eur: 8000` (unused now — no new entries) |
 | RSI concurrency (8% heat cap) | ~5–6 concurrent — per-trade risk fixed at `RSI_LIVE_FIXED_RISK_EUR = 45` (~500 SEK) | — |
 | Risk per trade | **RSI: fixed ~€45 loss-if-stopped** (`RSI_LIVE_FIXED_RISK_EUR = 45.0`), uniform across pairs. `LIVE_RISK_PCT_OVERRIDE = 0.0075` applies to any non-RSI strategy. | — |
-| Trade viability gate | **LIVE-strict** (`7945f9e`, `c9a6216`): edge-to-cost ratio **5×** not 3× (`_min_edge_ratio()`); a position below **`MIN_LIVE_NOTIONAL_EUR = 3,500`** notional is skipped (`below_min_notional`); an unknown round-trip cost **blocks** on LIVE (`cost_unknown_live`) — SIM still fails-open. Rationale: `reports/live_pair_commission_analysis.py` — at €45 fixed risk every LIVE pair nets +€13–€17 on a 0.5R bounce after the flat ~€5.18 commission; the MXNUSD loss was a legacy 1,000-lot trade where R had collapsed to ~€5. | — |
+| Trade viability gate | **LIVE-strict**: edge-to-cost ratio **5×** not 3× on the 2R target (`_min_edge_ratio()`); **recovery-vs-cost gate** (RSI) — a `RSI_LIVE_ASSUMED_EXIT_R = 0.5`R recovery must clear `RSI_LIVE_MIN_RECOVERY_MULT = 3.0` × the all-in cost (`_live_all_in_cost_eur` = flat commission + one spread crossing + `RSI_LIVE_SLIPPAGE_PIPS = 0.5`-pip slippage; **financing excluded** — holding cost, sign not fixed), else the signal is **rejected** (`recovery_below_cost_margin`), **never resized up**; an unknown round-trip cost **or missing FX rate** blocks on LIVE (`cost_unknown_live`) — SIM still fails-open on unknown cost. **ONE pair-independent rule** (2026-09-01, user) — replaced *both* `MIN_LIVE_NOTIONAL_EUR` and the pair-specific `LIVE_RSI_MIN_UNITS` table: at fixed €45 risk every pair's realised R is €37–45 and commission is a flat €5.18, so a 0.5R recovery clears the all-in cost by **3.1–3.9× on all 17** pairs — no per-pair number to encode. The gate only bites if R collapses (tight stop + lot rounding, or a future low-notional pair) — the MXNUSD failure mode. `RSI_LIVE_ASSUMED_EXIT_R = 0.5` is provisional; the AI journal will measure the real median RSI exit and that one constant gets updated. | — |
 | Trading halt | `LIVE_TRADING_HALTED = False` (lifted 2026-08-28 by explicit go-ahead) | same |
 
 **Gates between a signal and a real order (LIVE only; SIM has none of these):**
@@ -42,10 +42,13 @@ redesign and the 2026-08-29/30/31 tuning. Where they disagree, this table wins.
   raised 2026-08-29 because the cap of 1 let one position consume a whole
   currency slot and blocked nearly every subsequent RSI signal). SIM stays
   unlimited (999).
-- **Cost-clearance gate** — a signal whose own target can't clear
-  `MIN_EDGE_TO_COST_RATIO = 3.0 ×` Saxo's real round-trip commission is
-  skipped. Bigger position size (see the RSI lot ladder) makes more
-  signals clear this.
+- **Cost-clearance gate** — a signal whose own 2R target can't clear
+  `MIN_EDGE_TO_COST_RATIO ×` Saxo's real round-trip commission is
+  skipped (**LIVE: 5×** via `_min_edge_ratio()`; SIM: 3×).
+- **Recovery-vs-cost gate** (`recovery_below_cost_margin`, 2026-09-01) —
+  see the *Trade viability gate* row above. One pair-independent rule,
+  reject-not-resize; replaced *both* `MIN_LIVE_NOTIONAL_EUR` and the
+  pair-specific `LIVE_RSI_MIN_UNITS` table.
 - **RSI fixed per-trade risk** (`RSI_LIVE_FIXED_RISK_EUR = 45.0`,
   2026-08-31) — RSI on both real-money accounts sizes for a **uniform
   ~€45 loss if the stop is hit**, on every pair regardless of stop width.

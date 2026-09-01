@@ -64,7 +64,9 @@ def log_cost_gate_decision(*, account_env: str, strategy: str, symbol: str, dire
                             expected_target_profit_quote: float, round_trip_cost_quote: float | None,
                             expected_target_profit_eur: float | None, round_trip_cost_eur: float | None,
                             min_edge_to_cost_ratio: float, decision: str, reason: str = "",
-                            notional_eur: float | None = None) -> None:
+                            notional_eur: float | None = None,
+                            realised_r_eur: float | None = None,
+                            all_in_cost_eur: float | None = None) -> None:
     """decision: "PASS" or "BLOCKED". Called for every signal that reaches
     this gate, not just the ones it blocks -- the point is to be able to
     ask later "of the signals it let through, how many were actually
@@ -85,6 +87,10 @@ def log_cost_gate_decision(*, account_env: str, strategy: str, symbol: str, dire
         "min_edge_to_cost_ratio": min_edge_to_cost_ratio,
         "decision": decision, "reason": reason,
         "notional_eur": round(notional_eur, 0) if notional_eur is not None else None,
+        "realised_r_eur": round(realised_r_eur, 2) if realised_r_eur is not None else None,
+        "all_in_cost_eur": round(all_in_cost_eur, 2) if all_in_cost_eur is not None else None,
+        "r_to_all_in_cost": (round(realised_r_eur / all_in_cost_eur, 2)
+                             if (realised_r_eur is not None and all_in_cost_eur) else None),
     })
 
 

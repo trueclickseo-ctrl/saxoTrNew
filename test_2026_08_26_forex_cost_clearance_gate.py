@@ -138,11 +138,12 @@ def test_cost_gate_fails_open_on_sim_closed_on_live():
     # failed. The "cost_not_cleared" branch still needs both values.
     assert 'block_reason = True, "cost_not_cleared"' in src
     assert "round_trip_cost is not None and expected_target_profit < round_trip_cost * _edge_ratio" in src
-    # the LIVE-only fail-closed branch
-    assert 'elif _is_live and round_trip_cost is None:' in src
+    # the LIVE-only fail-closed branch (2026-09-01: also blocks when the FX
+    # rate is missing -- the recovery gate can't evaluate without it)
+    assert 'elif _is_live and (round_trip_cost is None or eur_rate_for_log is None):' in src
     assert 'block_reason = True, "cost_unknown_live"' in src
     # ...and it is an ELIF (never reached for sim -> sim stays fail-open)
-    assert src.index('elif _is_live and round_trip_cost is None') > src.index('block_reason = True, "cost_not_cleared"')
+    assert src.index('elif _is_live and (round_trip_cost is None') > src.index('block_reason = True, "cost_not_cleared"')
 _run("forex/runner: cost gate fails OPEN on SIM, CLOSED on LIVE, when the commission lookup fails",
      test_cost_gate_fails_open_on_sim_closed_on_live)
 

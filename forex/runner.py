@@ -1978,29 +1978,72 @@ def _live_price(uic: int, account_key: str) -> float | None:
 # discipline: validate against SIM history before this gates anything LIVE.
 MIN_EDGE_TO_COST_RATIO = 3.0
 
-# 2026-09-01 (user): LIVE gets a STRICTER version of the two viability
-# checks after MXNUSD closed a real -EUR3.05 loss whose only problem was
-# size -- +EUR2.13 gross price move, -EUR5.19 flat commission. On real
-# money:
-#   * the edge-to-cost ratio is 5x, not 3x (bigger safety margin);
-#   * a position below MIN_LIVE_NOTIONAL_EUR of notional is skipped
-#     outright;
+# 2026-09-01 (user): LIVE gets a STRICTER version of the viability checks
+# after MXNUSD closed a real -EUR3.05 loss whose only problem was size --
+# +EUR2.13 gross price move, -EUR5.19 flat commission (a legacy 1,000-lot
+# trade whose R had collapsed to ~EUR5, so the flat fee was ~100% of R). On
+# real money:
+#   * the edge-to-cost ratio on the 2R target is 5x, not 3x;
+#   * the RECOVERY-vs-COST gate below (RSI only) -- a realistic partial
+#     recovery must clear the all-in round-trip cost by a healthy margin;
 #   * an UNKNOWN round-trip cost (the infoprices Commissions lookup
 #     failed) blocks the trade on LIVE instead of passing -- don't gamble
 #     real money on a transient API hiccup. SIM still treats unknown as
 #     "don't block" (forward-test continuity).
-#
-# MIN_LIVE_NOTIONAL_EUR = 3,500 (was first cut at 5,000): the per-pair
-# analysis (reports/live_pair_commission_analysis.py) showed that at the
-# EUR45 FIXED-risk sizing every LIVE HIGH_VOLUME pair already nets +EUR13
-# to +EUR17 on a modest 0.5R bounce after the ~EUR5.18 flat commission --
-# R is pinned at EUR45, so commission is only ~12% of it (the MXNUSD loss
-# was a legacy 1,000-lot trade where R had collapsed to ~EUR5). 5,000
-# dropped 7 economically-fine pairs (NZDUSD/USDCHF/AUDJPY/AUDUSD/GBPAUD/
-# GBPCHF/GBPJPY, notional EUR3,560-4,934); 3,500 blocks only the genuinely
-# tiny (the ~EUR1,090 MXNUSD class) and keeps all 17.
 MIN_LIVE_EDGE_TO_COST_RATIO = 5.0
-MIN_LIVE_NOTIONAL_EUR       = 3500.0
+
+# ── LIVE RSI recovery-vs-cost viability gate (2026-09-01, user) ────────────
+# REPLACES both the generic MIN_LIVE_NOTIONAL_EUR and the pair-specific
+# LIVE_RSI_MIN_UNITS table -- ONE pair-independent rule.
+#
+# Rationale: at a FIXED EUR45 risk the economics are already near-identical
+# across every LIVE pair -- realised R EUR37-45, flat commission ~EUR5.18,
+# so commission is ~12% of R everywhere and a 0.5R recovery clears the
+# all-in cost by 3.1-4.0x on all 17 HIGH_VOLUME pairs. There is no
+# per-pair number to encode. What actually breaks the economics is R
+# COLLAPSING (tight stop + lot rounding, or a future low-notional pair) --
+# that is what this gate catches, directly.
+#
+# The gate: ASSUMED_EXIT_R * realised_R_eur  >=  MIN_RECOVERY_MULT * all_in_cost_eur
+# all_in_cost = flat Saxo commission + one live spread crossing + a small
+# round-trip slippage buffer. Tom/Next financing is deliberately NOT in the
+# gate: it is a HOLDING cost (only accrues if held overnight) and its sign
+# is not even fixed (carry can be earned). It is tracked in the analysis
+# report and will show up in the journal's realised per-trade costs.
+#
+# ASSUMED_EXIT_R = 0.5 is provisional -- a stand-in for the real median RSI
+# exit, which the AI trade journal will measure over ~1 week of clean LIVE
+# data; then this one constant is updated (the mechanism does not change).
+# MIN_RECOVERY_MULT = 3.0 is the user's chosen safety margin. At EUR45 risk
+# all 17 HIGH_VOLUME pairs clear it today (ratios 3.0-4.0x); the gate only
+# bites if R collapses.
+RSI_LIVE_ASSUMED_EXIT_R      = 0.5     # provisional; journal replaces with measured median
+RSI_LIVE_MIN_RECOVERY_MULT   = 3.0     # 0.5R must be >= 3x the all-in round-trip cost
+RSI_LIVE_SLIPPAGE_PIPS       = 0.5     # round-trip slippage buffer (~0.25 pip each side)
+_EM_SWAP_SURCHARGE_CCY = frozenset({"MXN", "RUB", "TRY", "ZAR"})   # +0.30% Tom/Next markup (report only)
+
+
+def _live_all_in_cost_eur(commission_eur: float | None, spread_pct: float | None,
+                          entry_px: float, notional_eur: float | None,
+                          quote_ccy: str) -> float | None:
+    """All-in round-trip TRANSACTION cost of a LIVE trade, in EUR:
+        flat Saxo commission
+      + crossing the live bid/ask spread once (half in, half out)
+      + an RSI_LIVE_SLIPPAGE_PIPS round-trip slippage buffer.
+    Financing is a separate holding cost -- not included here. Pure (no API
+    calls). Returns None if the flat commission (the dominant term) is
+    unknown.
+    """
+    if commission_eur is None:
+        return None
+    cost = float(commission_eur)
+    if notional_eur:
+        if spread_pct:                                     # _spread_pct returns % of mid
+            cost += (spread_pct / 100.0) * notional_eur
+        if entry_px:
+            pip = 0.01 if quote_ccy == "JPY" else 0.0001
+            cost += (RSI_LIVE_SLIPPAGE_PIPS * pip / entry_px) * notional_eur
+    return cost
 
 
 def _min_edge_ratio() -> float:
@@ -3580,14 +3623,32 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             if _base_rate:
                 notional_eur = qty * _base_rate
 
+        # LIVE RSI recovery-vs-cost viability gate (2026-09-01, user). At the
+        # fixed EUR45 risk every pair's economics are the same, so there is
+        # no per-pair table -- one rule: a realistic partial recovery
+        # (RSI_LIVE_ASSUMED_EXIT_R of R) must clear the all-in round-trip
+        # cost by RSI_LIVE_MIN_RECOVERY_MULT. Catches R collapsing (tight
+        # stop + lot rounding, or a future low-notional pair). REJECT, never
+        # resize up. Replaces MIN_LIVE_NOTIONAL_EUR and LIVE_RSI_MIN_UNITS.
+        _realised_r_eur = (abs(sig["close"] - sig["stop_price"]) * qty * eur_rate_for_log
+                           if eur_rate_for_log else None)
+        _all_in_cost_eur = _live_all_in_cost_eur(
+            commission_eur=(round_trip_cost * eur_rate_for_log)
+                           if (round_trip_cost is not None and eur_rate_for_log) else None,
+            spread_pct=spread, entry_px=sig["close"], notional_eur=notional_eur,
+            quote_ccy=quote_ccy_for_log)
+
         blocked = False
         block_reason = ""
         if round_trip_cost is not None and expected_target_profit < round_trip_cost * _edge_ratio:
             blocked, block_reason = True, "cost_not_cleared"
-        elif _is_live and round_trip_cost is None:
+        elif _is_live and (round_trip_cost is None or eur_rate_for_log is None):
             blocked, block_reason = True, "cost_unknown_live"
-        elif _is_live and notional_eur is not None and notional_eur < MIN_LIVE_NOTIONAL_EUR:
-            blocked, block_reason = True, "below_min_notional"
+        elif (_is_live and strat_name == "rsi"
+              and _realised_r_eur is not None and _all_in_cost_eur is not None
+              and RSI_LIVE_ASSUMED_EXIT_R * _realised_r_eur
+                  < RSI_LIVE_MIN_RECOVERY_MULT * _all_in_cost_eur):
+            blocked, block_reason = True, "recovery_below_cost_margin"
 
         forward_observation.log_cost_gate_decision(
             account_env=ACCOUNT_ENV, strategy=strat_name, symbol=sym, direction=direction,
@@ -3599,15 +3660,19 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             decision="BLOCKED" if blocked else "PASS",
             reason=block_reason or ("cost_unknown" if round_trip_cost is None else ""),
             notional_eur=notional_eur,
+            realised_r_eur=_realised_r_eur, all_in_cost_eur=_all_in_cost_eur,
         )
         if blocked:
-            if block_reason == "below_min_notional":
-                logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] — LIVE notional "
-                            f"€{notional_eur:,.0f} ({qty:,} units) below the €{MIN_LIVE_NOTIONAL_EUR:,.0f} "
-                            f"minimum — too small vs the flat ~€5 commission")
+            if block_reason == "recovery_below_cost_margin":
+                logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] — a "
+                            f"{RSI_LIVE_ASSUMED_EXIT_R:.2f}R recovery "
+                            f"(€{RSI_LIVE_ASSUMED_EXIT_R * _realised_r_eur:,.1f}) doesn't clear "
+                            f"{RSI_LIVE_MIN_RECOVERY_MULT:.1f}× the all-in cost "
+                            f"(€{_all_in_cost_eur:,.2f}) at {qty:,} units — realised R only "
+                            f"€{_realised_r_eur:,.1f}, rejecting (not resizing up)")
             elif block_reason == "cost_unknown_live":
-                logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] — round-trip cost "
-                            f"lookup failed on a LIVE account; not opening a real position blind")
+                logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] — round-trip cost or FX "
+                            f"rate lookup failed on a LIVE account; not opening a real position blind")
             else:
                 logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] "
                             f"— target profit {expected_target_profit:.2f} doesn't clear "
