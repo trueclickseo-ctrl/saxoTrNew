@@ -21,6 +21,7 @@ failure. This function MUST NOT raise.
 from __future__ import annotations
 
 import json
+import re
 import time
 
 import ai.config as ai_config
@@ -31,7 +32,13 @@ import ai.config as ai_config
 MULTIPLIER_FLOOR = 0.25
 MULTIPLIER_CEIL  = 1.00
 EVAL_TIMEOUT_S   = 25.0
-MAX_TOKENS       = 1024
+# 2026-09-01: was 1024 -- one shadow decision (sim|rsi|CADZAR) came back
+# truncated mid-`comment`, JSON parse failed, and it was logged as a false
+# HOLD. The decision schema is tiny; the model's own `comment` prose is
+# what runs long. 2048 gives headroom (the comment is trimmed to 200 chars
+# in _coerce_decision anyway), and _salvage_partial() below recovers
+# action + size_multiplier from a still-truncated response.
+MAX_TOKENS       = 2048
 
 _SYSTEM = """You are ATOS's Trading Copilot. You evaluate trade proposals from a \
 deterministic quantitative trading bot. You NEVER place, block, or modify an order \
@@ -165,6 +172,24 @@ def _extract_json(text: str) -> dict | None:
     return None
 
 
+_ACT_RE  = re.compile(r'"action"\s*:\s*"([A-Za-z]+)"')
+_MULT_RE = re.compile(r'"size_multiplier"\s*:\s*(-?\d+(?:\.\d+)?)')
+
+
+def _salvage_partial(text: str) -> dict | None:
+    """Recover a decision from a response that was cut off (max_tokens) part
+    way through -- `action` and `size_multiplier` are the first fields in
+    the schema, so they're intact even when the trailing `comment` isn't."""
+    m_act = _ACT_RE.search(text or "")
+    if not m_act:
+        return None
+    out = {"action": m_act.group(1), "comment": "(response truncated -- salvaged)"}
+    m_mult = _MULT_RE.search(text or "")
+    if m_mult:
+        out["size_multiplier"] = float(m_mult.group(1))
+    return out
+
+
 def evaluate_proposal(proposal: dict) -> dict:
     """Return a decision dict for `proposal`. Never raises. Any failure ->
     action 'HOLD'."""
@@ -198,6 +223,8 @@ def evaluate_proposal(proposal: dict) -> dict:
 
     text = "".join(b.text for b in getattr(resp, "content", []) if getattr(b, "type", "") == "text")
     raw = _extract_json(text)
+    if not isinstance(raw, dict) and getattr(resp, "stop_reason", None) == "max_tokens":
+        raw = _salvage_partial(text)          # cut off mid-comment -> keep action + mult
     if not isinstance(raw, dict):
         return _hold(f"unparseable response: {text[:120]!r}", latency, model)
     return _coerce_decision(raw, model, latency)

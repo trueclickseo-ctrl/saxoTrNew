@@ -125,6 +125,39 @@ def test_refusal_is_hold():
 _run("a model refusal -> HOLD", test_refusal_is_hold)
 
 
+def test_truncated_response_is_salvaged_not_a_false_hold():
+    # 2026-09-01: MAX_TOKENS=1024 cut a real MODIFY off mid-`comment`,
+    # json.loads failed, and it was logged as a false HOLD. With
+    # stop_reason='max_tokens' the prefix's action + size_multiplier are
+    # recovered instead.
+    partial = ('{"action": "MODIFY", "size_multiplier": 0.5, '
+               '"adjusted_stop_loss": null, "comment": "Deep oversold but the book already')
+    _install_fake_anthropic(reply=partial, stop_reason="max_tokens")
+    try:
+        d = tc.evaluate_proposal(_PROP)
+        assert d["action"] == "MODIFY", d
+        assert abs(d["size_multiplier"] - 0.5) < 1e-9
+    finally:
+        _uninstall_fake()
+_run("a max_tokens-truncated MODIFY is salvaged, not a false HOLD", test_truncated_response_is_salvaged_not_a_false_hold)
+
+
+def test_truncated_with_no_action_still_holds():
+    _install_fake_anthropic(reply='{"size_multiplier": 0.5, "comment": "blah', stop_reason="max_tokens")
+    try:
+        assert tc.evaluate_proposal(_PROP)["action"] == "HOLD"
+    finally:
+        _uninstall_fake()
+_run("a truncated response with no action field -> HOLD", test_truncated_with_no_action_still_holds)
+
+
+def test_max_tokens_headroom():
+    assert tc.MAX_TOKENS >= 2048
+
+
+_run("MAX_TOKENS raised to >= 2048", test_max_tokens_headroom)
+
+
 def test_no_sdk_is_hold():
     # force `import anthropic` to fail even if the real SDK is installed
     _uninstall_fake()
