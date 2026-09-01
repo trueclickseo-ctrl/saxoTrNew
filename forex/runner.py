@@ -3634,13 +3634,21 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         if _base_rate:
             notional_eur = qty * _base_rate
 
-        # LIVE RSI recovery-vs-cost viability gate (2026-09-01, user). At the
-        # fixed EUR45 risk every pair's economics are the same, so there is
-        # no per-pair table -- one rule: a realistic partial recovery
-        # (RSI_LIVE_ASSUMED_EXIT_R of R) must clear the all-in round-trip
-        # cost by RSI_LIVE_MIN_RECOVERY_MULT. Catches R collapsing (tight
-        # stop + lot rounding, or a future low-notional pair). REJECT, never
-        # resize up. Replaces MIN_LIVE_NOTIONAL_EUR and LIVE_RSI_MIN_UNITS.
+        # RSI recovery-vs-cost viability check (2026-09-01, user). One rule,
+        # pair-independent: a realistic partial recovery (RSI_LIVE_ASSUMED_
+        # EXIT_R of R) must clear the all-in round-trip cost by RSI_LIVE_MIN_
+        # RECOVERY_MULT. Catches R collapsing (tight stop + lot rounding, a
+        # low-notional pair).
+        #   * LIVE: a REJECT (never resize up) -- replaced MIN_LIVE_NOTIONAL_
+        #     EUR + the LIVE_RSI_MIN_UNITS table.
+        #   * SIM: NOT a reject -- SIM keeps full forward-test breadth (RSI on
+        #     all 184 pairs, user 2026-09-01). But `_rsi_recovery_thin` is
+        #     recorded on every SIM RSI signal so the AI shadow study /
+        #     journal / analysis can tell a cost-dominated signal from a
+        #     healthy one without the trade being suppressed.
+        # The 0.5R assumption is RSI(2)-specific; other strategies keep the
+        # 2R-target `cost_not_cleared` gate. SIM still fails OPEN on unknown
+        # cost/rate.
         _realised_r_eur = (abs(sig["close"] - sig["stop_price"]) * qty * eur_rate_for_log
                            if eur_rate_for_log else None)
         _all_in_cost_eur = _live_all_in_cost_eur(
@@ -3648,6 +3656,10 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                            if (round_trip_cost is not None and eur_rate_for_log) else None,
             spread_pct=spread, entry_px=sig["close"], notional_eur=notional_eur,
             quote_ccy=quote_ccy_for_log)
+        _rsi_recovery_thin = (
+            strat_name == "rsi" and _realised_r_eur is not None and _all_in_cost_eur
+            and RSI_LIVE_ASSUMED_EXIT_R * _realised_r_eur
+                < RSI_LIVE_MIN_RECOVERY_MULT * _all_in_cost_eur)
 
         blocked = False
         block_reason = ""
@@ -3655,10 +3667,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             blocked, block_reason = True, "cost_not_cleared"
         elif _is_live and (round_trip_cost is None or eur_rate_for_log is None):
             blocked, block_reason = True, "cost_unknown_live"
-        elif (_is_live and strat_name == "rsi"
-              and _realised_r_eur is not None and _all_in_cost_eur is not None
-              and RSI_LIVE_ASSUMED_EXIT_R * _realised_r_eur
-                  < RSI_LIVE_MIN_RECOVERY_MULT * _all_in_cost_eur):
+        elif _is_live and _rsi_recovery_thin:
             blocked, block_reason = True, "recovery_below_cost_margin"
 
         forward_observation.log_cost_gate_decision(
@@ -3669,9 +3678,12 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             round_trip_cost_eur=(round_trip_cost * eur_rate_for_log) if (round_trip_cost is not None and eur_rate_for_log) else None,
             min_edge_to_cost_ratio=_edge_ratio,
             decision="BLOCKED" if blocked else "PASS",
-            reason=block_reason or ("cost_unknown" if round_trip_cost is None else ""),
+            reason=(block_reason
+                    or ("recovery_thin_sim" if _rsi_recovery_thin else "")
+                    or ("cost_unknown" if round_trip_cost is None else "")),
             notional_eur=notional_eur,
             realised_r_eur=_realised_r_eur, all_in_cost_eur=_all_in_cost_eur,
+            recovery_thin=bool(_rsi_recovery_thin),
         )
         if blocked:
             if block_reason == "recovery_below_cost_margin":
@@ -3866,6 +3878,10 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 cost_eur=(round_trip_cost * eur_rate_entry) if (round_trip_cost is not None and eur_rate_entry) else None,
                 cost_to_edge_ratio=(round(expected_target_profit / round_trip_cost, 2)
                                     if round_trip_cost else None),
+                all_in_cost_eur=_all_in_cost_eur,
+                recovery_to_cost_ratio=(round(RSI_LIVE_ASSUMED_EXIT_R * _realised_r_eur / _all_in_cost_eur, 2)
+                                        if (_realised_r_eur is not None and _all_in_cost_eur) else None),
+                recovery_thin=bool(_rsi_recovery_thin),
                 exposure_before_eur=exposure_before_notional,
                 exposure_after_eur=_currency_exposure_notional_eur(positions),
             )

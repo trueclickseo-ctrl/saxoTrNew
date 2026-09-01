@@ -75,6 +75,16 @@ that trade; if "mae_mfe_coarse" is true it's a loose upper bound from a single d
 bar (intraday strategy) -- use it directionally only. Otherwise if MAE/MFE still \
 looks wildly inconsistent with net P&L and risk, say so and don't over-read it.
 
+COST HEALTH (Saxo charges a flat ~EUR5.18 round-trip commission, so a small \
+position is commission-dominated): "recovery_to_cost_ratio" is a realistic 0.5R \
+recovery divided by the all-in cost (commission + spread + slippage). LIVE rejects \
+anything below 3.0. "recovery_thin": true means this RSI signal WOULD have been \
+rejected on LIVE -- on SIM it ran anyway because SIM tests all 184 pairs at full \
+breadth. Treat a recovery_thin trade as a marginal setup: a small win on one is not \
+evidence the pair is good, and a loss on one is partly a sizing/cost problem, not a \
+signal problem. In the day_summary, call out if the thin trades cluster on \
+particular pairs or tiers.
+
 For EACH trade return:
 - entry_quality: "excellent" | "good" | "fair" | "poor"  -- judged on regime fit, \
   signal/regime alignment, volatility, and how the trade sat against the book.
@@ -251,6 +261,17 @@ def build_dossiers(since: str | None = None, limit: int | None = None) -> list[d
             "atr_at_entry": t.get("atr_at_entry"),
             "quantity": t.get("quantity"),
             "risk_eur": t.get("risk_eur"),
+            # cost health AT ENTRY -- the flat Saxo commission dominates, so
+            # a small position (or a tight-stop pair) can be cost-dominated.
+            # `recovery_to_cost_ratio` is 0.5R / all-in cost (LIVE rejects
+            # < 3.0); `recovery_thin` True == this RSI signal would have been
+            # REJECTED on LIVE -- on SIM it ran anyway (full 184-pair
+            # breadth), so weigh it as a marginal setup, not a clean one.
+            "cost_eur": t.get("cost_eur"),
+            "all_in_cost_eur": t.get("all_in_cost_eur"),
+            "cost_to_edge_ratio": t.get("cost_to_edge_ratio"),
+            "recovery_to_cost_ratio": t.get("recovery_to_cost_ratio"),
+            "recovery_thin": bool(t.get("recovery_thin")),
             "regime_at_entry": ai.get("regime"),
             "ai_action": ai.get("action"),
             "ai_size_multiplier": ai.get("size_multiplier"),
@@ -362,7 +383,8 @@ def _day_context_row(d: dict) -> dict:
             "strategy": d.get("strategy"), "direction": d.get("direction"),
             "regime": d.get("regime_at_entry"),
             "net_pnl_eur": d.get("net_pnl_eur"), "r_multiple": d.get("r_multiple"),
-            "exit_reason": d.get("exit_reason")}
+            "exit_reason": d.get("exit_reason"),
+            "recovery_thin": bool(d.get("recovery_thin"))}
 
 
 def generate(dossiers: list[dict], day_context: list[dict] | None = None) -> dict:

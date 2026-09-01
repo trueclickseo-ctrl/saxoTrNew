@@ -6,13 +6,16 @@ MXNUSD closed a real -EUR3.05 LIVE loss whose only fault was size:
 1,000-lot trade whose R had collapsed to ~EUR5). On real money the cost
 gate is now:
   * edge-to-cost ratio 5x, not 3x on the 2R target (_min_edge_ratio);
-  * RECOVERY-vs-COST (RSI): a realistic partial recovery
+  * RECOVERY-vs-COST (RSI, LIVE + SIM): a realistic partial recovery
     (RSI_LIVE_ASSUMED_EXIT_R of R) must clear RSI_LIVE_MIN_RECOVERY_MULT x
     the all-in transaction cost (commission + spread + slippage) -- else
     the signal is REJECTED ("recovery_below_cost_margin"), never resized
-    up. ONE pair-independent rule; replaced BOTH the generic
-    MIN_LIVE_NOTIONAL_EUR and the pair-specific LIVE_RSI_MIN_UNITS table
-    (at fixed EUR45 risk the economics are the same for every pair).
+    up. ONE pair-independent rule; on LIVE it replaced BOTH the generic
+    MIN_LIVE_NOTIONAL_EUR and the LIVE_RSI_MIN_UNITS table. Enforced on
+    SIM too (2026-09-01, user) across all 184 pairs, so the AI shadow
+    study / journal never accumulate a cost-dominated RSI trade the LIVE
+    gate would reject. rsi-scoped -- 0.5R is an RSI(2) assumption; other
+    strategies keep the 2R-target `cost_not_cleared` gate.
   * an UNKNOWN round-trip cost OR missing FX rate blocks on LIVE
     (SIM still passes on unknown cost -- forward-test continuity).
 No signal/entry/exit change -- these only ever REMOVE marginal trades.
@@ -69,19 +72,31 @@ def test_recovery_gate_constants():
     assert "RSI_LIVE_ASSUMED_HOLD_DAYS" not in dir(fr)
 
 
-def test_sim_gets_the_cost_calc_but_not_the_block():
-    # the AI accumulates data from SIM too, so the all-in cost + realised R
-    # must be computed identically on SIM -- only the *block* is LIVE-only.
+def test_sim_records_recovery_thin_but_does_not_block():
+    # 2026-09-01 (user): SIM keeps FULL breadth -- RSI on all 184 pairs, no
+    # block -- but every SIM RSI signal is TAGGED `recovery_thin` when a
+    # 0.5R recovery can't clear 3x the all-in cost, so the AI shadow study /
+    # journal / analysis can separate the healthy signals from the
+    # cost-dominated ones.
     src = inspect.getsource(fr._run_entries)
-    # notional_eur (=> full all-in cost, spread + slippage) is NOT behind an
-    # `if _is_live` guard any more
+    # the flag is computed rsi-scoped, for EVERY account
+    assert "_rsi_recovery_thin = (" in src
+    assert 'strat_name == "rsi" and _realised_r_eur is not None' in src
+    # ...but the BLOCK is LIVE-only
+    assert "elif _is_live and _rsi_recovery_thin:" in src
+    # notional_eur (=> full all-in cost) is computed for every account
     i_notl = src.index("notional_eur = None")
-    seg = src[i_notl:i_notl + 260]
-    assert "if _is_live" not in seg, "notional_eur must be computed for SIM too"
-    assert "_base_rate = _eur_per_unit(sym[:3], akey)" in seg
-    # the recovery *block* stays LIVE-only
-    j = src.index('"recovery_below_cost_margin"')
-    assert "_is_live and strat_name ==" in src[j - 420:j]
+    assert "if _is_live" not in src[i_notl:i_notl + 260]
+    # the flag is threaded into the cost-gate telemetry + the entry card
+    assert "recovery_thin=bool(_rsi_recovery_thin)" in src
+    assert 'reason=(block_reason' in src and '"recovery_thin_sim"' in src
+
+
+def test_recovery_thin_reaches_the_journal_dossier():
+    import ai.features.trade_journal as tj
+    src = inspect.getsource(tj.build_dossiers)
+    assert '"recovery_thin"' in src and '"recovery_to_cost_ratio"' in src
+    assert "recovery_thin" in tj._SYSTEM and "recovery_to_cost_ratio" in tj._SYSTEM
 
 
 def test_gate_block_logic_in_source():
@@ -92,13 +107,10 @@ def test_gate_block_logic_in_source():
     assert "RSI_LIVE_ASSUMED_EXIT_R * _realised_r_eur" in src
     assert "RSI_LIVE_MIN_RECOVERY_MULT * _all_in_cost_eur" in src
     assert '"recovery_below_cost_margin"' in src
-    # RSI-scoped (the only LIVE strategy; a future one needs its own logic)
-    i = src.index('"recovery_below_cost_margin"')
-    assert 'strat_name == "rsi"' in src[i-400:i]
     # realised R is the RISK-BASED qty's stop distance -- never a bumped qty
     assert 'abs(sig["close"] - sig["stop_price"]) * qty * eur_rate_for_log' in src
-    # LIVE now also blocks when the FX rate is missing (can't evaluate)
-    assert "round_trip_cost is None or eur_rate_for_log is None" in src
+    # LIVE also blocks when the FX rate is missing (SIM fails open there)
+    assert "_is_live and (round_trip_cost is None or eur_rate_for_log is None)" in src
 
 
 def test_reject_never_resizes_up():

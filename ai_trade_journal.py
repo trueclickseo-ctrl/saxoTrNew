@@ -19,6 +19,14 @@ import os
 import sys
 from collections import Counter
 
+# The roll-up printout uses box-drawing chars; a Windows console defaults to
+# cp1252 and raises UnicodeEncodeError on them. Force UTF-8 on our streams.
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 import ai.features.trade_journal as tj
 
 G, R, Y, C, DIM, X, B = (
