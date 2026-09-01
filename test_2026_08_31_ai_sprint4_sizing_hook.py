@@ -130,10 +130,12 @@ def test_runner_hook_placement_and_shape():
     # the Sprint 4 apply block exists and is gated on can_apply_decision
     assert "ai_config.can_apply_decision(ACCOUNT_ENV)" in src
     assert "_ai_apply_decision_to_qty(" in src
-    # it sits AFTER sizing and BEFORE the cost gate
+    # it sits AFTER sizing and BEFORE the cost gate. (Anchor on the gate's
+    # own computation -- `_round_trip_cost_quote_ccy` also appears earlier
+    # now as an AI-proposal input, 2026-09-01, which is not the gate.)
     i_size = src.index("strat_mod.size_position(")
     i_hook = src.index("_ai_apply_decision_to_qty(")
-    i_cost = src.index("_round_trip_cost_quote_ccy(")
+    i_cost = src.index("expected_target_profit = abs(tp")
     assert i_size < i_hook < i_cost, "hook must run after sizing, before the cost gate"
     # REJECT -> continue (same skip shape as the deterministic gates)
     hook = src[i_hook: i_cost]

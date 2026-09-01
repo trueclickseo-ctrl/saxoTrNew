@@ -601,6 +601,42 @@ def _pnl_module() -> str:
     return "forex"
 
 
+_PAIR_STATS_CACHE: dict = {}
+
+
+def _pair_history_stats(sym: str, strat_name: str) -> dict | None:
+    """Per-pair closed-trade track record for the AI proposal -- so the
+    Copilot can weigh 'this pair/strategy has actually worked' alongside
+    the live signal. LIVE has almost no closed history yet, so this uses
+    the SIM 'forex' ledger as the proxy and SAYS SO (source field). Cached
+    for the process. Read-only; never raises."""
+    key = (strat_name,)
+    if key not in _PAIR_STATS_CACHE:
+        try:
+            # prefer this account's own module; fall back to SIM 'forex'
+            rows = pnl_tracker.get_strategy_symbol_summary(_pnl_module())
+            src = _pnl_module()
+            if sum(r.get("n", 0) for r in rows) < 30:
+                rows = pnl_tracker.get_strategy_symbol_summary("forex")
+                src = "forex (SIM proxy)"
+            by_sym = {r.get("symbol"): r for r in rows if r.get("strategy") == strat_name}
+            _PAIR_STATS_CACHE[key] = (by_sym, src)
+        except Exception:
+            _PAIR_STATS_CACHE[key] = ({}, None)
+    by_sym, src = _PAIR_STATS_CACHE[key]
+    r = by_sym.get(sym)
+    n = (r or {}).get("trades") or 0
+    if not r or n < 3 or r.get("unresolved"):
+        return None
+    return {
+        "n_closed": n,
+        "win_rate_pct": r.get("win_rate"),
+        "avg_pnl_eur": round((r.get("total_pnl") or 0) / n, 2),
+        "profit_factor": r.get("profit_factor"),
+        "source": src,
+    }
+
+
 def _filter_pairs_for_account(pairs: list) -> list:
     """2026-08-28 two-account LIVE design: SEK LIVE and EUR LIVE (originally
     bb and rsi respectively; both rsi since 2026-08-31) traded the SAME
@@ -3299,6 +3335,14 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         # signal is evaluated once per day, not every rescan.
         if ai_config is not None and ai_config.ai_enabled_for(ACCOUNT_ENV):
             try:
+                # give the agent the trade's real economics: the flat Saxo
+                # round-trip commission (in EUR) and this pair/strategy's
+                # closed-trade track record. Commission is size-flat, so a
+                # nominal 10k-lot quote is representative.
+                _uic_ai = get_pair(sym)["uic"]
+                _rt_q = _round_trip_cost_quote_ccy(_uic_ai, 10_000, akey)
+                _q_rate = _eur_per_unit(sym[3:6] if len(sym) >= 6 else "", akey)
+                _comm_eur = round(_rt_q * _q_rate, 2) if (_rt_q and _q_rate) else None
                 _prop = _ai_build_proposal(
                     account_env=ACCOUNT_ENV, strategy=strat_name, symbol=sym,
                     direction=direction, sig=sig, features=features,
@@ -3306,6 +3350,9 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                     take_profit=_resolve_tp_price(sig, direction),
                     n_strategies=len(STRATEGIES),
                     regime_bars=(regime_data or {}).get(sym),
+                    est_commission_eur=_comm_eur,
+                    fixed_risk_eur=(RSI_LIVE_FIXED_RISK_EUR if strat_name == "rsi" else None),
+                    pair_stats=_pair_history_stats(sym, strat_name),
                 )
                 _ai_log_proposal(_prop)
                 if (ai_config.agent_enabled_for(ACCOUNT_ENV)

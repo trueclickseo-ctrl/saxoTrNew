@@ -98,6 +98,17 @@ HOW TO WEIGH THE INPUTS (guidance, not a formula -- use judgement)
   ~3+ positions in the SAME currency or SAME direction as this trade (correlated \
   risk) -> MODIFY. A handful of unrelated positions is not a reason to trim.
 - rsi2 (mean-reversion): the further from 50, the stronger the setup -> lean APPROVE.
+- trade_economics: what this trade nets in EUR AFTER Saxo's flat round-trip \
+  commission. `tp_net_after_commission_eur` is the payoff if the full take-profit \
+  hits; `small_win_0p5R_net_eur` is the realistic case (RSI(2) usually exits on a \
+  small bounce, not the full TP) -- if that is <= a few EUR, or negative, the \
+  trade is commission-dominated -> MODIFY or REJECT. `breakeven_bounce_R` is how \
+  much of the risk unit the price must move just to cover commission.
+- pair_history: this pair+strategy's own closed-trade record. A well-sampled \
+  (n >= ~15) HIGH win_rate_pct with a positive avg_pnl_eur is a real reason to \
+  APPROVE (and, once size adjustment is enabled, to keep full size); a poor or \
+  thinly-sampled record is a reason to MODIFY. `source` tells you if it is this \
+  account's own history or the SIM proxy -- weight the proxy less.
 
 HARD RULES
 - size_multiplier must be <= 1.0. You can only ever REDUCE size, never amplify it.
