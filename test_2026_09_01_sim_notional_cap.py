@@ -124,7 +124,9 @@ def test_forex_cap_hook_present_and_sim_only():
     assert 'ACCOUNT_ENV == "sim"' in src and "sim_max_trade_notional_eur()" in src
     i_ai = src.index("_ai_apply_decision_to_qty(")
     i_cap = src.index("sim_max_trade_notional_eur()")
-    i_cost = src.index("_round_trip_cost_quote_ccy(")
+    # the GATE's own commission call (qty-based) -- not the AI-proposal
+    # block's nominal-10k advisory call earlier in the function (2026-09-01).
+    i_cost = src.index("_round_trip_cost_quote_ccy(uic, qty, akey)")
     assert i_ai < i_cap < i_cost, "cap must sit after the AI sizing hook and before the cost gate"
     block = src[i_cap - 400: i_cost]
     assert 'pair_info["min_units"]' in block   # floors to the instrument minimum

@@ -89,7 +89,7 @@ _run("forex/runner: weekend scan still generates + emails signals (market_closed
 def test_live_signals_emailed_on_normal_runs_too():
     import forex.runner as r
     src = inspect.getsource(r._run_entries)
-    tail = src[src.rindex("return entries") - 800:]
+    tail = src[src.rindex("return entries") - 2200:]
     assert "send_signals_detected" in tail and "entered=entered_syms" in tail
     assert 'ACCOUNT_ENV in ("live", "live_eur")' in tail
 _run("forex/runner: LIVE signals are emailed on normal (open-market) runs too",

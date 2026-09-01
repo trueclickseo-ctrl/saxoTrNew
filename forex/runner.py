@@ -2848,7 +2848,7 @@ def _reconcile_closed_vs_saxo() -> None:
 
 def _run_exits(strat_name: str, strat_mod, positions: dict,
                market_data: dict, akey: str, dry_run: bool,
-               today_str: str) -> int:
+               today_str: str, state: dict | None = None) -> int:
     exits = 0
     prefix = f"{strat_name}:"
     for key in [k for k in positions if k.startswith(prefix)]:
@@ -3170,6 +3170,18 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
                 )
         del positions[key]
         exits += 1
+        # Checkpoint IMMEDIATELY, not just at the end of this strategy's pass
+        # (2026-09-01): the real close order above already happened at the
+        # broker. If the process is killed/watchdog-restarted before the
+        # pass-end _save_state below, the NEXT scan still sees this position
+        # as open and re-sends a close against an already-flat position --
+        # Saxo executes it as a fresh position the other way (naked, and
+        # untracked by every module, because state still thought it was
+        # gap:GBPNZD/EURCAD/etc. and never recorded a NEW one). This is the
+        # exact class that created the untracked 41,000 GBPNZD long
+        # (2026-08-24) and a 46,000 EURCAD naked short (2026-09-01, SIM).
+        if state is not None and not dry_run:
+            _save_state(state)
     return exits
 
 
@@ -3179,7 +3191,8 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                  live_prices: dict | None = None,
                  agreement: dict | None = None,
                  weight: float = 1.0,
-                 regime_data: dict | None = None) -> int:
+                 regime_data: dict | None = None,
+                 state: dict | None = None) -> int:
     # regime_data: the FULL daily-bar market_data dict (unfiltered), used
     # only to fold a regime label into the AI trade-proposal log (Sprint 2).
     # `market_data` (4th arg) may be a momentum-filtered subset for some
@@ -3237,6 +3250,26 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         return 0
 
     open_syms = {k.split(":", 1)[1] for k in positions if k.startswith(prefix)}
+
+    # Ledger-backed re-entry guard (2026-09-01). `positions` is this run's
+    # loaded state -- normally checkpointed after every entry/exit (see the
+    # `state is not None` saves below), but as a second, independent line of
+    # defense against exactly the divergence that stacked 4 SIM EURCAD longs
+    # in one afternoon (a scan opened it, was killed/watchdog-restarted
+    # before its checkpoint saved, and the next scan's state didn't know
+    # about it) -- fold in every symbol this strategy already has an OPEN
+    # row for in the pnl ledger, even if `positions` doesn't know about it.
+    try:
+        _ledger_open_syms = {r["symbol"] for r in pnl_tracker.get_open_positions(module=_pnl_module())
+                             if r.get("strategy") == strat_name}
+    except Exception:
+        _ledger_open_syms = set()
+    _ledger_only = _ledger_open_syms - open_syms
+    if _ledger_only:
+        logger.warning(f"  [{strat_name}] ledger already has an OPEN position on "
+                       f"{sorted(_ledger_only)} that local state didn't know about "
+                       f"-- not stacking a duplicate")
+    open_syms = open_syms | _ledger_open_syms
 
     if strat_name in ("london_breakout", "london_breakout_v2"):
         # London/NY Breakout: fetch H1 bars for the configured pairs only.
@@ -3899,6 +3932,15 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 # even if this position closes (TP/SL) while price is still
                 # beyond the range boundary.
                 _mark_lbo_v2_session_traded(sig["session_key"])
+        # Checkpoint IMMEDIATELY (2026-09-01), not just at the end of this
+        # strategy's pass: the real entry order above already happened at
+        # the broker. If the process is killed/watchdog-restarted before the
+        # pass-end _save_state, the NEXT scan's `positions` won't have this
+        # entry, its open_syms won't exclude `sym`, and the strategy can
+        # signal + open the SAME pair again -- the exact mechanism that
+        # stacked 4 SIM EURCAD longs in one afternoon.
+        if state is not None and not dry_run:
+            _save_state(state)
         entries += 1
         entered_syms.append(sym)
 
@@ -4182,7 +4224,7 @@ def run_exits_only(dry_run: bool = True,
         exits = 0
         try:
             exits = _run_exits(strat_name, strat_mod, positions,
-                               market_data, akey, dry_run, today_str)
+                               market_data, akey, dry_run, today_str, state=state)
         except Exception as exc:
             # See the matching try/except in run_daily() for the full
             # writeup -- same fix, same reason: one rejected close order
@@ -4201,7 +4243,7 @@ def run_exits_only(dry_run: bool = True,
                     f"exit rules (entries stay blocked)")
         try:
             n = _run_exits(strat_name, STRATEGIES[strat_name], positions,
-                           market_data, akey, dry_run, today_str)
+                           market_data, akey, dry_run, today_str, state=state)
         except Exception as exc:
             logger.error(f"  [{strat_name}] legacy exits pass crashed, continuing: {exc}")
             n = 0
@@ -4384,7 +4426,7 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
         exits = entries = 0
         try:
             exits = _run_exits(strat_name, strat_mod, positions,
-                               market_data, akey, dry_run, today_str)
+                               market_data, akey, dry_run, today_str, state=state)
             # entries_blocked is always False now (see the risk pre-flight
             # block above) -- kept as a variable rather than removed outright
             # so this stays a one-line revert if the loss-limit/drawdown
@@ -4414,7 +4456,7 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
                 entries = _run_entries(strat_name, strat_mod, positions,
                                        _edata, equity, akey, dry_run, today_str,
                                        live_prices=live_prices, agreement=agreement,
-                                       weight=w, regime_data=market_data)
+                                       weight=w, regime_data=market_data, state=state)
         except Exception as exc:
             # 2026-08-25: a single rejected order (e.g. WouldExceedMargin)
             # used to crash out of this entire function uncaught, which
@@ -4448,7 +4490,7 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
         logger.info(f"  Strategy: {strat_name.upper()}  (legacy positions — exit rules only, no entries)")
         try:
             n = _run_exits(strat_name, STRATEGIES[strat_name], positions,
-                           market_data, akey, dry_run, today_str)
+                           market_data, akey, dry_run, today_str, state=state)
         except Exception as exc:
             logger.error(f"  [{strat_name}] legacy exits pass crashed, continuing: {exc}")
             n = 0

@@ -77,7 +77,11 @@ def test_entry_loop_applies_ladder_only_for_live_rsi_before_cost_gate():
     # fallback -- still gated to live RSI, still before the cost gate.
     assert 'if RSI_LIVE_FIXED_RISK_EUR:' in src and 'else:' in src[src.index('if RSI_LIVE_FIXED_RISK_EUR:'):]
     snap_at = src.index("_snap_rsi_live_lot(qty)")
-    cost_at = src.index("_round_trip_cost")
+    # anchor on the GATE's own commission lookup (qty-based), not the first
+    # "_round_trip_cost" substring in the function -- the AI-proposal block
+    # (2026-09-01) calls _round_trip_cost_quote_ccy on a nominal 10k lot
+    # earlier, for advisory economics only, not the gate itself.
+    cost_at = src.index("round_trip_cost = _round_trip_cost_quote_ccy(uic, qty, akey)")
     assert snap_at < cost_at, "lot sizing (ladder or fixed-risk cap) must run before the cost gate"
 _run("forex/runner: _run_entries sizes live RSI lots (fixed-risk primary, ladder fallback) before the cost gate",
      test_entry_loop_applies_ladder_only_for_live_rsi_before_cost_gate)
