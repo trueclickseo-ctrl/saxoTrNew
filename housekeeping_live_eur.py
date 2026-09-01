@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import os
 import smtplib
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
@@ -282,6 +283,85 @@ def scan_naked_positions_live_eur(snapshot: "LiveSnapshot | None" = None,
     else:
         logger.info("[housekeeping_live_eur] scan_naked_positions_live_eur: everything protected")
     return naked
+
+
+# ── Consistency guards for the safeguard fix pass ──────────────────────
+# Mirror of housekeeping_live.py's guards (kept as a separate copy per the
+# "each real-money account gets its own independent safety net" rule).
+# scan_naked_positions_live_eur() reports off ONE snapshot -- safe for a
+# read-only warning, NOT for firing a real-money order. Saxo's pooled
+# /port/v1/orders/me can transiently come back empty/short (rate limit,
+# mid-OMS update, FIFO re-attribution blip on the shared margin pool), so
+# a position with a good OCO stop can momentarily look "naked". The
+# safeguard must see the same uic naked in TWO snapshots ~3s apart before
+# it acts, and must confirm the stop it POSTed actually went live.
+
+_SECOND_SNAPSHOT_DELAY_S = 3.0
+_STOP_CONFIRM_DELAY_S = 2.0
+
+
+def orders_snapshot_looks_unreliable(snap: "LiveSnapshot") -> bool:
+    """True when /orders/me almost certainly came back degraded: open
+    positions but ZERO working orders -- a funded account always carries
+    OCO brackets, so that is a bad fetch, not "every position is naked"."""
+    has_positions = any(
+        p and p[0]["PositionBase"].get("Amount")
+        for p in snap.positions_by_uic.values()
+    )
+    n_working_orders = sum(len(v) for v in snap.orders_by_uic.values())
+    return has_positions and n_working_orders == 0
+
+
+def confirm_naked_live_eur(first_snapshot: "LiveSnapshot",
+                           first_naked: list) -> list:
+    """Two-snapshot agreement gate. Returns only the naked positions still
+    naked in a fresh snapshot ~3s later; [] if either snapshot's orders
+    look unreliable (skip the fix pass this cycle)."""
+    if not first_naked:
+        return []
+    if orders_snapshot_looks_unreliable(first_snapshot):
+        logger.warning("[housekeeping_live_eur] naked scan: first snapshot's /orders looks "
+                       "degraded (open positions but 0 working orders) -- skipping the "
+                       "safeguard fix pass this cycle")
+        return []
+
+    time.sleep(_SECOND_SNAPSHOT_DELAY_S)
+    second = fetch_live_snapshot()
+    if orders_snapshot_looks_unreliable(second):
+        logger.warning("[housekeeping_live_eur] naked scan: confirming snapshot's /orders looks "
+                       "degraded -- skipping the safeguard fix pass this cycle")
+        return []
+
+    second_naked = {n.uic: n for n in scan_naked_positions_live_eur(snapshot=second, send_email=False)}
+    confirmed, dropped = [], []
+    for n in first_naked:
+        if n.uic in second_naked:
+            confirmed.append(second_naked[n.uic])
+        else:
+            dropped.append(n.symbol)
+    if dropped:
+        logger.warning(f"[housekeeping_live_eur] naked scan: {dropped} looked naked in one "
+                       f"snapshot but not the confirming one -- NOT acting (transient "
+                       f"pooled-snapshot inconsistency, not a real naked position)")
+    return confirmed
+
+
+def stop_order_is_working(oid: str) -> bool:
+    """Confirm a protective stop we just POSTed reached the broker's order
+    book (Saxo returns an OrderId on ACCEPTANCE, not on it going live).
+    Fail open (True) if the confirm call itself errors."""
+    if not oid:
+        return False
+    try:
+        time.sleep(_STOP_CONFIRM_DELAY_S)
+        resp = saxo_client.get_orders(env="live_eur")
+        for o in resp.get("Data", resp) or []:
+            if str(o.get("OrderId")) == str(oid):
+                return o.get("Status") in ("Working", "Parked", "WaitCondition", None)
+        return False
+    except Exception as exc:
+        logger.warning(f"[housekeeping_live_eur] could not confirm protective stop {oid}: {exc}")
+        return True
 
 
 # ── Email — always [LIVE-EUR]-tagged, own sender ────────────────────────

@@ -419,6 +419,7 @@ _run("safeguard_live._fix_naked_position_live(): no live current price -> skippe
 
 def test_fix_naked_buy_direction_stop_price_below_current():
     import safeguard_live as sgl
+    import housekeeping_live as hkl
     import saxo_client
     n = _naked(direction="Buy", price=1.1000, uncovered=1000)
     captured = {}
@@ -428,6 +429,7 @@ def test_fix_naked_buy_direction_stop_price_below_current():
     with patch.object(saxo_client, "get_account_key", return_value="sek-key"), \
          patch("forex.runner.set_account_env"), \
          patch("forex.runner.get_price_decimals", return_value=5, create=True), \
+         patch.object(hkl, "stop_order_is_working", return_value=True), \
          patch("saxo_order.place_protective_stop", side_effect=fake_place):
         outcome = sgl._fix_naked_position_live(n)
     assert outcome.fixed is True
@@ -439,6 +441,7 @@ _run("safeguard_live._fix_naked_position_live(): a Buy/long naked position gets 
 
 def test_fix_naked_sell_direction_stop_price_above_current():
     import safeguard_live as sgl
+    import housekeeping_live as hkl
     import saxo_client
     n = _naked(direction="Sell", price=1.1000, uncovered=1000)
     captured = {}
@@ -448,6 +451,7 @@ def test_fix_naked_sell_direction_stop_price_above_current():
     with patch.object(saxo_client, "get_account_key", return_value="sek-key"), \
          patch("forex.runner.set_account_env"), \
          patch("forex.runner.get_price_decimals", return_value=5, create=True), \
+         patch.object(hkl, "stop_order_is_working", return_value=True), \
          patch("saxo_order.place_protective_stop", side_effect=fake_place):
         outcome = sgl._fix_naked_position_live(n)
     assert outcome.fixed is True
@@ -497,10 +501,15 @@ def test_run_safeguard_live_marks_failed_verification_as_not_fixed():
     import safeguard_live as sgl
     import housekeeping_live as hkl
     n = _naked(uic=21, uncovered=1000)
-    snap = _fake_snapshot(positions_by_uic={21: [_position_dict(21, 1000)]})
+    # a snapshot with at least one working order somewhere -> not flagged
+    # "degraded" by the new orders-sanity guard
+    snap = _fake_snapshot(positions_by_uic={21: [_position_dict(21, 1000)]},
+                          orders_by_uic={21: [{"Status": "Working", "BuySell": "Sell",
+                                               "OpenOrderType": "Limit", "Amount": 1000}]})
 
     with patch.object(hkl, "fetch_live_snapshot", return_value=snap), \
          patch.object(hkl, "scan_naked_positions_live", side_effect=[[n], [n]]), \
+         patch.object(hkl, "confirm_naked_live", return_value=[n]), \
          patch.object(hkl, "reconcile_live_forex", return_value=[]), \
          patch.object(sgl, "_fix_naked_position_live",
                      return_value=sgl.FixOutcomeLive(n.symbol, "place_protective_stop", True,

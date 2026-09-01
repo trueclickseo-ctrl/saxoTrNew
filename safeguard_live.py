@@ -102,6 +102,15 @@ def _fix_naked_position_live(n: "hk_live.NakedPositionLive") -> FixOutcomeLive:
         return FixOutcomeLive(n.symbol, "place_protective_stop", False,
                               f"Saxo rejected the protective stop order "
                               f"({n.uncovered_qty:,.0f} @ ~{stop_price:.5f})", uic=n.uic)
+    # Saxo returns an OrderId on ACCEPTANCE -- confirm it actually reached
+    # the order book before calling this a fix (else it's an unprotected
+    # position wearing a fake "fixed" tag until the next run).
+    if not hk_live.stop_order_is_working(new_oid):
+        saxo_client.cancel_order(new_oid, env="live")
+        return FixOutcomeLive(n.symbol, "place_protective_stop", False,
+                              f"Saxo returned order id {new_oid} but it never became a live "
+                              f"order (rejected post-accept) -- position still unprotected, "
+                              f"retrying next cycle", uic=n.uic)
     return FixOutcomeLive(n.symbol, "place_protective_stop", True,
                           f"placed stop for {n.uncovered_qty:,.0f} @ ~{stop_price:.5f} "
                           f"({pct:.0%} from current price {n.current_price:.5f})", uic=n.uic)
@@ -114,7 +123,12 @@ def run_safeguard_live() -> list[FixOutcomeLive]:
     snapshot = hk_live.fetch_live_snapshot()
     outcomes: list[FixOutcomeLive] = []
 
-    naked = hk_live.scan_naked_positions_live(snapshot=snapshot, send_email=False)
+    first_naked = hk_live.scan_naked_positions_live(snapshot=snapshot, send_email=False)
+    # Never fire a real-money stop off a single snapshot -- require the same
+    # uic to look naked in a second snapshot ~3s later, and bail entirely if
+    # either snapshot's /orders came back degraded (2026-09-02 EURUSD false
+    # page). scan_naked_positions_live() still logs/emails the warning above.
+    naked = hk_live.confirm_naked_live(snapshot, first_naked)
     for n in naked:
         outcomes.append(_fix_naked_position_live(n))
 
@@ -148,12 +162,19 @@ def run_safeguard_live() -> list[FixOutcomeLive]:
 
     # ── Verify: re-fetch fresh and re-check what we just touched ──────────
     fresh = hk_live.fetch_live_snapshot()
-    still_naked_uics = {n.uic for n in hk_live.scan_naked_positions_live(snapshot=fresh, send_email=False)}
-
-    for o in outcomes:
-        if o.action == "place_protective_stop" and o.fixed and o.uic in still_naked_uics:
-            o.fixed = False
-            o.detail += " -- VERIFICATION FAILED: still shows naked/under-protected after the fix"
+    if hk_live.orders_snapshot_looks_unreliable(fresh):
+        # A degraded verify snapshot would flip every just-placed stop to
+        # "VERIFICATION FAILED" on noise -- exactly the false page we're
+        # fixing. The placement-time confirm (stop_order_is_working) and the
+        # next run's re-scan are the backstops.
+        logger.warning("[safeguard_live] verify snapshot's /orders looks degraded -- "
+                       "keeping fix outcomes as reported, next run will re-check")
+    else:
+        still_naked_uics = {n.uic for n in hk_live.scan_naked_positions_live(snapshot=fresh, send_email=False)}
+        for o in outcomes:
+            if o.action == "place_protective_stop" and o.fixed and o.uic in still_naked_uics:
+                o.fixed = False
+                o.detail += " -- VERIFICATION FAILED: still shows naked/under-protected after the fix"
 
     for o in outcomes:
         _tag = "NEEDS HUMAN" if o.needs_human else ("FIXED" if o.fixed else "NOT FIXED")
