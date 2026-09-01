@@ -239,7 +239,63 @@ def _check(now: datetime | None, cfg: dict | None) -> list[str]:
     return problems
 
 
+def heartbeat_html() -> tuple[str, str]:
+    """(subject, html_body) -- a POSITIVE 'the AI bot is up and green'
+    status (or the problems if not). For `--email`, schedulable as often
+    as wanted; the watchdog still only emails on problems."""
+    problems = check()
+    now = datetime.now(timezone.utc)
+    decs, props = _load_jsonl(DECISIONS), _load_jsonl(PROPOSALS)
+
+    def _within(rows, hrs):
+        cut = now - timedelta(hours=hrs)
+        return [r for r in rows if (_parse_ts(r) or datetime.min.replace(tzinfo=timezone.utc)) >= cut]
+
+    d24, p24 = _within(decs, 24), _within(props, 24)
+    d7 = _within(decs, 24 * 7)
+    ok7 = sum(1 for d in d7 if _is_ok(d))
+    last_dec = max((_parse_ts(d) for d in decs if _parse_ts(d)), default=None)
+    last_ago = f"{(now - last_dec).total_seconds() / 3600:.1f}h ago" if last_dec else "never"
+    acts = Counter((d.get("agent_action") or d.get("action") or "-") for d in d7)
+
+    if problems:
+        subj = f"[AI] shadow study — {len(problems)} problem(s)"
+        rows = "".join(f"<li>{p}</li>" for p in problems)
+        head = f"<h2 style='color:#c0392b'>&#9679; AI shadow study NOT healthy</h2><ul>{rows}</ul>"
+    else:
+        subj = "[AI] shadow study — healthy ✓"
+        head = ("<h2 style='color:#1e8449'>&#9679; AI shadow study HEALTHY</h2>"
+                "<p>The AI bot is up, scoring signals and logging decisions.</p>")
+    body = f"""<!DOCTYPE html><html><body style="font-family:sans-serif;color:#222">
+    {head}
+    <table cellpadding="6" style="border-collapse:collapse;margin-top:8px">
+      <tr><td>Decisions (24h)</td><td><b>{len(d24)}</b></td></tr>
+      <tr><td>Proposals (24h)</td><td><b>{len(p24)}</b></td></tr>
+      <tr><td>LLM ok (7d)</td><td><b>{ok7}/{len(d7)}</b></td></tr>
+      <tr><td>Total decisions logged</td><td><b>{len(decs)}</b></td></tr>
+      <tr><td>Last decision</td><td><b>{last_ago}</b></td></tr>
+      <tr><td>7d verdicts</td><td><b>{', '.join(f'{k} {v}' for k, v in acts.most_common()) or '-'}</b></td></tr>
+    </table>
+    <p style="color:#888;font-size:12px">ai_shadow_health.py --email · the watchdog still alerts separately on problems only.</p>
+    </body></html>"""
+    return subj, body
+
+
+def send_heartbeat() -> bool:
+    try:
+        from forex.notifier import _send
+        subj, html = heartbeat_html()
+        return bool(_send(subj, html))
+    except Exception as exc:
+        print(f"ai_shadow_health: heartbeat email failed: {exc}")
+        return False
+
+
 def main() -> int:
+    if "--email" in sys.argv:
+        ok = send_heartbeat()
+        print("heartbeat email sent" if ok else "heartbeat email FAILED")
+        return 0 if ok else 1
     problems = check()
     if not problems:
         print("ai_shadow_health: OK -- shadow study pipeline looks healthy "

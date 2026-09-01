@@ -219,6 +219,70 @@ def _ai_journal_section() -> str:
     """
 
 
+def _ai_health_section() -> str:
+    """AI shadow-study heartbeat -- a GREEN 'the bot is alive' block, not
+    just the failure alerts the watchdog sends. Read-only, never raises."""
+    try:
+        import ai_shadow_health as h
+        from datetime import datetime, timezone, timedelta
+        cfg = h._load_config()
+        if not h._study_on(cfg):
+            return ("<h2>AI Shadow Study</h2><p class='muted'>Switched off in "
+                    "config/ai.json &mdash; nothing to monitor.</p>")
+
+        problems = h.check()
+        now = datetime.now(timezone.utc)
+        decs = h._load_jsonl(h.DECISIONS)
+        props = h._load_jsonl(h.PROPOSALS)
+
+        def _within(rows, hrs):
+            cut = now - timedelta(hours=hrs)
+            return [r for r in rows if (h._parse_ts(r) or datetime.min.replace(tzinfo=timezone.utc)) >= cut]
+
+        d24, p24 = _within(decs, 24), _within(props, 24)
+        d7 = _within(decs, 24 * 7)
+        ok7 = sum(1 for d in d7 if h._is_ok(d))
+        ok_rate = f"{ok7}/{len(d7)}" if d7 else "—"
+        last_dec = max((h._parse_ts(d) for d in decs if h._parse_ts(d)), default=None)
+        last_ago = (f"{(now - last_dec).total_seconds() / 3600:.1f}h ago"
+                    if last_dec else "never")
+
+        from collections import Counter
+        acts = Counter((d.get("agent_action") or d.get("action") or "—") for d in d7)
+        act_line = ", ".join(f"{k} {v}" for k, v in acts.most_common()) or "—"
+
+        if problems:
+            banner = ("<div style='background:#3a1212;border-left:4px solid #f85149;"
+                      "padding:10px 14px;border-radius:6px;margin:4px 0 12px'>"
+                      "<b class='neg'>&#9679; NOT HEALTHY</b><ul style='margin:6px 0 0'>"
+                      + "".join(f"<li class='muted'>{p}</li>" for p in problems) + "</ul></div>")
+        else:
+            banner = ("<div style='background:#12261a;border-left:4px solid #3fb950;"
+                      "padding:10px 14px;border-radius:6px;margin:4px 0 12px'>"
+                      "<b class='pos'>&#9679; HEALTHY &mdash; the AI bot is up, scoring signals, "
+                      "logging decisions</b></div>")
+
+        applied = "yes (SIM sizing)" if cfg.get("shadow_mode") is False else "no (shadow only)"
+        strat = ", ".join(cfg.get("agent_strategies") or []) or "all"
+        return f"""
+        <h2>AI Shadow Study</h2>
+        {banner}
+        <div class="metric-row">
+          <div class="metric"><div class="lbl">Decisions 24h</div><div class="val">{len(d24)}</div></div>
+          <div class="metric"><div class="lbl">Proposals 24h</div><div class="val">{len(p24)}</div></div>
+          <div class="metric"><div class="lbl">LLM ok (7d)</div><div class="val">{ok_rate}</div></div>
+          <div class="metric"><div class="lbl">Total decisions</div><div class="val">{len(decs)}</div></div>
+        </div>
+        <p class="muted" style="margin:2px 0 0">
+          Last decision {last_ago} &nbsp;&middot;&nbsp; 7d verdicts: {act_line} &nbsp;&middot;&nbsp;
+          agent strategies: <code>{strat}</code> &nbsp;&middot;&nbsp; acting on trades: {applied}
+          &nbsp;&middot;&nbsp; <code>python ai_shadow_report.py</code> for the study.
+        </p>
+        """
+    except Exception:
+        return ""
+
+
 def _profit_ladder_section() -> str:
     """RSI profit-protection ladder forward-test roll-up (added 2026-08-31).
     Shows ladder (rsi) vs control (advanced_rsi_master) per account and a
@@ -345,7 +409,8 @@ def send_daily_summary(since: str | None = None) -> bool:
     mutate live state, which this report doesn't do. See the Housekeeping/Safeguard emails (every 30 min) for that.</p>
     """
 
-    body = header + "".join(sections) + _ai_journal_section() + _profit_ladder_section()
+    body = (header + "".join(sections) + _ai_health_section()
+            + _ai_journal_section() + _profit_ladder_section())
     subject = f"Daily Summary — {total_trades} trades | {day_sign}${total_pnl:,.0f} | {since}"
     html = _wrap(f"Trading Day — {since}", body)
     return _send_email(subject, html)
