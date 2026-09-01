@@ -526,9 +526,10 @@ def test_forex_live_capital_cap_is_sek_and_separate_from_sim():
     import atos.capital_config as cap
     live_cap = cap.forex_live_risk_equity_sek()
     sim_cap  = cap.forex_risk_equity_eur()
-    assert live_cap == 15000.0, f"expected the 2026-08-28 15,000 SEK cap, got {live_cap}"
+    # 2026-09-01: 15,000 -> 35,000 SEK after the 20,000 SEK deposit (Option A).
+    assert live_cap == 35000.0, f"expected the 2026-09-01 35,000 SEK cap, got {live_cap}"
     assert live_cap != sim_cap, "LIVE's cap must be a separate config value from SIM's, not accidentally shared"
-_run("atos.capital_config: forex_live_risk_equity_sek() returns 15,000 SEK, independent of SIM's EUR cap",
+_run("atos.capital_config: forex_live_risk_equity_sek() returns 35,000 SEK, independent of SIM's EUR cap",
      test_forex_live_capital_cap_is_sek_and_separate_from_sim)
 
 
@@ -1223,11 +1224,11 @@ def test_risk_equity_under_live_env():
     import forex.runner as r
     r.set_account_env("live")
     try:
-        capped = r._risk_equity(1_000_000.0)   # a broker balance far above the 15,000 SEK cap
-        assert capped == 15000.0, f"expected LIVE's 2026-08-28 15,000 SEK cap to bind, got {capped}"
+        capped = r._risk_equity(1_000_000.0)   # a broker balance far above the 35,000 SEK cap
+        assert capped == 35000.0, f"expected LIVE's 2026-09-01 35,000 SEK cap to bind, got {capped}"
     finally:
         r.set_account_env("sim")
-_run("forex/runner: _risk_equity() under LIVE caps at the 15,000 SEK configured capital (was untested)",
+_run("forex/runner: _risk_equity() under LIVE caps at the 35,000 SEK configured capital (was untested)",
      test_risk_equity_under_live_env)
 
 

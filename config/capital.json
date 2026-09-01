@@ -92,13 +92,22 @@
       "account's own portfolio heat cap (_heat_allows_entry()) only sees ITS OWN",
       "open positions (separate state files) -- it has no visibility into the",
       "other account's exposure against this same shared real pool, so real",
-      "aggregate risk can exceed what either account's own 6% heat check shows.",
-      "Restricted by explicit user decision to exactly bb (see forex/runner.py's",
-      "LIVE_ALLOWED_STRATEGIES) on the 17 HIGH_VOLUME_SYMBOLS pairs only."
+      "aggregate risk can exceed what either account's own 8% heat check shows.",
+      "Restricted by explicit user decision to exactly rsi (see forex/runner.py's",
+      "LIVE_ALLOWED_STRATEGIES, switched bb->rsi 2026-08-31) on the 17",
+      "HIGH_VOLUME_SYMBOLS pairs only.",
+      "2026-09-01: raised 15,000 -> 35,000 SEK, explicit user decision (Option A:",
+      "keep per-trade risk at the RSI_LIVE_FIXED_RISK_EUR=45 / ~500 SEK fixed",
+      "amount, just size off the now-real pooled equity). The 20,000 SEK deposit",
+      "landed -- real POOLED balance ~35,800 SEK (verified live via",
+      "/port/v1/balances/me TotalValue). _forex_live_risk_equity() returns",
+      "min(real_equity, cap), so 35,000 lets this account size off the real pool.",
+      "Per-trade risk is UNCHANGED (fixed EUR45); the effect is the 8% RSI heat",
+      "cap now allows ~5-6 concurrent RSI positions here vs ~2-3 at 15,000."
     ],
     "forex_live": {
       "enabled": true,
-      "risk_equity_sek": 15000
+      "risk_equity_sek": 35000
     },
 
     "_forex_live_eur_comment": [
@@ -126,6 +135,9 @@
       "Post-deposit real balance ~= 33,800 SEK (~EUR 3,050); 8,000 EUR is ~2.5x that",
       "-- a deliberate leverage choice for bigger natural size / better commission",
       "ratio (user declined both the 1:1 EUR 3,000 and the 5x EUR 15,000 options).",
+      "2026-09-01: 20,000 SEK deposit landed, real pool now ~35,800 SEK (~EUR 3,300).",
+      "User kept this at EUR 8,000 (still ~2.4x the real EUR share) -- the SEK",
+      "account's cap was raised to 35,000 SEK the same day, this one left as-is.",
       "Risk % stays 0.75%. Paired with an RSI-ONLY 8% heat cap",
       "(_HEAT_LIMIT_BY_STRATEGY in forex/runner.py) allowing ~10 concurrent RSI",
       "positions. Shared-pool caveat unchanged: this account's heat cap can't see",

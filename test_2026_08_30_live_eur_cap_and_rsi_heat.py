@@ -60,10 +60,14 @@ def test_loader_returns_8000():
 _run("atos.capital_config.forex_live_eur_risk_equity_eur() == 8000.0", test_loader_returns_8000)
 
 
-def test_sek_account_cap_untouched():
+def test_sek_account_cap():
+    # 2026-08-30 this asserted the SEK cap "must not move" (the EUR-only raise).
+    # 2026-09-01: after the 20,000 SEK deposit the SEK cap WAS moved
+    # 15,000 -> 35,000 by explicit user decision (Option A) to size off the
+    # now-real ~35,800 SEK pool. EUR cap left at 8,000.
     import atos.capital_config as c
-    assert c.forex_live_risk_equity_sek() == 15000.0, "the SEK LIVE account cap must not move"
-_run("forex_live (SEK) risk_equity_sek still 15,000 -- unchanged", test_sek_account_cap_untouched)
+    assert c.forex_live_risk_equity_sek() == 35000.0, "SEK LIVE cap should be 35,000 (2026-09-01 deposit)"
+_run("forex_live (SEK) risk_equity_sek == 35,000 (2026-09-01 deposit)", test_sek_account_cap)
 
 
 def test_live_risk_pct_still_075():

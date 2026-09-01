@@ -138,15 +138,17 @@ def test_live_caps_reflect_the_2026_08_28_pooled_balance_raise():
     # decision) -- 1,000-unit minimum-lot trades were commission-dominated
     # (flat ~5 EUR round-trip vs ~10 EUR risk budget).
     # 2026-08-30: EUR cap raised 6,000 -> 8,000 (explicit user decision,
-    # AskUserQuestion) ahead of an 18,000 SEK deposit -- ~2.5x the
-    # post-deposit real pooled balance (~33,800 SEK). See capital.json's
-    # forex_live_eur comment. SEK cap unchanged; risk % unchanged at 0.75%.
+    # AskUserQuestion) ahead of an 18,000 SEK deposit.
+    # 2026-09-01: 20,000 SEK deposit landed (real pool ~35,800 SEK). Explicit
+    # user decision (Option A): SEK cap 15,000 -> 35,000 to size off the
+    # now-real pool; EUR cap KEPT at 8,000 (still ~2.4x the real EUR share).
+    # Per-trade RSI risk unchanged (RSI_LIVE_FIXED_RISK_EUR=45).
     import atos.capital_config as cc
     sek_cap = cc.forex_live_risk_equity_sek()
     eur_cap = cc.forex_live_eur_risk_equity_eur()
-    assert sek_cap == 15_000.0, f"expected the 2026-08-28 15,000 SEK cap, got {sek_cap}"
+    assert sek_cap == 35_000.0, f"expected the 2026-09-01 35,000 SEK cap, got {sek_cap}"
     assert eur_cap == 8_000.0, f"expected the 2026-08-30 8,000 EUR cap, got {eur_cap}"
-_run("atos.capital_config: LIVE caps are 15,000 SEK / 8,000 EUR (2026-08-30 EUR raise)",
+_run("atos.capital_config: LIVE caps are 35,000 SEK / 8,000 EUR (2026-09-01 deposit)",
      test_live_caps_reflect_the_2026_08_28_pooled_balance_raise)
 
 
@@ -210,12 +212,16 @@ def test_some_but_not_all_cells_clear_both_gates_at_new_caps():
         f"expected at least 1/{total} cells to clear both gates at the new caps -- "
         f"if this is 0, the 2026-08-28 capital raise isn't achieving its purpose, worth a fresh look"
     )
-    assert both_pass < total, (
-        f"expected LESS than all {total} cells to clear -- this was a deliberate moderate raise "
-        f"(0.75% risk, not 1.00%), not meant for full 34/34 coverage; if this is now {total}/{total}, "
-        f"capital/risk has grown enough to revisit the decision with the user"
+    # 2026-09-01: the SEK cap went 15,000 -> 35,000 after the 20,000 SEK
+    # deposit (explicit user decision). Broad %-based coverage is now the
+    # intended outcome, not a tripwire -- but LIVE RSI actually sizes off
+    # RSI_LIVE_FIXED_RISK_EUR=45, not this %-path, so cell coverage here is
+    # informational. Just assert the raise widened it materially.
+    assert both_pass >= max(1, total // 2), (
+        f"expected the 35,000 SEK cap to clear at least half the {total} cells on the "
+        f"%-path; got {both_pass} -- if far below, re-check the cap / risk % / cost gate"
     )
-_run("Some (not all) of the 34 cells clear both gates at the new 15,000 SEK / 0.75% risk setting (real live data)",
+_run("Most of the 34 cells clear both gates at the 2026-09-01 35,000 SEK / 0.75% setting (real live data)",
      test_some_but_not_all_cells_clear_both_gates_at_new_caps)
 
 
