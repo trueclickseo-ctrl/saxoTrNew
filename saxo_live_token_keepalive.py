@@ -45,10 +45,17 @@ logger = logging.getLogger("saxo_live_token_keepalive")
 def run_once() -> bool:
     try:
         saxo_auth.get_valid_access_token(env="live")
-        logger.info("[keepalive] LIVE token OK (refreshed if it was close to expiry)")
+        # A live /port/v1/users/me call is the only check that catches a
+        # revoked or structurally-broken token -- get_valid_access_token
+        # only does time math on the file's expires_in. See the SIM
+        # keepalive for the 2026-09-01 incident that motivated this.
+        import saxo_client
+        me = saxo_client.test_connection(env="live")
+        logger.info(f"[keepalive] LIVE token OK — {me.get('Name', '?')} "
+                    f"(UserId {me.get('UserId', '?')})")
         return True
     except Exception as exc:
-        logger.error(f"[keepalive] LIVE token refresh FAILED: {exc}")
+        logger.error(f"[keepalive] LIVE token check FAILED: {exc}")
         _send_alert(str(exc))
         return False
 

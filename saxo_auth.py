@@ -268,6 +268,17 @@ def get_valid_access_token(env: str = "sim") -> str:
             "log in interactively — after that this refreshes itself automatically."
         )
 
+    # Structural sanity check: a real Saxo access token is a ~500-char JWT.
+    # A bad Ctrl+V paste into set_token.py once saved the 1-char string
+    # "\x16" and this function returned it happily for hours (2026-09-01).
+    _at = tokens.get("access_token") or ""
+    _hint = "python set_token.py" if env == "sim" else "python saxo_auth.py --live"
+    if len(_at) < 100 or any(ord(c) < 32 or c == " " for c in _at):
+        raise RuntimeError(
+            f"Saved Saxo {env.upper()} access_token is malformed (len {len(_at)}) — "
+            f"likely a bad paste. Re-set it with `{_hint}`."
+        )
+
     expires_at = tokens["obtained_at"] + tokens.get("expires_in", 1200)
     # Refresh a bit early (60s buffer) rather than cutting it exactly at expiry
     if time.time() < expires_at - 60:

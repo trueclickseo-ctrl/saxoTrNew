@@ -45,10 +45,19 @@ logger = logging.getLogger("saxo_sim_token_keepalive")
 def run_once() -> bool:
     try:
         saxo_auth.get_valid_access_token(env="sim")
-        logger.info("[keepalive] SIM token OK (refreshed if it was close to expiry)")
+        # get_valid_access_token only does time math on the file's own
+        # expires_in -- it happily returns a structurally-broken token (e.g.
+        # a bad Ctrl+V paste into set_token.py that saved "\x16") or one
+        # Saxo has since revoked. Confirmed 2026-09-01: it reported "OK" 24
+        # times against a 1-char token while every real scan was failing. A
+        # live /port/v1/users/me call is the only check that means anything.
+        import saxo_client
+        me = saxo_client.test_connection(env="sim")
+        logger.info(f"[keepalive] SIM token OK — {me.get('Name', '?')} "
+                    f"(UserId {me.get('UserId', '?')})")
         return True
     except Exception as exc:
-        logger.error(f"[keepalive] SIM token refresh FAILED: {exc}")
+        logger.error(f"[keepalive] SIM token check FAILED: {exc}")
         _send_alert(str(exc))
         return False
 
