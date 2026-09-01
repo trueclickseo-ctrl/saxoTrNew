@@ -122,6 +122,48 @@ def test_giveback_and_journal_already_skip_invalidated():
     assert 'x.get("mae_mfe_invalidated")' in inspect.getsource(report_giveback._load_trades)
 
 
+# ── orphan ledger-row close ───────────────────────────────────────────
+def test_close_orphan_ledger_rows_closes_only_untracked():
+    import sqlite3
+    import pnl_tracker as pt
+    tmp = os.path.join(BASE, "data", "_test_orphan_ledger.db")
+    for p in (tmp, tmp + "-wal", tmp + "-shm"):
+        if os.path.exists(p):
+            os.remove(p)
+    o_db = pt.DB_PATH
+    pt.DB_PATH = tmp
+    try:
+        pt._conn().close()                                            # creates the schema
+        pt.log_open("forex", "ml", "USDRON", "Buy", 10000, 4.52839)   # will be orphan
+        pt.log_open("forex", "rsi", "EURUSD", "Buy", 10000, 1.16)     # tracked
+        pt.log_open("forex", "ml", "USDRON", "Buy", 10000, 4.52839)   # dup orphan
+        fr.set_account_env("sim")
+        o_mod = fr._pnl_module
+        fr._pnl_module = lambda: "forex"
+        try:
+            n = fr._close_orphan_ledger_rows({"rsi:EURUSD": {}})
+        finally:
+            fr._pnl_module = o_mod
+        assert n == 2
+        con = sqlite3.connect(tmp)
+        openrows = con.execute("SELECT strategy, symbol FROM trades WHERE status!='closed'").fetchall()
+        closed = con.execute("SELECT exit_reason, realized_pnl FROM trades WHERE status='closed'").fetchall()
+        con.close()
+        assert openrows == [("rsi", "EURUSD")]
+        assert all(r[0] == "reconciled_no_state" and r[1] is None for r in closed)
+    finally:
+        pt.DB_PATH = o_db
+        for p in (tmp, tmp + "-wal", tmp + "-shm"):
+            try:
+                os.path.exists(p) and os.remove(p)
+            except OSError:
+                pass
+
+
+def test_close_orphan_wired_into_both_cycles():
+    assert inspect.getsource(fr).count("_close_orphan_ledger_rows(positions)") == 2
+
+
 for _n, _f in list(globals().items()):
     if _n.startswith("test_") and callable(_f):
         _run(_n, _f)

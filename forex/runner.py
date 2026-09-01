@@ -2672,6 +2672,36 @@ def _apply_profit_ladder_stop(key: str, pos: dict, df, strat_name: str,
 
 # ── Per-strategy exit / entry helpers ─────────────────────────────────────────
 
+def _close_orphan_ledger_rows(positions: dict) -> int:
+    """Mark `pnl_ledger.db` open rows closed when the strategy no longer
+    tracks that position in state -- it was closed by a broker-side
+    resting stop (so _run_exits/pnl_tracker.log_close never fired) or
+    cleared by reconciliation. Confirmed 2026-09-01: 719 forex + 1349 etf
+    open rows vs 153 real positions (ml:USDRON 53 open / 0 closed). Closed
+    with realized_pnl NULL -- the true exit P&L is unknown, and every
+    SUM()/AVG() in pnl_tracker's reports skips NULL. Best-effort."""
+    try:
+        import pnl_tracker as _pt
+        mod = _pnl_module()
+        want = {(k.split(":", 1)[0], k.split(":", 1)[1]) for k in positions if ":" in k}
+        with _pt._conn() as c:
+            rows = c.execute(
+                "SELECT id, strategy, symbol FROM trades WHERE module=? AND status!='closed'",
+                (mod,)).fetchall()
+            stale = [r["id"] for r in rows if (r["strategy"], r["symbol"]) not in want]
+            if stale:
+                c.executemany(
+                    "UPDATE trades SET status='closed', realized_pnl=NULL, "
+                    "exit_reason='reconciled_no_state', timestamp_close=? WHERE id=?",
+                    [(datetime.now().isoformat(), i) for i in stale])
+        if stale:
+            logger.info(f"  [ledger] closed {len(stale)} orphan open row(s) with no state position")
+        return len(stale)
+    except Exception as exc:
+        logger.debug(f"  [ledger] orphan-close skipped: {exc}")
+        return 0
+
+
 def _legacy_exit_strategies(active_strategies, positions) -> list:
     """Strategies that have an OPEN position but are no longer in the entry
     allowlist -- e.g. the SEK LIVE account's 4 `donchian:` positions after
@@ -4004,6 +4034,7 @@ def run_exits_only(dry_run: bool = True,
     else:
         state["last_exits_check"] = datetime.now().isoformat()
         _save_state(state)
+        _close_orphan_ledger_rows(positions)
         _reconcile_closed_vs_saxo()
     return {"exits": total_exits, "holding": len(positions), "dry_run": dry_run}
 
@@ -4254,6 +4285,7 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
     else:
         state["last_run"] = datetime.now().isoformat()
         _save_state(state)
+        _close_orphan_ledger_rows(positions)
         _reconcile_closed_vs_saxo()
 
     # ── Order-venue circuit breaker: one email at end of run + retry flag ─────
