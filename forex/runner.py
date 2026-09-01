@@ -3625,12 +3625,14 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         _is_live = ACCOUNT_ENV in ("live", "live_eur")
         _edge_ratio = _min_edge_ratio()
 
-        # LIVE: this trade's EUR notional (qty is in the pair's BASE ccy).
+        # this trade's EUR notional (qty is in the pair's BASE ccy). Computed
+        # for EVERY account -- SIM included -- so the cost-gate telemetry and
+        # the all-in-cost figure the AI accumulates are identical on SIM and
+        # LIVE (the deterministic *block* below is still LIVE-only).
         notional_eur = None
-        if _is_live:
-            _base_rate = _eur_per_unit(sym[:3], akey)
-            if _base_rate:
-                notional_eur = qty * _base_rate
+        _base_rate = _eur_per_unit(sym[:3], akey)
+        if _base_rate:
+            notional_eur = qty * _base_rate
 
         # LIVE RSI recovery-vs-cost viability gate (2026-09-01, user). At the
         # fixed EUR45 risk every pair's economics are the same, so there is

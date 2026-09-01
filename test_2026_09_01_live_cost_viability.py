@@ -69,6 +69,21 @@ def test_recovery_gate_constants():
     assert "RSI_LIVE_ASSUMED_HOLD_DAYS" not in dir(fr)
 
 
+def test_sim_gets_the_cost_calc_but_not_the_block():
+    # the AI accumulates data from SIM too, so the all-in cost + realised R
+    # must be computed identically on SIM -- only the *block* is LIVE-only.
+    src = inspect.getsource(fr._run_entries)
+    # notional_eur (=> full all-in cost, spread + slippage) is NOT behind an
+    # `if _is_live` guard any more
+    i_notl = src.index("notional_eur = None")
+    seg = src[i_notl:i_notl + 260]
+    assert "if _is_live" not in seg, "notional_eur must be computed for SIM too"
+    assert "_base_rate = _eur_per_unit(sym[:3], akey)" in seg
+    # the recovery *block* stays LIVE-only
+    j = src.index('"recovery_below_cost_margin"')
+    assert "_is_live and strat_name ==" in src[j - 420:j]
+
+
 def test_gate_block_logic_in_source():
     src = inspect.getsource(fr._run_entries)
     assert 'block_reason = True, "cost_not_cleared"' in src
