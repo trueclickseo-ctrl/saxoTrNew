@@ -1699,6 +1699,45 @@ def _position_net_pnl_quote_ccy(uic: int, qty: float, direction: str,
     return float(pnl) + float(costs)   # costs is already negative-signed
 
 
+def _sane_net_pnl_quote(net_quote, entry, exit_px, qty, is_long, uic, akey, sym):
+    """Sanity-gate Saxo's positions/me net P&L.
+
+    On LIVE that figure (ProfitLossOnTrade + TradeCostsTotal) is
+    authoritative. On SIM it is UNRELIABLE -- confirmed 2026-09-01: SIM
+    reported ~+$11 net for an MXNUSD rsi 170,000 Buy that moved -$3.91 on
+    price, so the trade booked +8.23 EUR, the WIN/LOSS email said
+    "WIN +$10 / -0.04%", the ML label recorded the loss as a win, and the
+    observation card carried a +0.12R for the journal / give-back.
+
+    Commission is always a COST: a trustworthy net is <= the gross price
+    move and within a sane band of it. When Saxo's number fails that,
+    rebuild net = gross price move - real Saxo-quoted round-trip commission
+    (or a small modeled cost if that lookup fails). Returns
+    (value, was_rebuilt)."""
+    if net_quote is None:
+        return None, False
+    gross = (exit_px - entry) * qty if is_long else (entry - exit_px) * qty
+    implied_cost = gross - net_quote                    # >0 == Saxo net below gross (normal)
+    notional = abs(entry * qty) or 1.0
+    plausible = (implied_cost >= -1e-9
+                 and abs(implied_cost) <= max(notional * 0.01, abs(gross) * 2.0 + 10.0))
+    if plausible:
+        return net_quote, False
+    rt = None
+    try:
+        rt = _round_trip_cost_quote_ccy(uic, qty, akey)
+    except Exception:
+        rt = None
+    if rt is None:
+        rt = min(notional * 0.0006, abs(gross) + notional * 0.0002)
+    fixed = gross - abs(rt)
+    logger.warning(
+        f"  [PNL] {sym}: Saxo net {net_quote:.2f} implausible vs price-move {gross:.2f} "
+        f"(implied cost {implied_cost:.2f}) — rebuilt as {fixed:.2f} "
+        f"(price move − round-trip cost {abs(rt):.2f})")
+    return fixed, True
+
+
 # ── Fill confirmation ───────────────────────────────────────────────────────
 # Saxo's order POST (/trade/v2/orders) returns ONLY an OrderId -- never a
 # fill confirmation and never a fill price. Until 2026-09-01 the code took
@@ -2766,6 +2805,8 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
         # estimate below if this lookup fails (network hiccup, no match).
         _paper = _is_paper_position(pos)
         net_pnl_quote = None if (dry_run or _paper) else _position_net_pnl_quote_ccy(uic, qty, direction, entry)
+        net_pnl_quote, _net_rebuilt = _sane_net_pnl_quote(
+            net_pnl_quote, entry, live_px, qty, is_long, uic, akey, sym)
 
         order = {"AccountKey": akey, "Uic": uic, "AssetType": ASSET_TYPE,
                  "Amount": qty, "BuySell": close_side, "OrderType": "Market",
@@ -2864,6 +2905,7 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
                     session=pos.get("lbo_session", "") if strat_name in ("london_breakout", "london_breakout_v2") else "",
                     live=(ACCOUNT_ENV in ("live", "live_eur")),
                     net_pnl_native=net_pnl_quote,
+                    net_reconstructed=_net_rebuilt,
                 )
 
             # Forward-SIM observation exit card (2026-08-27) -- only if this
@@ -2893,6 +2935,7 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
                     ladder_rung=pos.get("ladder_rung"),
                     ladder_rung_r=pos.get("ladder_rung_r"),
                     mae_mfe_coarse=bool(pos.get("mae_mfe_coarse")),
+                    net_pnl_reconstructed=_net_rebuilt,
                 )
         del positions[key]
         exits += 1

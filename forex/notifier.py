@@ -672,6 +672,7 @@ def send_trade_closed(
     session:   str = "",
     live:      bool = False,   # True = a real-money LIVE account, not SIM
     net_pnl_native: float | None = None,  # true P&L (price + broker cost), pair's own quote ccy
+    net_reconstructed: bool = False,      # net_pnl_native is price-move - modeled cost (Saxo's own figure was implausible)
 ) -> None:
     """Immediate win/loss alert when ANY forex strategy closes a position.
 
@@ -709,7 +710,8 @@ def send_trade_closed(
     col     = "#3fb950" if won else "#f85149"
     sign    = "+" if pnl_pct >= 0 else ""
     pnl_sgn = "+" if pnl_native >= 0 else ""
-    net_note = (" (net of broker cost)" if net_pnl_native is not None
+    net_note = (" (estimated: price move − modeled cost)" if net_reconstructed
+                else " (net of broker cost)" if net_pnl_native is not None
                 and (net_pnl_native > 0) != (raw_pnl_native > 0) else "")
     session_line = f" · {session} session" if session else ""
 

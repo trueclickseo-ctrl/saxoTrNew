@@ -139,6 +139,8 @@ def _closed_trades() -> list[dict]:
             exits.append(c)
     trades = []
     for x in exits:
+        if x.get("pnl_suspect"):
+            continue                       # SIM P&L feed proven bad for this trade
         e = entry.get(x["card_id"])
         if e:
             # exit fields win on merge, but keep the ENTRY timestamp under its

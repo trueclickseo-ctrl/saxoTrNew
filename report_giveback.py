@@ -76,6 +76,8 @@ def _load_trades():
             continue
         if x.get("mae_mfe_invalidated"):
             continue                       # pre-fix corrupted -- skip
+        if x.get("pnl_suspect"):
+            continue                       # SIM P&L feed proven bad for this trade -- skip
         risk = e.get("risk_eur")
         mfe, mae, net = x.get("mfe_eur"), x.get("mae_eur"), x.get("net_pnl_eur")
         if not risk or risk <= 0 or mfe is None or net is None:

@@ -64,11 +64,19 @@ def test_looks_like_token_accepts_a_real_shape():
     assert set_token._looks_like_token(_GOOD) is None
 
 
-def test_set_token_has_live_check_and_rollback():
+def test_set_token_stages_then_verifies_then_promotes():
     src = inspect.getsource(set_token)
-    assert "_live_check()" in src and "test_connection" in src
-    assert ".prev" in src and "shutil.move" in src        # rollback path
+    assert "_verify_against_saxo(" in src and "test_connection" in src
+    assert '".staging"' in src and "os.replace(staging, PATH)" in src
     assert "_looks_like_token(tok)" in src
+    # the real file must not be written before the verify passes
+    i_write = src.index('open(staging, "w")')
+    i_verify = src.index("_verify_against_saxo(staging)")
+    i_promote = src.index("os.replace(staging, PATH)")
+    assert i_write < i_verify < i_promote
+    # failure path removes the staging file and does NOT touch PATH
+    fail_block = src[src.index("if not ok:"):src.index("os.replace(staging, PATH)")]
+    assert "os.remove(staging)" in fail_block and "NOT saved" in fail_block
 
 
 # ── saxo_auth.get_valid_access_token guard ─────────────────────────────
