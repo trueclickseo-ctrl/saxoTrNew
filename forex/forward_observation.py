@@ -143,7 +143,8 @@ def log_trade_exit_card(*, card_id: str, exit_price: float, exit_reason: str,
                          ladder_rung: str | None = None,
                          ladder_rung_r: float | None = None,
                          mae_mfe_coarse: bool = False,
-                         net_pnl_reconstructed: bool = False) -> None:
+                         net_pnl_reconstructed: bool = False,
+                         mae_mfe_invalidated: str | None = None) -> None:
     """Written once, at close, referencing the entry card's card_id.
     MAE/MFE are in EUR (worst/best unrealized excursion seen while the
     position was open) -- accumulated by update_mae_mfe() below on every
@@ -174,6 +175,9 @@ def log_trade_exit_card(*, card_id: str, exit_price: float, exit_reason: str,
         # glitch) so net_pnl_eur is price-move minus a modeled round-trip
         # cost, not Saxo's own figure. See forex/runner._sane_net_pnl_quote.
         "net_pnl_reconstructed": bool(net_pnl_reconstructed),
+        # non-null = MAE/MFE were nulled at write time (over the sane-R cap,
+        # accumulated before a fix deployed). report_giveback / journal skip.
+        **({"mae_mfe_invalidated": mae_mfe_invalidated} if mae_mfe_invalidated else {}),
     })
 
 

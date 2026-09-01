@@ -2993,11 +2993,29 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
                     holding_hours = round((datetime.now() - entry_dt).total_seconds() / 3600, 1)
                 except Exception:
                     pass
+                # Final MAE/MFE sanity gate at write time. The per-cycle
+                # reject (see _bars_for_excursion call site) only skips the
+                # CURRENT reading -- a value accumulated into pos["mae_eur"]
+                # by an earlier cycle (e.g. before the 2026-09-01 holding-
+                # window fix deployed, or on a cycle where risk_eur_at_entry
+                # was momentarily unavailable so the cap was None) still
+                # rode through to here. Confirmed: 59 sim:gap:* cards with
+                # MAE/MFE up to 170R. Null anything past the cap.
+                _mae, _mfe = pos.get("mae_eur"), pos.get("mfe_eur")
+                _mm_bad = False
+                if risk_at_entry and risk_at_entry > 0:
+                    _lim = _MAE_MFE_SANE_R * risk_at_entry
+                    if (_mae is not None and abs(_mae) > _lim) or (_mfe is not None and abs(_mfe) > _lim):
+                        _mm_bad = True
+                        logger.warning(f"  [obs] {sym}: MAE/MFE {_mae}/{_mfe} EUR over "
+                                       f"{_MAE_MFE_SANE_R:.0f}R (EUR{_lim:.0f}) — nulled on the card")
+                        _mae = _mfe = None
                 forward_observation.log_trade_exit_card(
                     card_id=card_id, exit_price=live_px, exit_reason=reason,
                     gross_pnl_eur=gross_pnl_eur, commission_eur=commission_eur,
                     net_pnl_eur=net_pnl_eur, r_multiple=r_multiple,
-                    mae_eur=pos.get("mae_eur"), mfe_eur=pos.get("mfe_eur"),
+                    mae_eur=_mae, mfe_eur=_mfe,
+                    mae_mfe_invalidated=("accumulated-over-cap" if _mm_bad else None),
                     holding_hours=holding_hours,
                     ladder_rung=pos.get("ladder_rung"),
                     ladder_rung_r=pos.get("ladder_rung_r"),
