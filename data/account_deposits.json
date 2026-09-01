@@ -1,0 +1,9 @@
+{
+  "note": "Net external cash into the pooled Saxo AccountGroup (all sub-accounts), in SEK. account_equity.py uses sum(entries[].sek) as the return-since-inception basis. Correct these amounts against your real Saxo transfer history.",
+  "needs_review": true,
+  "entries": [
+    {"date": "2026-08-21", "sek": 6000, "note": "initial SEK funding (estimate - confirm)"},
+    {"date": "2026-08-26", "sek": 10200, "note": "EUR deposit ~EUR900 at the day's rate (estimate - confirm)"},
+    {"date": "2026-09-01", "sek": 20000, "note": "SEK top-up (confirmed from Saxo TransactionsNotBooked.CashDeposit)"}
+  ]
+}

@@ -211,6 +211,18 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append(HR)
     L.append("")
 
+    # ── Real account equity (pooled Saxo AccountGroup -- peak / drawdown /
+    # return / give-back, NOT the sizing cap). account_equity.py.
+    try:
+        import account_equity
+        L.append(account_equity.render(color=True))
+        L.append("")
+        L.append(HR)
+        L.append("")
+    except Exception as exc:
+        L.append(f"  {fd.DM}[account equity block unavailable: {exc}]{fd.W}")
+        L.append("")
+
     # ── Open positions (single section -- no core/exotic split needed, this
     # account IS the core universe by construction). forex_dashboard's own
     # _positions_section() can't be reused here: its P&L math is hardwired

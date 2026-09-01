@@ -4589,6 +4589,17 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
     if not dry_run and ACCOUNT_ENV in ("live", "live_eur") and attention is not None:
         _note_operational_blocks()
 
+    # ── Real-account equity snapshot (LIVE): one row on the equity curve
+    # per run -- the honest peak/drawdown/return, NOT the sizing cap.
+    # Reporting only; never gates anything. Once per pooled group is
+    # enough, so only the SEK ("live") run does it.
+    if not dry_run and ACCOUNT_ENV == "live":
+        try:
+            import account_equity
+            account_equity.snapshot()
+        except Exception as exc:
+            logger.warning(f"  [account_equity] snapshot failed: {exc}")
+
     # ── Strategy learning pass — update weights from today's closed trades ────
     try:
         learn_result = strategy_learner.run_learning_pass(_pnl_module())

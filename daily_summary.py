@@ -283,6 +283,17 @@ def _ai_health_section() -> str:
         return ""
 
 
+def _account_equity_section() -> str:
+    """Real-money account equity: peak / drawdown / return / give-back,
+    from account_equity.py's tracked curve (NOT the sizing cap). Best-
+    effort -- never raises into the email."""
+    try:
+        import account_equity
+        return "<h2>Account Equity</h2>" + account_equity.render_html()
+    except Exception as exc:
+        return f"<h2>Account Equity</h2><p class='muted'>unavailable: {exc}</p>"
+
+
 def _profit_ladder_section() -> str:
     """RSI profit-protection ladder forward-test roll-up (added 2026-08-31).
     Shows ladder (rsi) vs control (advanced_rsi_master) per account and a
@@ -409,7 +420,7 @@ def send_daily_summary(since: str | None = None) -> bool:
     mutate live state, which this report doesn't do. See the Housekeeping/Safeguard emails (every 30 min) for that.</p>
     """
 
-    body = (header + "".join(sections) + _ai_health_section()
+    body = (header + "".join(sections) + _account_equity_section() + _ai_health_section()
             + _ai_journal_section() + _profit_ladder_section())
     subject = f"Daily Summary — {total_trades} trades | {day_sign}${total_pnl:,.0f} | {since}"
     html = _wrap(f"Trading Day — {since}", body)
