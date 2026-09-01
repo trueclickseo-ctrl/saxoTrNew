@@ -191,7 +191,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     except Exception:
         pass
 
-    W_TOTAL = 108
+    W_TOTAL = 139
     HR = f"  {fd.DM}{'─' * W_TOTAL}{fd.W}"
     L = []
 

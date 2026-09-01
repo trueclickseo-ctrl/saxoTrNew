@@ -109,7 +109,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     import atos.capital_config as _cap
     cap_eur = _cap.forex_live_eur_risk_equity_eur()
 
-    W_TOTAL = 108
+    W_TOTAL = 139
     HR      = f"  {fd.DM}{'─' * W_TOTAL}{fd.W}"
     L       = []
 

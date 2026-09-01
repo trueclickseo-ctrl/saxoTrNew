@@ -598,17 +598,29 @@ def _positions_section(title: str, positions_subset: list, live: dict,
     2026-08-25 for unambiguous visual separation between tiers."""
     L = _section_header(f"{title}  ({len(positions_subset)} active)", color, W_TOTAL)
 
-    # 2026-09-01: table is grouped by PAIR now (pair is the group header +
-    # mini-subtotal); each row's 2nd column is blank since the pair is above.
+    # 2026-09-01: table is grouped by PAIR (pair is the group header +
+    # mini-subtotal). Column widths below are wide enough for METALS
+    # magnitudes (gold ~3,500, XAUJPY ~700,000) and the long "(A/B)"
+    # strategy labels; price/ATR precision scales with magnitude so the
+    # columns actually line up (fixed 2026-09-01, user).
+    _CW = {"strat": 19, "side": 5, "qty": 10, "px": 11, "pnl": 10, "pct": 9,
+           "atr": 10, "days": 4}
     COL_HDR = (
         f"  {DM}"
-        f"{'Strategy':<10}  {'':<7}  {'Side':<6}  "
-        f"{'Qty':>12}  {'Entry':>10}  {'Now':>10}  "
-        f"{'Stop':>10}  {'P&L (EUR)':>12}  {'%':>9}  "
-        f"{'ATR':>8}  {'Days':>5}  {'Stop Risk':>12}{W}"
+        f"{'Strategy':<{_CW['strat']}}  {'Side':<{_CW['side']}}  "
+        f"{'Qty':>{_CW['qty']}}  {'Entry':>{_CW['px']}}  {'Now':>{_CW['px']}}  "
+        f"{'Stop':>{_CW['px']}}  {'P&L(EUR)':>{_CW['pnl']}}  {'%':>{_CW['pct']}}  "
+        f"{'ATR':>{_CW['atr']}}  {'Days':>{_CW['days'] + 1}}  {'Stop Risk'}{W}"
     )
     L.append(COL_HDR)
     L.append(HR)
+
+    def _pxfmt(v: float, dec: int) -> str:
+        return f"{v:,.{dec}f}" if v is not None else "—"
+
+    def _px_dec(v: float) -> int:
+        av = abs(v or 0)
+        return 0 if av >= 100_000 else 1 if av >= 1_000 else 2 if av >= 10 else 5
 
     total_pnl   = 0.0
     total_cost  = 0.0
@@ -688,13 +700,15 @@ def _positions_section(title: str, positions_subset: list, live: dict,
                 qty      = p["qty"]
                 atr      = p["atr"]
                 sc       = STRAT_COL.get(strat, DM)
+                label    = STRAT_LABELS_ALL.get(strat, strat)[:_CW["strat"]]
                 try:
                     held = (date.today() - date.fromisoformat(p["entry_date"])).days
                 except Exception:
                     held = 0
 
-                side_tag = f"{GR}{BD}LONG {W}" if is_long else f"{RD}{BD}SHORT{W}"
+                side_tag = f"{GR}{BD}{'LONG':<{_CW['side']}}{W}" if is_long else f"{RD}{BD}{'SHORT':<{_CW['side']}}{W}"
 
+                dec = _px_dec(ep)
                 quote_ccy = sym[3:6] if len(sym) >= 6 else ""
                 eur_rate  = _eur_per_unit(quote_ccy, live) if now_px and ep > 0 else None
                 if now_px and ep > 0 and eur_rate is not None:
@@ -707,32 +721,32 @@ def _positions_section(title: str, positions_subset: list, live: dict,
                     if pos_cost is not None:
                         total_costs_eur += pos_cost
                     pc   = GR if pnl_eur >= 0 else RD
-                    pnl_s = f"{pc}{pnl_eur:>+,.0f}{W}"
-                    pct_s = f"{pc}{pnl_pct:>+.4f}%{W}"
-                    now_s = f"{now_px:.5f}"
+                    pnl_s = f"{pc}{pnl_eur:>+{_CW['pnl']},.0f}{W}"
+                    pct_s = f"{pc}{pnl_pct:>+{_CW['pct'] - 1}.2f}%{W}"
+                    now_s = f"{BD}{_pxfmt(now_px, dec):>{_CW['px']}}{W}"
                 else:
-                    pnl_s = f"{DM}{'—':>12}{W}"
-                    pct_s = f"{DM}{'—':>9}{W}"
-                    now_s = f"{'—':>10}"
+                    pnl_s = f"{DM}{'—':>{_CW['pnl']}}{W}"
+                    pct_s = f"{DM}{'—':>{_CW['pct']}}{W}"
+                    now_s = f"{DM}{'—':>{_CW['px']}}{W}"
 
                 near = (stop_px > 0 and now_px and
                         ((is_long and now_px < stop_px * 1.005) or
                          (not is_long and now_px > stop_px * 0.995)))
                 stp_col = f"{RD}{BD}" if near else DM
-                stop_s  = f"{stop_px:.5f}"
+                stop_s  = _pxfmt(stop_px, dec) if stop_px > 0 else "—"
 
                 if stop_px > 0 and now_px:
                     dist_pct = abs(now_px - stop_px) / now_px * 100
                     dist_s   = f"{DM}{dist_pct:.2f}% from stop{W}"
                 else:
-                    dist_s = f"{DM}{'—':>12}{W}"
+                    dist_s = f"{DM}—{W}"
 
                 L.append(
-                    f"  {sc}{BD}{strat:<10}{W}  {'':<7}  {side_tag}  "
-                    f"{DM}{qty:>12,}{W}  {DM}{ep:>10.5f}{W}  {BD}{now_s:>10}{W}  "
-                    f"{stp_col}{stop_s:>10}{W}  {_pad_ansi(pnl_s, 17)}  "
-                    f"{_pad_ansi(pct_s, 14)}  {DM}{atr:>8.5f}{W}  "
-                    f"{DM}{held:>5}d{W}  {dist_s}"
+                    f"  {sc}{BD}{label:<{_CW['strat']}}{W}  {side_tag}  "
+                    f"{DM}{qty:>{_CW['qty']},}{W}  {DM}{_pxfmt(ep, dec):>{_CW['px']}}{W}  {now_s}  "
+                    f"{stp_col}{stop_s:>{_CW['px']}}{W}  {pnl_s}  {pct_s}  "
+                    f"{DM}{_pxfmt(atr, _px_dec(atr)):>{_CW['atr']}}{W}  "
+                    f"{DM}{held:>{_CW['days']}}d{W}  {dist_s}"
                 )
 
         L.append(HR)

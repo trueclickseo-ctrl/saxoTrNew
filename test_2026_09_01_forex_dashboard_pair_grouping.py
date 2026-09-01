@@ -41,9 +41,9 @@ def _pos(strat, sym, qty, entry, stop, ed="2026-08-30", uic=1):
                 entry=entry, stop=stop, atr=1.0, entry_date=ed, uic=uic)
 
 
-def _plain(sym_positions, live):
+def _plain(sym_positions, live, w=139):
     lines, tot_pnl, tot_cost, tot_costs = fd._positions_section(
-        "OPEN POSITIONS — TEST", sym_positions, live, {}, 120, "-" * 120, color="")
+        "OPEN POSITIONS — TEST", sym_positions, live, {}, w, "-" * w, color="")
     return [re.sub(r"\033\[[0-9;]*m", "", x) for x in lines], tot_pnl, tot_cost
 
 
@@ -61,7 +61,8 @@ def test_rows_are_grouped_by_pair_not_strategy():
     assert body.count("AAAEUR   3 strategies") == 1
     i_aaa = next(i for i, l in enumerate(lines) if l.strip().startswith("AAAEUR "))
     trio = lines[i_aaa + 1:i_aaa + 4]
-    assert [l.split()[0] for l in trio] == ["rsi", "gap", "advanced_ml"]  # strat_order
+    # rows show the friendly STRAT_LABELS_ALL name now, ordered by strat_order
+    assert [l.split()[0] for l in trio] == ["RSI", "Gap", "ML"]  # RSI (2) / Gap Fill / ML Adv
 
 
 def test_pairs_sorted_by_concentration_then_pnl():
@@ -130,6 +131,36 @@ def test_unpriced_pair_shows_dash_not_crash():
     hdr = next(l.strip() for l in lines if l.strip().startswith("NOP "))
     assert "—" in hdr
     assert tot_pnl == 0.0
+
+
+def test_metals_magnitudes_stay_aligned():
+    # 2026-09-01 (user): gold ~3,500 and XAUJPY ~700,000 used to overflow
+    # the fixed-width price columns and shove every column out of line.
+    # Prices now scale their decimals with magnitude and columns are wide
+    # enough -- every data row's column starts must match the header's.
+    pos = [
+        _pos("rsi", "XAUJPY", 1, 708554.0, 688194.0),
+        _pos("advanced_rsi_master", "XAUHKD", 1, 34877.63, 33677.46),
+        _pos("advanced_pullback_master", "XAUGBP", 1, 3283.97, 3179.48),
+        _pos("rsi", "EURUSD", 7000, 1.15905, 1.151),
+    ]
+    live = {"XAUJPY": 701401.0, "XAUHKD": 34353.44, "XAUGBP": 3236.77, "EURUSD": 1.16074}
+    lines, *_ = _plain(pos, live)
+    hdr = next(l for l in lines if "Strategy" in l and "Entry" in l and "ATR" in l)
+    # 'Entry' / 'Now' / 'Stop' / 'ATR' right-edge columns from the header
+    for col in ("Entry", "Now", "Stop", "ATR", "P&L(EUR)"):
+        edge = hdr.index(col) + len(col)
+        # a numeric data row (starts with a known label, has "LONG")
+        data = [l for l in lines if " LONG " in l and "from stop" in l]
+        assert data, "no data rows rendered"
+        for d in data:
+            # the char at the header column's right edge must be a digit,
+            # space, sign or separator -- never a mid-number overflow
+            assert d[edge - 1] in "0123456789 ,.+-—%", f"{col!r} misaligned in: {d!r}"
+    # no data row is wider than the section rule
+    rule = next(l for l in lines if set(l.strip()) <= {"-"} and len(l) > 40)
+    for d in [l for l in lines if " LONG " in l]:
+        assert len(d.rstrip()) <= len(rule), f"row overflows the rule: {d!r}"
 
 
 try:
