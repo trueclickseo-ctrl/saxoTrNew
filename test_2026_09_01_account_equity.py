@@ -35,6 +35,14 @@ def _run(n, f):
 
 
 import account_equity as ae
+import attention
+
+# never let a test's snapshot() touch the REAL attention_state.json --
+# it raises a low-sev item when it "detects" a transfer, which once
+# leaked a bogus "ATOS needs a human" email (2026-09-01). Point the
+# attention channel at a throwaway file for the whole test run.
+_REAL_ATTN = attention.STATE_PATH
+attention.STATE_PATH = os.path.join(BASE, "data", "_test_ae_attention.json")
 
 _seq = 0
 
@@ -44,7 +52,7 @@ def _fresh():
     _seq += 1
     cp = os.path.join(BASE, "data", f"_test_ae_curve_{_seq}.jsonl")
     dp = os.path.join(BASE, "data", f"_test_ae_deps_{_seq}.json")
-    for p in (cp, dp):
+    for p in (cp, dp, attention.STATE_PATH):
         try:
             os.remove(p)
         except OSError:
@@ -215,6 +223,7 @@ for _n, _f in list(globals().items()):
     if _n.startswith("test_") and callable(_f):
         _run(_n, _f)
 
+attention.STATE_PATH = _REAL_ATTN   # restore -- must never leave it pointed at a temp file
 # tidy any leftovers
 for p in os.listdir(os.path.join(BASE, "data")):
     if p.startswith("_test_ae_"):
