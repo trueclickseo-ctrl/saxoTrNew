@@ -120,9 +120,14 @@ def test_column_header_has_no_pair_label():
 
 
 def test_empty_subset():
+    # 2026-09-02: an empty tier now returns [] (hide_if_empty default) so the
+    # caller can fold empty tier names into one line instead of 8 empty boxes.
     lines, tot_pnl, tot_cost = _plain([], {})
-    assert any("No open positions in this tier." in l for l in lines)
+    assert lines == []
     assert tot_pnl == 0.0 and tot_cost == 0.0
+    # opt back in to the full "No open positions" box
+    full, *_ = fd._positions_section("T", [], {}, {}, 139, "-" * 139, color="", hide_if_empty=False)
+    assert any("No open positions in this tier." in re.sub(r"\033\[[0-9;]*m", "", l) for l in full)
 
 
 def test_unpriced_pair_shows_dash_not_crash():

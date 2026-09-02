@@ -469,9 +469,12 @@ def _strategy_breakdown_table(title: str, positions: list, live: dict,
                 f"this total — check it isn't propping up an otherwise-losing strategy{W}"
             )
 
-    # 2026-09-02: one collapsed line for every dormant (non-roster) strategy
-    # that still has skin in the game -- shown only while the legacy book
-    # winds down; vanishes once flat.
+    # 2026-09-02: ONE dimmed line for the dormant (non-roster) book. Its
+    # OPEN exposure (positions + unrealized) IS folded into the grand total
+    # -- that's a live risk. Its LIFETIME realised P&L is shown parenthetically
+    # but NOT added to the roster total (it's dead-strategy history: gap /
+    # donchian etc.), so ROSTER TOTAL reflects the 5 strategies you run.
+    # The whole line vanishes once the legacy book is flat.
     if _dormant:
         d_count = sum(1 for p in pos_in_scope if p["strategy"] in _dormant)
         d_unreal = 0.0
@@ -480,22 +483,20 @@ def _strategy_breakdown_table(title: str, positions: list, live: dict,
                 continue
             now_px = live.get(p["symbol"])
             if now_px and p["entry"] > 0:
-                qc = p["symbol"][3:6] if len(p["symbol"]) >= 6 else ""
-                er = _eur_per_unit(qc, live)
+                er = _eur_per_unit(p["symbol"][3:6] if len(p["symbol"]) >= 6 else "", live)
                 if er is not None:
                     raw = (now_px - p["entry"]) if p["direction"] == "Buy" else (p["entry"] - now_px)
                     d_unreal += raw * p["qty"] * er
-        d_realized = sum(v.get("total_pnl", 0.0) for k, v in stats_by_strat.items() if k in _dormant)
+        d_life = sum(v.get("total_pnl", 0.0) for k, v in stats_by_strat.items() if k in _dormant)
         d_names = sum(1 for k in _dormant if k in stats_by_strat or any(p["strategy"] == k for p in pos_in_scope))
-        if d_count or d_realized:
+        if d_count or abs(d_life) > 0.5:
             grand_active     += d_count
-            grand_unrealized += d_unreal
-            grand_realized   += d_realized
+            grand_unrealized += d_unreal          # open exposure IS the roster's problem
             uc = GR if d_unreal >= 0 else RD
-            rc = GR if d_realized >= 0 else RD
+            life_s = f"lifetime {d_life:+,.0f} (legacy)" if abs(d_life) > 0.5 else ""
             L.append(
                 f"  {DM}{f'· dormant ×{d_names}':<16}  {f'{d_count}/—':>6}  {'':>7}  {'winding down':>7}  "
-                f"{'':>6}  {'':>6}  {_pad_ansi(f'{rc}{d_realized:>+,.0f} {currency_label}{W}', 15)}  "
+                f"{'':>6}  {'':>6}  {DM}{life_s:>15}{W}  "
                 f"{'—':>11}  {_pad_ansi(f'{uc}{d_unreal:>+,.0f} {currency_label}{W}', 13)}{W}"
             )
     L.append(HR)
@@ -527,21 +528,17 @@ def _abbr_eur(v: float) -> str:
     return f"{v:+,.0f}"
 
 
-def _consolidated_breakdown(positions: list, live: dict, color: str = CY) -> list:
-    """Replaces the 8 per-tier STRATEGY BREAKDOWN tables (2026-09-01, user:
-    "1 instead of all separately but have all information smartly") with:
-      1. TIER SCORECARD  -- one row per tier (pairs/active/closed/WR/PF/
-         all-time/today/unrealized). The 8 old "TOTAL" lines, side by side.
-      2. STRATEGY x TIER P&L GRID -- strategies (rows with any activity) x
-         tiers (cols), cell = all-time realized P&L. Shows *where* each
-         strategy makes/loses money -- the cross-tab the 8 separate tables
-         couldn't. Data is per-strategy per-tier from
-         pnl_tracker.get_strategy_summary(symbols=<tier set>), exactly what
-         the old tables used.
-    The full per-strategy ALL-pairs table + the strategy x SYMBOL detail
-    (pnl_tracker.get_strategy_symbol_summary) are unchanged / still available.
+def _consolidated_breakdown(positions: list, live: dict, color: str = CY,
+                            roster: list | None = None) -> list:
+    """TIER SCORECARD + STRATEGY x TIER P&L GRID.
+
+    2026-09-02: when `roster` is given, BOTH are scoped to those strategies
+    -- the scorecard shows how the *current* book is doing per tier (not 200
+    dead trades), and the grid shows roster rows + one collapsed "dormant"
+    line. The dashboard runs 5 strategies now; the rest is history.
     """
     import pnl_tracker
+    _roster = set(roster) if roster is not None else None
     _LBO_EXCL = {"london_breakout", "london_breakout_v2"}
     tiers = [
         ("High Vol",  "HIGH VOLUME",   HIGH_VOLUME_SYMBOLS,          frozenset()),
@@ -564,10 +561,17 @@ def _consolidated_breakdown(positions: list, live: dict, color: str = CY) -> lis
             trows = pnl_tracker.get_strategy_summary_since("forex", today_str, symbols=syms)
         except Exception:
             srows, trows = [], []
-        by_strat = {r["strategy"]: r for r in srows if r["strategy"] not in excl}
+        by_strat_all = {r["strategy"]: r for r in srows if r["strategy"] not in excl}
+        by_strat = ({k: v for k, v in by_strat_all.items() if k in _roster}
+                    if _roster is not None else by_strat_all)
+        # keep the dormant total per tier for the collapsed grid row
         tier_strat_pnl[short] = {k: (v.get("total_pnl") or 0.0) for k, v in by_strat.items()}
+        if _roster is not None:
+            tier_strat_pnl[short]["·dormant"] = sum(
+                (v.get("total_pnl") or 0.0) for k, v in by_strat_all.items() if k not in _roster)
 
-        pos_scope = [p for p in positions if p["symbol"] in syms and p["strategy"] not in excl]
+        pos_scope = [p for p in positions if p["symbol"] in syms and p["strategy"] not in excl
+                     and (_roster is None or p["strategy"] in _roster)]
         unreal = 0.0
         for p in pos_scope:
             now_px = live.get(p["symbol"])
@@ -582,7 +586,8 @@ def _consolidated_breakdown(positions: list, live: dict, color: str = CY) -> lis
         wins = sum(v.get("wins", 0) for v in by_strat.values())
         losses = sum(v.get("losses", 0) for v in by_strat.values())
         n_closed = sum(v.get("trades", 0) for v in by_strat.values())
-        today_pnl = sum(r.get("total_pnl") or 0.0 for r in trows if r["strategy"] not in excl)
+        today_pnl = sum(r.get("total_pnl") or 0.0 for r in trows if r["strategy"] not in excl
+                        and (_roster is None or r["strategy"] in _roster))
         tier_totals[short] = {
             "pairs": len(syms), "active": len(pos_scope), "closed": n_closed,
             "wins": wins, "losses": losses,
@@ -593,7 +598,9 @@ def _consolidated_breakdown(positions: list, live: dict, color: str = CY) -> lis
 
     W_TOTAL = 108
     HR = f"  {DM}{'─' * W_TOTAL}{W}"
-    L = _section_header("STRATEGY BREAKDOWN — BY TIER (all 8 tiers, one view)", color, W_TOTAL)
+    _tier_title = ("SIM ROSTER — BY TIER (5 strategies, where the live book sits)"
+                   if _roster is not None else "STRATEGY BREAKDOWN — BY TIER (all 8 tiers, one view)")
+    L = _section_header(_tier_title, color, W_TOTAL)
 
     # ── 1. TIER SCORECARD ──────────────────────────────────────────────────
     L.append(f"  {DM}{'Tier':<14}  {'Pairs':>5}  {'Active':>6}  {'Closed':>7}  {'W/L':>8}  "
@@ -618,13 +625,20 @@ def _consolidated_breakdown(positions: list, live: dict, color: str = CY) -> lis
     L.append(HR)
 
     # ── 2. STRATEGY x TIER P&L GRID (all-time realized) ────────────────────
-    active_strats = [s for s in STRAT_LABELS_ALL
-                     if any(abs(tier_strat_pnl[sh].get(s, 0.0)) > 0.5 for sh, *_ in tiers)]
-    if active_strats:
+    if _roster is not None:
+        grid_strats = [s for s in roster] + ["·dormant"]
+        grid_label = {**STRAT_LABELS_ALL, "·dormant": "· dormant (legacy)"}
+    else:
+        grid_strats = [s for s in STRAT_LABELS_ALL
+                       if any(abs(tier_strat_pnl[sh].get(s, 0.0)) > 0.5 for sh, *_ in tiers)]
+        grid_label = STRAT_LABELS_ALL
+    grid_strats = [s for s in grid_strats
+                   if any(abs(tier_strat_pnl[sh].get(s, 0.0)) > 0.5 for sh, *_ in tiers)]
+    if grid_strats:
         L.append("")
         L.append(f"  {BD}Strategy × tier — all-time realised P&L (EUR){W}")
         L.append(f"  {DM}{'':<16}" + "".join(f"{sh:>11}" for sh, *_ in tiers) + f"{'  Σ':>11}{W}")
-        for s in active_strats:
+        for s in grid_strats:
             row_vals = [tier_strat_pnl[sh].get(s, 0.0) for sh, *_ in tiers]
             cells = ""
             for v in row_vals:
@@ -632,7 +646,7 @@ def _consolidated_breakdown(positions: list, live: dict, color: str = CY) -> lis
                 cells += f"{c}{_abbr_eur(v) if abs(v) > 0.5 else '·':>11}{W}"
             tot = sum(row_vals)
             tc = GR if tot > 0.5 else (RD if tot < -0.5 else DM)
-            L.append(f"  {STRAT_COL.get(s, DM)}{BD}{STRAT_LABELS_ALL[s]:<16}{W}{cells}"
+            L.append(f"  {STRAT_COL.get(s, DM)}{BD}{grid_label.get(s, s):<16}{W}{cells}"
                      f"{tc}{BD}{_abbr_eur(tot):>11}{W}")
     L.append(HR)
     L.append(f"  {DM}·  = no closed trades in that tier   ·   "
@@ -644,7 +658,7 @@ def _consolidated_breakdown(positions: list, live: dict, color: str = CY) -> lis
 
 def _positions_section(title: str, positions_subset: list, live: dict,
                         position_costs: dict, W_TOTAL: int, HR: str,
-                        color: str = CY) -> tuple:
+                        color: str = CY, hide_if_empty: bool = True) -> tuple:
     """One OPEN POSITIONS table (grouped by strategy, per-row P&L, stop
     proximity) scoped to whatever pair subset the caller already filtered
     into `positions_subset`. Returns (lines, total_pnl, total_cost,
@@ -656,7 +670,13 @@ def _positions_section(title: str, positions_subset: list, live: dict,
     the STRATEGY BREAKDOWN tables — the live-vs-SIM-only decision needs to
     see which OPEN positions sit in which tier too, not just closed-trade
     stats. Boxed/colored header (same as _strategy_breakdown_table) added
-    2026-08-25 for unambiguous visual separation between tiers."""
+    2026-08-25 for unambiguous visual separation between tiers.
+
+    2026-09-02: with the SIM book down to a handful of positions, an empty
+    tier returns `[]` (hide_if_empty) instead of a 7-line "No open positions"
+    box -- the caller folds the empty tier NAMES into one summary line."""
+    if hide_if_empty and not positions_subset:
+        return [], 0.0, 0.0, 0.0
     L = _section_header(f"{title}  ({len(positions_subset)} active)", color, W_TOTAL)
 
     # 2026-09-01: table is grouped by PAIR (pair is the group header +
@@ -1082,6 +1102,16 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         exotic_latam_mideast_positions, live, position_costs, W_TOTAL, HR, color=EXOTIC_LATAM_MIDEAST_COLOR)
     L.extend(exotic_lm_lines)
 
+    # 2026-09-02: fold every empty tier into ONE line instead of 8 empty boxes
+    _empty = [nm for nm, ln in (
+        ("High Volume", high_volume_lines), ("Core Standard", core_standard_lines),
+        ("Scandi", scandi_lines), ("Metals", metals_lines), ("Exotic Asia", exotic_asia_lines),
+        ("Exotic Europe", exotic_europe_lines), ("Exotic Carry", exotic_carry_lines),
+        ("Exotic LatAm", exotic_lm_lines)) if not ln]
+    if _empty:
+        L.append(f"  {DM}Empty tiers ({len(_empty)}/8): {' · '.join(_empty)}{W}")
+        L.append("")
+
     total_pnl       = (high_volume_pnl + core_standard_pnl + scandi_pnl + metals_pnl
                        + exotic_asia_pnl + exotic_europe_pnl + exotic_carry_pnl + exotic_lm_pnl)
     total_cost      = (high_volume_cost + core_standard_cost + scandi_cost + metals_cost
@@ -1138,7 +1168,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     # CARRY|LATAM), each ~20 mostly-zero rows, collapsed into a TIER
     # SCORECARD (8 rows) + a strategy x tier all-time-P&L grid. Same
     # underlying data (pnl_tracker.get_strategy_summary per tier set).
-    L.extend(_consolidated_breakdown(positions, live, color=HIGH_VOLUME_COLOR))
+    L.extend(_consolidated_breakdown(positions, live, color=HIGH_VOLUME_COLOR, roster=_SIM_ROSTER))
 
     # The one full per-strategy table stays -- master reference across the
     # whole 184-pair universe.
