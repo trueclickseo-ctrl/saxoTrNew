@@ -162,3 +162,29 @@ round-trip cost**: trades · WR · avg win/loss R · profit factor · max DD ·
 not the highest win rate. Needs ~40–80 resolved triggers per account before it's
 actionable (paper-fill keeps SIM flowing through Saxo outages). Also feeds AI
 roadmap #4 (Trade Probability).
+
+---
+
+## SIM-only A/B twins (this strategy is the control)
+
+`strategy_rsi.py` is deliberately **byte-unchanged** so it's a clean control for
+two SIM-only experiments running in parallel with it. Neither can place a
+real-money order.
+
+| Variant | Runner key | What differs | Doc |
+|---|---|---|---|
+| Advanced RSI Master | `advanced_rsi_master` | robust one-sided RSI, EMA50/200 alignment + slope, min EMA200-distance, ATR-percentile band, post-extreme reversal-confirm bar, DI confirm. Also the **ladder-vs-no-ladder control** — keeps plain breakeven + 1.5×ATR trail (not in `PROFIT_LADDER_STRATEGIES`). | [forex_advanced_rsi_master_strategy.md](forex_advanced_rsi_master_strategy.md) |
+| **RSI Trend** | `rsi_trend` | **Identical to `rsi` in every way** — delegates `should_exit` / `size_position` / `trailing_stop_update`, re-exports every constant, **shares the profit ladder** — *except one entry gate*: a Buy is only taken when `ai.regime.classifier` says `TRENDING_BULLISH`, a Sell only when `TRENDING_BEARISH`. So the SIM A/B isolates exactly one variable: the regime filter. `classify_regime` failure → signal dropped, never raises. | [forex_rsi_trend_strategy.md](forex_rsi_trend_strategy.md) |
+
+**Why `rsi_trend` (2026-09-02):** an 11y / 49-CORE-pair backtest decomposition
+showed RSI(2)'s raw edge (+0.021 R/trade) is *unstable* — ≈0 in 2014–2020,
++0.046 in 2021–2026 — and lives entirely in the TRENDING regime buckets
+(`TRENDING_BULLISH` +0.088 R, stable both halves; `RANGING` +0.011, unstable,
+= 75% of signals). Gating on `TRENDING_*` lifted avg R to +0.081 (positive in
+both halves), PF 1.09 → 1.37, max drawdown 82 R → 18 R. Forward-test on SIM +
+a proper walk-forward before any LIVE consideration.
+
+Compare all three via the `pnl_ledger` rows (`strategy` column) and the AI
+journal / give-back reports (both break down by strategy);
+`python report_profit_ladder.py` covers `rsi` (ladder) vs `advanced_rsi_master`
+(control).
