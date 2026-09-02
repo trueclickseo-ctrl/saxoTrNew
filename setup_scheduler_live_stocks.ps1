@@ -7,13 +7,12 @@
 # (data/stocks_live_scheduler.log), own .bat wrappers. Shares only the Saxo
 # SEK sub-account login.
 #
-# PHASE 1 = OBSERVE ONLY. The .bat wrappers deliberately do NOT pass --live,
-# so atos_live_stocks.py stays in dry-run: would-be orders + AI cards logged,
-# ZERO real orders. Registering these tasks does NOT start real trading.
-# Phase 2 (separate approval): edit run_atos_live_stocks_daily.bat to add
-# --live, AND set (User env, then reboot):
+# LIVE since 2026-09-03 (explicit user instruction). Both .bat wrappers pass
+# --live; real orders also require the User env vars below (set 2026-09-03):
 #   [System.Environment]::SetEnvironmentVariable("SAXO_LIVE_STOCKS_CONFIRMED","1","User")
 #   [System.Environment]::SetEnvironmentVariable("LIVE_STOCKS_DRY_RUN","0","User")
+# To go back to observe-only WITHOUT touching the .bat: setx LIVE_STOCKS_DRY_RUN 1
+# (or remove SAXO_LIVE_STOCKS_CONFIRMED), then reboot / new logon.
 #
 # Cadence: US Blend is a 14-day rebalance + a daily risk-off/event/stop
 # overlay -- no "still-forming candle" every-45-min logic. One daily run
@@ -40,7 +39,7 @@ $dailyOk = $true
 try {
     Register-ScheduledTask -TaskName "ATOS Stocks LIVE Daily Run" `
                -Action $action1 -Trigger $trigger1 -Settings $settings `
-               -Description "Real-money US Blend stocks sleeve (30k SEK, SEK LIVE sub-account). PHASE 1 OBSERVE-ONLY -- .bat has no --live." `
+               -Description "Real-money US Blend stocks sleeve (30k SEK, SEK LIVE sub-account). LIVE since 2026-09-03 -- .bat passes --live; env vars are the real gate." `
                -RunLevel Highest -Force -ErrorAction Stop | Out-Null
 } catch {
     $dailyOk = $false
@@ -56,7 +55,7 @@ $exitOk = $true
 try {
     Register-ScheduledTask -TaskName "ATOS Stocks LIVE Exit Check" `
                -Action $action2 -Trigger $trigger2 -Settings $settings `
-               -Description "Real-money US Blend stocks sleeve -- stop/risk-off/event exit check only, once daily. PHASE 1 OBSERVE-ONLY." `
+               -Description "Real-money US Blend stocks sleeve -- stop/risk-off/event exit check only, once daily. LIVE since 2026-09-03." `
                -RunLevel Highest -Force -ErrorAction Stop | Out-Null
 } catch {
     $exitOk = $false
@@ -67,7 +66,7 @@ Write-Host ""
 if ($dailyOk) { Write-Host "Registered 'ATOS Stocks LIVE Daily Run'  -> daily 02:40 PKT (rebalance + overlay)." -ForegroundColor Green }
 if ($exitOk)  { Write-Host "Registered 'ATOS Stocks LIVE Exit Check' -> daily 14:00 PKT (exits only)." -ForegroundColor Green }
 Write-Host ""
-Write-Host "PHASE 1: these run OBSERVE-ONLY (no --live in the .bat). No real orders." -ForegroundColor Yellow
+Write-Host "LIVE: .bat passes --live. Real orders require SAXO_LIVE_STOCKS_CONFIRMED=1 + LIVE_STOCKS_DRY_RUN=0 (User env)." -ForegroundColor Yellow
 Write-Host ""
 Write-Host "Remove later with:"
 Write-Host "  Unregister-ScheduledTask -TaskName 'ATOS Stocks LIVE Daily Run'  -Confirm:`$false"

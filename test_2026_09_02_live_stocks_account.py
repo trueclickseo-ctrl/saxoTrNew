@@ -94,23 +94,27 @@ def test_dashboard_strips_ansi_when_output_is_not_a_tty():
     assert "\033[" not in buf.getvalue()
 
 
-def test_dry_run_is_the_default_without_all_three_switches():
-    # No --live, no env vars -> observe only. --info path proves argparse +
-    # dry-run resolution without needing a full scan.
-    src = open(os.path.join(BASE, "atos_live_stocks.py"), encoding="utf-8").read()
-    assert 'dry_run = dry_env or (not args.live) or (not confirmed) or halted' in src
-    assert 'os.environ.get("SAXO_LIVE_STOCKS_CONFIRMED") == "1"' in src
-    assert 'os.environ.get("LIVE_STOCKS_DRY_RUN", "1") != "0"' in src
-
-
-def test_phase1_bats_do_not_pass_live():
+def test_bats_never_carry_a_strategy_token():
+    # US Blend is hard-coded in atos_live_stocks.py -- a --strategy token in the
+    # .bat could only ever be wrong. (--live IS present as of the 2026-09-03
+    # go-live; the real safety gate is SAXO_LIVE_STOCKS_CONFIRMED + LIVE_STOCKS_
+    # DRY_RUN, checked in atos_live_stocks.run().)
     for b in ("run_atos_live_stocks_daily.bat", "run_atos_live_stocks_exits.bat"):
         cmd_lines = [ln.strip() for ln in open(os.path.join(BASE, b), encoding="utf-8")
                      if "atos_live_stocks.py" in ln and not ln.lstrip().startswith(("REM", "::"))]
         assert cmd_lines, f"{b}: no command line found"
         for ln in cmd_lines:
-            assert "--live" not in ln, f"{b} command line must NOT pass --live in Phase 1: {ln}"
             assert "--strategy" not in ln, f"{b} command line must not carry a strategy token: {ln}"
+
+
+def test_live_run_still_needs_both_env_vars_regardless_of_the_bat():
+    # the .bat passing --live is NOT sufficient -- run() forces dry_run unless
+    # SAXO_LIVE_STOCKS_CONFIRMED=1 AND LIVE_STOCKS_DRY_RUN=0 (and not halted).
+    src = open(os.path.join(BASE, "atos_live_stocks.py"), encoding="utf-8").read()
+    assert 'dry_run = dry_env or (not args.live) or (not confirmed) or halted' in src
+    assert 'os.environ.get("SAXO_LIVE_STOCKS_CONFIRMED") == "1"' in src
+    assert 'os.environ.get("LIVE_STOCKS_DRY_RUN", "1") != "0"' in src
+    assert "LIVE_STOCKS_TRADING_HALTED" in src
 
 
 # ═══════════════════════════════════════════════════════════════════════
