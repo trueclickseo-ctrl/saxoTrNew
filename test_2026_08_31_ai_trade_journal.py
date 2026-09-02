@@ -48,8 +48,14 @@ _JOURNAL = os.path.join(BASE_DIR, "data", "_test_journal_out.jsonl")
 
 tj.CARDS_LOG, tj.PROPOSALS_LOG, tj.SHADOW_LOG, tj.EXIT_ADVISOR_LOG, tj.JOURNAL_LOG = (
     _CARDS, _PROP, _SHADOW, _EA, _JOURNAL)
+# 2026-09-02: the stocks AI layer is armed, so _closed_trades() also reads
+# STOCK_CARDS_LOG when stocks_journal_enabled() -- stub it too or the tests
+# pick up real live stock closes from data/stock_observation_cards.jsonl.
+_STOCK_CARDS = os.path.join(BASE_DIR, "data", "_test_journal_stock_cards.jsonl")
+if hasattr(tj, "STOCK_CARDS_LOG"):
+    tj.STOCK_CARDS_LOG = _STOCK_CARDS
 
-_ALL = (_CARDS, _PROP, _SHADOW, _EA, _JOURNAL)
+_ALL = (_CARDS, _PROP, _SHADOW, _EA, _JOURNAL, _STOCK_CARDS)
 
 
 def _clean():
