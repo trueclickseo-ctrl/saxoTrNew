@@ -171,6 +171,8 @@ def _closed_trades() -> list[dict]:
         if x.get("pnl_suspect"):
             continue                       # SIM P&L feed proven bad for this trade
         e = entry.get(x["card_id"])
+        if e and e.get("orphaned"):
+            continue                       # crash-state re-entry artifact (swept 2026-09-02)
         if e:
             # exit fields win on merge, but keep the ENTRY timestamp under its
             # own key -- the AI proposal/shadow trade_id is dated by entry day,

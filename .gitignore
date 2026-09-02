@@ -43,6 +43,10 @@ data/stock_observation_cards.jsonl
 data/ai_basket_shadow.jsonl
 # "ATOS needs a human" escalation channel -- ephemeral, safeguard rewrites it every cycle
 data/attention_state.json
+# last-good Saxo FX rate cache -- ANALYTICS-ONLY fallback for R-multiple / cost
+# enrichment when Saxo can't price a quote ccy on a given run; machine-local,
+# rebuilds itself from live quotes (forex/runner._save_eur_rate)
+data/eur_rate_cache.json
 # strategy monitor state
 data/strategy_monitor.json
 # gap strategy cooldown — per-week, per-pair re-entry block (runtime state, machine-local)

@@ -74,6 +74,8 @@ def _load_trades():
         e = entry.get(x["card_id"])
         if not e:
             continue
+        if e.get("orphaned"):
+            continue                       # crash-state re-entry artifact (swept 2026-09-02) -- not a real trade
         if x.get("mae_mfe_invalidated"):
             continue                       # pre-fix corrupted -- skip
         if x.get("pnl_suspect"):

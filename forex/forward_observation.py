@@ -48,6 +48,7 @@ COST_GATE_LOG     = os.path.join(_DATA_DIR, "cost_gate_decisions.jsonl")
 EXPOSURE_LOG      = os.path.join(_DATA_DIR, "currency_exposure_snapshots.jsonl")
 TRADE_CARDS_LOG   = os.path.join(_DATA_DIR, "trade_observation_cards.jsonl")
 EXIT_ADVISOR_LOG  = os.path.join(_DATA_DIR, "exit_advisor_shadow.jsonl")
+SIGNAL_REJECT_LOG = os.path.join(_DATA_DIR, "signal_rejections.jsonl")
 
 
 def _append_jsonl(path: str, record: dict) -> None:
@@ -67,7 +68,8 @@ def log_cost_gate_decision(*, account_env: str, strategy: str, symbol: str, dire
                             notional_eur: float | None = None,
                             realised_r_eur: float | None = None,
                             all_in_cost_eur: float | None = None,
-                            recovery_thin: bool = False) -> None:
+                            recovery_thin: bool = False,
+                            rate_source: str | None = None) -> None:
     """decision: "PASS" or "BLOCKED". Called for every signal that reaches
     this gate, not just the ones it blocks -- the point is to be able to
     ask later "of the signals it let through, how many were actually
@@ -97,6 +99,41 @@ def log_cost_gate_decision(*, account_env: str, strategy: str, symbol: str, dire
         # but this flag lets the AI / analysis separate the healthy signals
         # from the cost-dominated ones once RSI trades all 184 pairs.
         "recovery_thin": bool(recovery_thin),
+        # how the EUR conversion behind realised_r_eur / all_in_cost_eur was
+        # obtained: "live" (fresh Saxo quote), "last_good" (persisted Saxo
+        # rate < 24h old -- fine for an R denominator), or None (no rate at
+        # all -> the *_eur fields above are None). Lets an analysis down-weight
+        # or exclude last_good rows if it wants to.
+        "rate_source": rate_source,
+    })
+
+
+def log_signal_rejected(*, account_env: str, strategy: str, symbol: str, direction: str,
+                         stage: str, detail: str = "",
+                         entry_price: float | None = None, stop_price: float | None = None,
+                         tp_price: float | None = None,
+                         rsi: float | None = None, adx: float | None = None,
+                         atr: float | None = None) -> None:
+    """A signal the strategy generated that the pipeline dropped BEFORE the
+    cost-clearance gate -- so it never reached cost_gate_decisions.jsonl and,
+    before this, existed only as a text line in the scheduler log.
+
+    `stage` is the filter that rejected it: "stale_price", "signal_filter",
+    "currency_exposure", "opposing_strategy", "wide_spread", "no_fx_rate",
+    "risk_budget". With entry/stop/tp captured, a later pass can look up what
+    price actually did and measure the counterfactual -- the same question
+    the cost-gate log was built for, extended to the earlier filter stage.
+
+    Pure observation. Never changes whether the signal is skipped.
+    """
+    _append_jsonl(SIGNAL_REJECT_LOG, {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "account_env": account_env, "strategy": strategy, "symbol": symbol,
+        "direction": direction, "stage": stage, "detail": detail,
+        "entry_price": entry_price, "stop_price": stop_price, "tp_price": tp_price,
+        "rsi": round(rsi, 1) if isinstance(rsi, (int, float)) else None,
+        "adx": round(adx, 1) if isinstance(adx, (int, float)) else None,
+        "atr": atr,
     })
 
 
@@ -131,7 +168,8 @@ def log_trade_entry_card(*, account_env: str, strategy: str, symbol: str, direct
                           exposure_before_eur: dict, exposure_after_eur: dict,
                           all_in_cost_eur: float | None = None,
                           recovery_to_cost_ratio: float | None = None,
-                          recovery_thin: bool = False) -> str:
+                          recovery_thin: bool = False,
+                          rate_source: str | None = None) -> str:
     """Written once, at entry. structural_stop/hybrid_stop are only
     meaningful for donchian (its own channel data) -- None for every
     other strategy, not a placeholder guess. Returns a card_id to pass
@@ -154,6 +192,9 @@ def log_trade_entry_card(*, account_env: str, strategy: str, symbol: str, direct
         "all_in_cost_eur": round(all_in_cost_eur, 2) if all_in_cost_eur is not None else None,
         "recovery_to_cost_ratio": recovery_to_cost_ratio,
         "recovery_thin": bool(recovery_thin),
+        # "live" / "last_good" / None -- how risk_eur & all_in_cost_eur's EUR
+        # conversion was sourced (see log_cost_gate_decision's note).
+        "rate_source": rate_source,
         "exposure_before_eur": {k: round(v, 2) for k, v in exposure_before_eur.items()},
         "exposure_after_eur": {k: round(v, 2) for k, v in exposure_after_eur.items()},
     })

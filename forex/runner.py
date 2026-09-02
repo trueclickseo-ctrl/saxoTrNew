@@ -1205,6 +1205,63 @@ def _verify_token(scheduled_time: str = "") -> bool:
 _QUOTE_RATE_CACHE: dict[str, float] = {}
 _PAIRS_BY_SYMBOL = {p["symbol"]: p for p in PAIRS}
 
+# Persistent last-good Saxo rate store -- ANALYTICS ONLY (never sizing). The
+# in-memory _QUOTE_RATE_CACHE dies with each scheduled process, so a quote
+# currency Saxo can't price on this run has no rate at all -- which is why
+# ~80% of SIM RSI cost-gate rows had recovery_thin/all_in_cost_eur = None
+# (2026-09-02 finding). _eur_per_unit() writes every fresh success here;
+# _eur_rate_for_log() reads it back as a fallback for R-multiple / all-in-cost
+# enrichment so the AI journal / shadow study gets a real number. Strict
+# callers (sizing, exposure, the LIVE €45 risk cap) never touch this.
+_EUR_RATE_STORE_PATH = os.path.join(DATA_DIR, "eur_rate_cache.json")
+_EUR_RATE_STORE_MAX_AGE_H = 24.0
+
+
+def _load_eur_rate_store() -> dict:
+    try:
+        with open(_EUR_RATE_STORE_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_eur_rate(ccy: str, rate: float) -> None:
+    if not rate or rate <= 0:
+        return
+    try:
+        store = _load_eur_rate_store()
+        store[ccy] = {"rate": rate, "ts": datetime.now(timezone.utc).isoformat()}
+        tmp = _EUR_RATE_STORE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(store, f)
+        os.replace(tmp, _EUR_RATE_STORE_PATH)
+    except Exception:
+        pass  # analytics cache -- must never break a run
+
+
+def _eur_rate_for_log(ccy: str, akey: str | None = None) -> tuple[float | None, str | None]:
+    """EUR value of one unit of `ccy` for ANALYTICS ONLY -- R-multiple /
+    all-in-cost enrichment, cost-gate telemetry, observation cards. NEVER for
+    sizing or converting a live trade (those stay on strict _eur_per_unit(),
+    which still returns None on a Saxo miss). Tries a fresh Saxo quote; on a
+    miss, falls back to the last good Saxo rate we persisted (still a Saxo
+    number, minutes-to-hours old -- a fine denominator for an R-multiple).
+    Returns (rate, source) with source "live" / "last_good" / None.
+    """
+    live = _eur_per_unit(ccy, akey)
+    if live is not None:
+        return live, "live"
+    rec = _load_eur_rate_store().get(ccy)
+    if rec:
+        try:
+            age_h = (datetime.now(timezone.utc)
+                     - datetime.fromisoformat(rec["ts"])).total_seconds() / 3600.0
+            if 0 <= age_h <= _EUR_RATE_STORE_MAX_AGE_H and float(rec.get("rate", 0)) > 0:
+                return float(rec["rate"]), "last_good"
+        except Exception:
+            pass
+    return None, None
+
 
 def _live_price_retry(uic: int, akey: str, attempts: int = 2) -> float | None:
     """_live_price with a couple of retries -- a single infoprices call
@@ -1257,6 +1314,7 @@ def _eur_per_unit(ccy: str, akey: str | None = None) -> float | None:
         logger.warning(f"Saxo has no live quote for {ccy} right now -- treating as unknown")
         return None
     _QUOTE_RATE_CACHE[ccy] = rate
+    _save_eur_rate(ccy, rate)   # persist for _eur_rate_for_log()'s analytics fallback
     return rate
 
 
@@ -3552,6 +3610,20 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
     entered_syms: list[str] = []
     _ai_shadow_pending: list = []   # (sym, proposal, decision) -- flushed after the loop
     _ai_decision_by_sym: dict = {}  # AI Sprint 4: latest decision per symbol, for the sizing hook
+    def _rej(stage: str, detail: str = "") -> None:
+        # Structured record for a signal dropped BEFORE the cost gate (so it
+        # never reaches cost_gate_decisions.jsonl). Pure observation.
+        try:
+            forward_observation.log_signal_rejected(
+                account_env=ACCOUNT_ENV, strategy=strat_name, symbol=sym, direction=direction,
+                stage=stage, detail=detail,
+                entry_price=float(sig.get("close", 0) or 0) or None,
+                stop_price=float(sig.get("stop_price", 0) or 0) or None,
+                tp_price=(_resolve_tp_price(sig, direction) if sig.get("close") else None),
+                rsi=sig.get("rsi"), adx=sig.get("adx"), atr=sig.get("atr"))
+        except Exception:
+            pass
+
     for sig in signals:
         if entries >= slots_free:
             break
@@ -3571,6 +3643,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             logger.warning(
                 f"  [{strat_name}] SKIP {sym}[{direction}] — signal price {_sc:.5f} is "
                 f"{(_sc/_lq-1)*100:+.2f}% off the live quote {_lq:.5f} (stale chart bar)")
+            _rej("stale_price", f"{(_sc/_lq-1)*100:+.2f}% off live quote")
             continue
 
         # ── Signal filter: consensus + ML meta-filter ──────────────────────
@@ -3580,6 +3653,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         if not passes:
             logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] "
                         f"— signal_filter: {reason}")
+            _rej("signal_filter", reason)
             continue
         agrees = features["agreement_count"]
         ml_info = (f"  ml_prob={features['ml_prob']}" if features.get("ml_prob") else "")
@@ -3606,8 +3680,8 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 # spread term too.
                 _uic_ai = get_pair(sym)["uic"]
                 _rt_q = _round_trip_cost_quote_ccy(_uic_ai, 10_000, akey)
-                _q_rate = _eur_per_unit(sym[3:6] if len(sym) >= 6 else "", akey)
-                _b_rate = _eur_per_unit(sym[:3], akey)
+                _q_rate = _eur_rate_for_log(sym[3:6] if len(sym) >= 6 else "", akey)[0]
+                _b_rate = _eur_rate_for_log(sym[:3], akey)[0]
                 _comm_eur = round(_rt_q * _q_rate, 2) if (_rt_q and _q_rate) else None
                 _all_in_eur = _live_all_in_cost_eur(
                     commission_eur=_comm_eur, spread_pct=_spread_pct(_uic_ai),
@@ -3648,12 +3722,14 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         if not _currency_ok(sym, direction, exposure):
             logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] "
                         f"— currency exposure limit (max {_max_currency_exposure()})")
+            _rej("currency_exposure", f"max {_max_currency_exposure()}")
             continue
         opposing = _opposing_strategy_holds(sym, direction, positions)
         if opposing is not None:
             logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] "
                         f"— {opposing} already holds the opposite direction on {sym}, "
                         f"no upside to taking both sides")
+            _rej("opposing_strategy", f"{opposing} holds opposite")
             continue
         pair_info = get_pair(sym)
         uic       = pair_info["uic"]
@@ -3662,6 +3738,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] "
                         f"— spread {spread:.3f}% wider than {MAX_SPREAD_PCT}% "
                         f"(illiquid right now, not a good time to trade this pair)")
+            _rej("wide_spread", f"{spread:.3f}% > {MAX_SPREAD_PCT}%")
             continue
         if not _margin_allows_entry():
             break   # real Saxo margin too tight — stop entries for EVERY strategy, LBO included
@@ -3703,6 +3780,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 logger.warning(f"  [{strat_name}] SKIP {sym}: no live EUR rate for "
                                f"{_q_ccy} — can't enforce the €{RSI_LIVE_FIXED_RISK_EUR:.0f} "
                                f"risk cap, not falling back to %-based sizing on real money")
+                _rej("no_fx_rate", f"no live EUR rate for {_q_ccy} (LIVE €45 cap)")
                 continue
             rp_kw["risk_amount"] = RSI_LIVE_FIXED_RISK_EUR / _eur_per
             rp_kw.pop("risk_pct", None)
@@ -3720,6 +3798,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             if eq_quote is None:
                 logger.warning(f"  [{strat_name}] SKIP {sym}: no FX rate for quote "
                                f"currency — refusing to size without conversion")
+                _rej("no_fx_rate", "no quote-ccy FX rate for sizing")
                 continue
             qty = strat_mod.size_position(eq_quote, sig["atr"],
                                           pair_info["min_units"], **rp_kw)
@@ -3841,7 +3920,10 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         expected_target_profit = abs(tp - sig["close"]) * qty
         round_trip_cost = _round_trip_cost_quote_ccy(uic, qty, akey)
         quote_ccy_for_log = sym[3:6] if len(sym) >= 6 else ""
-        eur_rate_for_log = _eur_per_unit(quote_ccy_for_log, akey)
+        # analytics rate: fresh Saxo quote, else last-good Saxo rate (< 24h).
+        # NOT used to size anything -- the LIVE €45 risk cap has its own strict
+        # _eur_per_unit() call above and still SKIPs on a miss.
+        eur_rate_for_log, _rate_src = _eur_rate_for_log(quote_ccy_for_log, akey)
         _is_live = ACCOUNT_ENV in ("live", "live_eur")
         _edge_ratio = _min_edge_ratio()
 
@@ -3850,7 +3932,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         # the all-in-cost figure the AI accumulates are identical on SIM and
         # LIVE (the deterministic *block* below is still LIVE-only).
         notional_eur = None
-        _base_rate = _eur_per_unit(sym[:3], akey)
+        _base_rate = _eur_rate_for_log(sym[:3], akey)[0]
         if _base_rate:
             notional_eur = qty * _base_rate
 
@@ -3903,7 +3985,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                     or ("cost_unknown" if round_trip_cost is None else "")),
             notional_eur=notional_eur,
             realised_r_eur=_realised_r_eur, all_in_cost_eur=_all_in_cost_eur,
-            recovery_thin=bool(_rsi_recovery_thin),
+            recovery_thin=bool(_rsi_recovery_thin), rate_source=_rate_src,
         )
         if blocked:
             if block_reason == "recovery_below_cost_margin":
@@ -4086,7 +4168,11 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                                        else max(structural_stop, sig["close"] + floor_dist))
                 except Exception:
                     pass
-            eur_rate_entry = _eur_per_unit(quote_ccy_for_log, akey)
+            # analytics rate (fresh Saxo quote, else last-good < 24h) -- this
+            # only ever feeds the observation card / R-multiple / MAE-MFE cap,
+            # never a size or a gate, so a slightly stale Saxo rate beats a
+            # None that drops the trade out of the give-back sample entirely.
+            eur_rate_entry, _rate_src_entry = _eur_rate_for_log(quote_ccy_for_log, akey)
             risk_eur_entry = (abs(sig["close"] - sig["stop_price"]) * qty * eur_rate_entry
                                if eur_rate_entry else None)
             pos_record["risk_eur_at_entry"] = risk_eur_entry  # for a true R-multiple at exit, not a re-derived guess
@@ -4102,6 +4188,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 recovery_to_cost_ratio=(round(RSI_LIVE_ASSUMED_EXIT_R * _realised_r_eur / _all_in_cost_eur, 2)
                                         if (_realised_r_eur is not None and _all_in_cost_eur) else None),
                 recovery_thin=bool(_rsi_recovery_thin),
+                rate_source=_rate_src_entry,
                 exposure_before_eur=exposure_before_notional,
                 exposure_after_eur=_currency_exposure_notional_eur(positions),
             )
