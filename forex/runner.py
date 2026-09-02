@@ -707,8 +707,21 @@ def set_account_env(env: str) -> None:
         STATE_FILE       = os.path.join(DATA_DIR, "forex_live_eur_state.json")
         ORDERS_FILE      = os.path.join(DATA_DIR, "forex_live_eur_orders.json")
         PEAK_EQUITY_FILE = os.path.join(DATA_DIR, "forex_live_eur_peak_equity.json")
+    elif env == "ai_sim":
+        # AI-DECISION SIM TWIN (2026-09-03). Uses the SIM gateway for QUOTES
+        # only -- _paper_only_account() forces every entry/exit through the
+        # local paper path (PAPER- ids, pos["paper"]=True), so NO order is
+        # ever sent to Saxo and there is no account contention with the main
+        # SIM book. Own state / ledger (`forex_ai`) so the forward A/B is
+        # fully isolated. The one behavioural difference vs `sim`: the
+        # Trading Copilot's resize/skip is APPLIED (can_apply_decision(
+        # "ai_sim") is True).
+        BASE_URL         = "https://gateway.saxobank.com/sim/openapi"
+        STATE_FILE       = os.path.join(DATA_DIR, "forex_state_ai.json")
+        ORDERS_FILE      = os.path.join(DATA_DIR, "forex_orders_ai.json")
+        PEAK_EQUITY_FILE = os.path.join(DATA_DIR, "forex_peak_equity_ai.json")
     else:
-        raise ValueError(f"Unknown account env {env!r} -- expected 'sim', 'live', or 'live_eur'.")
+        raise ValueError(f"Unknown account env {env!r} -- expected 'sim', 'live', 'live_eur', or 'ai_sim'.")
     ACCOUNT_ENV = env
 
 
@@ -728,6 +741,8 @@ def _pnl_module() -> str:
         return "forex_live"
     if ACCOUNT_ENV == "live_eur":
         return "forex_live_eur"
+    if ACCOUNT_ENV == "ai_sim":
+        return "forex_ai"
     return "forex"
 
 
@@ -910,8 +925,15 @@ EXIT_ADVISOR_MODE = "shadow"   # "shadow" | (future: "active")
 SIM_PAPER_FILL_ON_REJECT = True
 
 
+def _paper_only_account() -> bool:
+    """ai_sim -- the AI-decision SIM twin. EVERY entry/exit is booked locally
+    at the live quote; no order is ever sent to Saxo. Distinct from the
+    `sim` paper-fill FALLBACK below (which only kicks in on a Saxo rejection)."""
+    return ACCOUNT_ENV == "ai_sim"
+
+
 def _sim_paper_fill_enabled() -> bool:
-    return SIM_PAPER_FILL_ON_REJECT and ACCOUNT_ENV == "sim"
+    return (SIM_PAPER_FILL_ON_REJECT and ACCOUNT_ENV == "sim") or _paper_only_account()
 
 
 def _is_paper_position(pos: dict) -> bool:
@@ -4163,6 +4185,19 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             logger.info(f"  [DRY] {direction:<4} {qty:,}x {sym}[{tag}] "
                         f"({strat_name})  @ {sig['close']:.5f}  "
                         f"stop={sig['stop_price']:.5f}  tp={tp:.5f}  {detail}{agree_tag}")
+        elif _paper_only_account():
+            # AI SIM twin: never send a Saxo order. Book the fill locally at
+            # the live quote; the exit stack manages it against quotes (the
+            # PAPER- id / pos["paper"]=True path, same as the SIM rejection
+            # fallback). `qty` here is already AI-resized (the Sprint-4 hook
+            # above ran -- can_apply_decision("ai_sim") is True).
+            _fill_px = _live_price(uic, akey) or float(sig["close"])
+            sig["close"] = _fill_px
+            entry_oid = "PAPER-" + uuid.uuid4().hex[:12]
+            stop_oid, tp_oid = "PAPER-STOP", "PAPER-TP"
+            _record_entry_result(rejected=False)
+            logger.info(f"  [{strat_name}] AI-SIM {direction} {qty:,}x {sym}[{tag}] "
+                        f"@ {_fill_px:.5f}  stop={sig['stop_price']:.5f}  tp={tp:.5f}{agree_tag}")
         else:
             if _sim_paper_fill_enabled() and _order_circuit_is_open():
                 # Venue already confirmed down this run — don't waste the
@@ -4603,7 +4638,11 @@ def _lock_path() -> str:
     re-acquires FOREX_LOCK every minute; sharing it with LIVE meant a real
     live run could sit polling against an unrelated process for several
     minutes despite there being zero actual shared-file risk between them."""
-    return proc_lock.FOREX_LIVE_LOCK if ACCOUNT_ENV == "live" else proc_lock.FOREX_LOCK
+    if ACCOUNT_ENV == "live":
+        return proc_lock.FOREX_LIVE_LOCK
+    if ACCOUNT_ENV == "ai_sim":
+        return proc_lock.FOREX_AI_LOCK
+    return proc_lock.FOREX_LOCK
 
 
 def _acquire_lock(label: str = "") -> bool:
@@ -5063,8 +5102,10 @@ if __name__ == "__main__":
                          "comma-separated list (e.g. donchian,ema,rsi). Choices: "
                          "ema, rsi, donchian, bb, pullback, gap, supertrend, "
                          "zscore, ml, cnn_lstm, london_breakout")
-    ap.add_argument("--account", default="sim", choices=["sim", "live", "live_eur"],
+    ap.add_argument("--account", default="sim", choices=["sim", "live", "live_eur", "ai_sim"],
                     help="Which Saxo account to run against (default: sim). "
+                         "'ai_sim' is the AI-decision SIM paper twin (Copilot "
+                         "resize/skip applied; no real orders; own forex_ai ledger). "
                          "'live' is the real-money SEK account -- restricted to "
                          "LIVE_ALLOWED_STRATEGIES (rsi since 2026-08-31) and the "
                          "17-pair HIGH_VOLUME_SYMBOLS universe, requires "
@@ -5405,7 +5446,7 @@ if __name__ == "__main__":
         sys.exit(0)
 
     active = requested_strategies if requested_strategies is not None else list(_ACTIVE_STRATEGIES)
-    if requested_strategies is not None and ACCOUNT_ENV == "sim":
+    if requested_strategies is not None and ACCOUNT_ENV in ("sim", "ai_sim"):
         _explicit_retired = sorted(set(active) & RETIRED_STRATEGIES)
         _explicit_offroster = sorted((set(active) & set(STRATEGIES))
                                      - set(SIM_ACTIVE_STRATEGIES) - set(_explicit_retired))
