@@ -5,11 +5,11 @@ it runs today** — parameters, entry/exit rules, sizing, where it runs (SIM /
 LIVE), and any known stale docstring notes. **None of these describe changes** —
 the strategies run as-is.
 
-The 20 strategies are the keys of `STRATEGIES` in [`forex/runner.py`](../forex/runner.py).
-The `advanced_*` / `*_master` / `rsi_trend` ones are SIM-only A/B experiments
-running in parallel with their untouched originals — none of them can place a
-real-money order.
-All 21 appear in the SIM scan and in `forex_dashboard.py` (`STRAT_LABELS_ALL` /
+The 23 strategies are the keys of `STRATEGIES` in [`forex/runner.py`](../forex/runner.py).
+The `advanced_*` / `*_master` / `rsi_trend` / `ema_trend` / `bb_quality` ones are
+SIM-only A/B experiments running in parallel with their untouched originals —
+none of them can place a real-money order.
+All 23 appear in the SIM scan and in `forex_dashboard.py` (`STRAT_LABELS_ALL` /
 `STRAT_COL` / the strategy legend + per-strategy breakdown tables).
 
 ## Swing strategies (daily bars, SIM scan)
@@ -18,6 +18,7 @@ All 21 appear in the SIM scan and in `forex_dashboard.py` (`STRAT_LABELS_ALL` /
 |---|---|---|---|
 | `ema` | [forex_ema_strategy.md](forex_ema_strategy.md) | EMA(5/30) crossover + ADX | SIM |
 | `advanced_ema` | [forex_advanced_ema_strategy.md](forex_advanced_ema_strategy.md) | `ema` + EMA50 confirm + rising-ADX + vol-percentile + recent-cross-only (A/B vs `ema`) | SIM |
+| `ema_trend` | [forex_ema_trend_strategy.md](forex_ema_trend_strategy.md) | `ema` + fresh crossover (≤3 bars) + `|+DI−−DI|≥15` (A/B vs `ema`, 2026-09-02) | SIM |
 | `rsi` | [forex_rsi_strategy.md](forex_rsi_strategy.md) | RSI(2) pullback (mean-reversion) | SIM **+ LIVE_EUR (real money)** |
 | `advanced_rsi_master` | [forex_advanced_rsi_master_strategy.md](forex_advanced_rsi_master_strategy.md) | `rsi` + EMA50/200 alignment + slope + distance + reversal-confirm (A/B vs `rsi`) | SIM |
 | `rsi_trend` | [forex_rsi_trend_strategy.md](forex_rsi_trend_strategy.md) | `rsi` + regime gate: Buy only in `TRENDING_BULLISH`, Sell only in `TRENDING_BEARISH` (A/B vs `rsi`, 2026-09-02) | SIM |
@@ -25,6 +26,7 @@ All 21 appear in the SIM scan and in `forex_dashboard.py` (`STRAT_LABELS_ALL` /
 | `donchian_quality` | [forex_donchian_quality_strategy.md](forex_donchian_quality_strategy.md) | `donchian` + breakout-quality filters (A/B) | SIM |
 | `bb` | [forex_bb_strategy.md](forex_bb_strategy.md) | Bollinger(20,2) + RSI reversion | SIM **+ SEK LIVE** (task Disabled) |
 | `advanced_bb_master` | [forex_advanced_bb_master_strategy.md](forex_advanced_bb_master_strategy.md) | `bb` + ADX ceiling + band-width + excursion + reversal-confirm (A/B vs `bb`) | SIM |
+| `bb_quality` | [forex_bb_quality_strategy.md](forex_bb_quality_strategy.md) | `bb` + non-directional-market gate `|+DI−−DI|≤14` (A/B vs `bb`, 2026-09-02) | SIM |
 | `pullback` | [forex_pullback_strategy.md](forex_pullback_strategy.md) | trend pullback to EMA(20) | SIM |
 | `advanced_pullback_master` | [forex_advanced_pullback_master_strategy.md](forex_advanced_pullback_master_strategy.md) | `pullback` + EMA5>20>50 structure + vol-percentile + DI + same-day bounce (A/B vs `pullback`) | SIM |
 | `supertrend` | [forex_supertrend_strategy.md](forex_supertrend_strategy.md) | SuperTrend(10,3) + EMA(200) | SIM |

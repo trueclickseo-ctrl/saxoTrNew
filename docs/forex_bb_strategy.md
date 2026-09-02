@@ -76,3 +76,13 @@ Same LIVE gate stack as RSI: currency-exposure cap 5, 3× cost gate, 6% heat cap
 ## Inspect
 
 `python forex/runner.py --scan` → `[BB]` panel.
+
+## SIM-only A/B twins
+
+| Twin | Difference | Doc |
+|---|---|---|
+| `advanced_bb_master` | ADX ceiling + band-width + excursion-in-ATR + prior-excursion/reversal confirm | [forex_advanced_bb_master_strategy.md](forex_advanced_bb_master_strategy.md) |
+| `bb_quality` | **non-directional-market gate only**: keep a signal only if `|+DI−−DI| ≤ 14`; everything else delegated to this module. From a 12y decomposition — the low-DI-spread subset ran +0.22 R (PF 2.07) vs this module's +0.048. | [forex_bb_quality_strategy.md](forex_bb_quality_strategy.md) |
+
+Both are SIM-only, never in a LIVE allowlist. `forex/strategy_bb.py` is
+byte-unchanged — it is the A/B control.

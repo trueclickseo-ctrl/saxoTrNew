@@ -59,6 +59,7 @@ import saxo_auth
 from forex.universe import PAIRS, ASSET_TYPE, get_pair, price_decimals as get_price_decimals, CORE_SYMBOLS, EXOTIC_SYMBOLS, HIGH_VOLUME_SYMBOLS, METALS_SYMBOLS
 import forex.strategy             as strat_ema
 import forex.strategy_advanced_ema as strat_advanced_ema
+import forex.strategy_ema_trend   as strat_ema_trend
 import forex.strategy_rsi         as strat_rsi
 import forex.strategy_rsi_trend   as strat_rsi_trend
 import forex.strategy_advanced_rsi_master as strat_advanced_rsi_master
@@ -66,6 +67,7 @@ import forex.strategy_donchian    as strat_donchian
 import forex.strategy_donchian_quality as strat_donchian_quality
 import forex.strategy_bb          as strat_bb
 import forex.strategy_advanced_bb_master as strat_advanced_bb_master
+import forex.strategy_bb_quality  as strat_bb_quality
 import forex.strategy_pullback    as strat_pullback
 import forex.strategy_advanced_pullback_master as strat_advanced_pullback_master
 import forex.strategy_gap         as strat_gap
@@ -150,6 +152,14 @@ STRATEGIES = {
     # ADX alone. "ema" (forex/strategy.py) is completely untouched. Never
     # added to either LIVE allowlist -- SIM only.
     "advanced_ema": strat_advanced_ema,
+    # 2026-09-02: SIM-only A/B vs "ema" -- IDENTICAL to "ema" except an entry
+    # is only kept when the EMA(5/30) crossover is BOTH fresh (age <= 3 bars,
+    # base allows 15) AND backed by a real +DI/-DI gap (|spread| >= 15). A
+    # 12y/49-pair decomposition showed "ema"'s edge (unstable, CI spans zero)
+    # concentrates entirely in fresh + high-conviction crossovers: that
+    # subset ran +0.30 R/trade, PF ~2, positive in both halves. "ema" is
+    # UNTOUCHED. Never in either LIVE allowlist. See forex/strategy_ema_trend.py.
+    "ema_trend":   strat_ema_trend,
     "rsi":         strat_rsi,
     # 2026-09-02: SIM-only A/B vs "rsi" -- IDENTICAL to "rsi" except entries
     # are gated on ai.regime.classifier: Buy only when TRENDING_BULLISH,
@@ -181,6 +191,14 @@ STRATEGIES = {
     # prior-excursion + today's-reversal confirmation. "bb" is untouched;
     # SIM only, never in either LIVE allowlist.
     "advanced_bb_master": strat_advanced_bb_master,
+    # 2026-09-02: SIM-only A/B vs "bb" -- IDENTICAL to "bb" except an entry
+    # is only kept when the market is non-directional at the signal bar
+    # (|plus_di - minus_di| <= 14). A 12y/49-pair decomposition showed "bb"
+    # (already stable-positive at +0.048 R) gives most of its edge back on
+    # the high-DI-spread signals; the low-DI-spread half ran +0.15-0.22 R,
+    # PF ~2, positive in both halves. "bb" is UNTOUCHED. Never in either LIVE
+    # allowlist. See forex/strategy_bb_quality.py.
+    "bb_quality":  strat_bb_quality,
     "pullback":    strat_pullback,
     # 2026-08-30: SIM-only A/B vs "pullback" (user-supplied "master"
     # design). Adds EMA5>EMA20>EMA50 structure, ATR-percentile band,
@@ -244,6 +262,8 @@ SLOTS_PER_STRATEGY = {
     # universe was expanded to the full major+EM/exotic set for SIM testing —
     # so every swing strategy can take a position in every pair it signals on.
     "ema": _SWING_SLOTS, "advanced_ema": _SWING_SLOTS,  # advanced_ema (2026-08-30): uncapped, mirrors "ema" for a clean A/B
+    "ema_trend": _SWING_SLOTS,   # 2026-09-02: mirrors "ema" -- full universe, clean A/B
+    "bb_quality": _SWING_SLOTS,  # 2026-09-02: mirrors "bb"  -- full universe, clean A/B
     "rsi": _SWING_SLOTS, "rsi_trend": _SWING_SLOTS, "donchian": _SWING_SLOTS, "bb": _SWING_SLOTS,
     "pullback": _SWING_SLOTS, "gap": _SWING_SLOTS, "gap_weekend": _SWING_SLOTS,
     # 2026-08-30: the 4 user-supplied "advanced_*_master" A/B strategies --
@@ -4158,6 +4178,16 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 pos_record["regime_fit"] = bool(
                     (_reg == "TRENDING_BULLISH" and direction == "Buy") or
                     (_reg == "TRENDING_BEARISH" and direction == "Sell"))
+        # 2026-09-02: persist the A/B entry-gate values for ema_trend / bb_quality
+        # (the SIM twins of ema / bb) so report/dashboard views can show which
+        # open positions cleared each gate, without re-deriving the indicators.
+        if strat_name == "ema_trend":
+            if sig.get("crossover_age") is not None:
+                pos_record["crossover_age"] = sig["crossover_age"]
+            if sig.get("di_spread") is not None:
+                pos_record["di_spread"] = sig["di_spread"]
+        elif strat_name == "bb_quality" and sig.get("di_spread") is not None:
+            pos_record["di_spread"] = sig["di_spread"]
         if "gap_target" in sig:
             pos_record["gap_target"]   = sig["gap_target"]
             pos_record["friday_close"] = sig.get("friday_close", sig["gap_target"])
@@ -4759,7 +4789,12 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
                                        # pre-filter ranks by trend strength, which suppresses the
                                        # reversal setups they are designed to catch. (rsi_trend has
                                        # its OWN regime gate -- don't double-filter it.)
-                                       "advanced_rsi_master", "advanced_bb_master")
+                                       "advanced_rsi_master", "advanced_bb_master",
+                                       # 2026-09-02: bb_quality is bb + a non-directional-market
+                                       # gate -- still mean-reversion, exempt like "bb". ema_trend
+                                       # is trend-following (twins "ema") -- deliberately NOT here,
+                                       # it SHOULD be momentum-filtered like its parent.
+                                       "bb_quality")
                 _edata = market_data if strat_name in _NO_MOMENTUM_FILTER else entry_market_data
                 entries = _run_entries(strat_name, strat_mod, positions,
                                        _edata, equity, akey, dry_run, today_str,
