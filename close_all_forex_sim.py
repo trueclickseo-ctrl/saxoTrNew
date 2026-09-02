@@ -4,39 +4,31 @@ close_all_forex_sim.py
 Flatten the entire forex SIM book in one go.
 
 Used on 2026-09-02 when the SIM roster was cut to the 5 kept strategies
-(rsi / rsi_trend / ema_trend / bb_quality / zscore_quality) -- everything the
-dormant strategies were still holding gets closed so the dashboard starts
-clean.
+(rsi / rsi_trend / ema_trend / bb_quality / zscore_quality).
 
 SOURCE OF TRUTH = the pnl ledger (data/pnl_ledger.db, module='forex',
-status='open'), NOT data/forex_state.json. The state file is a per-cycle
-cache; the ledger is the durable record. (This matters after a partial /
-interrupted run: the ledger still has every open row even if the state file
-lost some.) data/forex_state.json is cross-referenced for uic + the resting
-stop/TP order ids, and reconciled at the end.
+status='open'), NOT data/forex_state.json.
 
-Per open ledger row:
-  1. cancel its resting stop + TP orders   (from forex_state.json, if present)
-  2. MARKET-close it on Saxo SIM the opposite way (only if it's actually a
-     live Saxo position -- paper fills are just booked out)
-  3. log_close() -> flips the ledger row to 'closed' (Saxo's own
-     ProfitLossOnTrade when found live, else mark-to-entry)
-  4. drop it from data/forex_state.json
+Saxo SIM NETS every position on a Uic into ONE net position, so this closes
+BY UIC, once per Uic (trying to close two ledger rows on the same Uic
+separately is what produced the 409 Conflict storm on the first attempt):
+  1. cancel EVERY working order on that Uic
+  2. flatten the net Saxo amount with ONE market order (throttled; backs off
+     on 429; longer retry on 409)
+  3. book EVERY ledger row for that Uic to 'closed'  (net P&L on the first
+     row, 0 on the rest)
+  4. drop them all from data/forex_state.json
+A Uic that still won't flatten after cancelling its orders is booked out
+LOCALLY and left for  housekeeping.py --reconcile-only  +  safeguard  (which
+auto-closes untracked SIM positions every 30 min).
 
 SAFETY
-  * SIM ONLY -- never opens/reads/writes forex_live_state.json or
-    forex_live_eur_state.json. The real-money SEK / EUR books are untouched.
-  * DRY-RUN BY DEFAULT. It prints what it WOULD do and exits. Nothing happens
-    without  --execute  AND typing  FLATTEN  at the prompt.
-  * A close whose ORDER fails is reported and its ledger row is LEFT open --
-    re-run for stragglers. Exit code is non-zero on any failure.
-  * Needs a Saxo SIM login (`python saxo_auth.py` once) to place the real
-    close orders. Without one it can only mark paper rows out -- it will warn
-    and refuse --execute.
+  * SIM ONLY -- never touches forex_live_state.json / forex_live_eur_state.json.
+  * DRY RUN BY DEFAULT. Needs --execute AND typing FLATTEN.
+  * Needs a Saxo SIM login (python saxo_auth.py).
 
-    python close_all_forex_sim.py                 # dry run (safe, default)
-    python close_all_forex_sim.py --execute       # real: preview + type FLATTEN
-    python close_all_forex_sim.py --root E:\SaxoTrNew\SaxoTrNew   # explicit tree
+    python close_all_forex_sim.py                 # dry run
+    python close_all_forex_sim.py --execute       # real
 """
 import argparse
 import os
@@ -47,15 +39,17 @@ from collections import defaultdict
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 
+THROTTLE_S     = 0.6     # between Uics
+BACKOFF_429_S  = 8.0
+RETRY_409_S    = 2.5
+
 
 def _resolve_root() -> str:
-    """The PRIMARY checkout (real runner state + Saxo token), even when this
-    script is run from a git worktree."""
     env = os.environ.get("ATOS_ROOT")
     if env and os.path.exists(os.path.join(env, "data", "pnl_ledger.db")):
         return env
     gitfile = os.path.join(BASE, ".git")
-    if os.path.isfile(gitfile):                       # worktree: .git is a FILE
+    if os.path.isfile(gitfile):
         try:
             gitdir = open(gitfile).read().split("gitdir:", 1)[1].strip()
             main = os.path.abspath(os.path.join(gitdir, "..", "..", ".."))
@@ -68,163 +62,169 @@ def _resolve_root() -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--execute", action="store_true",
-                    help="actually place the close orders (default: dry run)")
-    ap.add_argument("--root", help="repo root holding data/ (default: auto-detect)")
+    ap.add_argument("--execute", action="store_true")
+    ap.add_argument("--root")
     args = ap.parse_args()
 
     root = args.root or _resolve_root()
     db_path    = os.path.join(root, "data", "pnl_ledger.db")
     state_path = os.path.join(root, "data", "forex_state.json")
-    print(f"  ledger : {db_path}")
-    print(f"  state  : {state_path}")
+    print(f"  ledger : {db_path}\n  state  : {state_path}")
     if not os.path.exists(db_path):
-        print("  no pnl_ledger.db there -- use --root to point at the primary checkout")
-        return 1
+        print("  no pnl_ledger.db -- use --root"); return 1
 
     import json
     import sqlite3
+    import requests
+    import saxo_client
+    import pnl_tracker
     from forex.universe import get_pair
 
-    # ── authoritative open list = the ledger ─────────────────────────────
-    con = sqlite3.connect(db_path)
-    con.row_factory = sqlite3.Row
-    open_rows = con.execute(
-        "SELECT id, strategy, symbol, direction, entry_price, quantity "
-        "FROM trades WHERE module='forex' AND status='open'").fetchall()
-    if not open_rows:
-        print("  ledger shows the forex SIM book already flat (0 open rows).")
-        return 0
+    con = sqlite3.connect(db_path); con.row_factory = sqlite3.Row
+    rows = con.execute("SELECT id, strategy, symbol, direction, entry_price, quantity "
+                       "FROM trades WHERE module='forex' AND status='open'").fetchall()
+    if not rows:
+        print("  forex SIM book already flat."); return 0
 
     state = json.load(open(state_path, encoding="utf-8")) if os.path.exists(state_path) else {"positions": {}}
     positions = state.setdefault("positions", {})
 
-    # ── live Saxo SIM positions (real amount + P&L) ──────────────────────
-    saxo_by_uic = {}
-    have_saxo = False
-    try:
-        import saxo_client
-        for p in saxo_client.get_positions(env="sim").get("Data", []):
-            pb, pv = p.get("PositionBase", {}), p.get("PositionView", {})
-            if pb.get("Uic") is not None:
-                saxo_by_uic[int(pb["Uic"])] = {
-                    "amount":  float(pb.get("Amount", 0.0)),
-                    "pl_base": pv.get("ProfitLossOnTradeInBaseCurrency"),
-                    "open":    float(pb.get("OpenPrice", 0.0) or 0.0),
-                }
-        have_saxo = True
-    except Exception as e:
-        print(f"\n  [WARN] no live Saxo SIM data ({str(e)[:90]})")
+    # ── group open ledger rows by Uic ───────────────────────────────────
+    by_uic = defaultdict(list)
+    no_uic = []
+    for r in rows:
+        key = f"{r['strategy']}:{r['symbol']}"
+        uic = (positions.get(key, {}) or {}).get("uic") or (get_pair(r["symbol"]) or {}).get("uic")
+        if uic:
+            by_uic[int(uic)].append(r)
+        else:
+            no_uic.append(r)
 
-    # ── preview ─────────────────────────────────────────────────────────
-    by_strat = defaultdict(list)
-    for r in open_rows:
-        by_strat[r["strategy"]].append(r)
-    print(f"\n{'='*78}\n  {'DRY RUN — ' if not args.execute else ''}FLATTEN forex SIM book — "
-          f"{len(open_rows)} open ledger row(s), {len(by_strat)} strateg"
-          f"{'y' if len(by_strat)==1 else 'ies'}\n{'='*78}")
-    real_ct = paper_ct = 0
-    for strat in sorted(by_strat):
-        rows = by_strat[strat]
-        print(f"\n  {strat}  ({len(rows)})")
-        for r in rows:
-            key = f"{strat}:{r['symbol']}"
-            sp  = positions.get(key, {})
-            uic = sp.get("uic") or (get_pair(r["symbol"]) or {}).get("uic")
-            sx  = saxo_by_uic.get(int(uic)) if uic else None
-            if sx and abs(sx["amount"]) > 0:
-                real_ct += 1
-                pl = f"{sx['pl_base']:+,.2f} EUR" if sx.get("pl_base") is not None else "?"
-                tag = f"LIVE {sx['amount']:+,.0f}  P&L {pl}"
-            else:
-                paper_ct += 1
-                tag = "paper / not on Saxo" if have_saxo else "(Saxo unknown)"
-            print(f"    {r['symbol']:<9} {r['direction']:<4} {r['quantity']:>10,.0f}  @ {r['entry_price']:<12}  {tag}")
-    print(f"\n  {real_ct} live Saxo position(s), {paper_ct} paper/unknown.")
-    print("  LIVE books (forex_live*.json) NOT touched.")
+    # ── live Saxo state ─────────────────────────────────────────────────
+    try:
+        saxo_pos = {int(p["PositionBase"]["Uic"]): p
+                    for p in saxo_client.get_positions(env="sim").get("Data", [])
+                    if p.get("PositionBase", {}).get("Uic") is not None}
+    except Exception as e:
+        print(f"\n  cannot reach Saxo SIM ({str(e)[:90]})"); return 1
+    try:
+        all_orders = saxo_client.get_orders(env="sim").get("Data", [])
+    except Exception:
+        all_orders = []
+    orders_by_uic = defaultdict(list)
+    for o in all_orders:
+        u = o.get("Uic")
+        if u is not None:
+            orders_by_uic[int(u)].append(o.get("OrderId"))
+
+    print(f"\n{'='*74}\n  {'DRY RUN — ' if not args.execute else ''}FLATTEN forex SIM — "
+          f"{len(rows)} ledger row(s) across {len(by_uic)} Uic(s)\n{'='*74}")
+    live_net = {}
+    for uic, rr in sorted(by_uic.items(), key=lambda kv: -len(kv[1])):
+        p = saxo_pos.get(uic)
+        amt = float(p["PositionBase"].get("Amount", 0.0)) if p else 0.0
+        pl  = (p.get("PositionView", {}) or {}).get("ProfitLossOnTradeInBaseCurrency") if p else None
+        live_net[uic] = (amt, pl)
+        syms = ",".join(sorted({r["symbol"] for r in rr}))
+        print(f"  uic {uic:<9} {syms:<10} rows {len(rr):<3} live {amt:+,.0f}  "
+              f"P&L {pl:+,.2f} EUR" if pl is not None else
+              f"  uic {uic:<9} {syms:<10} rows {len(rr):<3} live {amt:+,.0f}  (paper)")
+    if no_uic:
+        print(f"  + {len(no_uic)} row(s) with no resolvable uic -- will be booked out locally")
+    print("\n  LIVE books NOT touched.")
 
     if not args.execute:
-        print(f"\n  DRY RUN — nothing done. Re-run with --execute to flatten.")
-        return 0
-    if not have_saxo:
-        print(f"\n  REFUSING --execute without a Saxo SIM login (can't place real closes, "
-              f"can't read real P&L). Run: python saxo_auth.py")
-        return 1
-    if input(f"\n  Type FLATTEN to close all {len(open_rows)} positions: ").strip() != "FLATTEN":
+        print("\n  DRY RUN. Re-run with --execute."); return 0
+    if input(f"\n  Type FLATTEN to close {len(rows)} row(s) across {len(by_uic)} Uic(s): ").strip() != "FLATTEN":
         print("  aborted."); return 1
 
-    # ── close loop ──────────────────────────────────────────────────────
-    import pnl_tracker
-    closed = failed = 0
+    def _write():
+        tmp = state_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+        os.replace(tmp, state_path)
+
+    def _book(rr, exit_px, pl_net, reason):
+        for i, r in enumerate(rr):
+            try:
+                pnl_tracker.log_close("forex", r["symbol"], float(exit_px), reason,
+                                      strategy=r["strategy"],
+                                      gross_pnl_base_override=(float(pl_net) if (i == 0 and pl_net is not None) else 0.0))
+            except Exception as e:
+                print(f"    [warn] log_close {r['strategy']}:{r['symbol']} — {str(e)[:80]}")
+            positions.pop(f"{r['strategy']}:{r['symbol']}", None)
+
+    done = local = fail = 0
     booked = 0.0
-    for r in open_rows:
-        strat, sym, direction = r["strategy"], r["symbol"], r["direction"]
-        key = f"{strat}:{sym}"
-        sp  = positions.get(key, {})
-        uic = sp.get("uic") or (get_pair(sym) or {}).get("uic")
-        if not uic:
-            print(f"  [skip] {key}: no uic")
-            failed += 1
-            continue
-        uic = int(uic)
-        for oid_key in ("stop_order_id", "tp_order_id"):
-            if sp.get(oid_key):
+    for n, (uic, rr) in enumerate(sorted(by_uic.items(), key=lambda kv: -len(kv[1])), 1):
+        # 1. cancel every working order on this Uic
+        for oid in orders_by_uic.get(uic, []):
+            if oid:
                 try:
-                    saxo_client.cancel_order(str(sp[oid_key]), env="sim")
+                    saxo_client.cancel_order(str(oid), env="sim")
                 except Exception:
                     pass
-        sx = saxo_by_uic.get(uic)
-        exit_px = r["entry_price"]
-        pl_override = None
-        if sx and abs(sx["amount"]) > 0:
-            qty = int(abs(sx["amount"]))
-            side = "Sell" if sx["amount"] > 0 else "Buy"
-            ok = False
-            for attempt in (1, 2):
-                try:
-                    saxo_client.place_market_order(uic, "FxSpot", side, qty, env="sim")
-                    ok = True
-                    break
-                except Exception as e:
-                    print(f"  [retry {attempt}] {key}: {str(e)[:110]}")
-                    time.sleep(1.5)
-            if not ok:
-                print(f"  [FAIL] {key}: not flattened — ledger row left open")
-                failed += 1
-                continue
-            pl_override = sx.get("pl_base")
-            if sx.get("open"):
-                exit_px = sx["open"]
-        try:
-            net = pnl_tracker.log_close(
-                "forex", sym, float(exit_px), "roster_flatten_2026-09-02", strategy=strat,
-                gross_pnl_base_override=(float(pl_override) if pl_override is not None else None))
-            if net is not None:
-                booked += net
-        except Exception as e:
-            print(f"  [warn] {key}: log_close failed ({str(e)[:90]})")
-        positions.pop(key, None)
-        closed += 1
-        if closed % 25 == 0:
-            _write(state_path, state)
-            print(f"  ... {closed}/{len(open_rows)}")
+        time.sleep(0.25)
+        amt, pl = live_net.get(uic, (0.0, None))
+        exit_px = rr[0]["entry_price"]
+        p = saxo_pos.get(uic)
+        if p and p["PositionBase"].get("OpenPrice"):
+            exit_px = float(p["PositionBase"]["OpenPrice"])
 
-    _write(state_path, state)
-    print(f"\n{'='*78}\n  done: {closed} closed, {failed} failed")
+        if abs(amt) < 1:
+            _book(rr, exit_px, pl, "roster_flatten_local_2026-09-02")
+            local += 1
+            continue
+
+        side = "Sell" if amt > 0 else "Buy"
+        qty  = int(abs(amt))
+        ok = False
+        for attempt in range(4):
+            try:
+                saxo_client.place_market_order(uic, "FxSpot", side, qty, env="sim")
+                ok = True
+                break
+            except requests.exceptions.HTTPError as e:
+                code = e.response.status_code if e.response is not None else 0
+                if code == 429:
+                    print(f"    429 — backing off {BACKOFF_429_S}s")
+                    time.sleep(BACKOFF_429_S)
+                elif code == 409:
+                    time.sleep(RETRY_409_S)
+                else:
+                    print(f"    {code} {str(e)[:90]}")
+                    time.sleep(RETRY_409_S)
+            except Exception as e:
+                print(f"    {str(e)[:90]}")
+                time.sleep(RETRY_409_S)
+        if ok:
+            _book(rr, exit_px, pl, "roster_flatten_2026-09-02")
+            if pl is not None:
+                booked += pl
+            done += 1
+        else:
+            # cancelled its orders, still won't flatten -> book local, leave to housekeeping
+            _book(rr, exit_px, pl, "roster_flatten_stuck_2026-09-02")
+            fail += 1
+            print(f"  [stuck] uic {uic} ({rr[0]['symbol']}) — booked local, housekeeping will reconcile Saxo")
+
+        if n % 10 == 0:
+            _write()
+            print(f"  ... {n}/{len(by_uic)}  (closed {done}, local {local}, stuck {fail})")
+        time.sleep(THROTTLE_S)
+
+    for r in no_uic:
+        _book([r], r["entry_price"], None, "roster_flatten_local_2026-09-02")
+        local += 1
+
+    _write()
+    print(f"\n{'='*74}\n  done: {done} flattened on Saxo, {local} booked local (already flat), "
+          f"{fail} stuck (booked local)")
     print(f"  booked P&L this run (EUR): {booked:+,.2f}")
-    if failed:
-        print(f"  -> re-run for the {failed} straggler(s)")
-    print(f"  then: python housekeeping.py --reconcile-only --modules forex")
-    print(f"{'='*78}")
-    return 1 if failed else 0
-
-
-def _write(path, state):
-    import json
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2)
-    os.replace(tmp, path)
+    print(f"  NEXT: python housekeeping.py --reconcile-only --modules forex")
+    print(f"        (and safeguard's 30-min auto_close_untracked sweep clears any real residual)")
+    print(f"{'='*74}")
+    return 0
 
 
 if __name__ == "__main__":
