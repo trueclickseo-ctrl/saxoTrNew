@@ -1496,6 +1496,54 @@ US_BLEND_STOP_PCT = 0.08   # 8% stop-loss, matching the ETF module's convention
 US_BLEND_TP_PCT   = 0.20   # 20% take-profit, matching the ETF module's convention
 
 
+def _blend_book_state() -> dict:
+    """Rebalance clock + current holdings for BOTH US Blend books (SIM and the
+    real-money live_stocks sleeve), read from their own state files + ledgers.
+    Handed to the AI basket-ranker so it can track how the two books' timing
+    and holdings have drifted -- OBSERVE only. Never raises."""
+    from datetime import date as _date
+    out: dict = {}
+    _books = {
+        "sim":         (os.path.join(BASE_DIR, "data", "us_momentum_state.json"),
+                        os.path.join(BASE_DIR, "data", "atos_live.db")),
+        "live_stocks": (os.path.join(BASE_DIR, "data", "us_momentum_state_live.json"),
+                        os.path.join(BASE_DIR, "data", "atos_live_stocks.db")),
+    }
+    try:
+        from atos import us_momentum as _USM
+        rebal_days = int(_USM.REBAL_DAYS)
+    except Exception:
+        rebal_days = 14
+    for name, (state_f, db_f) in _books.items():
+        info: dict = {"last_rebalance": None, "days_since": None,
+                      "next_due_in_days": None, "holdings": {}}
+        try:
+            if os.path.exists(state_f):
+                last = json.load(open(state_f)).get("last_rebalance")
+                info["last_rebalance"] = last
+                if last:
+                    ds = (_date.today() - _date.fromisoformat(last)).days
+                    info["days_since"] = ds
+                    info["next_due_in_days"] = max(0, rebal_days - ds)
+        except Exception:
+            pass
+        try:
+            if os.path.exists(db_f):
+                import sqlite3 as _sq
+                con = _sq.connect(db_f)
+                try:
+                    rows = con.execute(
+                        "select ticker, shares from trades where exit_price is null "
+                        "and strategy='US Blend'").fetchall()
+                finally:
+                    con.close()
+                info["holdings"] = {t: int(s or 0) for t, s in rows}
+        except Exception:
+            pass
+        out[name] = info
+    return out
+
+
 def _place_us(side: str, ticker: str, shares: int, imap: dict,
               todays_actions: list, price: float, cur_trade: dict = None,
               strategy: str = "US Blend") -> bool:
@@ -1776,12 +1824,17 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
                         _regime = classify_regime(_lead_bars).get("label")
                 except Exception:
                     pass
+                try:
+                    _bstate = _blend_book_state()
+                except Exception:
+                    _bstate = {}
                 ai_basket_ranker.rank_basket_shadow(
                     account_env=account_env,
                     det_offense=_mom, det_defense=tgt.get("lowvol", []),
                     det_count=len(_mom), detail=tgt.get("detail", {}),
                     regime_label=_regime, mom_n_max=USM.MOM_N_MAX,
                     as_of_date=date.today().isoformat(),
+                    book_state=_bstate,
                 )
             except Exception as _exc:
                 print(f"  [ai] blend basket-ranker hook failed: {_exc}")
@@ -2080,8 +2133,12 @@ def run_us_blend_live(*, budget_sek: float, dry_run: bool, exits_only: bool = Fa
 
     buy_n  = sum(1 for a in todays_actions if a.get("action") == "BUY")
     sell_n = sum(1 for a in todays_actions if a.get("action") in ("SELL", "EXIT"))
+    try:
+        _bstate = _blend_book_state()
+    except Exception:
+        _bstate = {}
     return {"actions": todays_actions, "buy": buy_n, "sell": sell_n,
-            "signal": dict(_blend_signal)}
+            "signal": dict(_blend_signal), "book_state": _bstate}
 
 
 def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,

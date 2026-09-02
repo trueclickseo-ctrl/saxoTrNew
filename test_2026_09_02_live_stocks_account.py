@@ -232,6 +232,26 @@ def test_run_us_blend_live_returns_the_signal_basket():
     import inspect, atos_runner
     src = inspect.getsource(atos_runner.run_us_blend_live)
     assert '"signal"' in src and "_blend_signal" in src
+    assert '"book_state"' in src
+
+
+def test_blend_book_state_covers_both_books():
+    import atos_runner
+    bs = atos_runner._blend_book_state()
+    assert set(bs) == {"sim", "live_stocks"}
+    for b in bs.values():
+        assert set(b) >= {"last_rebalance", "days_since", "next_due_in_days", "holdings"}
+        assert isinstance(b["holdings"], dict)
+
+
+def test_basket_ranker_accepts_and_logs_book_state():
+    import inspect
+    from ai.features import basket_ranker as br
+    sig = inspect.signature(br.rank_basket_shadow)
+    assert "book_state" in sig.parameters and sig.parameters["book_state"].default is None
+    src = inspect.getsource(br.rank_basket_shadow)
+    assert '"book_state": book_state or {}' in src           # on the logged row
+    assert '"book_state": book_state or {}' in src.split("payload = {", 1)[1]  # and in the LLM payload
 
 
 def test_dashboard_renders_scan_signal_from_status_file(tmp=None):

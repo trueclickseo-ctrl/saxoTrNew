@@ -97,6 +97,7 @@ def _write_status(dry_run: bool, exits_only: bool, snap: dict, rails: dict, resu
         "actions": result.get("actions", []),
         "buy": result.get("buy", 0),
         "sell": result.get("sell", 0),
+        "book_state": result.get("book_state", {}),
     }
     try:
         tmp = STATUS_FILE + ".tmp"
