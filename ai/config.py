@@ -73,6 +73,24 @@ _DEFAULTS = {
     "journal_enabled": False,
     "journal_model": "claude-sonnet-5",
     "journal_max_trades_per_run": 40,
+    # ── Stocks AI (2026-09-02) ────────────────────────────────────────────
+    # The forex AI layer (proposal log -> shadow Copilot -> Journal) extended
+    # to the SIM stocks module (atos_runner.py). Independently gated and
+    # ships OFF (`enabled: false`) -- the whole `stocks` subtree is inert
+    # until it's flipped. Sub-flags let each piece be toggled once enabled:
+    #   journal                   -- feed stocks closed trades to the Journal
+    #   shadow_copilot_reversion  -- score every US Reversion entry (log-only)
+    #   basket_ranker_blend       -- shadow-rank the US Blend fortnightly
+    #                                offense basket (log-only, changes nothing)
+    # Every stocks hook is OBSERVE/LOG only -- there is no apply path in the
+    # code, so a future forex Sprint-4 can_apply_decision("sim")==True can
+    # never leak into a stocks trade (AST-checked in the stocks-AI tests).
+    "stocks": {
+        "enabled": False,
+        "journal": True,
+        "shadow_copilot_reversion": True,
+        "basket_ranker_blend": True,
+    },
 }
 
 
@@ -173,6 +191,41 @@ def journal_max_trades_per_run() -> int:
         return max(1, int(_load().get("journal_max_trades_per_run", 40)))
     except (TypeError, ValueError):
         return 40
+
+
+def _stocks_cfg() -> dict:
+    s = _load().get("stocks")
+    return s if isinstance(s, dict) else {}
+
+
+def stocks_enabled() -> bool:
+    """Master switch for the stocks AI layer (atos_runner.py hooks). False if
+    the `stocks` block is missing or `enabled` is not true. Nothing in the
+    stocks AI path does anything while this is False."""
+    return bool(_stocks_cfg().get("enabled", False))
+
+
+def stocks_journal_enabled() -> bool:
+    """Feed the SIM stocks module's closed trades to the AI Trading Journal.
+    Requires stocks_enabled() AND the `journal` sub-flag AND journal_enabled()
+    (the Journal's own master switch)."""
+    return stocks_enabled() and bool(_stocks_cfg().get("journal", False)) and journal_enabled()
+
+
+def stocks_reversion_copilot_enabled() -> bool:
+    """Score every US Reversion entry candidate with the shadow Trading
+    Copilot (log-only, applies nothing). Requires stocks_enabled() AND the
+    `shadow_copilot_reversion` sub-flag AND agent_enabled_for('sim')."""
+    return (stocks_enabled() and bool(_stocks_cfg().get("shadow_copilot_reversion", False))
+            and agent_enabled_for("sim"))
+
+
+def stocks_basket_ranker_enabled() -> bool:
+    """Shadow-rank the US Blend fortnightly offense basket (log-only, the
+    deterministic targets are never modified). Requires stocks_enabled() AND
+    the `basket_ranker_blend` sub-flag AND agent_enabled_for('sim')."""
+    return (stocks_enabled() and bool(_stocks_cfg().get("basket_ranker_blend", False))
+            and agent_enabled_for("sim"))
 
 
 def config_path() -> str:

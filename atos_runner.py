@@ -102,7 +102,36 @@ import saxo_order
 import saxo_fx
 import saxo_history
 
+# ── AI observation layer (2026-09-02) -- OBSERVE/LOG ONLY, ships OFF ──
+# Guarded exactly like forex/runner.py: if the ai package fails to import
+# (or config/ai.json is missing/off) every hook below sees ai_config is
+# None / the stubs and no-ops. There is NO apply path -- these hooks only
+# build proposals, log them, and (when the paid agent is on) log a shadow
+# decision. A stocks trade is never resized or skipped by any of this.
+try:
+    import ai.config as ai_config
+    import ai.agent.trading_copilot as ai_trading_copilot
+    from ai.features import stock_cards as ai_stock_cards
+    from ai.features import stock_proposal as ai_stock_proposal
+    from ai.features import basket_ranker as ai_basket_ranker
+except Exception:                                      # pragma: no cover
+    ai_config = None
+    ai_trading_copilot = None
+    ai_stock_cards = None
+    ai_stock_proposal = None
+    ai_basket_ranker = None
+
 DEPLOY_CONFIG = os.path.join(BASE_DIR, "config", "deploy.json")
+
+
+def _sek_per_eur() -> float | None:
+    """SEK value of one EUR, from Saxo's live quotes. None on failure -- the
+    AI card writers then skip the EUR conversion rather than guess."""
+    try:
+        r = _rate_to_sek("EUR")
+        return float(r) if r and r > 0 else None
+    except Exception:
+        return None
 
 
 def _rate_to_sek(ccy: str) -> float:
@@ -1512,6 +1541,18 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
         record_fill(-(shares * price_sek + comm))
         _append_trade_log("US Blend", "BUY", ticker, shares, price,
                           shares * price_sek, None, "US momentum rebalance")
+        if (ai_config is not None and ai_config.stocks_enabled()
+                and ai_stock_cards is not None):
+            try:
+                _blend_stop = round(price * (1 - US_BLEND_STOP_PCT), 2)
+                ai_stock_cards.log_stock_entry_card(
+                    strategy="us_blend", ticker=ticker, direction="Buy",
+                    entry_price=price, shares=shares, stop_price=_blend_stop,
+                    sek_per_eur=_sek_per_eur(), entry_date=date.today().isoformat(),
+                    risk_sek=abs(price - _blend_stop) * shares * rate,
+                )
+            except Exception as _exc:
+                print(f"  [ai] blend entry-card hook failed for {ticker}: {_exc}")
         todays_actions.append({"action": "BUY", "ticker": ticker, "market_group": "US Equities",
                                "strategy": "US Blend", "score": 0, "shares": shares,
                                "price": price, "reason": "US momentum", "pnl_sek": None})
@@ -1532,6 +1573,22 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
         _append_trade_log("US Blend", "SELL", ticker, shares, price,
                           shares * price_sek, pnl, "US momentum exit",
                           entry_date=cur_trade.get("entry_date", "") if cur_trade else "")
+        _blend_entry_d = cur_trade.get("entry_date", "") if cur_trade else ""
+        if (ai_config is not None and ai_config.stocks_enabled()
+                and ai_stock_cards is not None and cur_trade and _blend_entry_d):
+            try:
+                _ep = cur_trade.get("entry_price", price)
+                _sp = cur_trade.get("stop_price")
+                ai_stock_cards.log_stock_exit_card(
+                    card_id=ai_stock_cards.card_id_for("us_blend", ticker, _blend_entry_d),
+                    exit_price=price, exit_reason="momentum_rebalance",
+                    gross_pnl_sek=shares * (price_sek - _ep * rate),
+                    commission_sek=comm, net_pnl_sek=pnl, holding_hours=None,
+                    sek_per_eur=_sek_per_eur(),
+                    risk_sek=(abs(_ep - _sp) * shares * rate) if _sp else None,
+                )
+            except Exception as _exc:
+                print(f"  [ai] blend exit-card hook failed for {ticker}: {_exc}")
         todays_actions.append({"action": "EXIT", "ticker": ticker, "market_group": "US Equities",
                                "strategy": "US Blend", "score": 0, "shares": shares,
                                "price": price, "reason": "US momentum exit", "pnl_sek": pnl})
@@ -1613,6 +1670,34 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
             lowvol_tickers   = tgt.get("lowvol", []),
             sleeve_sek       = available_cash_sek or CAP.blend_allocation_pct() * CAP.starting_capital_sek(),
         )
+
+        # ── AI shadow basket ranker (OBSERVE/LOG ONLY) ──────────────────────
+        # Logs what the LLM WOULD do to the offense (momentum) basket next to
+        # `tgt`. `tgt` is NOT modified -- plan_rebalance() below gets the
+        # deterministic pick unchanged. Report: report_ai_basket.py. The
+        # deterministic re-ranking rule (if any) comes out of the user's
+        # review of this log, then a backtest -- never from this hook.
+        if (ai_config is not None and ai_basket_ranker is not None
+                and ai_config.stocks_basket_ranker_enabled()
+                and tgt.get("momentum")):
+            try:
+                _mom = tgt.get("momentum", [])
+                _regime = None
+                try:
+                    from ai.regime.classifier import classify_regime
+                    _lead_bars = feat_data.get(_mom[0])
+                    if _lead_bars is not None:
+                        _regime = classify_regime(_lead_bars).get("label")
+                except Exception:
+                    pass
+                ai_basket_ranker.rank_basket_shadow(
+                    det_offense=_mom, det_defense=tgt.get("lowvol", []),
+                    det_count=len(_mom), detail=tgt.get("detail", {}),
+                    regime_label=_regime, mom_n_max=USM.MOM_N_MAX,
+                    as_of_date=date.today().isoformat(),
+                )
+            except Exception as _exc:
+                print(f"  [ai] blend basket-ranker hook failed: {_exc}")
 
     def _price(tk, fallback=0):
         return float(feat_data[tk]["Close"].iloc[-1]) if tk in feat_data else fallback
@@ -1882,6 +1967,23 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
                         sh * cur_price * fx_usd, pnl_sek, reason,
                         entry_date=entry_d, days_held=held_d,
                     )
+                    if (ai_config is not None and ai_config.stocks_enabled()
+                            and ai_stock_cards is not None and entry_d):
+                        try:
+                            _ep = trade.get("entry_price", 0)
+                            _sp = trade.get("stop_price")
+                            ai_stock_cards.log_stock_exit_card(
+                                card_id=ai_stock_cards.card_id_for("us_reversion", ticker, entry_d),
+                                exit_price=cur_price, exit_reason=reason,
+                                gross_pnl_sek=(cur_price - _ep) * sh * fx_usd,
+                                commission_sek=comm_exit,
+                                net_pnl_sek=pnl_sek,
+                                holding_hours=held_d * 24.0 if held_d else None,
+                                sek_per_eur=_sek_per_eur(),
+                                risk_sek=(abs(_ep - _sp) * sh * fx_usd) if _sp else None,
+                            )
+                        except Exception as _exc:
+                            print(f"  [ai] reversion exit-card hook failed for {ticker}: {_exc}")
                     todays_actions.append({
                         "action": "SELL", "ticker": ticker, "market_group": "US Equities",
                         "strategy": "US Reversion", "score": 0, "shares": sh,
@@ -1954,6 +2056,54 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
 
     scan_ts_str    = datetime.now().isoformat()
     ordered_tickers = set()
+
+    # ── AI shadow Copilot on US Reversion entries (OBSERVE/LOG ONLY) ──────
+    # Mirrors forex/runner.py's _run_entries hook: build a proposal in the
+    # forex schema, log it, and (when the paid agent is on + not already
+    # evaluated today) score it and log the shadow decision. NOTHING here
+    # changes which candidates are entered, the size, or the order -- there
+    # is no apply path. can_apply_decision is never consulted.
+    if (ai_config is not None and ai_stock_proposal is not None
+            and ai_config.stocks_enabled()):
+        try:
+            _spe = _sek_per_eur()
+            _equity_sek = get_total_equity(db.get_open_trades())
+            _equity_eur = (_equity_sek / _spe) if (_equity_sek and _spe) else None
+            _open_rev = [{"symbol": t, "side": "BUY", "size": v.get("shares"),
+                          "strategy": "us_reversion"}
+                         for t, v in rev_open_now.items()]
+            for _c in candidates[:slots_free]:
+                _tk = _c["ticker"]
+                _bars = feat_data.get(_tk)
+                _vol_pct = None
+                try:
+                    _cl = _bars["Close"].dropna()
+                    _vol_pct = round(float(_cl.pct_change().rolling(20).std().iloc[-1]) * 100, 3)
+                except Exception:
+                    pass
+                _stop = round(_c["price"] * (1 - USR.STOP_PCT), 2)
+                _sh = _sim_cap_shares(int(slot_sek / (_c["price"] * fx_usd)), _c["price"], fx_usd)
+                _risk_eur = ((_c["price"] - _stop) * _sh * fx_usd / _spe) if _spe else None
+                _prop = ai_stock_proposal.build_stock_proposal(
+                    strategy="us_reversion", ticker=_tk, entry_price=_c["price"],
+                    stop_price=_stop, target_price=_c.get("sma20"),
+                    rsi14=_c.get("rsi"), shares=_sh,
+                    daily_vol_pct=_vol_pct, risk_eur=_risk_eur,
+                    account_equity_eur=_equity_eur, open_positions=_open_rev,
+                    regime_bars=_bars,
+                )
+                if not _prop:
+                    continue
+                ai_stock_proposal.log_proposal(_prop)
+                if (ai_config.stocks_reversion_copilot_enabled()
+                        and ai_trading_copilot is not None):
+                    if not (ai_config.agent_dedup_enabled()
+                            and ai_stock_proposal.already_evaluated(_prop)):
+                        _dec = ai_trading_copilot.evaluate_proposal(_prop)
+                        ai_stock_proposal.log_shadow_decision(
+                            _prop, _dec, entered=_tk in {c["ticker"] for c in candidates[:slots_free]})
+        except Exception as _exc:
+            print(f"  [ai] reversion shadow-Copilot hook failed: {_exc}")
 
     for cand in candidates[:slots_free]:
         ticker = cand["ticker"]
@@ -2037,6 +2187,19 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
                 "US Reversion", "BUY", ticker, shares, price, cost_sek, None,
                 f"RSI={cand['rsi']} dip={cand['dip_pct']}% vol={cand['vol_ratio']}x",
             )
+            # AI observation card (OBSERVE/LOG only) -- picked up by the Journal
+            if ai_config is not None and ai_config.stocks_enabled() and ai_stock_cards is not None:
+                try:
+                    _spe = _sek_per_eur()
+                    ai_stock_cards.log_stock_entry_card(
+                        strategy="us_reversion", ticker=ticker, direction="Buy",
+                        entry_price=price, shares=shares, stop_price=stop_p,
+                        sek_per_eur=_spe, entry_date=today.isoformat(),
+                        risk_sek=abs(price - stop_p) * shares * fx_usd,
+                        rsi_at_entry=cand.get("rsi"), sma20_target=cand.get("sma20"),
+                    )
+                except Exception as _exc:
+                    print(f"  [ai] reversion entry-card hook failed for {ticker}: {_exc}")
             todays_actions.append({
                 "action": "BUY", "ticker": ticker, "market_group": "US Equities",
                 "strategy": "US Reversion", "score": cand["score"],

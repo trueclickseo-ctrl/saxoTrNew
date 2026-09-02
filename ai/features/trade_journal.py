@@ -45,6 +45,7 @@ _DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), "data")
 
 CARDS_LOG        = os.path.join(_DATA_DIR, "trade_observation_cards.jsonl")
+STOCK_CARDS_LOG  = os.path.join(_DATA_DIR, "stock_observation_cards.jsonl")
 PROPOSALS_LOG    = os.path.join(_DATA_DIR, "ai_trade_proposals.jsonl")
 SHADOW_LOG       = os.path.join(_DATA_DIR, "ai_shadow_decisions.jsonl")
 EXIT_ADVISOR_LOG = os.path.join(_DATA_DIR, "exit_advisor_shadow.jsonl")
@@ -55,8 +56,18 @@ MAX_TOKENS     = 16000
 CHUNK_SIZE     = 8       # trades per LLM call; a big day is split into several
 
 _SYSTEM = """You are ATOS's Trading Journal -- a post-trade analyst for a systematic \
-FX trading bot. Every trade you see has ALREADY closed. You do not place, modify, or \
-advise on any live order; you write an honest retrospective so the operator can learn.
+trading bot (FX and US equities). Every trade you see has ALREADY closed. You do not \
+place, modify, or advise on any live order; you write an honest retrospective so the \
+operator can learn.
+
+Most trades are FX. Some carry "market": "equity" -- a US stock, SIM/paper only. \
+Two equity strategies: "us_reversion" = buy an RSI(14)<38 oversold dip above the \
+200-EMA, exit on RSI recovery / the 20-day SMA / a -4% stop / a 10-day time stop \
+(structurally the same idea as the FX RSI(2) book); "us_blend" = a fortnightly \
+top-momentum rebalance with NO per-trade stop -- so an "exit_reason" of \
+"momentum_rebalance" is the strategy working normally, not a failure, and there is \
+no ATR / MAE-MFE / stop-give-back angle to judge for those. Equity P&L was converted \
+from SEK to EUR at write time; "net_pnl_native" is the raw SEK.
 
 You receive a JSON object: "narrate" is the list of closed trades to write up in \
 detail; "all_trades_today" (when present) is a compact list of every trade that day \
@@ -142,11 +153,19 @@ def _closed_trades() -> list[dict]:
     per closed trade (exit fields win), sorted by exit timestamp."""
     entry: dict[str, dict] = {}
     exits: list[dict] = []
-    for c in _load_jsonl(CARDS_LOG):
-        if c.get("event") == "entry" and c.get("card_id"):
-            entry[c["card_id"]] = c
-        elif c.get("event") == "exit" and c.get("card_id"):
-            exits.append(c)
+    sources = [CARDS_LOG]
+    # Stocks module cards (US Blend / US Reversion) live in their own file so
+    # the forex-only reports (report_giveback, verify_ai_data, ...) that read
+    # CARDS_LOG are unaffected. The Journal reads both. SEK figures on these
+    # cards were converted to EUR at write time (ai/features/stock_cards.py).
+    if ai_config.stocks_journal_enabled():
+        sources.append(STOCK_CARDS_LOG)
+    for src in sources:
+        for c in _load_jsonl(src):
+            if c.get("event") == "entry" and c.get("card_id"):
+                entry[c["card_id"]] = c
+            elif c.get("event") == "exit" and c.get("card_id"):
+                exits.append(c)
     trades = []
     for x in exits:
         if x.get("pnl_suspect"):
@@ -252,10 +271,14 @@ def build_dossiers(since: str | None = None, limit: int | None = None) -> list[d
         dossiers.append({
             "card_id": cid,
             "day": exit_day,
+            "market": t.get("market", "fx"),
             "account_env": t.get("account_env"),
             "strategy": t.get("strategy"),
             "symbol": t.get("symbol"),
             "direction": t.get("direction"),
+            "rsi_at_entry": t.get("rsi_at_entry"),
+            "sma20_target": t.get("sma20_target"),
+            "net_pnl_native": t.get("net_pnl_native"),
             "entry_price": t.get("entry_price"),
             "stop_at_entry": t.get("current_stop"),
             "atr_at_entry": t.get("atr_at_entry"),
