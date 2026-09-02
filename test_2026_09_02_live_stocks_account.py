@@ -247,8 +247,12 @@ def test_dashboard_renders_scan_signal_from_status_file(tmp=None):
             "buy": 1, "sell": 0,
         }, open(path, "w"))
         out = d.render()
-        assert "LAST SCAN" in out and "SCAN SIGNALS" in out
+        assert "LAST SCAN" in out and "TODAY'S SCAN SIGNALS" in out
+        # the SIM-dashboard column layout
+        for col in ("Action", "Ticker", "Strategy", "Score", "Shares", "Price", "Reason"):
+            assert col in out, col
         assert "HUM" in out and "target basket" in out
+        assert "1 BUY" in out and "BLOCKED" in out          # the SIM-style footer
         assert "OBSERVE" in out
     finally:
         d.STATUS_FILE = real

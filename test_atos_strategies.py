@@ -200,6 +200,43 @@ def test_rebalance_no_targets_only_exits():
     assert actions == [{"ticker": "OLD", "side": "Sell", "shares": 5}]
 
 
+_SMALL_SLEEVE = dict(   # 30k sleeve / 6 names / fx 10 -> per_usd = $500/slot
+    targets=["N1", "N2", "N3", "N4", "N5", "N6"], scale=1.0,
+    sleeve_sek=30_000, fx_usd_sek=10.0)
+
+
+def test_rebalance_small_sleeve_floors_slightly_pricey_target_to_1_share():
+    # $500/slot; N1 at $560 (1.12x) rounds to 0 shares and would drop out of the
+    # equal-weight basket -- the small-sleeve rule floors it to 1 share.
+    actions = mom.plan_rebalance(
+        current_shares={},
+        prices_usd={"N1": 560.0, "N2": 40.0, "N3": 40.0, "N4": 40.0, "N5": 40.0, "N6": 40.0},
+        **_SMALL_SLEEVE)
+    n1 = [a for a in actions if a["ticker"] == "N1"]
+    assert n1 == [{"ticker": "N1", "side": "Buy", "shares": 1}], actions
+
+
+def test_rebalance_does_not_floor_a_target_far_above_the_slot_budget():
+    # $500/slot; a $2,000 stock (4x) is a genuine affordability limit -- still
+    # skipped, not force-bought.
+    actions = mom.plan_rebalance(
+        current_shares={},
+        prices_usd={"N1": 2_000.0, "N2": 40.0, "N3": 40.0, "N4": 40.0, "N5": 40.0, "N6": 40.0},
+        **_SMALL_SLEEVE)
+    assert not [a for a in actions if a["ticker"] == "N1"], actions
+
+
+def test_rebalance_floor_does_not_touch_an_existing_position():
+    # We already hold 1 share of a name that now rounds to 0 target shares
+    # ($560 vs a $500/slot budget across 6 names) -> the floor rule
+    # (cur==0 only) doesn't fire; delta -1 -> Sell 1.
+    actions = mom.plan_rebalance(
+        current_shares={"HELD": 1},
+        targets=["HELD", "T2", "T3", "T4", "T5", "T6"], scale=1.0,
+        prices_usd={"HELD": 560.0}, sleeve_sek=30_000, fx_usd_sek=10.0)
+    assert actions == [{"ticker": "HELD", "side": "Sell", "shares": 1}]
+
+
 # ── us_reversion: scan() ─────────────────────────────────────────────────
 section("us_reversion: scan()")
 
@@ -306,6 +343,12 @@ _run("rebalance: buys up to the target share count", test_rebalance_buys_up_to_t
 _run("rebalance: skips a position already at its target (idempotent)", test_rebalance_skips_trivial_drift_within_threshold)
 _run("rebalance: caps shares at MAX_SHARES_PER_NAME for cheap tickers", test_rebalance_caps_shares_at_max_per_name)
 _run("rebalance: empty targets only produces exits", test_rebalance_no_targets_only_exits)
+_run("rebalance: small sleeve floors a slightly-pricey target to 1 share (DELL fix)",
+     test_rebalance_small_sleeve_floors_slightly_pricey_target_to_1_share)
+_run("rebalance: a target far above the slot budget is still skipped, not force-bought",
+     test_rebalance_does_not_floor_a_target_far_above_the_slot_budget)
+_run("rebalance: the 1-share floor never touches an existing position",
+     test_rebalance_floor_does_not_touch_an_existing_position)
 _run("reversion fires on the full dip+oversold+volume setup", test_reversion_fires_on_full_dip_setup)
 _run("reversion does not fire on a stock that never dipped", test_reversion_does_not_fire_on_a_stock_that_never_dipped)
 _run("reversion rejects a dip with no volume spike", test_reversion_rejects_without_volume_spike)
