@@ -52,6 +52,16 @@ data/gap_cooldown.json
 data/forex_live_state.json
 data/forex_live_orders.json
 data/forex_live_peak_equity.json
+# SIM module runtime state — positions / caches / perf logs rewritten every
+# cycle, reconciled against live Saxo on load, and every reader guards a
+# missing file. Untracked 2026-09-02 (were committed by mistake, dirtied
+# git status on every run). Same class as the LIVE state above.
+# (data/attention_state.json is covered a few lines up.)
+data/forex_state.json
+data/futures_state.json
+data/futures_uic_cache.json
+saxo_etf_strategy/data/etf_positions.json
+saxo_etf_strategy/data/etf_rank_performance_log.csv
 # Cross-process lock files -- runtime-only, never meaningful across machines
 *.lock
 # generated HTML dashboard (was uploaded to namazic.com)
