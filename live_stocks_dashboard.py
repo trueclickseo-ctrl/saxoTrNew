@@ -137,22 +137,35 @@ def render() -> str:
             L.append(f"    {BL}defense (low-vol){W}  : {' '.join(lv) if lv else '—'}")
             L.append(f"    {BD}target basket{W}     : {' '.join(tgts) if tgts else '—'}")
 
-        # ── Scan signals — the orders THIS scan produced (would-be in Phase 1) ─
+        # ── Today's scan signals — same layout as the SIM stocks dashboard ────
         acts = st.get("actions") or []
+        HR = f"{DM}  {'─' * 96}{W}"
         L.append("")
-        L.append(f"{BD}  SCAN SIGNALS{W}  {DM}({len(acts)} this scan — "
-                 f"{st.get('buy',0)} buy / {st.get('sell',0)} sell){W}")
+        L.append(f"{BD}  TODAY'S SCAN SIGNALS{W}  {DM}(scan: {ts}){W}"
+                 + (f"  {YL}[would-be — observe only]{W}" if st.get("dry_run") else ""))
+        L.append("")
         if not acts:
-            L.append(f"{DM}    holdings already match target — no orders this scan{W}")
+            L.append(f"{DM}    holdings already match the target basket — no orders this scan{W}")
         else:
-            L.append(f"    {DM}{'Action':<8} {'Ticker':<7} {'Shares':>6} {'Price':>9}  Reason{W}")
+            L.append(f"  {DM}{'Action':<10}  {'Ticker':<7}  {'Strategy':<14}  "
+                     f"{'Score':>5}  {'Shares':>6}  {'Price':>8}  Reason{W}")
+            L.append(HR)
+            n_buy = n_exit = n_blocked = 0
             for a in acts:
-                act = a.get("action", "")
-                acol = GR + BD if act == "BUY" else (CY if act in ("SELL", "EXIT") else DM)
-                wb = f" {DM}(would-be){W}" if a.get("would_be") else ""
-                L.append(f"    {acol}{act:<8}{W} {BD}{(a.get('ticker') or '')[:7]:<7}{W} "
-                         f"{a.get('shares',0):>6} {(a.get('price') or 0):>9.2f}  "
-                         f"{DM}{(a.get('reason') or '')[:34]}{W}{wb}")
+                raw = a.get("action", "")
+                disp = "BUY" if raw == "BUY" else ("EXIT" if raw in ("SELL", "EXIT") else raw or "—")
+                if disp == "BUY":      n_buy += 1
+                elif disp == "EXIT":   n_exit += 1
+                elif disp == "BLOCKED": n_blocked += 1
+                acol = {"BUY": GR + BD, "EXIT": CY, "BLOCKED": DM}.get(disp, DM)
+                L.append(
+                    f"  {acol}{disp:<10}{W}  {BD}{(a.get('ticker') or '')[:7]:<7}{W}  "
+                    f"{DM}{(a.get('strategy') or 'US Blend')[:14]:<14}{W}  "
+                    f"{(a.get('score') or 0):>5.2f}  {a.get('shares', 0):>6}  "
+                    f"{(a.get('price') or 0):>8.2f}  {DM}{(a.get('reason') or '')[:40]}{W}"
+                )
+            L.append(HR)
+            L.append(f"  {GR}{n_buy} BUY{W}  {CY}{n_exit} EXIT{W}  {DM}{n_blocked} BLOCKED{W}")
 
     openp = _rows("select * from trades where exit_price is null and strategy='US Blend' order by entry_date")
     L.append("")
@@ -174,15 +187,25 @@ def render() -> str:
             col = GR if pnl >= 0 else RD
             L.append(f"    {t.get('ticker',''):<8} {col}{pnl:+,.0f} SEK{W}  {DM}{t.get('exit_reason','')}{W}")
 
-    wb = _tail_jsonl(WOULD_BE_ORDERS, 12)
+    wb = _tail_jsonl(WOULD_BE_ORDERS, 15)
     L.append("")
-    L.append(f"{BD}  WOULD-BE ORDERS — full history{W}  {DM}(last {len(wb)}, all scans){W}")
+    L.append(f"{BD}  WOULD-BE ORDERS — full history{W}  {DM}(last {len(wb)} across all observe scans){W}")
     if not wb:
-        L.append(f"{DM}    none logged yet{W}")
-    for r in wb:
-        L.append(f"    {DM}{str(r.get('ts',''))[:16]}{W}  {r.get('side',''):<4} "
-                 f"{r.get('shares',0):>5} {r.get('ticker',''):<7} @ ${r.get('price_usd',0):.2f}  "
-                 f"~{r.get('notional_sek',0):,.0f} SEK")
+        L.append(f"{DM}    none logged yet — first scan runs at 02:40 PKT{W}")
+    else:
+        L.append(f"  {DM}{'When':<16}  {'Side':<4}  {'Ticker':<7}  {'Shares':>6}  "
+                 f"{'Price':>9}  {'Notional':>12}{W}")
+        L.append(f"{DM}  {'─' * 66}{W}")
+        for r in wb:
+            when = str(r.get("ts", "")).replace("T", " ")[:16]
+            side = (r.get("side") or "").upper()
+            scol = GR if side == "BUY" else CY
+            L.append(
+                f"  {DM}{when:<16}{W}  {scol}{side:<4}{W}  "
+                f"{BD}{(r.get('ticker') or '')[:7]:<7}{W}  {r.get('shares', 0):>6}  "
+                f"{DM}${W}{(r.get('price_usd') or 0):>8,.2f}  "
+                f"{(r.get('notional_sek') or 0):>9,.0f} SEK"
+            )
 
     basket = [r for r in _tail_jsonl(BASKET_SHADOW, 40)
               if r.get("account_env") == "live_stocks"][-3:]

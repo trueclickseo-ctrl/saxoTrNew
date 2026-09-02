@@ -1826,8 +1826,9 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
             "action": "BUY" if side == "Buy" else "SELL",
             "ticker": tk, "market_group": "US Equities", "strategy": "US Blend",
             "score": 0, "shares": int(shares), "price": round(float(price), 4),
-            "reason": "US Blend rebalance (would-be, observe)", "pnl_sek": None,
-            "would_be": True,
+            "reason": ("fortnightly rebalance — enter" if side == "Buy"
+                       else "dropped from target basket"),
+            "pnl_sek": None, "would_be": True,
         })
         return True
 

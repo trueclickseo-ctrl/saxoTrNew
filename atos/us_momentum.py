@@ -147,6 +147,15 @@ def plan_rebalance(current_shares: dict, targets: list, scale: float,
     # pairs, which is the current priority — not a strategy change, a sizing
     # ceiling on top of the existing dollar-budget calc below.
     MAX_SHARES_PER_NAME = 50
+    # Small-sleeve completeness: a target name whose 1-share price is a little
+    # over the per-slot budget rounds to 0 shares under the plain dollar-budget
+    # calc and is silently dropped from the equal-weight basket -- e.g. on the
+    # 30k real-money sleeve (~$450/slot across 6-8 names) DELL at ~$492 got no
+    # order despite being the #2 momentum pick. Allow exactly 1 share for a NEW
+    # position when a single share costs no more than MIN_ENTRY_SLOT_MULT x the
+    # slot budget, so the basket stays complete; names priced well beyond that
+    # (a genuine affordability limit for the sleeve size) still skip.
+    MIN_ENTRY_SLOT_MULT = 1.5
 
     actions = []
     # Exit anything no longer in the target set (full close, no threshold).
@@ -162,6 +171,8 @@ def plan_rebalance(current_shares: dict, targets: list, scale: float,
             continue
         tgt = min(int(per_usd / price), MAX_SHARES_PER_NAME)
         cur = int(current_shares.get(t, 0))
+        if tgt == 0 and cur == 0 and price <= per_usd * MIN_ENTRY_SLOT_MULT:
+            tgt = 1
         delta = tgt - cur
         # Skip trivial size drift — only trade when the position is meaningfully off.
         if tgt > 0 and abs(delta) / tgt < REBAL_THRESHOLD:
