@@ -38,6 +38,11 @@ data/ai_trade_proposals.jsonl
 data/ai_trade_journal.jsonl
 data/exit_advisor_shadow.jsonl
 data/rsi_signal_registry.jsonl
+# Stocks AI layer runtime logs (2026-09-02) -- equity observation cards + Blend basket shadow
+data/stock_observation_cards.jsonl
+data/ai_basket_shadow.jsonl
+# "ATOS needs a human" escalation channel -- ephemeral, safeguard rewrites it every cycle
+data/attention_state.json
 # strategy monitor state
 data/strategy_monitor.json
 # gap strategy cooldown — per-week, per-pair re-entry block (runtime state, machine-local)
