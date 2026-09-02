@@ -159,6 +159,7 @@ STRAT_COL = {
     "gap":        WH,
     "supertrend": "\033[38;5;208m",   # orange
     "zscore":     "\033[38;5;147m",   # lavender
+    "zscore_quality":             "\033[38;5;141m",   # deeper lavender (~zscore, non-directional-gate A/B, 2026-09-02)
     "ml":         "\033[38;5;119m",   # lime
     "london_breakout": "\033[38;5;214m",   # amber — day trading book
     "cnn_lstm":   "\033[38;5;135m",   # purple
@@ -174,7 +175,6 @@ STRAT_COL = {
     "ema_trend":                  "\033[38;5;45m",    # teal-cyan    (~ema, clean-crossover A/B, 2026-09-02)
     "advanced_rsi_master":        "\033[38;5;213m",   # pink         (~rsi)
     "rsi_trend":                  "\033[38;5;207m",   # magenta-pink (~rsi, regime-gated A/B, 2026-09-02)
-    "rsi_confirm":                "\033[38;5;171m",   # violet       (~rsi, confirmation-delay + conviction, 2026-09-02)
     "advanced_bb_master":         "\033[38;5;229m",   # pale yellow  (~bb)
     "bb_quality":                 "\033[38;5;222m",   # gold         (~bb, non-directional-gate A/B, 2026-09-02)
     "advanced_pullback_master":   "\033[38;5;75m",    # light blue   (~pullback)
@@ -286,6 +286,7 @@ STRAT_LABELS_ALL = {
     "gap":        "Gap Fill ★★",
     "supertrend": "SuperTrend",
     "zscore":     "Z-Score Rev",
+    "zscore_quality":             "Z-Score Qual (A/B)",   # 2026-09-02: zscore + non-directional-market gate
     "ml":         "ML Signals",
     "cnn_lstm":   "CNN-LSTM",
     "london_breakout": "LBO Day Trade",
@@ -303,7 +304,6 @@ STRAT_LABELS_ALL = {
     "ema_trend":                  "EMA Trend (A/B)",   # 2026-09-02: ema + fresh-crossover & DI-conviction gate
     "advanced_rsi_master":        "RSI2 (A/B)",   # 2026-09-02 (user): call it RSI2 — a separate strategy from the day-1 "rsi", must stay distinct
     "rsi_trend":                  "RSI Trend (A/B)",   # 2026-09-02: rsi + regime entry gate. Distinct from "RSI" (core) and "RSI2 (A/B)".
-    "rsi_confirm":                "RSI Confirm (exp)",   # 2026-09-02: confirmation-delay bucket + conviction single slot
     "advanced_bb_master":         "BB Master (A/B)",
     "advanced_pullback_master":   "Pullback Mstr (A/B)",
     "advanced_ml":                "ML Adv (A/B)",
@@ -642,10 +642,9 @@ def _positions_section(title: str, positions_subset: list, live: dict,
 
     if positions_subset:
         strat_order = ["ema", "advanced_ema", "ema_trend", "rsi", "advanced_rsi_master", "rsi_trend",
-                       "rsi_confirm",
                        "donchian", "donchian_quality", "bb", "advanced_bb_master", "bb_quality",
                        "pullback", "advanced_pullback_master",
-                       "gap", "gap_weekend", "supertrend", "zscore",
+                       "gap", "gap_weekend", "supertrend", "zscore", "zscore_quality",
                        "ml", "advanced_ml", "cnn_lstm", "advanced_cnn_lstm_master",
                        "london_breakout", "london_breakout_v2"]
         _sidx = {s: i for i, s in enumerate(strat_order)}
@@ -924,9 +923,9 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
              f"{STRAT_COL['ema_trend']}{BD}■ EMA Trend{W}  A/B   "
              f"{STRAT_COL['advanced_rsi_master']}{BD}■ RSI2{W}  A/B   "
              f"{STRAT_COL['rsi_trend']}{BD}■ RSI Trend{W}  A/B   "
-             f"{STRAT_COL['rsi_confirm']}{BD}■ RSI Confirm{W}  exp   "
              f"{STRAT_COL['advanced_bb_master']}{BD}■ BB Mstr{W}  A/B   "
              f"{STRAT_COL['bb_quality']}{BD}■ BB Qual{W}  A/B   "
+             f"{STRAT_COL['zscore_quality']}{BD}■ ZS Qual{W}  A/B   "
              f"{STRAT_COL['advanced_pullback_master']}{BD}■ Pullback Mstr{W}  A/B   "
              f"{STRAT_COL['advanced_ml']}{BD}■ ML Adv{W}  A/B   "
              f"{STRAT_COL['advanced_cnn_lstm_master']}{BD}■ CNN-LSTM Mstr{W}  A/B")

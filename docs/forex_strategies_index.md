@@ -7,10 +7,14 @@ the strategies run as-is.
 
 The 24 strategies are the keys of `STRATEGIES` in [`forex/runner.py`](../forex/runner.py).
 The `advanced_*` / `*_master` / `rsi_trend` / `ema_trend` / `bb_quality` /
-`rsi_confirm` ones are SIM-only experiments running in parallel with their
+`zscore_quality` ones are SIM-only experiments running in parallel with their
 untouched originals — none of them can place a real-money order.
 All 24 appear in the SIM scan and in `forex_dashboard.py` (`STRAT_LABELS_ALL` /
 `STRAT_COL` / the strategy legend + per-strategy breakdown tables).
+
+`rsi_confirm` (the confirmation-delay idea) was built + backtested + **retired
+the same day** (2026-09-02) — see [forex_rsi_confirm_strategy.md](forex_rsi_confirm_strategy.md).
+The module is kept unwired as a documented negative result.
 
 ## Swing strategies (daily bars, SIM scan)
 
@@ -32,6 +36,7 @@ All 24 appear in the SIM scan and in `forex_dashboard.py` (`STRAT_LABELS_ALL` /
 | `advanced_pullback_master` | [forex_advanced_pullback_master_strategy.md](forex_advanced_pullback_master_strategy.md) | `pullback` + EMA5>20>50 structure + vol-percentile + DI + same-day bounce (A/B vs `pullback`) | SIM |
 | `supertrend` | [forex_supertrend_strategy.md](forex_supertrend_strategy.md) | SuperTrend(10,3) + EMA(200) | SIM |
 | `zscore` | [forex_zscore_strategy.md](forex_zscore_strategy.md) | z-score(20) ±2σ reversion | SIM |
+| `zscore_quality` | [forex_zscore_quality_strategy.md](forex_zscore_quality_strategy.md) | `zscore` + non-directional-market gate `|+DI−−DI|≤14` (A/B vs `zscore`, 2026-09-02) | SIM |
 | `ml` | [forex_ml_strategy.md](forex_ml_strategy.md) | per-pair logistic regression, 7 features | SIM |
 | `advanced_ml` | [forex_advanced_ml_strategy.md](forex_advanced_ml_strategy.md) | regularized logistic reg + regime + trend filters (A/B vs `ml`) | SIM |
 | `cnn_lstm` | [forex_cnn_lstm_strategy.md](forex_cnn_lstm_strategy.md) | CNN + BiLSTM + attention (⚠️ barely fires) | SIM |

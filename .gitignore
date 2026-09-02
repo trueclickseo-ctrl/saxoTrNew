@@ -53,8 +53,6 @@ data/strategy_monitor.json
 data/gap_cooldown.json
 data/gap_weekend_cooldown.json
 data/lbo_v2_session_cooldown.json
-# rsi_confirm LIVE-CANDIDATE bucket — queued RSI signals under observation (runtime state, machine-local)
-data/rsi_confirm_candidates.json
 # Real-money LIVE forex account runtime state (positions/orders/peak-equity) --
 # machine-local, never source-controlled, same as the other risk/state trackers above
 data/forex_live_state.json

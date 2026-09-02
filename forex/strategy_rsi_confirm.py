@@ -2,6 +2,25 @@
 forex/strategy_rsi_confirm.py
 ----------------------------
 RSI(2) pullback with a CONFIRMATION-DELAY + CONVICTION single-slot.
+
+*** RETIRED 2026-09-02 -- BACKTEST-FALSIFIED, NEVER SCANNED ***
+Built and backtested the same day. A 12,700-signal / 12y / 49-CORE-pair
+backtest (scratchpad/rsi_confirm_backtest.py) showed the confirmation delay
+systematically enters AFTER the mean reversion it is trying to catch:
+  immediate + rsi-exit (control)  -0.106 R/trade   win 56%   PF 0.65
+  delayed  + rsi-exit             -0.242 R/trade   win 42%   PF 0.32
+  delayed  + fast-TP (this)       -0.252 R/trade   win 45%   PF 0.32
+Every variant is worse than entering on the signal, in both halves, and in
+TRENDING_BULLISH-only too. RSI(2) is a mean-reversion signal -- its edge is
+buying the instant of the extreme; waiting 6-30h means the bounce already
+happened. There is no knob that fixes "don't wait to fade an extreme".
+
+This module is UNWIRED from forex/runner.py (not in STRATEGIES) and kept only
+as the documented negative result. See docs/forex_rsi_confirm_strategy.md.
+Do not re-register it without a NEW backtest that overturns the above.
+
+--------------------------------------------------------------------------
+Original design (the user's idea, 2026-09-02):
 A **SIM-only** strategy (never in either LIVE allowlist).
 
 The user's idea (2026-09-02), built as-specified for a SIM forward-test:

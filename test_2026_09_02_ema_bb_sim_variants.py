@@ -1,11 +1,12 @@
 """
-2026-09-02 -- ema_trend + bb_quality: SIM-only A/B twins of "ema" / "bb" that
-gate entries on features a 12y/49-CORE-pair decomposition showed carry the
-stable edge.
+2026-09-02 -- ema_trend + bb_quality + zscore_quality: SIM-only A/B twins of
+"ema" / "bb" / "zscore" that gate entries on features a 12y/49-CORE-pair
+decomposition showed carry the stable edge.
 
-  ema_trend  = "ema"  kept only if crossover age <= 3 bars AND
-                       |plus_di - minus_di| >= 15
-  bb_quality = "bb"   kept only if |plus_di - minus_di| <= 14 (non-directional)
+  ema_trend      = "ema"    kept only if crossover age <= 3 bars AND
+                             |plus_di - minus_di| >= 15
+  bb_quality     = "bb"     kept only if |plus_di - minus_di| <= 14 (non-directional)
+  zscore_quality = "zscore" kept only if |plus_di - minus_di| <= 14 (non-directional)
 
 These tests lock the A/B design: each twin must be IDENTICAL to its parent
 except the entry gate, SIM-only, delegate all exit management, and can never
@@ -39,8 +40,10 @@ def _run(n, f):
 
 import forex.strategy as ema_base
 import forex.strategy_bb as bb_base
+import forex.strategy_zscore as zs_base
 import forex.strategy_ema_trend as et
 import forex.strategy_bb_quality as bq
+import forex.strategy_zscore_quality as zq
 import forex.runner as runner
 
 
@@ -49,7 +52,8 @@ import forex.runner as runner
 def test_registered_as_sim_only_ab_twins():
     assert runner.STRATEGIES.get("ema_trend") is et
     assert runner.STRATEGIES.get("bb_quality") is bq
-    for k, parent in (("ema_trend", "ema"), ("bb_quality", "bb")):
+    assert runner.STRATEGIES.get("zscore_quality") is zq
+    for k, parent in (("ema_trend", "ema"), ("bb_quality", "bb"), ("zscore_quality", "zscore")):
         assert runner.SLOTS_PER_STRATEGY[k] == runner.SLOTS_PER_STRATEGY[parent], f"{k} slots != {parent}"
         assert runner.SLOTS_PER_STRATEGY[k] == runner._SWING_SLOTS, f"{k} not full-universe"
         assert k not in runner.LIVE_ALLOWED_STRATEGIES, f"{k} leaked into LIVE allowlist"
@@ -60,20 +64,22 @@ def test_momentum_filter_membership_matches_parent_nature():
     src = inspect.getsource(runner)
     i = src.index("_NO_MOMENTUM_FILTER = (")
     block = src[i:src.index("_edata = market_data", i)]
-    # bb_quality is mean-reversion (twins bb, which IS exempt) -> exempt
+    # bb_quality / zscore_quality are mean-reversion (twin bb / zscore, both exempt) -> exempt
     assert '"bb_quality"' in block
+    assert '"zscore_quality"' in block
     # ema_trend is trend-following (twins ema, which is NOT exempt) -> momentum-filtered
     assert '"ema_trend"' not in block
 
 
 def test_not_in_profit_ladder():
-    # ema / bb don't use the RSI(2) profit ladder -> neither do their twins
+    # ema / bb / zscore don't use the RSI(2) profit ladder -> neither do their twins
     assert "ema_trend" not in runner.PROFIT_LADDER_STRATEGIES
     assert "bb_quality" not in runner.PROFIT_LADDER_STRATEGIES
+    assert "zscore_quality" not in runner.PROFIT_LADDER_STRATEGIES
 
 
 def test_parent_modules_are_untouched():
-    for rel in ("forex/strategy.py", "forex/strategy_bb.py"):
+    for rel in ("forex/strategy.py", "forex/strategy_bb.py", "forex/strategy_zscore.py"):
         try:
             head = subprocess.run(["git", "show", f"HEAD:{rel}"],
                                   capture_output=True, text=True, cwd=BASE, timeout=15).stdout
@@ -92,6 +98,9 @@ def test_exit_sizing_trailing_are_the_SAME_objects():
     assert bq.should_exit is bb_base.should_exit
     assert bq.size_position is bb_base.size_position
     assert bq.trailing_stop_update is bb_base.trailing_stop_update
+    assert zq.should_exit is zs_base.should_exit
+    assert zq.size_position is zs_base.size_position
+    assert not hasattr(zq, "trailing_stop_update")   # zscore has none -> twin has none (clean A/B)
 
 
 def test_constants_mirror_parents():
@@ -101,10 +110,13 @@ def test_constants_mirror_parents():
     for k in ("BB_PERIOD", "BB_STD", "RSI_OB", "RSI_OS", "ATR_STOP_MULT", "RISK_PCT",
               "MAX_POSITIONS", "TIME_STOP_DAYS", "LOT_ROUND", "MIN_BARS"):
         assert getattr(bq, k) == getattr(bb_base, k), f"bb_quality.{k} diverged"
+    for k in ("LOOKBACK", "Z_ENTRY", "Z_EXIT", "EMA_TREND", "ATR_STOP_MULT",
+              "RISK_PCT", "TIME_STOP_DAYS", "LOT_ROUND", "MIN_BARS"):
+        assert getattr(zq, k) == getattr(zs_base, k), f"zscore_quality.{k} diverged"
 
 
 def test_only_the_gate_thresholds_are_new():
-    et_src, bq_src = inspect.getsource(et), inspect.getsource(bq)
+    et_src, bq_src, zq_src = inspect.getsource(et), inspect.getsource(bq), inspect.getsource(zq)
     def _upper_assigns(src):
         return {n.targets[0].id for n in ast.walk(ast.parse(src))
                 if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name)
@@ -115,15 +127,20 @@ def test_only_the_gate_thresholds_are_new():
     bq_allowed = {"BB_PERIOD", "BB_STD", "RSI_PERIOD", "RSI_OB", "RSI_OS", "ATR_PERIOD",
                   "ATR_STOP_MULT", "RISK_PCT", "MAX_POSITIONS", "TIME_STOP_DAYS",
                   "LOT_ROUND", "MIN_BARS", "DI_SPREAD_MAX"}
+    zq_allowed = {"LOOKBACK", "Z_ENTRY", "Z_EXIT", "EMA_TREND", "ATR_PERIOD",
+                  "ATR_STOP_MULT", "RISK_PCT", "TIME_STOP_DAYS", "LOT_ROUND",
+                  "MIN_BARS", "DI_SPREAD_MAX"}
     assert _upper_assigns(et_src) - et_allowed - {"_BASE_SIGNAL_LOOKBACK"} == set()
     assert _upper_assigns(bq_src) - bq_allowed == set()
-    # the two ema gates + one bb gate, exact values
+    assert _upper_assigns(zq_src) - zq_allowed == set()
+    # the two ema gates + one bb gate + one zscore gate, exact values
     assert et.MAX_CROSSOVER_AGE == 3 and et.DI_SPREAD_MIN == 15.0
     assert bq.DI_SPREAD_MAX == 14.0
+    assert zq.DI_SPREAD_MAX == 14.0
 
 
 def test_no_orders_or_io_in_either_module():
-    for src in (inspect.getsource(et), inspect.getsource(bq)):
+    for src in (inspect.getsource(et), inspect.getsource(bq), inspect.getsource(zq)):
         for bad in ("saxo", "open(", "requests", "_place", "insert_trade",
                     "cancel_order", ".to_csv", "json.dump"):
             assert bad not in src, f"{bad!r} in a pure strategy twin"
@@ -165,6 +182,16 @@ def test_bb_quality_is_a_subset_of_bb():
     assert t <= b, f"bb_quality produced signals bb did not: {t - b}"
 
 
+def test_zscore_quality_is_a_subset_of_zscore():
+    md = {"A": _synth("bb_spike_trend"), "B": _synth("bb_spike_flat"),
+          "C": _synth("bb_spike_flat", seed=13), "D": _synth("chop", seed=4)}
+    b = {(s["symbol"], s["direction"]) for s in zs_base.generate_signals(md)}
+    t = {(s["symbol"], s["direction"]) for s in zq.generate_signals(md)}
+    assert t <= b, f"zscore_quality produced signals zscore did not: {t - b}"
+    for sig in zq.generate_signals(md):
+        assert sig["di_spread"] <= zq.DI_SPREAD_MAX
+
+
 def test_ema_trend_kept_signals_obey_both_gates():
     md = {s: _synth("clean_up", seed=i) for i, s in enumerate(["P1", "P2", "P3", "P4"])}
     for sig in et.generate_signals(md):
@@ -200,7 +227,8 @@ def test_gates_are_not_no_ops_on_real_history():
             pass
     if len(md) < 4:
         return
-    for parent, twin, name in ((ema_base, et, "ema_trend"), (bb_base, bq, "bb_quality")):
+    for parent, twin, name in ((ema_base, et, "ema_trend"), (bb_base, bq, "bb_quality"),
+                               (zs_base, zq, "zscore_quality")):
         pb = len(parent.generate_signals(md))
         tw = len(twin.generate_signals(md))
         assert tw <= pb, f"{name}: {tw} > parent {pb}"

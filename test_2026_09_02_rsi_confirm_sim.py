@@ -1,14 +1,14 @@
 """
-2026-09-02 -- rsi_confirm: the user's confirmation-delay + conviction idea,
-built for a SIM forward-test (backtest is the NEXT step).
+2026-09-02 -- rsi_confirm: the user's confirmation-delay + conviction idea.
+Built and BACKTESTED the same day; RETIRED before it ever scanned -- a
+12,700-signal / 12y backtest showed the delay systematically enters after the
+mean reversion it targets (every variant worse than entering on the signal).
+See docs/forex_rsi_confirm_strategy.md.
 
-An RSI(2) signal is queued in a candidate bucket, observed ~6-30h, and
-entered only on a confirmed dip-then-recover (or immediate follow-through),
-as ONE concentrated position at a time with a tight ATR take-profit.
-
-These tests lock: SIM-only wiring, the pure candidate state machine (queue /
-age / expire / confirm), the conviction single-slot, the fast-TP exit, and
-that strategy_rsi.py is untouched.
+These tests now lock:
+  1. it is RETIRED -- NOT in runner.STRATEGIES, no runner plumbing left
+  2. strategy_rsi.py is still untouched (the control was never modified)
+  3. the module's own logic still does what the doc says (kept for the record)
 """
 
 import ast
@@ -55,28 +55,33 @@ def _uptrend_then_dip(n=260):
     return px
 
 
-# ── 1. wiring ───────────────────────────────────────────────────────────
+# ── 1. RETIRED: no runner wiring left ───────────────────────────────────
 
-def test_registered_sim_only_single_slot():
-    assert runner.STRATEGIES.get("rsi_confirm") is rc
-    assert runner.SLOTS_PER_STRATEGY["rsi_confirm"] == 1          # conviction: one at a time
+def test_retired_not_in_strategies():
+    assert "rsi_confirm" not in runner.STRATEGIES
+    assert "rsi_confirm" not in runner.SLOTS_PER_STRATEGY
     assert "rsi_confirm" not in runner.LIVE_ALLOWED_STRATEGIES
     assert "rsi_confirm" not in runner.LIVE_EUR_ALLOWED_STRATEGIES
-    assert "rsi_confirm" not in runner.PROFIT_LADDER_STRATEGIES   # its own fast-TP exit
-    src = inspect.getsource(runner)
-    i = src.index("_NO_MOMENTUM_FILTER = (")
-    assert '"rsi_confirm"' in src[i:src.index("_edata = market_data", i)]
+    assert "rsi_confirm" not in runner.PROFIT_LADDER_STRATEGIES
 
 
-def test_runner_has_bucket_persistence():
+def test_no_runner_plumbing_left():
     src = inspect.getsource(runner)
-    assert "RSI_CONFIRM_CANDIDATES_FILE" in src
-    assert "_load_rsi_confirm_candidates" in src and "_save_rsi_confirm_candidates" in src
-    # the strategy module itself must be pure -- no file / order I/O
+    for tok in ("strat_rsi_confirm", "RSI_CONFIRM_CANDIDATES_FILE",
+                "_load_rsi_confirm_candidates", "_save_rsi_confirm_candidates",
+                "update_candidates"):
+        assert tok not in src, f"leftover rsi_confirm plumbing in runner: {tok!r}"
+    # the only mention allowed is the retirement note in the STRATEGIES dict
+    assert src.count("rsi_confirm") <= 1
+    # the module carries the RETIRED banner
+    assert "RETIRED" in inspect.getsource(rc)
+
+
+def test_module_stays_pure():
     msrc = inspect.getsource(rc)
     for bad in ("open(", "json.dump", "json.load", "saxo", "_place", "requests",
                 "insert_trade", "cancel_order"):
-        assert bad not in msrc, f"{bad!r} in the pure strategy module"
+        assert bad not in msrc, f"{bad!r} in the strategy module"
 
 
 def test_strategy_rsi_untouched():

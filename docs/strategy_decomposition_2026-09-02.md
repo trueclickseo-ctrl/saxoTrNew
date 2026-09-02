@@ -26,7 +26,9 @@ comparison — R-normalised or win% only.
 | **`ema`** | +0.036 | ✗ (CI spans zero) | ✅ **filterable** → shipped `ema_trend` |
 | **`bb`** | +0.048 | ✓ | ✅ **filterable** → shipped `bb_quality` |
 | **`rsi`** | +0.021 | ✗ (≈0 pre-2020) | ✅ **filterable** → shipped `rsi_trend` (2026-09-02, PR #7) |
+| **`zscore`** | +0.002 | ✗ (CI spans zero) | ✅ **filterable** → shipped `zscore_quality` (`|+DI−−DI| ≤ 14` = +0.132 R stable, same filter as `bb`); 19/49 pairs stable-positive |
 | `gap` | ≈0 | — | ⚠️ partial — `weekly` gaps survive (+0.10 R); session legs (`newyork`/`london`) net-losing |
+| `rsi_confirm` | −0.11 control / −0.25 delayed | — | ❌ built + backtested + retired same day — delay enters after the reversion |
 | **US Blend momentum** | +1.16%/pick, 57% win | ✓ | ✅ works — **don't concentrate**; see below |
 | `donchian` (+`donchian_quality`) | negative | — | ✗ retire — no rescuing filter |
 | `pullback` | negative | — | ✗ retire |
@@ -108,11 +110,20 @@ top-up/trim.
 
 1. ✅ `ema_trend` — shipped (this branch)
 2. ✅ `bb_quality` — shipped (this branch)
-3. ✅ `rsi_confirm` — shipped (this branch) — the confirmation-delay idea
-   (LIVE-CANDIDATE bucket + 6–30h observation + reversal-confirmed entry +
-   conviction single-slot + fast ATR take-profit). Built at the user's
-   request; **its backtest is the next step**.
-   [Doc.](forex_rsi_confirm_strategy.md)
+3. ❌ `rsi_confirm` — built, **backtested, RETIRED same day**. The
+   confirmation delay systematically enters *after* the mean reversion:
+   control (enter on signal) −0.106 R/trade / win 56%; delayed −0.24 to
+   −0.27 R/trade / win 42% at every K (1/2/3 observation bars), both halves,
+   and in TRENDING_BULLISH-only too. Module kept unwired as the negative
+   result. [Doc.](forex_rsi_confirm_strategy.md)
+4. ✅ `zscore_quality` — **shipped (this branch).** `zscore` base is a
+   coin-flip (+0.002 R, CI spans zero) but `|+DI−−DI| ≤ 14` (non-directional
+   market) → **+0.132 R, stable both halves** (+0.120 / +0.144) — the *exact
+   same* filter that works for `bb`. Also: 19/49 pairs are stable-positive
+   both halves; trading only those → +0.084 R, PF 1.43, CI [+0.049, +0.120].
+   The NZD pairs + GBP-commodity crosses lose in both halves (thin,
+   trend-prone — bad for mean reversion). Per-pair whitelist NOT baked into
+   the module — a SIM-universe config lever to consider. [Doc.](forex_zscore_quality_strategy.md)
 
 ## Retire queue
 
