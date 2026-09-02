@@ -64,6 +64,9 @@ FOREX_AI_LOCK   = os.path.join(_DATA_DIR, "forex_ai_runner.lock")
 # data/atos_live_stocks.db, a completely different file from SIM's atos_live.db.
 ATOS_LOCK             = os.path.join(_DATA_DIR, "atos_runner.lock")
 ATOS_LIVE_STOCKS_LOCK = os.path.join(_DATA_DIR, "atos_live_stocks_runner.lock")
+# 2026-09-03: the AI-decision stocks twin (atos_ai_stocks.py) -- SIM paper US
+# Blend book on data/atos_ai.db, separate process, its own lock.
+ATOS_AI_STOCKS_LOCK   = os.path.join(_DATA_DIR, "atos_ai_stocks_runner.lock")
 
 STALE_SECONDS = 20 * 60   # generous vs. observed ~3-4 min full scans
 WAIT_TIMEOUT  = 15 * 60   # give up waiting and proceed rather than deadlock forever

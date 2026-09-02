@@ -105,12 +105,20 @@ def _extract_json(text: str):
 def rank_basket_shadow(*, det_offense: list, det_defense: list, det_count: int,
                        detail: dict, regime_label: str | None,
                        mom_n_max: int, as_of_date: str | None = None,
-                       account_env: str = "sim", book_state: dict | None = None) -> None:
-    """One shadow LLM call. Logs deterministic vs AI offense pick to
-    data/ai_basket_shadow.jsonl. Returns None. Never raises. The caller must
-    already have checked ai_config.stocks_basket_ranker_enabled(). `account_env`
-    ("sim" | "live_stocks") tags the row so the real-money US Blend sleeve's
-    shadow rebalances are separable from SIM's.
+                       account_env: str = "sim", book_state: dict | None = None) -> dict:
+    """One LLM call. Appends a row to data/ai_basket_shadow.jsonl AND returns
+    it. Never raises. The caller must already have checked
+    ai_config.stocks_basket_ranker_enabled(account_env).
+
+    The returned dict carries `ai_offense` (re-ranked subset, best first),
+    `ai_count`, `confidence`, `reasoning`, `changed`, `_agent`. For `sim` /
+    `live_stocks` callers ignore it (shadow-log only, deterministic pick
+    stands). The **`ai_sim`** twin (atos_ai_stocks.py) USES it -- it trades
+    `ai_offense[:ai_count]` instead of the deterministic top-N. On any agent
+    failure the row still has `ai_offense == det_offense` so a caller that
+    acts on it degrades safely to the deterministic basket.
+
+    `account_env` ("sim" | "live_stocks" | "ai_sim") tags the row.
 
     `book_state` (optional): {"sim": {...}, "live_stocks": {...}} where each
     sub-dict is {last_rebalance, days_since, next_due_in_days, holdings:{tk:sh}}.
@@ -129,11 +137,17 @@ def rank_basket_shadow(*, det_offense: list, det_defense: list, det_count: int,
         "det_count": det_count,
         "detail": detail or {},
         "book_state": book_state or {},
+        # defaults = the deterministic pick, so an early return on any agent
+        # failure lets an acting caller (ai_sim) degrade safely.
+        "ai_offense": det_offense[:det_count],
+        "ai_offense_ranked_full": det_offense[:],
+        "ai_count": det_count,
+        "changed": False,
     }
     if not det_offense:
         row["_agent"] = {"ok": False, "note": "no offense names to rank"}
         _append(row)
-        return None
+        return row
 
     model = ai_config.agent_model()
     t0 = time.time()
@@ -148,7 +162,7 @@ def rank_basket_shadow(*, det_offense: list, det_defense: list, det_count: int,
     except Exception:
         row["_agent"] = {"ok": False, "model": model, "note": "anthropic SDK not installed"}
         _append(row)
-        return None
+        return row
     try:
         client = anthropic.Anthropic().with_options(timeout=EVAL_TIMEOUT_S, max_retries=1)
         resp = client.messages.create(
@@ -161,7 +175,7 @@ def rank_basket_shadow(*, det_offense: list, det_defense: list, det_count: int,
                          "note": f"{type(exc).__name__}: {str(exc)[:160]}",
                          "latency_ms": round((time.time() - t0) * 1000)}
         _append(row)
-        return None
+        return row
 
     latency = round((time.time() - t0) * 1000)
     text = "".join(b.text for b in getattr(resp, "content", [])
@@ -171,7 +185,7 @@ def rank_basket_shadow(*, det_offense: list, det_defense: list, det_count: int,
         row["_agent"] = {"ok": False, "model": model, "latency_ms": latency,
                          "note": f"unparseable: {text[:120]!r}"}
         _append(row)
-        return None
+        return row
 
     # sanitise: subset of det_offense only, count <= det_count
     ai_off = [t for t in (parsed.get("ai_offense") or []) if t in det_offense]
@@ -193,4 +207,4 @@ def rank_basket_shadow(*, det_offense: list, det_defense: list, det_count: int,
         "_agent": {"ok": True, "model": model, "latency_ms": latency},
     })
     _append(row)
-    return None
+    return row

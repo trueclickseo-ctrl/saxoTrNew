@@ -1508,6 +1508,8 @@ def _blend_book_state() -> dict:
                         os.path.join(BASE_DIR, "data", "atos_live.db")),
         "live_stocks": (os.path.join(BASE_DIR, "data", "us_momentum_state_live.json"),
                         os.path.join(BASE_DIR, "data", "atos_live_stocks.db")),
+        "ai_sim":      (os.path.join(BASE_DIR, "data", "us_momentum_state_ai.json"),
+                        os.path.join(BASE_DIR, "data", "atos_ai.db")),
     }
     try:
         from atos import us_momentum as _USM
@@ -1828,7 +1830,7 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
                     _bstate = _blend_book_state()
                 except Exception:
                     _bstate = {}
-                ai_basket_ranker.rank_basket_shadow(
+                _rk = ai_basket_ranker.rank_basket_shadow(
                     account_env=account_env,
                     det_offense=_mom, det_defense=tgt.get("lowvol", []),
                     det_count=len(_mom), detail=tgt.get("detail", {}),
@@ -1836,6 +1838,16 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
                     as_of_date=date.today().isoformat(),
                     book_state=_bstate,
                 )
+                # ai_sim twin: TRADE the AI's re-ranked pick instead of the
+                # deterministic momentum names. Everywhere else this is
+                # shadow-log only (the ranker's row is logged, tgt untouched).
+                if (ai_config is not None and _rk
+                        and ai_config.basket_ranker_applies(account_env)):
+                    _ai_off = list(_rk.get("ai_offense") or _mom)
+                    if _ai_off and _ai_off != _mom:
+                        print(f"  {tag} AI basket: {_mom} -> {_ai_off} "
+                              f"(conf={_rk.get('confidence')}, {_rk.get('reasoning','')[:80]})")
+                    tgt["momentum"] = _ai_off
             except Exception as _exc:
                 print(f"  [ai] blend basket-ranker hook failed: {_exc}")
 
@@ -2130,6 +2142,48 @@ def run_us_blend_live(*, budget_sek: float, dry_run: bool, exits_only: bool = Fa
                         exits_only=exits_only)
     except Exception as e:
         print(f"  [live stocks] run_us_momentum error: {e}")
+
+    buy_n  = sum(1 for a in todays_actions if a.get("action") == "BUY")
+    sell_n = sum(1 for a in todays_actions if a.get("action") in ("SELL", "EXIT"))
+    try:
+        _bstate = _blend_book_state()
+    except Exception:
+        _bstate = {}
+    return {"actions": todays_actions, "buy": buy_n, "sell": sell_n,
+            "signal": dict(_blend_signal), "book_state": _bstate}
+
+
+def run_us_blend_ai(*, budget_sek: float) -> dict:
+    """AI-decision stocks twin entry point (atos_ai_stocks.py only).
+
+    Runs ONLY run_us_momentum(account_env="ai_sim") -- a real SIM PAPER
+    rebalance (observe=False; _STOCKS_ENV stays "sim" so orders paper-fill
+    and book to data/atos_ai.db). The basket-ranker's re-ranked pick is
+    swapped in for the deterministic momentum names inside run_us_momentum
+    (ai_config.basket_ranker_applies("ai_sim")). Never run_us_reversion /
+    legacy / dashboard. Returns the same dict shape as run_us_blend_live."""
+    global _blend_signal
+    _blend_signal = {}
+    db.init_db()
+    todays_actions: list = []
+
+    raw = download_universe(list(US_TICKERS))
+    feat_data: dict = {}
+    for tk, dfr in raw.items():
+        try:
+            feat_data[tk] = add_all(dfr)
+        except Exception as e:
+            print(f"  [ai stocks] features failed for {tk}: {e}")
+    if not feat_data:
+        print("  [ai stocks] no market data — aborting")
+        return {"actions": [], "buy": 0, "sell": 0, "signal": {}, "book_state": {}}
+
+    try:
+        run_us_momentum(feat_data, db.get_open_trades(), todays_actions,
+                        available_cash_sek=max(0.0, float(budget_sek)),
+                        account_env="ai_sim")
+    except Exception as e:
+        print(f"  [ai stocks] run_us_momentum error: {e}")
 
     buy_n  = sum(1 for a in todays_actions if a.get("action") == "BUY")
     sell_n = sum(1 for a in todays_actions if a.get("action") in ("SELL", "EXIT"))
