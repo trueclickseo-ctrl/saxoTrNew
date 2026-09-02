@@ -22,5 +22,13 @@
   "_journal_comment": "AI Trading Journal (roadmap #18): an LLM retrospective on each CLOSED trade (entry/exit quality, why it won/lost, the lesson) + a daily pattern summary. READ-ONLY -- ai/features/trade_journal.py only reads closed-trade logs (observation cards, AI shadow decisions, exit-advisor shadow) and writes data/ai_trade_journal.jsonl. It never places/amends/cancels an order, never touches a position or stop, never influences a strategy or sizing decision. Cost: ONE batched LLM call per trading day (not per trade). Runs from daily_summary.py; also `python ai_trade_journal.py`.",
   "journal_enabled": true,
   "journal_model": "claude-sonnet-5",
-  "journal_max_trades_per_run": 40
+  "journal_max_trades_per_run": 40,
+
+  "_stocks_comment": "Stocks AI layer (2026-09-02): the forex AI layer extended to the SIM stocks module (atos_runner.py). SHIPS OFF -- the whole subtree is inert until `enabled` is flipped true. All hooks are OBSERVE/LOG only (no apply path in the code). Sub-flags once enabled: journal = feed stocks closed trades to the AI Journal; shadow_copilot_reversion = score every US Reversion entry (log-only, needs agent_enabled + ANTHROPIC_API_KEY); basket_ranker_blend = shadow-rank the US Blend fortnightly offense basket (log-only, the deterministic targets are never touched). See docs/atos_ai_tracker.md.",
+  "stocks": {
+    "enabled": false,
+    "journal": true,
+    "shadow_copilot_reversion": true,
+    "basket_ranker_blend": true
+  }
 }

@@ -1,5 +1,14 @@
 # US Equities Strategy Playbook
 
+> **AI observation layer (2026-09-02, shadow — ships OFF).** The forex AI
+> layer now also covers this module: an LLM **Trading Journal** retrospective
+> on each closed trade, a **shadow Trading Copilot** score on every US
+> Reversion entry, and a **shadow basket-ranker** that logs a re-ranked US
+> Blend offense basket next to the deterministic pick. All OBSERVE/LOG only —
+> nothing changes a stocks trade, the rebalance basket, or any sizing.
+> Arm with `config/ai.json` `"stocks": {"enabled": true}`. See
+> [atos_ai_tracker.md](atos_ai_tracker.md).
+
 **Module**: `atos/` + `atos_runner.py`  
 **Universe**: 385 S&P 500 / large-cap US stocks  
 **Strategies**: 2 concurrent (Momentum Blend + Mean Reversion)  
