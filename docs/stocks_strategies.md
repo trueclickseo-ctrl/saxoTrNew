@@ -184,7 +184,7 @@ AND `AssetType=="Stock"`**.
 | Instrument map | `data/instrument_map.csv` | `data/instrument_map_live.csv` (USD-only) |
 | Housekeeping / safeguard | `housekeeping.py` / `safeguard.py` | `housekeeping_live_stocks.py` / `safeguard_live_stocks.py` |
 | Dashboard | `stocks_dashboard.py` | `live_stocks_dashboard.py` |
-| Scheduler | `ATOS Daily Run` | `ATOS Stocks LIVE Daily Run` (02:40 PKT) + `ATOS Stocks LIVE Exit Check` (14:00 PKT) |
+| Scheduler | `ATOS Daily Run` | `ATOS Stocks LIVE Daily Run` (19:20 PKT) + `ATOS Stocks LIVE Exit Check` (23:30 PKT) — both inside US market hours |
 | AI env | `sim` | `live_stocks` (own `stocks_live` config block) |
 
 ### Safety rails (mirror forex LIVE)
