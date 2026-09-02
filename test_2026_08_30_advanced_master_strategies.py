@@ -59,8 +59,9 @@ def test_all_registered_sim_only():
         assert r.SLOTS_PER_STRATEGY.get(k) == r._SWING_SLOTS, f"{k} slots wrong"
         assert k not in r.LIVE_ALLOWED_STRATEGIES, f"{k} leaked into LIVE allowlist"
         assert k not in r.LIVE_EUR_ALLOWED_STRATEGIES, f"{k} leaked into LIVE_EUR allowlist"
-    assert len(r.STRATEGIES) == 20
-_run("forex/runner: all 4 advanced_*_master registered, uncapped slots, SIM-only; STRATEGIES == 20",
+    # 21 as of 2026-09-02 (added "rsi_trend", the SIM regime-gated rsi A/B twin)
+    assert len(r.STRATEGIES) == 21
+_run("forex/runner: all 4 advanced_*_master registered, uncapped slots, SIM-only; STRATEGIES == 21",
      test_all_registered_sim_only)
 
 
