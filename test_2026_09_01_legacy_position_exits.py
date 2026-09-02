@@ -83,8 +83,12 @@ def test_donchian_has_the_exit_hooks_the_pass_needs():
 
 
 def test_profit_ladder_still_rsi_only_does_not_touch_donchian():
-    assert fr.PROFIT_LADDER_STRATEGIES == {"rsi"}
+    # 2026-09-02: "rsi_trend" (the SIM regime-gated A/B twin of rsi) joined
+    # the set so the A/B isolates the entry gate -- both arms share the
+    # ladder. Still RSI-family only; no trend strategy is in it.
+    assert fr.PROFIT_LADDER_STRATEGIES == {"rsi", "rsi_trend"}
     assert fr._profit_ladder_active("donchian") is False
+    assert fr._profit_ladder_active("advanced_rsi_master") is False  # the no-ladder control
 
 
 def test_module_parses():

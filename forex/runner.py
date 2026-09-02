@@ -60,6 +60,7 @@ from forex.universe import PAIRS, ASSET_TYPE, get_pair, price_decimals as get_pr
 import forex.strategy             as strat_ema
 import forex.strategy_advanced_ema as strat_advanced_ema
 import forex.strategy_rsi         as strat_rsi
+import forex.strategy_rsi_trend   as strat_rsi_trend
 import forex.strategy_advanced_rsi_master as strat_advanced_rsi_master
 import forex.strategy_donchian    as strat_donchian
 import forex.strategy_donchian_quality as strat_donchian_quality
@@ -150,6 +151,14 @@ STRATEGIES = {
     # added to either LIVE allowlist -- SIM only.
     "advanced_ema": strat_advanced_ema,
     "rsi":         strat_rsi,
+    # 2026-09-02: SIM-only A/B vs "rsi" -- IDENTICAL to "rsi" except entries
+    # are gated on ai.regime.classifier: Buy only when TRENDING_BULLISH,
+    # Sell only when TRENDING_BEARISH. An 11y/49-pair decomposition showed
+    # RSI(2)'s stable edge lives entirely in the TRENDING buckets (+0.08 R,
+    # positive in both halves) while RANGING (+0.011, unstable) is the
+    # regime-luck. "rsi" is UNTOUCHED. Never in either LIVE allowlist -- SIM
+    # forward-test + walk-forward first. See forex/strategy_rsi_trend.py.
+    "rsi_trend":   strat_rsi_trend,
     # 2026-08-30: SIM-only A/B vs "rsi" (user-supplied "master" design).
     # Robust one-sided RSI(2), EMA50/EMA200 alignment + EMA200 slope, a
     # minimum EMA200-distance gate, ATR-percentile band, a post-extreme
@@ -235,7 +244,7 @@ SLOTS_PER_STRATEGY = {
     # universe was expanded to the full major+EM/exotic set for SIM testing —
     # so every swing strategy can take a position in every pair it signals on.
     "ema": _SWING_SLOTS, "advanced_ema": _SWING_SLOTS,  # advanced_ema (2026-08-30): uncapped, mirrors "ema" for a clean A/B
-    "rsi": _SWING_SLOTS, "donchian": _SWING_SLOTS, "bb": _SWING_SLOTS,
+    "rsi": _SWING_SLOTS, "rsi_trend": _SWING_SLOTS, "donchian": _SWING_SLOTS, "bb": _SWING_SLOTS,
     "pullback": _SWING_SLOTS, "gap": _SWING_SLOTS, "gap_weekend": _SWING_SLOTS,
     # 2026-08-30: the 4 user-supplied "advanced_*_master" A/B strategies --
     # each uncapped, mirroring its original (rsi / bb / pullback / cnn_lstm)
@@ -712,7 +721,7 @@ PORTFOLIO_HEAT_LIMIT  = 0.06   # pause new entries when heat ≥ 6% of equity
 # SEK and EUR accounts, the effective combined ceiling is ~16% across the
 # two on the shared Saxo balance. Saxo's real 50% margin gate
 # (_margin_allows_entry) is still the hard backstop above all of this.
-_HEAT_LIMIT_BY_STRATEGY = {"rsi": 0.08}
+_HEAT_LIMIT_BY_STRATEGY = {"rsi": 0.08, "rsi_trend": 0.08}   # rsi_trend mirrors rsi for the A/B
 DRAWDOWN_PAUSE_PCT    = 0.10   # pause entries when drawdown > 10% from rolling peak
 DAILY_LOSS_LIMIT_PCT  = 0.03   # block entries if today's realised P&L ≤ −3% of equity
 PEAK_EQUITY_FILE      = os.path.join(DATA_DIR, "forex_peak_equity.json")
@@ -758,7 +767,11 @@ BREAKEVEN_GAP_FILL_PCT  = 0.50
 # trade-off is measurable, not guessed. Empty the set to revert everything
 # to the plain breakeven + 1.5xATR trail.
 PROFIT_LADDER_ACCOUNTS: set[str] = {"sim", "live", "live_eur"}
-PROFIT_LADDER_STRATEGIES         = {"rsi"}
+# "rsi_trend" (2026-09-02) is included so the SIM A/B isolates ONE variable
+# -- the regime entry gate -- against "rsi". Both arms then share identical
+# exit management (the ladder). "advanced_rsi_master" stays OUT as the
+# ladder-vs-no-ladder control.
+PROFIT_LADDER_STRATEGIES         = {"rsi", "rsi_trend"}
 PROFIT_LADDER_BREAKEVEN_R        = 0.75
 PROFIT_LADDER_COST_BUFFER_R      = 0.10
 PROFIT_LADDER_LOCK_ACTIVATE_R    = 1.00
@@ -4720,11 +4733,12 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
                 # donchian, pullback, supertrend, ml, cnn_lstm) should be
                 # momentum-filtered.
                 _NO_MOMENTUM_FILTER = ("gap", "gap_weekend", "london_breakout", "london_breakout_v2",
-                                       "rsi", "bb", "zscore",
+                                       "rsi", "rsi_trend", "bb", "zscore",
                                        # 2026-08-30: mean-reversion A/B variants -- exempt for the
                                        # same reason as their originals ("rsi"/"bb"): the momentum
                                        # pre-filter ranks by trend strength, which suppresses the
-                                       # reversal setups they are designed to catch.
+                                       # reversal setups they are designed to catch. (rsi_trend has
+                                       # its OWN regime gate -- don't double-filter it.)
                                        "advanced_rsi_master", "advanced_bb_master")
                 _edata = market_data if strat_name in _NO_MOMENTUM_FILTER else entry_market_data
                 entries = _run_entries(strat_name, strat_mod, positions,
