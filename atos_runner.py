@@ -101,6 +101,7 @@ import saxo_client
 import saxo_order
 import saxo_fx
 import saxo_history
+import proc_lock
 
 # ── AI observation layer (2026-09-02) -- OBSERVE/LOG ONLY, ships OFF ──
 # Guarded exactly like forex/runner.py: if the ai package fails to import
@@ -2515,7 +2516,16 @@ def run_intraday_cycle():
 
 if __name__ == "__main__":
     import sys
-    if len(sys.argv) > 1 and sys.argv[1] == "intraday":
-        run_intraday_cycle()
-    else:
-        run_cycle()
+    # 2026-09-02: serialize the SIM stocks engine against the every-30-min
+    # ATOS Housekeeping / ATOS Safeguard processes (all touch data/atos_live.db,
+    # WAL, with no prior lock). Never skips work -- only sequences it. The
+    # real-money atos_live_stocks.py uses its OWN lock (ATOS_LIVE_STOCKS_LOCK).
+    _lbl = "atos-intraday" if (len(sys.argv) > 1 and sys.argv[1] == "intraday") else "atos-cycle"
+    proc_lock.acquire(proc_lock.ATOS_LOCK, _lbl)
+    try:
+        if len(sys.argv) > 1 and sys.argv[1] == "intraday":
+            run_intraday_cycle()
+        else:
+            run_cycle()
+    finally:
+        proc_lock.release(proc_lock.ATOS_LOCK)

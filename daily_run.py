@@ -29,4 +29,13 @@ if not valid:
     sys.exit(0)
 
 import atos_runner
-atos_runner.run_cycle()
+import proc_lock
+# 2026-09-02: serialize against the every-30-min ATOS Housekeeping / Safeguard
+# processes (all touch data/atos_live.db). acquire() never skips work, only
+# sequences it -- so a run that arrives while housekeeping holds the lock just
+# waits its turn rather than racing a read-then-write.
+proc_lock.acquire(proc_lock.ATOS_LOCK, "daily_run")
+try:
+    atos_runner.run_cycle()
+finally:
+    proc_lock.release(proc_lock.ATOS_LOCK)

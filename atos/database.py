@@ -16,8 +16,21 @@ import sqlite3
 import os
 from datetime import datetime, date
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "atos_live.db")
+# 2026-09-02: the REAL-MONEY stocks engine (atos_live_stocks.py) points this at
+# data/atos_live_stocks.db -- a completely separate ledger from SIM's
+# atos_live.db -- via the ATOS_DB_PATH env var (set before this module is
+# imported) or set_db_path() at runtime. Every DB function goes through
+# _conn(), which reads DB_PATH fresh, so a mid-process switch is safe. SIM
+# (atos_runner.run_cycle) never sets either -- it keeps the default.
+_DEFAULT_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "atos_live.db")
+DB_PATH = os.environ.get("ATOS_DB_PATH") or _DEFAULT_DB_PATH
 
+
+def set_db_path(path: str) -> None:
+    """Point the ledger at `path` (used by atos_live_stocks.py). Call before
+    any insert/close/query so the whole run stays on one file."""
+    global DB_PATH
+    DB_PATH = path
 
 
 def _conn() -> sqlite3.Connection:
