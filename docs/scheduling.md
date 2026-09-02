@@ -20,6 +20,45 @@ regardless of when the task fires).
 
 ---
 
+## 2026-09-02 fixes — LIVE EUR exit-check was dead for ~2 days
+
+1. **The two EUR `.bat` files still passed `--strategy rsi`** after the
+   2026-09-01 SEK consolidation emptied `LIVE_EUR_ALLOWED_STRATEGIES`.
+   `forex/runner.py --account live_eur` `ap.error()`s (exit 2) on any
+   disallowed `--strategy` *before* it checks exits → the EUR exit-check
+   failed on every scheduled run since 2026-09-01. Broker OCO brackets
+   kept the positions safe; nothing else (trailing/time-stop/reconcile)
+   ran. Fix (`1ec531c`): omit `--strategy` in every LIVE `.bat` and let
+   `LIVE_ALLOWED_STRATEGIES` / `LIVE_EUR_ALLOWED_STRATEGIES` resolve it —
+   same fix the SEK exit `.bat` already got 2026-08-28. See
+   [forex_live_scheduler.md](forex_live_scheduler.md).
+2. **The watchdog didn't catch it.** Its non-zero-`LastTaskResult` path
+   trusts a *fresh* log over the code, and `run_hidden.vbs` kept appending
+   the argparse reject to the big append-mode scheduler log (healthy
+   mtime). `_log_content_failure`'s 200-byte size gate never fires on a
+   large log. Fix: `_log_tail_failure()` (no size gate) + a
+   `_CLI_REJECT_SIGNATURES` list — a non-zero exit whose log tail shows
+   `"runner.py: error:"` / `"usage: runner.py"` / `"only allows"` now
+   alerts. `test_2026_09_02_watchdog_cli_reject.py` (7).
+3. **A stale-state exit opened a wrong-way position.** Triggering the
+   fixed exit-check before reconciling state → `hard_stop` on a
+   `rsi:NZDCAD` already stopped out broker-side → a market `Sell 9,000`
+   against a flat account **opened a 9,000 short** (FX has no
+   reduce-only). Fix: `forex/runner._live_position_open()` verifies the
+   position exists at the broker before any LIVE close; "gone" → book
+   from Saxo, no order. `test_2026_09_02_exit_guard_stale_position.py`
+   (9). Operational rule: reconcile (or dry-run) before any LIVE trigger.
+4. **`data/` files created by an elevated task were not writable from a
+   normal shell.** RunLevel HIGHEST tasks create Administrator-owned
+   files; `data/` granted the user FullControl on the folder but with
+   `InheritanceFlags = None` so it never reached the files. Manual
+   `python forex\runner.py --live` died with `PermissionError` in
+   `_save_state()`. Fix: `fix_data_permissions.ps1` — inheritable Modify
+   ACE on `data/`, `logs/`, `saxo_etf_strategy/data/` + rewrite the
+   already-locked files. No elevation needed.
+
+---
+
 ## 2026-08-21 fixes — read this before trusting anything below as "working"
 
 Three separate bug classes were found and fixed this pass. Any task that

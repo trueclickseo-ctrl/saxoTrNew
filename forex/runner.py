@@ -1912,6 +1912,56 @@ def _confirm_entry_fill(entry_oid: str, uic: int) -> tuple[bool, float]:
     return False, 0.0
 
 
+def _live_position_open(uic: int, qty: float, direction: str,
+                        n_tracked: int) -> str:
+    """Is the LIVE position we're about to close still actually open at the
+    broker?  Returns "open", "gone", or "unknown".
+
+    Guards the exit path. should_exit() runs off LOCAL state, which can be
+    stale -- a broker-side stop/TP fill that no exits-check has reconciled
+    yet (e.g. the fill happened while the runner wasn't running at all). A
+    market close order for a position that no longer exists does NOT flatten
+    anything: FX has no reduce-only, so Saxo OPENS a fresh position the
+    other way. Confirmed live 2026-09-02 -- a ~2-day-stale rsi:NZDCAD
+    "hard_stop" sent Sell 9,000 against a flat account and opened a 9,000
+    short.
+
+    Only "gone" skips the close order. "unknown" (lookup failed, or a
+    snapshot that looks degraded) FALLS THROUGH to the normal close so a
+    genuine exit is never suppressed by a transient API problem.
+
+    `n_tracked` = how many positions local state currently holds. If the
+    broker snapshot is empty but we track several, the snapshot is suspect
+    -> "unknown", not "gone".
+    """
+    try:
+        data = _get("/port/v1/positions/me").get("Data", [])
+    except Exception as exc:
+        logger.warning(f"  [exit-guard] position lookup failed for UIC {uic}: {exc}")
+        return "unknown"
+    want_amount = qty if direction in ("Buy", "BUY") else -qty
+    fx_rows = 0
+    for p in data:
+        pb = p.get("PositionBase", {})
+        if pb.get("AssetType") != "FxSpot":
+            continue
+        fx_rows += 1
+        amount = pb.get("Amount", 0) or 0
+        if pb.get("Uic") == uic and abs(amount) == abs(want_amount) \
+                and (amount > 0) == (want_amount > 0):
+            return "open"
+    # No matching row. Trust that only if the snapshot itself looks healthy:
+    # at least one FxSpot position came back, OR we genuinely track nothing
+    # else. A totally empty snapshot while we hold several tracked positions
+    # is a bad fetch, not a flat account.
+    if fx_rows == 0 and n_tracked > 1:
+        logger.warning(f"  [exit-guard] UIC {uic}: 0 FxSpot positions in the "
+                       f"snapshot but {n_tracked} tracked locally — treating "
+                       f"as an unreliable fetch, not a closed position")
+        return "unknown"
+    return "gone"
+
+
 def _confirm_exit_fill(uic: int, qty: float, direction: str) -> float | None:
     """True ClosingPrice for the position just closed on `uic` (best-effort,
     2 quick attempts). Matches the most recently closed position on this Uic
@@ -3061,7 +3111,46 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
         # position still exists to look up. Falls back to our own rate
         # estimate below if this lookup fails (network hiccup, no match).
         _paper = _is_paper_position(pos)
-        net_pnl_quote = None if (dry_run or _paper) else _position_net_pnl_quote_ccy(uic, qty, direction, entry)
+
+        # ── EXIT GUARD (2026-09-02) ──────────────────────────────────────
+        # Before sending ANY real close order on a LIVE account, verify the
+        # position still exists at the broker. should_exit() fired off local
+        # state, which can be stale: a broker-side stop/TP fill that no
+        # exits-check reconciled (the fill can happen while the runner isn't
+        # even running). A market close for a position that's already flat
+        # does NOT reduce anything -- FX has no reduce-only, so Saxo opens a
+        # fresh position the OTHER way. Confirmed live 2026-09-02: a stale
+        # rsi:NZDCAD hard_stop sent Sell 9,000 against a flat account and
+        # opened a 9,000 short. Only a definite "gone" skips the order;
+        # "unknown" (API/snapshot problem) falls through to the normal close
+        # so a genuine exit is never suppressed.
+        _broker_closed = False
+        if not dry_run and not _paper and ACCOUNT_ENV in ("live", "live_eur"):
+            _pos_state = _live_position_open(uic, qty, direction, len(positions))
+            if _pos_state == "gone":
+                _broker_closed = True
+                logger.warning(
+                    f"  [exit-guard] {sym} ({strat_name}): should_exit fired "
+                    f"'{reason}' but NO matching open position at the broker — "
+                    f"already closed broker-side. Booking the close from Saxo, "
+                    f"NOT sending an order (would open a {close_side} the wrong way).")
+                if attention is not None:
+                    try:
+                        attention.raise_attention(
+                            f"{ACCOUNT_ENV}:stale-exit:{sym}",
+                            title=f"{sym}: closed broker-side, booked late",
+                            detail=(f"{sym} ({strat_name}) was closed by its own broker "
+                                    f"stop/TP while local state still tracked it as open. "
+                                    f"The exit-check booked it without sending an order "
+                                    f"(the exit-guard blocked a would-be wrong-way "
+                                    f"{close_side}). Verify the {ACCOUNT_ENV} ledger / "
+                                    f"state for {sym} matches Saxo."),
+                            source=f"exit-guard ({ACCOUNT_ENV} forex)",
+                            severity="warn", grace_minutes=0)
+                    except Exception:
+                        pass
+
+        net_pnl_quote = None if (dry_run or _paper or _broker_closed) else _position_net_pnl_quote_ccy(uic, qty, direction, entry)
         net_pnl_quote, _net_rebuilt = _sane_net_pnl_quote(
             net_pnl_quote, entry, live_px, qty, is_long, uic, akey, sym)
 
@@ -3079,6 +3168,22 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
             # the raw price calc (no Saxo cost -- there was no real fill).
             logger.info(f"  [PAPER] CLOSE {qty:,}x {sym}[{tag}] "
                         f"({strat_name}) — {reason}  P&L {pnl_pct:+.2f}%  @ {live_px:.5f}")
+        elif _broker_closed:
+            # Position already flat at the broker (stop/TP filled). Do NOT
+            # _post a close -- just clean up any orphan resting leg and book
+            # the close from Saxo's own record. _reconcile_closed_vs_saxo()
+            # (post-run) corrects the exact price/P&L against the
+            # ClosedPosition record afterwards.
+            for oid_key in ("stop_order_id", "tp_order_id"):
+                oid = pos.get(oid_key)
+                if oid and oid not in ("synced", None, ""):
+                    _cancel_order(oid, akey)
+            _real_exit = _confirm_exit_fill(uic, qty, direction)
+            if _real_exit:
+                live_px = _real_exit
+                pnl_pct = ((live_px - entry) / entry * 100) if is_long else ((entry - live_px) / entry * 100)
+            logger.info(f"  [exit-guard] BOOKED (no order) {qty:,}x {sym}[{tag}] "
+                        f"({strat_name}) — {reason}  @ {live_px:.5f}  P&L {pnl_pct:+.2f}%")
         else:
             # This close is happening because OUR should_exit() logic fired
             # (hard-stop/time-stop/trailing), not because the broker's own

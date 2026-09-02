@@ -6,15 +6,17 @@ Everything that runs automatically for the real-money LIVE account: what fires w
 
 ## The five LIVE-specific Windows Scheduled Tasks
 
-Covers both real-money accounts under this Saxo login — the SEK account (donchian/ema/rsi, 34 core pairs) and the EUR account (rsi only, 83 exotic pairs, added 2026-08-26). They share the token keepalive task (same OAuth login) but have entirely separate confirmation gates, state, and P&L.
+Covers both real-money accounts under this Saxo login. **As of the 2026-09-01 consolidation (`c6af3c7`) the SEK account is the only one that opens new positions** — `LIVE_ALLOWED_STRATEGIES = {"rsi"}` (RSI on the 17 HIGH_VOLUME pairs). The EUR account is **exits-only**: `LIVE_EUR_ALLOWED_STRATEGIES = set()` — it still holds `rsi:*` positions from before and manages them out, but takes no new entries. They share the token keepalive task (same OAuth login) but have entirely separate confirmation gates, state, and P&L.
 
 | Task | Trigger(s) | Command | Places real orders? |
 |---|---|---|---|
-| **ATOS Forex LIVE Daily Run** | every 45 min, `06:00-03:00` PKT | `python forex\runner.py --account live --strategy donchian,ema,rsi --live` | Yes — the only SEK-account task that can open a new position. Also checks exits every run. |
-| **ATOS Forex LIVE Exit Check** | 1x/day: `14:00` | `python forex\runner.py --account live --strategy donchian,ema,rsi --exits-only --live` | SEK account. Manages existing positions only. Backstop only. |
-| **ATOS Forex LIVE EUR Daily Run** | every 45 min, `06:00-03:00` PKT | `python forex\runner.py --account live_eur --strategy rsi --live` | Yes — the only EUR-account task that can open a new position. Also checks exits every run. Requires `SAXO_LIVE_EUR_CONFIRMED=1` (separate from the SEK account's gate). |
-| **ATOS Forex LIVE EUR Exit Check** | 1x/day: `14:00` | `python forex\runner.py --account live_eur --strategy rsi --exits-only --live` | EUR account. Manages existing positions only. Backstop only. |
+| **ATOS Forex LIVE Daily Run** | every 45 min, `06:00-03:00` PKT | `python forex\runner.py --account live --live` | Yes — the only task that opens a new position. `--strategy` **omitted** so it resolves to `LIVE_ALLOWED_STRATEGIES` (`{rsi}`) itself — see the 2026-08-28 fix below. Also checks exits every run. |
+| **ATOS Forex LIVE Exit Check** | 1x/day: `14:00` | `python forex\runner.py --account live --exits-only --live` | SEK account. Manages existing positions only. Backstop only. |
+| **ATOS Forex LIVE EUR Daily Run** | every 45 min, `06:00-03:00` PKT | `python forex\runner.py --account live_eur --live` | **No** (exits-only account). `--strategy` omitted → resolves to `LIVE_EUR_ALLOWED_STRATEGIES` (empty). Runs an exits/reconcile pass for the held `rsi:*` positions. Requires `SAXO_LIVE_EUR_CONFIRMED=1` for a real close order. Redundant with the Exit Check task — a candidate to disable. |
+| **ATOS Forex LIVE EUR Exit Check** | 1x/day: `14:00` | `python forex\runner.py --account live_eur --exits-only --live` | EUR account. Manages existing positions only. Backstop only. |
 | **ATOS Saxo LIVE Token Keepalive** | every 10 min, all day, **as SYSTEM** | `python saxo_live_token_keepalive.py` | No — read-only token refresh, no trading logic. Shared by both accounts (same OAuth login — `saxo_auth._cfg()` normalizes `"live_eur"` to `"live"`). Hardened 2026-08-30 (SYSTEM + `StartWhenAvailable` + 3× restart) so a reboot/sleep gap can't kill the 1h refresh token. |
+
+**2026-08-28 / 2026-09-02 — never hard-code `--strategy` in a LIVE `.bat`.** `forex/runner.py --account live[_eur]` validates every `--strategy` value against `LIVE_ALLOWED_STRATEGIES` / `LIVE_EUR_ALLOWED_STRATEGIES` and **`ap.error()`s (exit code 2) on any mismatch — before it checks exits.** The SEK exit `.bat` hit this on 2026-08-28 (hard-coded `donchian,ema,rsi`, none still allowed); **the two EUR `.bat` files hit it on 2026-09-01** — the consolidation emptied `LIVE_EUR_ALLOWED_STRATEGIES` but they still passed `--strategy rsi`, so the EUR exit-check exited 2 on **every scheduled run for ~2 days** (no trailing stops / time-stops / reconciliation on the open EUR positions — broker OCO brackets kept them safe, but nothing else ran). Fixed 2026-09-02 (`1ec531c`): omit `--strategy` everywhere and let the allowlist resolve it, so a future allowlist change can never desync a `.bat` again. The watchdog was also blind to it — see the exit-guard section below.
 
 **Moved from 9 fixed times/day to every 45 min, 2026-08-25** — explicit user request for tighter checking. `forex/runner.py`'s `run_daily()` (what Daily Run calls) already handles both new-entry scanning and exit checking together every time it runs, so this one task alone covers "scan for new trades and exit on stop-loss/profit target."
 
@@ -94,6 +96,29 @@ Fix script: `fix_sim_schedule_conflicts.ps1` (run as Administrator).
 23:08 PKT, manual invocation (not yet via the scheduled task — that ran later once the schedule fix was applied): `donchian` opened **EURNOK short** (1,000 @ 10.86975, stop 10.98368, TP 10.52803) and **GBPUSD long** (1,000 @ 1.36466, stop 1.35165, TP 1.39047). Both bracket orders verified correct against Saxo's own web trader (Orders tab, Order Blotter, push notifications) — direction, stop/TP placement, and OCO linkage all exactly right. `housekeeping_live`/`safeguard_live` ran immediately after and confirmed clean.
 
 ---
+
+## 2026-09-02 — exit-guard against stale local state (`1ec531c`)
+
+**Incident.** After the EUR `.bat` was fixed (above) the exit-check was triggered *before local state had been reconciled*. It saw a ~2-day-stale `rsi:NZDCAD` (marked open; actually stopped out broker-side hours earlier), fired `hard_stop`, and `_run_exits` sent a market `Sell 9,000`. **FX spot has no reduce-only** — a Sell against a flat position is a new short, so Saxo *opened* a 9,000 NZDCAD short. safeguard_live_eur stopped it and escalated; it was closed manually (~€8.70 cost).
+
+**Fix — `forex/runner.py _live_position_open(uic, qty, direction, n_tracked)`** → `"open" | "gone" | "unknown"`. `_run_exits` calls it before every real LIVE close order:
+
+- **`"gone"`** (a healthy positions snapshot with no matching row) → book the close from Saxo's own `ClosedPosition` record, send **no order**, raise a low-severity `attention` item. `_reconcile_closed_vs_saxo()` corrects the exact price/P&L afterwards.
+- **`"unknown"`** (the lookup failed, or 0 FxSpot rows came back while several positions are tracked = a degraded fetch) → fall through to the **normal** close, so a genuine exit is never suppressed by a transient API problem.
+
+Never runs on a dry-run, a paper position, or SIM. Tests: `test_2026_09_02_exit_guard_stale_position.py` (9).
+
+**Operational rule this encodes:** never trigger a LIVE run (or a scheduled LIVE task) until local state has been reconciled against Saxo — `python reconcile_closed_trades_vs_saxo.py`, or a dry `--exits-only` run eyeballed against `saxo_client.get_positions()`. The guard is a backstop, not a licence to skip that.
+
+### Watchdog blind spot that hid the 2-day outage (`1ec531c`)
+
+`scheduler_watchdog.py`'s result-code path trusted a *fresh log* over a non-zero `LastTaskResult` (a non-zero code is often just a mid-run reading). But `run_hidden.vbs` kept appending the argparse reject to the big append-mode `forex_live_eur_scheduler.log` every run, so its mtime stayed perfectly fresh. `_log_content_failure`'s 200-byte size gate never fires on a large log. Fix: **`_log_tail_failure()`** (no size gate) scans the log tail for `_CLI_REJECT_SIGNATURES` (`"runner.py: error:"`, `"usage: runner.py"`, `"only allows"`, …) and the existing crash signatures; on the non-zero-code path a fresh log is trusted **only when the tail is also clean.** Tests: `test_2026_09_02_watchdog_cli_reject.py` (7).
+
+## 2026-09-02 — data-folder write permissions (`fix_data_permissions.ps1`)
+
+The scheduled tasks run with **RunLevel HIGHEST**. A file an elevated task creates via `os.replace()` is owned by `BUILTIN\Administrators` and only carries the folder's *inheritable* ACEs — and `data/` granted the user FullControl on the folder with `InheritanceFlags = None`, so that never reached the files. Result: every state / orders / weights / observation-card file last written by a scheduled run was **readable but not writable from a normal (non-elevated) shell** — a manual `python forex\runner.py --live` died with `PermissionError` in `_save_state()`.
+
+`fix_data_permissions.ps1` (no elevation needed): adds an **inheritable** `(OI)(CI)` Modify ACE for the current user to `data/`, `logs/`, `saxo_etf_strategy/data/` — so every file created there from now on is user-writable regardless of which process made it — then rewrites each currently-locked file in place (temp + `os.replace`, using the folder's `DELETE_CHILD` right) so it picks up the new inherited ACE. Re-run any time; files a task is actively holding open are skipped and self-heal on their next atomic write.
 
 ## Verifying the current live schedule
 
