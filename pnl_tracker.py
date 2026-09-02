@@ -25,6 +25,36 @@ FX_JSON   = os.path.join(BASE_DIR, "data", "forex_state.json")
 
 MODULES   = ("stock", "etf", "futures", "forex")
 
+# ── P&L VIEW reset (2026-09-03) ────────────────────────────────────────────
+# data/pnl_reset.json maps a module -> a "YYYY-MM-DD" cutoff. Closed-trade
+# AGGREGATION reads below (get_strategy_summary / _since / get_pair_summary /
+# get_strategy_symbol_summary / get_summary) then only count trades closed on
+# or after that date. The rows themselves are NEVER deleted -- the full history
+# stays in pnl_ledger.db for the audit trail; this only changes what the
+# dashboards SHOW. Set for `forex` to 2026-09-03 by explicit user request
+# after the SIM book was cut to the 5-strategy roster ("reset all, calculate
+# from now"). Delete the file (or a module's key) to restore the all-time view.
+_RESET_PATH = os.path.join(BASE_DIR, "data", "pnl_reset.json")
+
+
+def reset_since(module: str) -> str | None:
+    """The configured P&L-view cutoff for `module` ("YYYY-MM-DD"), or None."""
+    try:
+        with open(_RESET_PATH, encoding="utf-8") as f:
+            v = json.load(f).get(module)
+        return v if isinstance(v, str) and len(v) == 10 else None
+    except Exception:
+        return None
+
+
+def _reset_clause(module: str, explicit_since: str | None = None) -> tuple[str, tuple]:
+    """(' AND timestamp_close >= ?', (date,)) for the effective cutoff =
+    max(reset_since(module), explicit_since), or ('', ()) when neither is set."""
+    cut = reset_since(module)
+    if explicit_since and (not cut or explicit_since > cut):
+        cut = explicit_since
+    return (" AND timestamp_close >= ?", (cut,)) if cut else ("", ())
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS trades (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -608,10 +638,13 @@ def get_strategy_summary(module: str = "forex", symbols: set | None = None) -> l
     to inform).
     """
     sym_filter = ""
-    params: tuple = (module,)
+    sym_params: tuple = ()
     if symbols:
         sym_filter = f" AND symbol IN ({','.join('?' * len(symbols))})"
-        params = (module, *symbols)
+        sym_params = tuple(symbols)
+    rc_sql, rc_params = _reset_clause(module)        # P&L-view cutoff (audit rows kept)
+    closed_params = (module, *rc_params, *sym_params)
+    open_params   = (module, *sym_params)
 
     with _conn() as c:
         # WHERE must filter to status='closed' -- open positions have
@@ -634,19 +667,21 @@ def get_strategy_summary(module: str = "forex", symbols: set | None = None) -> l
                    MAX(realized_pnl)                                            AS best,
                    MIN(realized_pnl)                                            AS worst
               FROM trades
-             WHERE module=? AND status='closed'{sym_filter}
+             WHERE module=? AND status='closed'{rc_sql}{sym_filter}
              GROUP BY strategy
              ORDER BY total_pnl DESC
-        """, params).fetchall()
+        """, closed_params).fetchall()
         # Open count needs its own query -- computing it from the same
         # closed-only rowset (the previous approach, shared with the WHERE
         # above) can only ever return 0, since status='open' rows were
         # already excluded before the CASE WHEN could match them. Confirmed
         # this exact zero-every-time bug in get_pair_summary below too.
+        # (No reset cutoff here -- an open position is open regardless of
+        # when it was entered.)
         open_counts = {row["strategy"]: row["n"] for row in c.execute(f"""
             SELECT strategy, COUNT(*) AS n FROM trades
              WHERE module=? AND status='open'{sym_filter} GROUP BY strategy
-        """, params).fetchall()}
+        """, open_params).fetchall()}
         # 2026-08-28: which symbol(s) each strategy actually traded --
         # futures_dashboard's STRATEGY BREAKDOWN showed strategy-level P&L
         # with no indication of which market it came from (e.g. "MACD 2
@@ -656,8 +691,8 @@ def get_strategy_summary(module: str = "forex", symbols: set | None = None) -> l
         symbols_by_strategy: dict = {}
         for row in c.execute(f"""
             SELECT DISTINCT strategy, symbol FROM trades
-             WHERE module=? AND status='closed'{sym_filter}
-        """, params).fetchall():
+             WHERE module=? AND status='closed'{rc_sql}{sym_filter}
+        """, closed_params).fetchall():
             symbols_by_strategy.setdefault(row["strategy"], []).append(row["symbol"])
 
     result = []
@@ -693,6 +728,9 @@ def get_strategy_summary_since(module: str, since: str, symbols: set | None = No
 
     `symbols`, if given, restricts to trades on those symbols only -- see
     get_strategy_summary()'s docstring for why (core/exotic tier split)."""
+    _cut = reset_since(module)                       # never show older than the reset
+    if _cut and _cut > since:
+        since = _cut
     sym_filter = ""
     params: tuple = (module, since)
     if symbols:
@@ -766,11 +804,7 @@ def get_strategy_symbol_summary(module: str, since: str | None = None) -> list[d
     closed on or after that date -- for a "Today" column, same as
     get_strategy_summary_since().
     """
-    since_filter = ""
-    params: tuple = (module,)
-    if since:
-        since_filter = " AND timestamp_close >= ?"
-        params = (module, since)
+    since_filter, since_params = _reset_clause(module, since)   # reset cutoff or `since`, whichever is later
 
     with _conn() as c:
         rows = c.execute(f"""
@@ -786,7 +820,7 @@ def get_strategy_symbol_summary(module: str, since: str | None = None) -> list[d
              WHERE module=? AND status='closed'{since_filter}
              GROUP BY strategy, symbol
              ORDER BY strategy, total_pnl DESC
-        """, params).fetchall()
+        """, (module, *since_params)).fetchall()
 
     result = []
     for r in rows:
@@ -822,8 +856,9 @@ def get_pair_summary(module: str = "forex") -> list[dict]:
     Returns list of dicts sorted by total_pnl descending.
     Only includes symbols with at least one closed trade.
     """
+    rc_sql, rc_params = _reset_clause(module)        # P&L-view cutoff (audit rows kept)
     with _conn() as c:
-        rows = c.execute("""
+        rows = c.execute(f"""
             SELECT symbol,
                    COUNT(*)                                                     AS n,
                    SUM(realized_pnl)                                            AS total_pnl,
@@ -834,10 +869,10 @@ def get_pair_summary(module: str = "forex") -> list[dict]:
                    MAX(realized_pnl)                                            AS best,
                    MIN(realized_pnl)                                            AS worst
               FROM trades
-             WHERE module=? AND status='closed'
+             WHERE module=? AND status='closed'{rc_sql}
              GROUP BY symbol
              ORDER BY total_pnl DESC
-        """, (module,)).fetchall()
+        """, (module, *rc_params)).fetchall()
         # Same fix as get_strategy_summary above: open_count can only ever
         # be 0 when computed from a rowset the WHERE clause already
         # filtered to status='closed' -- confirmed live, every pair showed
@@ -877,7 +912,8 @@ def get_summary(module: str = None) -> dict:
 
     with _conn() as c:
         for mod in modules:
-            closed = c.execute("""
+            rc_sql, rc_params = _reset_clause(mod)   # P&L-view cutoff (audit rows kept)
+            closed = c.execute(f"""
                 SELECT COUNT(*) AS n,
                        SUM(realized_pnl)                        AS total_pnl,
                        SUM(commission)                          AS total_commission,
@@ -890,8 +926,8 @@ def get_summary(module: str = None) -> dict:
                        AVG(realized_pnl)                        AS avg_pnl,
                        MIN(timestamp_open)                      AS first_trade,
                        MAX(timestamp_close)                     AS last_close
-                  FROM trades WHERE status='closed' AND module=?
-            """, (mod,)).fetchone()
+                  FROM trades WHERE status='closed' AND module=?{rc_sql}
+            """, (mod, *rc_params)).fetchone()
 
             open_n = c.execute(
                 "SELECT COUNT(*) FROM trades WHERE status='open' AND module=?", (mod,)

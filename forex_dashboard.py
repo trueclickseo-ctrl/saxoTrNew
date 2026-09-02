@@ -38,6 +38,18 @@ try:
 except Exception:
     _SIM_ROSTER = ["rsi", "rsi_trend", "ema_trend", "bb_quality", "zscore_quality"]
 
+# 2026-09-03: the forex P&L view was reset to the roster era. pnl_tracker's
+# aggregation reads only count trades closed on/after this date (rows are
+# never deleted -- see data/pnl_reset.json + pnl_tracker.reset_since). The
+# "All-Time" columns below are really "since the reset" -- relabel them so.
+try:
+    import pnl_tracker as _pt
+    _FX_RESET = _pt.reset_since("forex")
+except Exception:
+    _FX_RESET = None
+_PNL_COL = f"P&L since {_FX_RESET[5:]}" if _FX_RESET else "All-Time P&L"
+_PNL_COL_SHORT = f"since {_FX_RESET[5:]}" if _FX_RESET else "All-Time"
+
 REFRESH_SECONDS = 60
 
 # ── Quote-currency -> EUR conversion (account base currency) ──────────────
@@ -392,7 +404,7 @@ def _strategy_breakdown_table(title: str, positions: list, live: dict,
     L = _section_header(title, color, W_TOTAL)
     L.append(
         f"  {DM}{'Strategy':<16}  {'Active':>6}  {'Closed':>7}  {'W/L':>7}  "
-        f"{'WR%':>6}  {'PF':>6}  {'All-Time P&L':>15}  {'Today':>11}  {'Unrealized':>13}{W}"
+        f"{'WR%':>6}  {'PF':>6}  {_PNL_COL:>15}  {'Today':>11}  {'Unrealized':>13}{W}"
     )
     L.append(HR)
 
@@ -604,7 +616,7 @@ def _consolidated_breakdown(positions: list, live: dict, color: str = CY,
 
     # ── 1. TIER SCORECARD ──────────────────────────────────────────────────
     L.append(f"  {DM}{'Tier':<14}  {'Pairs':>5}  {'Active':>6}  {'Closed':>7}  {'W/L':>8}  "
-             f"{'WR%':>6}  {'PF':>7}  {'All-Time':>13}  {'Today':>10}  {'Unreal':>10}{W}")
+             f"{'WR%':>6}  {'PF':>7}  {_PNL_COL_SHORT:>13}  {'Today':>10}  {'Unreal':>10}{W}")
     L.append(HR)
     for short, full, _syms, _excl in tiers:
         t = tier_totals[short]
@@ -636,7 +648,8 @@ def _consolidated_breakdown(positions: list, live: dict, color: str = CY,
                    if any(abs(tier_strat_pnl[sh].get(s, 0.0)) > 0.5 for sh, *_ in tiers)]
     if grid_strats:
         L.append("")
-        L.append(f"  {BD}Strategy × tier — all-time realised P&L (EUR){W}")
+        _since_note = f" (since {_FX_RESET})" if _FX_RESET else " (all-time)"
+        L.append(f"  {BD}Strategy × tier — realised P&L (EUR){_since_note}{W}")
         L.append(f"  {DM}{'':<16}" + "".join(f"{sh:>11}" for sh, *_ in tiers) + f"{'  Σ':>11}{W}")
         for s in grid_strats:
             row_vals = [tier_strat_pnl[sh].get(s, 0.0) for sh, *_ in tiers]
