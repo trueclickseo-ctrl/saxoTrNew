@@ -432,6 +432,46 @@ INTRADAY_REPEATING_TASKS = {
 AUTO_FIX_ELIGIBLE = {n for n in INTRADAY_REPEATING_TASKS if "LIVE" not in n}
 
 
+# Argparse / CLI-reject signatures: a scheduled runner that exits non-zero
+# AND prints these rejected its own command line -- a stale .bat arg, a
+# renamed/removed flag, an allowlist that no longer accepts the strategy.
+# Distinct from _FAILURE_SIGNATURES (crash/no-op) and checked only on the
+# non-zero-result-code path, where a large append-mode log defeats
+# _log_content_failure's size gate. 2026-09-02 (LIVE EUR exit check, exit 2).
+_CLI_REJECT_SIGNATURES = (
+    "runner.py: error:",
+    "usage: runner.py",
+    "error: unrecognized arguments",
+    "error: argument ",
+    "only allows",
+)
+
+
+def _log_tail_failure(log_file: str, tail_bytes: int = 6144) -> str | None:
+    """A failure signature anywhere in the log's last `tail_bytes`. Used on
+    the non-zero-result-code path -- we already have an independent failure
+    signal there, so (unlike _log_content_failure) there is NO file-size
+    gate: a huge append-mode scheduler log whose most recent run appended
+    an argparse reject still gets caught. Returns a short description or
+    None. Never raises."""
+    path = _log_path(log_file)
+    if path is None:
+        return None
+    try:
+        with open(path, "rb") as f:
+            try:
+                f.seek(-tail_bytes, os.SEEK_END)
+            except OSError:
+                f.seek(0)
+            tail = f.read().decode("utf-8", errors="replace")
+    except Exception:
+        return None  # locked / unreadable -- not this check's job
+    for sig in _CLI_REJECT_SIGNATURES + _FAILURE_SIGNATURES:
+        if sig in tail:
+            return f'"{sig}" in the log tail'
+    return None
+
+
 def _log_content_failure(log_file: str) -> str | None:
     """Return a description if the log's own content indicates a no-op/crash
     that mtime freshness alone wouldn't catch, else None."""
@@ -693,11 +733,22 @@ def _check_windows_task(name: str, task_name: str, log_file: str, grace_min: int
         # fresh (proves the run genuinely completed), don't false-alarm on a
         # code that was just caught mid-transition. Only escalate if the log
         # is ALSO stale/missing — that combination is a real failure.
+        #
+        # EXCEPTION (2026-09-02): a fresh log is NOT proof of success when its
+        # tail is itself a failure. The LIVE EUR exit check exited 2 on a
+        # stale `--strategy` arg for ~2 days (the 2026-09-01 SEK consolidation
+        # emptied LIVE_EUR_ALLOWED_STRATEGIES); run_hidden.vbs still appended
+        # the argparse reject to the big, healthy-mtime scheduler log every
+        # run, so this "trust a fresh log" shortcut masked it completely.
+        # _log_content_failure's size gate never fires on an append-mode log.
         mtime = _log_mtime(log_file)
-        if mtime and mtime >= last_run - timedelta(minutes=2):
+        tail_fail = _log_tail_failure(log_file)
+        if mtime and mtime >= last_run - timedelta(minutes=2) and not tail_fail:
             return None
+        why = (f"its log tail shows {tail_fail}" if tail_fail
+               else f"{log_file} isn't fresh either")
         return (f"'{task_name}' last run at {last_run:%Y-%m-%d %H:%M} returned error code {result} "
-                f"and {log_file} isn't fresh either. {_remediation(task_name)}")
+                f"and {why}. {_remediation(task_name)}")
 
     mtime = _log_mtime(log_file)
     if mtime is None:
