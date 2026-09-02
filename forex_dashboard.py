@@ -172,6 +172,7 @@ STRAT_COL = {
     # a glance (advanced_ema~ema, advanced_ml~ml, etc.).
     "advanced_ema":               "\033[38;5;51m",    # bright cyan  (~ema)
     "advanced_rsi_master":        "\033[38;5;213m",   # pink         (~rsi)
+    "rsi_trend":                  "\033[38;5;207m",   # magenta-pink (~rsi, regime-gated A/B, 2026-09-02)
     "advanced_bb_master":         "\033[38;5;229m",   # pale yellow  (~bb)
     "advanced_pullback_master":   "\033[38;5;75m",    # light blue   (~pullback)
     "advanced_ml":                "\033[38;5;156m",   # pale green   (~ml)
@@ -293,6 +294,7 @@ STRAT_LABELS_ALL = {
     # dropped from the per-strategy breakdown even with real closed trades.
     "advanced_ema":               "EMA Adv (A/B)",
     "advanced_rsi_master":        "RSI2 (A/B)",   # 2026-09-02 (user): call it RSI2 — a separate strategy from the day-1 "rsi", must stay distinct
+    "rsi_trend":                  "RSI Trend (A/B)",   # 2026-09-02: rsi + regime entry gate. Distinct from "RSI" (core) and "RSI2 (A/B)".
     "advanced_bb_master":         "BB Master (A/B)",
     "advanced_pullback_master":   "Pullback Mstr (A/B)",
     "advanced_ml":                "ML Adv (A/B)",
@@ -630,7 +632,7 @@ def _positions_section(title: str, positions_subset: list, live: dict,
     total_costs_eur = 0.0   # spread + accrued swap/financing, NOT included in total_pnl
 
     if positions_subset:
-        strat_order = ["ema", "advanced_ema", "rsi", "advanced_rsi_master",
+        strat_order = ["ema", "advanced_ema", "rsi", "advanced_rsi_master", "rsi_trend",
                        "donchian", "donchian_quality", "bb", "advanced_bb_master",
                        "pullback", "advanced_pullback_master",
                        "gap", "gap_weekend", "supertrend", "zscore",
@@ -855,6 +857,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
              # 2026-08-30: 6 user-supplied SIM-only A/B "advanced_*" strategies
              f"{STRAT_COL['advanced_ema']}{BD}■ EMA Adv{W}  A/B   "
              f"{STRAT_COL['advanced_rsi_master']}{BD}■ RSI2{W}  A/B   "
+             f"{STRAT_COL['rsi_trend']}{BD}■ RSI Trend{W}  A/B   "
              f"{STRAT_COL['advanced_bb_master']}{BD}■ BB Mstr{W}  A/B   "
              f"{STRAT_COL['advanced_pullback_master']}{BD}■ Pullback Mstr{W}  A/B   "
              f"{STRAT_COL['advanced_ml']}{BD}■ ML Adv{W}  A/B   "
