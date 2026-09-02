@@ -336,11 +336,40 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
             "exit": _exit_info(drow), "live": False,
         })
 
+    # Saxo SIM won't quote stocks via /infoprices or return stock positions,
+    # so DB-fallback rows have now=None and show "—" for price/P&L. The chart
+    # endpoint (saxo_history) DOES serve stock bars on SIM -- backfill the last
+    # daily close for those rows so P&L and the exit triggers are usable. Not
+    # real-time, but a real price beats a dash. (2026-09-03, user request.)
+    _need_px = [r for r in rows if r.get("now") is None and r.get("entry", 0) > 0]
+    _px_src = None
+    if _need_px:
+        try:
+            import saxo_history
+            bars = saxo_history.fetch_daily_bars(
+                sorted({r["ticker"].split()[0] for r in _need_px}),
+                count=5, min_bars=1)   # just the last close; default min_bars=50 would drop them all
+            for r in _need_px:
+                base = r["ticker"].split()[0]
+                df = bars.get(base)
+                if df is not None and len(df):
+                    close = float(df["Close"].iloc[-1])
+                    r["now"] = close
+                    r["pnl"] = (close - r["entry"]) * r["shs"]
+                    r["ppc"] = ((close - r["entry"]) / r["entry"] * 100) if r["entry"] else 0.0
+                    r["live"] = True
+                    r["px_daily_close"] = True
+            _px_src = f"{YL}last daily close (Saxo chart — SIM has no live stock quotes){W}"
+        except Exception:
+            pass
+
     _extra = f"  {DM}+ {n_local} local" + (f" ({n_paper} paper){W}" if n_paper else f"{W}")
     if saxo:
         src_note = f"{GR}live from Saxo{W}" + (_extra if n_local else "")
     elif not token:
         src_note = f"{RD}token expired — run: python set_token.py{W}"
+    elif _px_src:
+        src_note = _px_src
     else:
         # Token valid but no stock positions on Saxo (SIM returns NoAccess for stocks)
         src_note = f"{YL}Saxo SIM — stock P&L unavailable (live account required){W}"
