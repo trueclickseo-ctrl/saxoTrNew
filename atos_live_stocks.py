@@ -66,6 +66,44 @@ CASH_BUFFER_PCT            = 0.10   # keep 10% of the 30k un-deployed
 MAX_DAILY_LOSS_PCT         = 0.03   # ~900 SEK/day on 30k -> exits-only when breached
 
 WOULD_BE_ORDERS = os.path.join(_ROOT, "data", "us_blend_live_would_be_orders.jsonl")
+STATUS_FILE     = os.path.join(_ROOT, "data", "stocks_live_status.json")
+
+
+def _write_status(dry_run: bool, exits_only: bool, snap: dict, rails: dict, result: dict) -> None:
+    """Persist the last scan for live_stocks_dashboard.py -- the LIVE analogue
+    of atos_runner._write_status() / data/atos_status.json. The blend target
+    basket (result['signal']) is the 'scan signal'; result['actions'] are the
+    would-be (or, in Phase 2, real) orders this scan produced."""
+    sig = result.get("signal") or {}
+    payload = {
+        "status": "complete",
+        "timestamp": datetime.now().isoformat(),
+        "dry_run": dry_run,
+        "exits_only": exits_only,
+        "account_key": snap.get("account_key"),
+        "open_positions": snap.get("_n_pos", 0),
+        "working_orders": snap.get("_n_ord", 0),
+        "budget_sek": rails.get("budget_sek"),
+        "margin_util_pct": rails.get("margin_util_pct"),
+        "rails_notes": rails.get("notes", []),
+        "signal": {
+            "targets":  sig.get("targets", []),
+            "risk_off": sig.get("risk_off", False),
+            "reason":   sig.get("reason", ""),
+            "momentum": sig.get("momentum", []),
+            "lowvol":   sig.get("lowvol", []),
+        },
+        "actions": result.get("actions", []),
+        "buy": result.get("buy", 0),
+        "sell": result.get("sell", 0),
+    }
+    try:
+        tmp = STATUS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        os.replace(tmp, STATUS_FILE)
+    except Exception as exc:
+        print(f"  [live stocks] could not write status file: {exc}")
 
 
 # ── Safety rails (Phase 1: computed + logged, NOT gating -- no orders) ────
@@ -252,6 +290,8 @@ def run(argv=None) -> int:
         )
         print(f"  {tag} done — {result['buy']} buy / {result['sell']} sell "
               f"({'observe-only, logged to us_blend_live_would_be_orders.jsonl' if dry_run else 'real orders'})")
+
+        _write_status(dry_run, exits_only, snap, rails, result)
 
         # post-run safety pass (built now, runs no-op while there are no positions)
         try:
