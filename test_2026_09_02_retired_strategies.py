@@ -52,8 +52,10 @@ def test_retired_stay_registered_for_exit_management():
 
 
 def test_retired_excluded_from_default_entry_rotation():
+    # 2026-09-02: the SIM roster is now an explicit 5-strategy allowlist
+    # (SIM_ACTIVE_STRATEGIES), which of course excludes every retired one.
     assert not (set(runner._ACTIVE_STRATEGIES) & runner.RETIRED_STRATEGIES)
-    assert set(runner._ACTIVE_STRATEGIES) == set(runner.STRATEGIES) - _EXPECTED
+    assert not (set(runner.SIM_ACTIVE_STRATEGIES) & runner.RETIRED_STRATEGIES)
     # run_daily's default and the CLI default both use _ACTIVE_STRATEGIES
     src = inspect.getsource(runner)
     assert src.count("active_strategies = list(_ACTIVE_STRATEGIES)") >= 1

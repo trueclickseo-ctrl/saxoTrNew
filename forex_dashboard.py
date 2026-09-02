@@ -30,6 +30,14 @@ from forex.universe import (
 
 _UNIVERSE_BY_SYMBOL = {p["symbol"]: p for p in _UNIVERSE_PAIRS}
 
+# 2026-09-02: the 5-strategy SIM roster the user actually runs. Every other
+# strategy is dormant (exits only) and is collapsed into a single "dormant"
+# line on the breakdown table while its legacy positions wind down.
+try:
+    from forex.runner import SIM_ACTIVE_STRATEGIES as _SIM_ROSTER
+except Exception:
+    _SIM_ROSTER = ["rsi", "rsi_trend", "ema_trend", "bb_quality", "zscore_quality"]
+
 REFRESH_SECONDS = 60
 
 # ── Quote-currency -> EUR conversion (account base currency) ──────────────
@@ -319,7 +327,8 @@ def _strategy_breakdown_table(title: str, positions: list, live: dict,
                                color: str = CY,
                                total_label: str | None = None,
                                module: str = "forex",
-                               currency_label: str = "EUR") -> list:
+                               currency_label: str = "EUR",
+                               roster: list | None = None) -> list:
     """One STRATEGY BREAKDOWN table, optionally scoped to a pair subset.
 
     `symbols=None` -> the full-universe blended view (call with
@@ -346,6 +355,14 @@ def _strategy_breakdown_table(title: str, positions: list, live: dict,
     total_label = total_label or title
 
     strat_labels = {k: v for k, v in STRAT_LABELS_ALL.items() if k not in exclude}
+    # 2026-09-02: when a `roster` is given, only those strategies get their own
+    # row; every other strategy that still has an open position or any closed
+    # history is rolled into a single "dormant (winding down)" line, so the
+    # dashboard shows the 5 the user actually runs and nothing else. Once
+    # close_all_forex_sim.py has flattened the legacy book that line disappears.
+    _dormant = [k for k in strat_labels if roster is not None and k not in roster]
+    if roster is not None:
+        strat_labels = {k: v for k, v in strat_labels.items() if k in roster}
     lbo_slots    = 28 if "london_breakout" not in exclude else None
     # 2026-08-29: the two new REAL-capped strategies (unlike gap_weekend,
     # which -- like "gap" -- uses the full swing universe_size) -- see
@@ -452,6 +469,35 @@ def _strategy_breakdown_table(title: str, positions: list, live: dict,
                 f"this total — check it isn't propping up an otherwise-losing strategy{W}"
             )
 
+    # 2026-09-02: one collapsed line for every dormant (non-roster) strategy
+    # that still has skin in the game -- shown only while the legacy book
+    # winds down; vanishes once flat.
+    if _dormant:
+        d_count = sum(1 for p in pos_in_scope if p["strategy"] in _dormant)
+        d_unreal = 0.0
+        for p in pos_in_scope:
+            if p["strategy"] not in _dormant:
+                continue
+            now_px = live.get(p["symbol"])
+            if now_px and p["entry"] > 0:
+                qc = p["symbol"][3:6] if len(p["symbol"]) >= 6 else ""
+                er = _eur_per_unit(qc, live)
+                if er is not None:
+                    raw = (now_px - p["entry"]) if p["direction"] == "Buy" else (p["entry"] - now_px)
+                    d_unreal += raw * p["qty"] * er
+        d_realized = sum(v.get("total_pnl", 0.0) for k, v in stats_by_strat.items() if k in _dormant)
+        d_names = sum(1 for k in _dormant if k in stats_by_strat or any(p["strategy"] == k for p in pos_in_scope))
+        if d_count or d_realized:
+            grand_active     += d_count
+            grand_unrealized += d_unreal
+            grand_realized   += d_realized
+            uc = GR if d_unreal >= 0 else RD
+            rc = GR if d_realized >= 0 else RD
+            L.append(
+                f"  {DM}{f'· dormant ×{d_names}':<16}  {f'{d_count}/—':>6}  {'':>7}  {'winding down':>7}  "
+                f"{'':>6}  {'':>6}  {_pad_ansi(f'{rc}{d_realized:>+,.0f} {currency_label}{W}', 15)}  "
+                f"{'—':>11}  {_pad_ansi(f'{uc}{d_unreal:>+,.0f} {currency_label}{W}', 13)}{W}"
+            )
     L.append(HR)
     g_wr   = (grand_wins / grand_closed * 100) if grand_closed else 0.0
     g_pf   = (grand_gp / grand_gl) if grand_gl > 0 else None
@@ -888,7 +934,9 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     # this file's own 2026-08-25 fix note warns about elsewhere (a literal
     # number silently going stale as strategies get added). Computed from
     # STRAT_LABELS_ALL so it can never drift again.
-    L.append(f"  {BD}{CY}║{f'  {len(STRAT_LABELS_ALL)} Strategies  |  {_total_pairs} FX Pairs  |  {len(positions)} positions in {pairs_trading}/{_total_pairs} pairs  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
+    _n_dormant_open = sum(1 for p in positions if p.get("strategy") not in _SIM_ROSTER)
+    _dormant_tag = f"  (+{_n_dormant_open} dormant winding down)" if _n_dormant_open else ""
+    L.append(f"  {BD}{CY}║{f'  {len(_SIM_ROSTER)} active strategies{_dormant_tag}  |  {_total_pairs} FX Pairs  |  {len(positions)} positions in {pairs_trading}/{_total_pairs} pairs  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{W}")
     # 2026-08-28: 2nd row added -- uses the EXACT Forex Grouping tier names
     # (not a coarser "core"/"exotic" paraphrase) per explicit user request,
     # so this line can be copy-referenced directly when configuring ATOS
@@ -902,42 +950,25 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     OR  = "\033[38;5;208m"
     LV  = "\033[38;5;147m"
     LM  = "\033[38;5;119m"
-    # ── Strategy legend ───────────────────────────────────────────
-    L.append(f"  {BD}STRATEGIES{W}   "
-             f"{CY}{BD}■ EMA{W}  trend   "
-             f"{MG}{BD}■ RSI{W}  mean-rev   "
-             f"{GR}{BD}■ Donchian(30){W}  breakout ⊗   "
-             f"{YL}{BD}■ BB(20,2){W}  fade   "
-             f"{BL}{BD}■ Pullback{W}  EMA20-in-EMA50 ⊗   "
-             f"{WH}{BD}■ Gap Fill{W}  ~80% WR   "
-             f"{OR}{BD}■ SuperTrend{W}  trend ⊗   "
-             f"{LV}{BD}■ Z-Score{W}  mean-rev   "
-             f"{LM}{BD}■ ML{W}  ML signals ⊗   "
-             f"\033[38;5;135m{BD}■ CNN-LSTM{W}  deep learning   "
-             f"\033[38;5;214m{BD}■ LBO{W}  day trade   "
-             # 2026-08-29: 3 new SIM-only A/B-test strategies
-             f"\033[38;5;80m{BD}■ Gap Wknd{W}  A/B   "
-             f"\033[38;5;120m{BD}■ Donchian Qual{W}  A/B ⊗   "
-             f"\033[38;5;220m{BD}■ LBO V2{W}  A/B   "
-             # 2026-08-30: 6 user-supplied SIM-only A/B "advanced_*" strategies
-             f"{STRAT_COL['advanced_ema']}{BD}■ EMA Adv{W}  A/B   "
-             f"{STRAT_COL['ema_trend']}{BD}■ EMA Trend{W}  A/B   "
-             f"{STRAT_COL['advanced_rsi_master']}{BD}■ RSI2{W}  A/B   "
-             f"{STRAT_COL['rsi_trend']}{BD}■ RSI Trend{W}  A/B   "
-             f"{STRAT_COL['advanced_bb_master']}{BD}■ BB Mstr{W}  A/B   "
-             f"{STRAT_COL['bb_quality']}{BD}■ BB Qual{W}  A/B   "
-             f"{STRAT_COL['zscore_quality']}{BD}■ ZS Qual{W}  A/B   "
-             f"{STRAT_COL['advanced_pullback_master']}{BD}■ Pullback Mstr{W}  A/B   "
-             f"{STRAT_COL['advanced_ml']}{BD}■ ML Adv{W}  A/B   "
-             f"{STRAT_COL['advanced_cnn_lstm_master']}{BD}■ CNN-LSTM Mstr{W}  A/B   "
-             f"{DM}⊗ = RETIRED (exits only, no new entries){W}")
+    # ── Strategy legend (2026-09-02: the 5-strategy SIM roster only) ──────
+    _leg = {
+        "rsi":            f"{STRAT_COL.get('rsi', MG)}{BD}■ RSI{W}  RSI(2) pullback, unfiltered (day-1 baseline + LIVE SEK)",
+        "rsi_trend":      f"{STRAT_COL['rsi_trend']}{BD}■ RSI Trend{W}  RSI(2) + regime gate (Buy=TREND_BULL / Sell=TREND_BEAR)",
+        "ema_trend":      f"{STRAT_COL['ema_trend']}{BD}■ EMA Trend{W}  EMA(5/30) + fresh-crossover(≤3b) + |+DI−−DI|≥15",
+        "bb_quality":     f"{STRAT_COL['bb_quality']}{BD}■ BB Qual{W}  BB(20,2) fade + non-directional gate |+DI−−DI|≤14",
+        "zscore_quality": f"{STRAT_COL['zscore_quality']}{BD}■ ZS Qual{W}  z-score ±2σ fade + non-directional gate |+DI−−DI|≤14",
+    }
+    L.append(f"  {BD}SIM ROSTER{W}   " + "   ".join(_leg[s] for s in _SIM_ROSTER if s in _leg))
+    _n_dormant = sum(1 for k in STRAT_LABELS_ALL if k not in _SIM_ROSTER)
+    L.append(f"  {DM}Everything else ({_n_dormant} strategies — originals, A/B experiments, retired, LBO) is "
+             f"DORMANT: exits only, no new entries, off this view. Reinstate via SIM_ACTIVE_STRATEGIES "
+             f"in forex/runner.py.{W}")
     L.append(f"  {DM}Scheduler: every 30min 06:00-03:00 PKT (scan)  |  14:00 PKT (exit check)  |  "
-             f"Mon 03:00 PKT weekly + session gap windows (gap fill)  |  "
+             f"Mon 03:00 PKT weekly gap  |  "
              f"{_total_pairs} pairs: {len(HIGH_VOLUME_SYMBOLS)} high volume + {len(CORE_STANDARD_SYMBOLS)} core standard + "
              f"{len(SCANDI_SYMBOLS)} scandi + {len(METALS_SYMBOLS)} metals + "
              f"{len(EXOTIC_SYMBOLS)} exotic ({len(EXOTIC_ASIA_SYMBOLS)} asia + {len(EXOTIC_EUROPE_SYMBOLS)} europe + "
-             f"{len(EXOTIC_CARRY_SYMBOLS)} carry + {len(EXOTIC_LATAM_MIDEAST_SYMBOLS)} latam/mideast, SIM-only)  |  "
-             f"Max slots {_total_pairs} (28 for day-trade LBO, 4 for Donchian Qual / LBO V2 A/B tests){W}")
+             f"{len(EXOTIC_CARRY_SYMBOLS)} carry + {len(EXOTIC_LATAM_MIDEAST_SYMBOLS)} latam/mideast, SIM-only){W}")
     L.append(HR)
     L.append("")
 
@@ -1112,9 +1143,9 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     # The one full per-strategy table stays -- master reference across the
     # whole 184-pair universe.
     L.extend(_strategy_breakdown_table(
-        f"STRATEGY BREAKDOWN — ALL {_total_pairs} PAIRS (blended reference)",
+        f"STRATEGY BREAKDOWN — SIM ROSTER ({len(_SIM_ROSTER)} strategies, all {_total_pairs} pairs)",
         positions, live, symbols=None, universe_size=_total_pairs,
-        color=ALLTIER_COLOR, total_label="ALL TOTAL"))
+        color=ALLTIER_COLOR, total_label="ROSTER TOTAL", roster=_SIM_ROSTER))
 
     # ── Footer ────────────────────────────────────────────────────
     L.append(f"  {DM}Per-pair/currency breakdown removed from this view by design (2026-08-24) — "

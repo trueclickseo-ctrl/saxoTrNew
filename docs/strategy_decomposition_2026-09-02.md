@@ -4,6 +4,16 @@ A sweep of every forex swing strategy (plus the US Blend momentum sleeve) to
 answer one question the user asked repeatedly: **is there a filterable subset
 of "top" trades inside each strategy, and if so what defines it?**
 
+> **Outcome (2026-09-02): the SIM forex book was cut to 5 strategies** —
+> `rsi` (day-1 baseline), `rsi_trend`, `ema_trend`, `bb_quality`,
+> `zscore_quality` (`SIM_ACTIVE_STRATEGIES` in `forex/runner.py`). Everything
+> else — the untouched originals, the A/B experiments, the retired set,
+> **`gap`**, and the LBO book — is dormant (exits only, opens nothing new).
+> The legacy book (204 positions) was force-flattened via
+> `close_all_forex_sim.py`. The `gap` `london`/`tokyo` disable +
+> `newyork` regime filter below still stand as the config for if `gap` is
+> ever put back in the roster. LIVE (SEK `rsi` / EUR exits-only) untouched.
+
 ## Method
 
 Replay each strategy's *real* `generate_signals` + exit stack on Yahoo daily

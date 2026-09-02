@@ -279,7 +279,24 @@ STRATEGIES = {k: v for k, v in STRATEGIES.items() if v is not None}
 RETIRED_STRATEGIES: set[str] = {
     "donchian", "donchian_quality", "pullback", "ml", "supertrend",
 }
-_ACTIVE_STRATEGIES = [k for k in STRATEGIES if k not in RETIRED_STRATEGIES]
+
+# ── SIM entry roster (2026-09-02, explicit user decision) ───────────────────
+# The user cut the SIM forex book down to the day-1 RSI(2) baseline + the four
+# decomposition-validated "improved" twins, and force-flattened everything
+# else once (close_all_forex_sim.py). Only these take NEW SIM entries and only
+# these show on forex_dashboard.py. Every other strategy -- the untouched
+# originals (ema/bb/zscore), the advanced_*/*_master A/B experiments, the
+# RETIRED_STRATEGIES set, the LBO day-trade book -- is dormant: its module
+# stays importable and any lingering open position still exit-manages
+# (run_exits_only iterates ALL of STRATEGIES; run_daily's _legacy_exit path
+# covers the rest), but it opens nothing new. `--strategy <name>` still runs
+# any one on explicit request, with a warning. Reversible: edit this list.
+# LIVE (SEK rsi / EUR exits-only) is UNAFFECTED -- that path resolves from
+# LIVE_ALLOWED_STRATEGIES, never this.
+SIM_ACTIVE_STRATEGIES: list[str] = [
+    "rsi", "rsi_trend", "ema_trend", "bb_quality", "zscore_quality",
+]
+_ACTIVE_STRATEGIES = [k for k in SIM_ACTIVE_STRATEGIES if k in STRATEGIES]
 
 # ── Disabled `gap` session legs (2026-09-02) ────────────────────────────────
 # A ~2.8y / H1-bar decomposition (docs/strategy_decomposition_2026-09-02.md)
@@ -4711,7 +4728,7 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
     # and no signals -- harmless. Skipping outright is the riskier failure
     # mode if the boundary assumption is ever wrong.
     if active_strategies is None:
-        active_strategies = list(_ACTIVE_STRATEGIES)   # retired strategies excluded from the entry rotation
+        active_strategies = list(_ACTIVE_STRATEGIES)   # the 5-strategy SIM roster (2026-09-02)
 
     _reset_order_circuit()   # per-run state; explicit reset for in-process re-calls
 
@@ -5376,12 +5393,18 @@ if __name__ == "__main__":
         sys.exit(0)
 
     active = requested_strategies if requested_strategies is not None else list(_ACTIVE_STRATEGIES)
-    _explicit_retired = sorted(set(active) & RETIRED_STRATEGIES) if requested_strategies is not None else []
-    if _explicit_retired:
-        logger.warning(f"  running RETIRED strateg{'y' if len(_explicit_retired)==1 else 'ies'} "
-                       f"{_explicit_retired} on explicit --strategy request -- these are excluded "
-                       f"from the default rotation (net-negative, see "
-                       f"docs/strategy_decomposition_2026-09-02.md); running anyway for research")
+    if requested_strategies is not None and ACCOUNT_ENV == "sim":
+        _explicit_retired = sorted(set(active) & RETIRED_STRATEGIES)
+        _explicit_offroster = sorted((set(active) & set(STRATEGIES))
+                                     - set(SIM_ACTIVE_STRATEGIES) - set(_explicit_retired))
+        if _explicit_retired:
+            logger.warning(f"  running RETIRED strateg{'y' if len(_explicit_retired)==1 else 'ies'} "
+                           f"{_explicit_retired} on explicit --strategy request -- net-negative, see "
+                           f"docs/strategy_decomposition_2026-09-02.md; running anyway for research")
+        if _explicit_offroster:
+            logger.warning(f"  {_explicit_offroster} not in the current SIM roster "
+                           f"({SIM_ACTIVE_STRATEGIES}) -- dormant since 2026-09-02, "
+                           f"running on explicit request")
     # Serialize concurrent live invocations project-wide -- see LOCK_FILE's
     # docstring above _acquire_lock() for why this exists (a real double-
     # entry risk between overlapping scheduled tasks, found 2026-08-24, not

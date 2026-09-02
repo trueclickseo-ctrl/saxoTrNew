@@ -24,6 +24,17 @@ positions keep full exit management) but are **excluded from the default
 entry rotation** — they never open anything new. `--strategy <name>` still
 runs one, with a warning, for research.
 
+**SIM ROSTER cut to 5, 2026-09-02** (`SIM_ACTIVE_STRATEGIES` in
+`forex/runner.py`, explicit user decision): the SIM forex book now runs
+**only** `rsi`, `rsi_trend`, `ema_trend`, `bb_quality`, `zscore_quality`.
+Every other strategy — the untouched originals (`ema`/`bb`/`zscore`), all
+`advanced_*`/`*_master` A/B experiments, the retired set, the LBO day-trade
+book — is **dormant**: module stays importable, open positions still
+exit-manage, but it opens nothing new and is collapsed to a single line on
+`forex_dashboard.py`. The legacy book was force-flattened once via
+`close_all_forex_sim.py`. Reversible: edit the list. LIVE (SEK `rsi` / EUR
+exits-only) is unaffected.
+
 ## Swing strategies (daily bars, SIM scan)
 
 | Strategy | Doc | Type | Runs on |
