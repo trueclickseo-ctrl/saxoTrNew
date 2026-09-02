@@ -24,9 +24,9 @@
   "journal_model": "claude-sonnet-5",
   "journal_max_trades_per_run": 40,
 
-  "_stocks_comment": "Stocks AI layer (2026-09-02): the forex AI layer extended to the SIM stocks module (atos_runner.py). SHIPS OFF -- the whole subtree is inert until `enabled` is flipped true. All hooks are OBSERVE/LOG only (no apply path in the code). Sub-flags once enabled: journal = feed stocks closed trades to the AI Journal; shadow_copilot_reversion = score every US Reversion entry (log-only, needs agent_enabled + ANTHROPIC_API_KEY); basket_ranker_blend = shadow-rank the US Blend fortnightly offense basket (log-only, the deterministic targets are never touched). See docs/atos_ai_tracker.md.",
+  "_stocks_comment": "Stocks AI layer (2026-09-02): the forex AI layer extended to the SIM stocks module (atos_runner.py). ARMED 2026-09-02 (enabled:true) -- still OBSERVE/LOG only (no apply path in the code). Sub-flags: journal = feed stocks closed trades to the AI Journal (cheap); shadow_copilot_reversion = score every US Reversion entry (log-only, uses agent_enabled + ANTHROPIC_API_KEY, ~cents/week); basket_ranker_blend = shadow-rank the US Blend fortnightly offense basket (one LLM call per rebalance, log-only, deterministic targets never touched). Reports: ai_trade_journal.py --report, report_ai_basket.py. Set enabled:false to disarm the whole subtree next cycle. See docs/atos_ai_tracker.md.",
   "stocks": {
-    "enabled": false,
+    "enabled": true,
     "journal": true,
     "shadow_copilot_reversion": true,
     "basket_ranker_blend": true

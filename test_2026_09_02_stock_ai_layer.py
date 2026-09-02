@@ -58,10 +58,15 @@ def test_stocks_flags_default_off():
         ai_config._load = real
 
 
-def test_committed_config_ships_stocks_off():
+def test_committed_config_stocks_block_wellformed():
     with open(os.path.join(BASE, "config", "ai.json"), encoding="utf-8") as f:
         cfg = json.load(f)
-    assert cfg.get("stocks", {}).get("enabled") is False, "stocks.enabled must ship false"
+    s = cfg.get("stocks")
+    assert isinstance(s, dict), "config/ai.json needs a `stocks` block"
+    for k in ("enabled", "journal", "shadow_copilot_reversion", "basket_ranker_blend"):
+        assert isinstance(s.get(k), bool), f"stocks.{k} must be a bool"
+    # ARMED 2026-09-02 -- observe/log only, no apply path (asserted elsewhere).
+    # Flip back to enabled:false to disarm the whole subtree.
 
 
 def test_sub_flags_need_master_and_own_gate():
