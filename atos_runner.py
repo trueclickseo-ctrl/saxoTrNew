@@ -1616,7 +1616,18 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
     except Exception as e:
         print(f"  [US momentum] instrument_map load failed: {e}"); return
 
-    us_open = {t["ticker"]: t for t in open_trades if t.get("market_group") == "US Equities"}
+    # Blend's working set is ITS OWN positions only. Previously this keyed off
+    # market_group == "US Equities", which also swept in every US Reversion
+    # position (same market_group, different strategy) -- so the delta
+    # rebalance below saw Reversion's dip-buys as Blend holdings that weren't
+    # in the momentum/low-vol target and emitted Sell orders for them.
+    # _place_us("Sell", cur_trade=<reversion row>) then closed the Reversion
+    # DB row tagged "momentum_rebalance"; the next Reversion scan re-bought the
+    # freed slot -> a buy/sell churn loop at the same price, pure commission +
+    # spread bleed (DELL/MTB, 2026-09-01/02). Reversion already scopes its own
+    # set by strategy (run_us_reversion); Blend now matches.
+    us_open = {t["ticker"]: t for t in open_trades if t.get("strategy") == "US Blend"}
+    rev_held = {t["ticker"] for t in open_trades if t.get("strategy") == "US Reversion"}
     tag = "[US momentum DRY-RUN]" if dry_run else "[US momentum]"
 
     # ── Reconcile DB open positions against the real Saxo account ─────────────
@@ -1800,6 +1811,11 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
     priority = []
     for tk in mom_names + lv_names:
         if tk in corp_skip:
+            continue
+        if tk in rev_held:
+            # US Reversion already holds this name -- don't open a second,
+            # independently-managed Blend position in the same ticker.
+            print(f"  {tag} skipping {tk} — held by US Reversion (no duplicate position)")
             continue
         if tk not in priority and tk in feat_data and tk in imap and _price(tk) > 0:
             priority.append(tk)
@@ -2036,8 +2052,12 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
               f"— no new entries (sleeve ~{sleeve_equity:,.0f} SEK)")
         return
 
+    blend_held = {t["ticker"] for t in db.get_open_trades()
+                  if t.get("strategy") == "US Blend"}
     candidates = USR.scan(feat_data, US_TICKERS)
-    candidates = [c for c in candidates if c["ticker"] not in rev_open_now]
+    candidates = [c for c in candidates
+                  if c["ticker"] not in rev_open_now
+                  and c["ticker"] not in blend_held]   # no duplicate cross-strategy position
     if not candidates:
         print(f"  {tag} no entry signals today")
         return
@@ -2370,7 +2390,12 @@ def run_intraday_cycle():
 
     # ── 5. Place orders for top signals (up to slots_free) ───────────
     todays_actions = []
-    already_held   = {t.get("ticker") for t in rev_open_now}
+    # Exclude names already held by EITHER sleeve -- a Blend momentum holding
+    # must not also be opened as an independently-managed Reversion position
+    # (and vice versa); that is the duplicate-trade / cross-strategy churn.
+    already_held   = ({t.get("ticker") for t in rev_open_now}
+                      | {t.get("ticker") for t in open_trades
+                         if t.get("strategy") == "US Blend"})
     placed         = 0
 
     # This loop previously called three nonexistent things: a module-level
