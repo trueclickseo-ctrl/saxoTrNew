@@ -305,6 +305,7 @@ STRAT_LABELS_ALL = {
     "advanced_rsi_master":        "RSI2 (A/B)",   # 2026-09-02 (user): call it RSI2 — a separate strategy from the day-1 "rsi", must stay distinct
     "rsi_trend":                  "RSI Trend (A/B)",   # 2026-09-02: rsi + regime entry gate. Distinct from "RSI" (core) and "RSI2 (A/B)".
     "advanced_bb_master":         "BB Master (A/B)",
+    "bb_quality":                 "BB Qual (A/B)",   # 2026-09-02: bb + non-directional-market gate
     "advanced_pullback_master":   "Pullback Mstr (A/B)",
     "advanced_ml":                "ML Adv (A/B)",
     "advanced_cnn_lstm_master":   "CNN-LSTM Mstr (A/B)",
@@ -905,18 +906,18 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append(f"  {BD}STRATEGIES{W}   "
              f"{CY}{BD}■ EMA{W}  trend   "
              f"{MG}{BD}■ RSI{W}  mean-rev   "
-             f"{GR}{BD}■ Donchian(30){W}  breakout   "
+             f"{GR}{BD}■ Donchian(30){W}  breakout ⊗   "
              f"{YL}{BD}■ BB(20,2){W}  fade   "
-             f"{BL}{BD}■ Pullback{W}  EMA20-in-EMA50   "
+             f"{BL}{BD}■ Pullback{W}  EMA20-in-EMA50 ⊗   "
              f"{WH}{BD}■ Gap Fill{W}  ~80% WR   "
-             f"{OR}{BD}■ SuperTrend{W}  trend   "
+             f"{OR}{BD}■ SuperTrend{W}  trend ⊗   "
              f"{LV}{BD}■ Z-Score{W}  mean-rev   "
-             f"{LM}{BD}■ ML{W}  ML signals   "
+             f"{LM}{BD}■ ML{W}  ML signals ⊗   "
              f"\033[38;5;135m{BD}■ CNN-LSTM{W}  deep learning   "
              f"\033[38;5;214m{BD}■ LBO{W}  day trade   "
              # 2026-08-29: 3 new SIM-only A/B-test strategies
              f"\033[38;5;80m{BD}■ Gap Wknd{W}  A/B   "
-             f"\033[38;5;120m{BD}■ Donchian Qual{W}  A/B   "
+             f"\033[38;5;120m{BD}■ Donchian Qual{W}  A/B ⊗   "
              f"\033[38;5;220m{BD}■ LBO V2{W}  A/B   "
              # 2026-08-30: 6 user-supplied SIM-only A/B "advanced_*" strategies
              f"{STRAT_COL['advanced_ema']}{BD}■ EMA Adv{W}  A/B   "
@@ -928,7 +929,8 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
              f"{STRAT_COL['zscore_quality']}{BD}■ ZS Qual{W}  A/B   "
              f"{STRAT_COL['advanced_pullback_master']}{BD}■ Pullback Mstr{W}  A/B   "
              f"{STRAT_COL['advanced_ml']}{BD}■ ML Adv{W}  A/B   "
-             f"{STRAT_COL['advanced_cnn_lstm_master']}{BD}■ CNN-LSTM Mstr{W}  A/B")
+             f"{STRAT_COL['advanced_cnn_lstm_master']}{BD}■ CNN-LSTM Mstr{W}  A/B   "
+             f"{DM}⊗ = RETIRED (exits only, no new entries){W}")
     L.append(f"  {DM}Scheduler: every 30min 06:00-03:00 PKT (scan)  |  14:00 PKT (exit check)  |  "
              f"Mon 03:00 PKT weekly + session gap windows (gap fill)  |  "
              f"{_total_pairs} pairs: {len(HIGH_VOLUME_SYMBOLS)} high volume + {len(CORE_STANDARD_SYMBOLS)} core standard + "
