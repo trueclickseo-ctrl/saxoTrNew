@@ -1548,23 +1548,37 @@ def _blend_book_state() -> dict:
 
 def _place_us(side: str, ticker: str, shares: int, imap: dict,
               todays_actions: list, price: float, cur_trade: dict = None,
-              strategy: str = "US Blend") -> bool:
+              strategy: str = "US Blend", account_env: str = "sim") -> bool:
     """Place ONE US market order and update DB + local cash on success.
     Routes to _sx() -- "sim" for atos_runner.run_cycle, "live" only when
-    atos_live_stocks.py has set it."""
+    atos_live_stocks.py has set it.
+
+    account_env == "ai_sim" (the AI-decision paper twin, atos_ai_stocks.py):
+    NEVER touches Saxo -- books the fill locally at the scan price and skips
+    the per-trade notifier email. Its DB is data/atos_ai.db (ATOS_DB_PATH),
+    fully isolated from the deterministic SIM / real-money books."""
     # 2026-09-02: real-money hard guard. _place_us is only ever called from the
     # US Blend rebalance path (run_us_momentum). Assert it so a future caller
     # can't route a non-Blend order to the live account.
     if _sx() == "live" and strategy != "US Blend":
         raise RuntimeError(f"_place_us on the LIVE account is US-Blend-only, got {strategy!r}")
+    _paper_twin = account_env == "ai_sim"
     shares = int(shares)
     if side == "Buy":
         shares = _sim_cap_shares(shares, price, _rate_to_sek("USD"))
     if shares < 1 or ticker not in imap:
         return False
     paper = 0
+    entry_oid = stop_oid = None
     try:
-        if side == "Buy":
+        if _paper_twin:
+            # AI SIM twin -- no Saxo order at all (the shared SIM account has
+            # no margin left for a parallel book, and its orders would collide
+            # with the deterministic book's on the same tickers). Book paper.
+            paper = 1
+            if side == "Sell" and cur_trade is None:
+                return False
+        elif side == "Buy":
             # Attach stop-loss/take-profit atomically with the entry — this
             # strategy previously placed a bare market order with no broker-
             # side protection at all (stop_price was hardcoded to 0), relying
@@ -1641,7 +1655,7 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
         record_fill(-(shares * price_sek + comm))
         _append_trade_log("US Blend", "BUY", ticker, shares, price,
                           shares * price_sek, None, "US momentum rebalance")
-        _ae = "live_stocks" if _sx() == "live" else "sim"
+        _ae = "live_stocks" if _sx() == "live" else ("ai_sim" if _paper_twin else "sim")
         if (ai_config is not None and ai_config.stocks_enabled(_ae)
                 and ai_stock_cards is not None):
             try:
@@ -1658,12 +1672,13 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
         todays_actions.append({"action": "BUY", "ticker": ticker, "market_group": "US Equities",
                                "strategy": "US Blend", "score": 0, "shares": shares,
                                "price": price, "reason": "US momentum", "pnl_sek": None})
-        notifier.notify_trade_executed(
-            side="BUY", ticker=ticker, shares=shares, price_usd=price,
-            value_sek=shares * price_sek, strategy="US Blend",
-            account_balance_sek=get_total_equity(db.get_open_trades()),
-            reason=("[PAPER-FILL — Saxo SIM down] " if paper else "") + "Weekly momentum rebalance",
-        )
+        if not _paper_twin:   # AI SIM twin: no per-trade email (paper A/B, watched on ai_dashboard.py)
+            notifier.notify_trade_executed(
+                side="BUY", ticker=ticker, shares=shares, price_usd=price,
+                value_sek=shares * price_sek, strategy="US Blend",
+                account_balance_sek=get_total_equity(db.get_open_trades()),
+                reason=("[PAPER-FILL — Saxo SIM down] " if paper else "") + "Weekly momentum rebalance",
+            )
     else:  # Sell (full close of the tracked position)
         pnl = None
         if cur_trade:
@@ -1693,12 +1708,13 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
         todays_actions.append({"action": "EXIT", "ticker": ticker, "market_group": "US Equities",
                                "strategy": "US Blend", "score": 0, "shares": shares,
                                "price": price, "reason": "US momentum exit", "pnl_sek": pnl})
-        notifier.notify_trade_executed(
-            side="SELL", ticker=ticker, shares=shares, price_usd=price,
-            value_sek=shares * price_sek, strategy="US Blend",
-            account_balance_sek=get_total_equity(db.get_open_trades()),
-            pnl_sek=pnl, reason="Weekly momentum rebalance exit",
-        )
+        if not _paper_twin:
+            notifier.notify_trade_executed(
+                side="SELL", ticker=ticker, shares=shares, price_usd=price,
+                value_sek=shares * price_sek, strategy="US Blend",
+                account_balance_sek=get_total_equity(db.get_open_trades()),
+                pnl_sek=pnl, reason="Weekly momentum rebalance exit",
+            )
     return True
 
 
@@ -1904,7 +1920,7 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
         if observe:
             return _observe_order(side, tk, shares, price, cur_trade=cur_trade)
         return _place_us(side, tk, shares, imap, todays_actions, price=price,
-                         cur_trade=cur_trade, strategy="US Blend")
+                         cur_trade=cur_trade, strategy="US Blend", account_env=account_env)
 
     def _sell_all_us():
         for tk, tr in us_open.items():
