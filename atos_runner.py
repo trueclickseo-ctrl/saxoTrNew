@@ -101,6 +101,7 @@ import saxo_client
 import saxo_order
 import saxo_fx
 import saxo_history
+import proc_lock
 
 # ── AI observation layer (2026-09-02) -- OBSERVE/LOG ONLY, ships OFF ──
 # Guarded exactly like forex/runner.py: if the ai package fails to import
@@ -208,16 +209,48 @@ US_REVERSION_ENABLED = True   # SIM enabled 2026-08-08 — honest OOS validated 
 # With this on, a rejected SIM stock BUY is booked in the trades table with
 # paper=1 at the scan price and managed by ATOS's own should_exit() /
 # rebalance logic. housekeeping.StocksAdapter skips paper rows (no Saxo
-# counterpart to reconcile). The stocks module is SIM-only — saxo_client
-# defaults to env="sim" and atos_runner never passes env="live"; _STOCKS_ENV
-# documents that and is the one gate to change if a LIVE stocks account is
-# ever added. A paper-fill can NEVER happen unless _STOCKS_ENV == "sim".
+# counterpart to reconcile).
+#
+# 2026-09-02: `_STOCKS_ENV` is now the real env gate. It defaults to "sim"
+# (atos_runner.run_cycle / daily_run.py / run_open_scan / run_us_reversion /
+# run_intraday_cycle never touch it). The real-money engine atos_live_stocks.py
+# calls set_stocks_env("live") and runs ONLY the US Blend path
+# (run_us_blend_live -> run_us_momentum). _sx() is threaded into every
+# US-Blend-path Saxo call so those hit the LIVE account; every US Reversion /
+# legacy / intraday Saxo call is left SIM-only forever. A paper-fill can NEVER
+# happen unless _STOCKS_ENV == "sim" (LIVE rejections are logged + skipped, no
+# phantom row).
 _STOCKS_ENV = "sim"
 STOCKS_SIM_PAPER_FILL_ON_REJECT = True
 
 
+def set_stocks_env(env: str) -> None:
+    """Point the US-Blend Saxo path at `env` ("sim" | "live"). Called once by
+    atos_live_stocks.py before any cycle. Raises on anything else."""
+    global _STOCKS_ENV
+    if env not in ("sim", "live"):
+        raise ValueError(f"_STOCKS_ENV must be 'sim' or 'live', got {env!r}")
+    _STOCKS_ENV = env
+
+
+def _sx() -> str:
+    return _STOCKS_ENV
+
+
 def _stocks_paper_fill_enabled() -> bool:
+    assert _STOCKS_ENV in ("sim", "live")
     return STOCKS_SIM_PAPER_FILL_ON_REJECT and _STOCKS_ENV == "sim"
+
+
+def stocks_live_commission_sek(shares: int, price_usd: float, fx_usd_sek: float) -> float:
+    """Real-money US-stock commission estimate for the LIVE ledger. Saxo Classic
+    US-stock ~USD 0.02/share, min ~USD 3 (confirm the account's plan -- Phase 2
+    reads /trade/v1/infoprices Commissions for the exact figure). Uses the LIVE
+    USD/SEK rate, not risk.py's hardcoded 10.5."""
+    per_share_usd = 0.02
+    min_usd = 3.0
+    comm_usd = max(shares * per_share_usd, min_usd)
+    return comm_usd * (fx_usd_sek or _rate_to_sek("USD") or 10.5)
 
 
 def _sim_cap_shares(shares: int, price_usd: float, fx_usd_sek: float) -> int:
@@ -267,7 +300,7 @@ def _heal_missing_stock_stops(open_trades: list) -> None:
         return
     try:
         held: dict = {}
-        for p in saxo_client.get_positions().get("Data", []):
+        for p in saxo_client.get_positions(env=_sx()).get("Data", []):
             b = p.get("PositionBase", {})
             u, amt = b.get("Uic"), b.get("Amount", 0)
             if u is not None and amt:
@@ -277,7 +310,7 @@ def _heal_missing_stock_stops(open_trades: list) -> None:
         return
     try:
         stopped_uics = {
-            o.get("Uic") for o in saxo_client.get_orders("Stock").get("Data", [])
+            o.get("Uic") for o in saxo_client.get_orders("Stock", env=_sx()).get("Data", [])
             if o.get("BuySell") == "Sell"
             and "Stop" in str(o.get("OpenOrderType") or o.get("OrderType") or "")
         }
@@ -285,7 +318,7 @@ def _heal_missing_stock_stops(open_trades: list) -> None:
         stopped_uics = set()
 
     try:
-        ak = saxo_client.get_account_key()
+        ak = saxo_client.get_account_key(env=_sx())
     except Exception as e:
         print(f"  [stop-heal] no account key: {e}")
         return
@@ -302,7 +335,8 @@ def _heal_missing_stock_stops(open_trades: list) -> None:
             db.set_stop_order_id(t["id"], "EXISTING")
             continue
         oid = saxo_order.place_stop_only(
-            post_fn=saxo_client.post, account_key=ak, uic=uic,
+            post_fn=lambda path, body: saxo_client.post(path, body, env=_sx()),
+            account_key=ak, uic=uic,
             asset_type="Stock", amount=int(t["shares"]),
             entry_side=("Buy" if str(t.get("direction", "BUY")).upper() == "BUY" else "Sell"),
             stop_price=float(t["stop_price"]), symbol=tk)
@@ -335,7 +369,7 @@ def _confirm_stock_fill(entry_oid: str, uic: int) -> tuple[bool, float]:
         if attempt:
             _t.sleep(_STOCK_FILL_DELAY_S)
         try:
-            data = saxo_client.get_positions().get("Data", [])
+            data = saxo_client.get_positions(env=_sx()).get("Data", [])
         except Exception:
             continue
         for p in data:
@@ -1372,7 +1406,12 @@ def _log_buy_signal(mkt: str, ticker: str, decision, executed: int, block_reason
     })
 
 
-US_MOMENTUM_STATE = os.path.join(BASE_DIR, "data", "us_momentum_state.json")
+# The real-money US Blend sleeve (atos_live_stocks.py) sets
+# ATOS_US_MOMENTUM_STATE=data/us_momentum_state_live.json before importing this
+# module, so its rebalance clock / sleeve-cash never touches SIM's file. SIM
+# leaves it unset.
+US_MOMENTUM_STATE = os.environ.get("ATOS_US_MOMENTUM_STATE") or os.path.join(
+    BASE_DIR, "data", "us_momentum_state.json")
 SCAN_STATE_FILE   = os.path.join(BASE_DIR, "data", "atos_scan_state.json")
 STATUS_FILE       = os.path.join(BASE_DIR, "data", "atos_status.json")
 
@@ -1458,8 +1497,16 @@ US_BLEND_TP_PCT   = 0.20   # 20% take-profit, matching the ETF module's conventi
 
 
 def _place_us(side: str, ticker: str, shares: int, imap: dict,
-              todays_actions: list, price: float, cur_trade: dict = None) -> bool:
-    """Place ONE US market order and update DB + local cash on success."""
+              todays_actions: list, price: float, cur_trade: dict = None,
+              strategy: str = "US Blend") -> bool:
+    """Place ONE US market order and update DB + local cash on success.
+    Routes to _sx() -- "sim" for atos_runner.run_cycle, "live" only when
+    atos_live_stocks.py has set it."""
+    # 2026-09-02: real-money hard guard. _place_us is only ever called from the
+    # US Blend rebalance path (run_us_momentum). Assert it so a future caller
+    # can't route a non-Blend order to the live account.
+    if _sx() == "live" and strategy != "US Blend":
+        raise RuntimeError(f"_place_us on the LIVE account is US-Blend-only, got {strategy!r}")
     shares = int(shares)
     if side == "Buy":
         shares = _sim_cap_shares(shares, price, _rate_to_sek("USD"))
@@ -1476,8 +1523,8 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
             stop_p = round(price * (1 - US_BLEND_STOP_PCT), 2)
             tp_p   = round(price * (1 + US_BLEND_TP_PCT), 2)
             entry_oid, stop_oid, _ = saxo_order.place_with_stop(
-                post_fn=saxo_client.post,
-                account_key=saxo_client.get_account_key(),
+                post_fn=lambda path, body: saxo_client.post(path, body, env=_sx()),
+                account_key=saxo_client.get_account_key(env=_sx()),
                 uic=imap[ticker]["uic"], asset_type="Stock", amount=shares,
                 buy_sell="Buy", stop_price=stop_p, take_profit_price=tp_p,
                 label=f"US Blend:{ticker}",
@@ -1503,7 +1550,7 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
                 else:
                     for _o in (entry_oid, stop_oid):
                         try:
-                            _o and saxo_client.cancel_order(str(_o))
+                            _o and saxo_client.cancel_order(str(_o), env=_sx())
                         except Exception:
                             pass
                     if _stocks_paper_fill_enabled():
@@ -1517,15 +1564,18 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
         else:
             cur_is_paper = bool(cur_trade and cur_trade.get("paper"))
             if not cur_is_paper:
-                saxo_client.place_market_order(imap[ticker]["uic"], "Stock", side, shares)
+                saxo_client.place_market_order(imap[ticker]["uic"], "Stock", side, shares, env=_sx())
             # paper position: no Saxo counterpart -- DB close happens below
     except Exception as e:
         print(f"  [US momentum] {side} {shares} {ticker} FAILED: {e}")
         return False
     rate = _rate_to_sek("USD")
     price_sek = (price or 0) * rate
+    # Commission: the LIVE stocks sleeve uses a per-share US-stock schedule
+    # (stocks_live_commission_sek); SIM keeps the legacy value-based model.
+    comm = (stocks_live_commission_sek(shares, price, rate) if _sx() == "live"
+            else commission_sek(shares, price_sek))
     if side == "Buy":
-        comm = commission_sek(shares, price_sek)
         db.insert_trade({
             "strategy": "US Blend", "market_group": "US Equities", "ticker": ticker,
             "direction": "BUY", "entry_date": date.today().isoformat(),
@@ -1541,7 +1591,8 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
         record_fill(-(shares * price_sek + comm))
         _append_trade_log("US Blend", "BUY", ticker, shares, price,
                           shares * price_sek, None, "US momentum rebalance")
-        if (ai_config is not None and ai_config.stocks_enabled()
+        _ae = "live_stocks" if _sx() == "live" else "sim"
+        if (ai_config is not None and ai_config.stocks_enabled(_ae)
                 and ai_stock_cards is not None):
             try:
                 _blend_stop = round(price * (1 - US_BLEND_STOP_PCT), 2)
@@ -1550,6 +1601,7 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
                     entry_price=price, shares=shares, stop_price=_blend_stop,
                     sek_per_eur=_sek_per_eur(), entry_date=date.today().isoformat(),
                     risk_sek=abs(price - _blend_stop) * shares * rate,
+                    account_env=_ae,
                 )
             except Exception as _exc:
                 print(f"  [ai] blend entry-card hook failed for {ticker}: {_exc}")
@@ -1563,7 +1615,6 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
             reason=("[PAPER-FILL — Saxo SIM down] " if paper else "") + "Weekly momentum rebalance",
         )
     else:  # Sell (full close of the tracked position)
-        comm = commission_sek(shares, price_sek)
         pnl = None
         if cur_trade:
             entry_sek = cur_trade.get("entry_price", price) * rate
@@ -1601,18 +1652,40 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
     return True
 
 
+US_BLEND_LIVE_WOULD_BE_ORDERS = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data", "us_blend_live_would_be_orders.jsonl")
+
+
 def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
-                    dry_run: bool = False, available_cash_sek: float = 0.0):
+                    dry_run: bool = False, available_cash_sek: float = 0.0,
+                    account_env: str = "sim", observe: bool = False,
+                    exits_only: bool = False):
     """Validated US cross-sectional momentum, executed as a monthly rebalance with a
     daily market risk-off overlay. See atos/us_momentum.py + STRATEGY_NOTES.md.
     available_cash_sek: if >0, overrides the fixed sleeve and uses this as the rebalance budget.
-    dry_run=True previews the orders (prints them) without placing any or touching the DB."""
+    dry_run=True previews the orders (prints them) without placing any or touching the DB.
+
+    account_env: "sim" (default -- byte-identical to the pre-2026-09-02 behaviour)
+      or "live_stocks" (the real-money US Blend sleeve, driven by atos_live_stocks.py,
+      which has already called set_stocks_env("live") and set ATOS_DB_PATH).
+    observe=True: Phase-1 dry-run for the LIVE stocks sleeve -- the AI basket-ranker
+      and notify_blend_targets hooks still fire, and every would-be order is appended
+      to data/us_blend_live_would_be_orders.jsonl, but NO real order is placed, NO DB
+      row is written, and last_rebalance is NOT stamped. Distinct from dry_run (which
+      is silent -- no hooks, no JSONL)."""
     from atos import us_momentum as USM
-    from instrument_map import load_instrument_map
+    from instrument_map import load_instrument_map, MAP_FILE_LIVE
+    # In observe mode nothing may mutate the ledger / broker / rebalance clock.
+    _mutate = not dry_run and not observe
+    _live_stocks = account_env == "live_stocks"
     if kill_switch_active():
         print("  [US momentum] STOP_TRADING present — skip"); return
     try:
-        imap = load_instrument_map()
+        if _live_stocks:
+            # Real-money sleeve: LIVE Uics (differ from SIM), USD-only.
+            imap = load_instrument_map(path=MAP_FILE_LIVE, require_usd=True)
+        else:
+            imap = load_instrument_map()
     except Exception as e:
         print(f"  [US momentum] instrument_map load failed: {e}"); return
 
@@ -1637,9 +1710,9 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
     # next sell fail with "NotOwned" and then opens a fresh duplicate position for
     # the same ticker instead of just holding it. Reconcile first so us_open only
     # contains what's actually held.
-    if not dry_run and us_open:
+    if _mutate and us_open:
         try:
-            broker_positions = saxo_client.get_positions()
+            broker_positions = saxo_client.get_positions(env=_sx())
             held_uics = set()
             for p in broker_positions.get("Data", []):
                 base = p.get("PositionBase", {})
@@ -1664,7 +1737,9 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
     print(f"  {tag} risk_off={tgt['risk_off']} | {tgt.get('reason')} | targets={tgt['targets']}")
     fx_usd = _rate_to_sek("USD")
 
-    if not dry_run:
+    # observe (LIVE Phase 1): fire the signal/notify/AI-shadow hooks, but not the
+    # order/DB mutations below. dry_run: stay fully silent.
+    if not dry_run or observe:
         global _blend_signal
         _blend_signal = {
             "targets":  tgt.get("targets", []),
@@ -1689,7 +1764,7 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
         # deterministic re-ranking rule (if any) comes out of the user's
         # review of this log, then a backtest -- never from this hook.
         if (ai_config is not None and ai_basket_ranker is not None
-                and ai_config.stocks_basket_ranker_enabled()
+                and ai_config.stocks_basket_ranker_enabled(account_env)
                 and tgt.get("momentum")):
             try:
                 _mom = tgt.get("momentum", [])
@@ -1702,6 +1777,7 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
                 except Exception:
                     pass
                 ai_basket_ranker.rank_basket_shadow(
+                    account_env=account_env,
                     det_offense=_mom, det_defense=tgt.get("lowvol", []),
                     det_count=len(_mom), detail=tgt.get("detail", {}),
                     regime_label=_regime, mom_n_max=USM.MOM_N_MAX,
@@ -1713,11 +1789,47 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
     def _price(tk, fallback=0):
         return float(feat_data[tk]["Close"].iloc[-1]) if tk in feat_data else fallback
 
+    def _observe_order(side, tk, shares, price, cur_trade=None):
+        """LIVE Phase 1: record the would-be order + (for buys) an AI entry card.
+        Places nothing, writes no DB row."""
+        rec = {
+            "ts": datetime.now().isoformat(),
+            "side": side, "ticker": tk, "shares": int(shares),
+            "price_usd": round(float(price), 4),
+            "notional_sek": round(shares * price * fx_usd, 2),
+            "budget_sek": round(float(available_cash_sek or 0.0), 2),
+            "strategy": "US Blend", "account_env": account_env,
+        }
+        try:
+            os.makedirs(os.path.dirname(US_BLEND_LIVE_WOULD_BE_ORDERS), exist_ok=True)
+            with open(US_BLEND_LIVE_WOULD_BE_ORDERS, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec) + "\n")
+        except Exception as _exc:
+            print(f"  {tag} could not append would-be order for {tk}: {_exc}")
+        print(f"    {tag} OBSERVE would {side.upper()} {shares} {tk} @ ${price:.2f}  "
+              f"(~{shares*price*fx_usd:,.0f} SEK)")
+        if side == "Buy" and ai_config is not None and ai_stock_cards is not None:
+            try:
+                _stop = round(price * (1 - US_BLEND_STOP_PCT), 2)
+                ai_stock_cards.log_stock_entry_card(
+                    strategy="us_blend", ticker=tk, direction="Buy",
+                    entry_price=price, shares=int(shares), stop_price=_stop,
+                    sek_per_eur=_sek_per_eur(), entry_date=date.today().isoformat(),
+                    risk_sek=abs(price - _stop) * shares * fx_usd,
+                    account_env=account_env,
+                )
+            except Exception as _exc:
+                print(f"  [ai] observe entry-card hook failed for {tk}: {_exc}")
+        return True
+
     def _do(side, tk, shares, price, cur_trade=None):
         if dry_run:
             print(f"    {tag} would {side.upper()} {shares} {tk} @ ${price:.2f}  (~{shares*price*fx_usd:,.0f} SEK)")
             return True
-        return _place_us(side, tk, shares, imap, todays_actions, price=price, cur_trade=cur_trade)
+        if observe:
+            return _observe_order(side, tk, shares, price, cur_trade=cur_trade)
+        return _place_us(side, tk, shares, imap, todays_actions, price=price,
+                         cur_trade=cur_trade, strategy="US Blend")
 
     def _sell_all_us():
         for tk, tr in us_open.items():
@@ -1756,7 +1868,7 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
                 event_sell_value += sh * px * fx_usd
             # Park the recovered cash back into the sleeve so the next rebalance
             # has the correct budget (mirrors how risk-off overlay works).
-            if not dry_run and event_sell_value > 0:
+            if _mutate and event_sell_value > 0:
                 # Recalculate open positions after the exits
                 remaining_us_open = {k: v for k, v in us_open.items()
                                      if k not in event_flags}
@@ -1777,9 +1889,16 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
         if us_open:
             print(f"  {tag} RISK-OFF — selling all US to cash (sleeve ~{sleeve_equity:,.0f} SEK)")
             _sell_all_us()
-        if not dry_run:
+        if _mutate:
             state["sleeve_cash"] = sleeve_equity   # value parked in cash until re-entry
             _save_us_state(state)
+        return
+
+    # exits_only: the corp-event + risk-off overlays above still run (they can
+    # only ever REDUCE exposure), but no new rebalance / buys. Used by the LIVE
+    # stocks Exit Check backstop and when the daily-loss cap is breached.
+    if exits_only:
+        print(f"  {tag} exits-only — overlays ran, skipping the rebalance/buy path")
         return
 
     # Rebalance when REBAL_DAYS calendar days have elapsed since last rebalance.
@@ -1834,7 +1953,7 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
               f"{len(lv_names)} low-vol {lv_names} — holdings already match target, no trades needed "
               f"| sleeve ~{sleeve_equity:,.0f} SEK")
         no_action_tickers = set(priority)
-        if not dry_run:
+        if _mutate:
             state["last_rebalance"] = date.today().isoformat()
             state["sleeve_cash"] = sleeve_equity - us_value
             _save_us_state(state)
@@ -1866,7 +1985,7 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
               f"freed ~{freed_sek:,.0f} SEK, deployed ~{deployed_sek:,.0f} SEK "
               f"of {sleeve_equity:,.0f} SEK sleeve; unchanged positions left in place")
         no_action_tickers = {tk for tk in priority if tk not in {a["ticker"] for a in actions}}
-        if not dry_run:
+        if _mutate:
             # Only stamp last_rebalance once at least one order actually landed.
             # If the market is closed (holiday) Saxo rejects every order and
             # filled_any stays False — retry next trading day.
@@ -1878,8 +1997,8 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
             state["sleeve_cash"] = (sleeve_equity - us_value) + freed_sek - deployed_sek
             _save_us_state(state)
 
-    # ── Log rebalance signals ───────────────────────────────────────────────
-    if not dry_run:
+    # ── Log rebalance signals (DB write -- SIM only) ────────────────────────
+    if _mutate:
         _mom_scan_ts = datetime.now().isoformat()
         for tk in priority:
             _placed = tk in {a["ticker"] for a in todays_actions if a.get("action") == "BUY"}
@@ -1903,6 +2022,51 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
                 })
             except Exception:
                 pass
+
+
+def run_us_blend_live(*, budget_sek: float, dry_run: bool, exits_only: bool = False) -> dict:
+    """Real-money US Blend sleeve entry point (atos_live_stocks.py only).
+
+    Runs ONLY run_us_momentum with account_env="live_stocks" -- never
+    run_us_reversion, never the legacy per-market engine, never the SIM
+    dashboard / learning pass. The caller (atos_live_stocks.py) has already:
+      * proc_lock.acquire(ATOS_LIVE_STOCKS_LOCK)
+      * set ATOS_DB_PATH / ATOS_RISK_STATE_FILE / ATOS_US_MOMENTUM_STATE
+      * atos_runner.set_stocks_env("live")
+      * verified SAXO_LIVE_STOCKS_CONFIRMED etc.
+
+    dry_run=True  -> observe=True inside run_us_momentum: AI hooks fire, every
+                     would-be order is logged to us_blend_live_would_be_orders
+                     .jsonl, but no real order / no DB row / no rebalance stamp.
+    exits_only=True -> risk-off is forced (sell-all path only); no new buys.
+    Returns {"actions": [...], "buy": n, "sell": n}."""
+    assert _sx() == "live", "run_us_blend_live requires set_stocks_env('live') first"
+    db.init_db()
+    todays_actions: list = []
+
+    raw = download_universe(list(US_TICKERS))
+    feat_data: dict = {}
+    for tk, dfr in raw.items():
+        try:
+            feat_data[tk] = add_all(dfr)
+        except Exception as e:
+            print(f"  [live stocks] features failed for {tk}: {e}")
+    if not feat_data:
+        print("  [live stocks] no market data — aborting (no orders, no state change)")
+        return {"actions": [], "buy": 0, "sell": 0}
+
+    open_trades = db.get_open_trades()
+    try:
+        run_us_momentum(feat_data, open_trades, todays_actions,
+                        available_cash_sek=max(0.0, float(budget_sek)),
+                        account_env="live_stocks", observe=dry_run,
+                        exits_only=exits_only)
+    except Exception as e:
+        print(f"  [live stocks] run_us_momentum error: {e}")
+
+    buy_n  = sum(1 for a in todays_actions if a.get("action") == "BUY")
+    sell_n = sum(1 for a in todays_actions if a.get("action") in ("SELL", "EXIT"))
+    return {"actions": todays_actions, "buy": buy_n, "sell": sell_n}
 
 
 def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
@@ -2515,7 +2679,16 @@ def run_intraday_cycle():
 
 if __name__ == "__main__":
     import sys
-    if len(sys.argv) > 1 and sys.argv[1] == "intraday":
-        run_intraday_cycle()
-    else:
-        run_cycle()
+    # 2026-09-02: serialize the SIM stocks engine against the every-30-min
+    # ATOS Housekeeping / ATOS Safeguard processes (all touch data/atos_live.db,
+    # WAL, with no prior lock). Never skips work -- only sequences it. The
+    # real-money atos_live_stocks.py uses its OWN lock (ATOS_LIVE_STOCKS_LOCK).
+    _lbl = "atos-intraday" if (len(sys.argv) > 1 and sys.argv[1] == "intraday") else "atos-cycle"
+    proc_lock.acquire(proc_lock.ATOS_LOCK, _lbl)
+    try:
+        if len(sys.argv) > 1 and sys.argv[1] == "intraday":
+            run_intraday_cycle()
+        else:
+            run_cycle()
+    finally:
+        proc_lock.release(proc_lock.ATOS_LOCK)

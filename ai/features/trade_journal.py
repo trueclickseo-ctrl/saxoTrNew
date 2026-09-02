@@ -60,7 +60,9 @@ trading bot (FX and US equities). Every trade you see has ALREADY closed. You do
 place, modify, or advise on any live order; you write an honest retrospective so the \
 operator can learn.
 
-Most trades are FX. Some carry "market": "equity" -- a US stock, SIM/paper only. \
+Most trades are FX. Some carry "market": "equity" -- a US stock. account_env \
+"live_stocks" is the REAL-money US Blend sleeve (30k SEK, SEK LIVE sub-account) -- \
+weigh its lessons heavier than "sim"; account_env "sim" equity trades are paper. \
 Two equity strategies: "us_reversion" = buy an RSI(14)<38 oversold dip above the \
 200-EMA, exit on RSI recovery / the 20-day SMA / a -4% stop / a 10-day time stop \
 (structurally the same idea as the FX RSI(2) book); "us_blend" = a fortnightly \
@@ -73,8 +75,8 @@ You receive a JSON object: "narrate" is the list of closed trades to write up in
 detail; "all_trades_today" (when present) is a compact list of every trade that day \
 for the day_summary; "partial_batch": true means narrate only, day_summary = null. \
 Each trade in "narrate" has: the account (account_env -- "sim" is paper, \
-"live"/"live_eur" are REAL money; weigh lessons on live trades more heavily), the \
-strategy, \
+"live"/"live_eur"/"live_stocks" are REAL money; weigh lessons on live trades more \
+heavily), the strategy, \
 symbol, direction, entry/stop/target prices, ATR at entry, position size, the market \
 REGIME at entry (from a deterministic classifier), any AI Copilot verdict on the \
 signal (APPROVE/REJECT/MODIFY + size multiplier, shadow-only -- it did not change the \
@@ -158,7 +160,11 @@ def _closed_trades() -> list[dict]:
     # the forex-only reports (report_giveback, verify_ai_data, ...) that read
     # CARDS_LOG are unaffected. The Journal reads both. SEK figures on these
     # cards were converted to EUR at write time (ai/features/stock_cards.py).
-    if ai_config.stocks_journal_enabled():
+    # One file holds BOTH the SIM stocks study and the real-money US Blend
+    # sleeve's cards (each row carries account_env) -- read it if either
+    # journal is on.
+    if (ai_config.stocks_journal_enabled("sim")
+            or ai_config.stocks_journal_enabled("live_stocks")):
         sources.append(STOCK_CARDS_LOG)
     for src in sources:
         for c in _load_jsonl(src):

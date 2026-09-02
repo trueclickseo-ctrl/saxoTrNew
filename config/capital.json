@@ -32,6 +32,24 @@
       "fallback_sleeve_sek": 300000
     },
 
+    "_stocks_live_comment": [
+      "2026-09-02: REAL-MONEY stocks sleeve. atos_live_stocks.py runs US Blend",
+      "ONLY (atos/us_momentum.py) on the existing Saxo LIVE SEK sub-account",
+      "1070996INET -- the same account forex/runner.py --account live uses.",
+      "Separate ledger data/atos_live_stocks.db, separate risk-state file,",
+      "separate pnl_tracker module 'stock_live' (NOT in pnl_tracker.MODULES).",
+      "capital_config.stocks_live_risk_equity_sek() returns min(real_pooled,",
+      "risk_equity_sek); the whole US Blend sleeve is capped here regardless of",
+      "the pooled raw (~35,800 SEK, shared with the forex wind-down). A 10%",
+      "cash buffer (account.cash_buffer_pct) is applied on top -> ~27k deployable.",
+      "PHASED: Phase 1 is dry-run / observe-only (no real orders) until BOTH",
+      "SAXO_LIVE_STOCKS_CONFIRMED=1 AND LIVE_STOCKS_DRY_RUN=0."
+    ],
+    "stocks_live": {
+      "enabled": true,
+      "risk_equity_sek": 30000
+    },
+
     "_futures_comment": [
       "The Saxo account is denominated in EUR. risk_equity_eur is the equity base",
       "futures position sizing risks 1% of per trade. It exists because the runner",
@@ -103,7 +121,15 @@
       "/port/v1/balances/me TotalValue). _forex_live_risk_equity() returns",
       "min(real_equity, cap), so 35,000 lets this account size off the real pool.",
       "Per-trade risk is UNCHANGED (fixed EUR45); the effect is the 8% RSI heat",
-      "cap now allows ~5-6 concurrent RSI positions here vs ~2-3 at 15,000."
+      "cap now allows ~5-6 concurrent RSI positions here vs ~2-3 at 15,000.",
+      "",
+      "2026-09-02: forex LIVE ENTRIES STOPPED. LIVE_ALLOWED_STRATEGIES emptied,",
+      "the ATOS Forex LIVE Daily Run task Disabled -- the user moved all",
+      "real-money trading to stocks (config/capital.json strategies.stocks_live",
+      "below, atos_live_stocks.py / US Blend). This cap is now INERT (exits-only",
+      "wind-down of the 5 open positions). Left at 35000 for the record; the",
+      "real pooled ~35,800 SEK balance is now the stocks_live sleeve's to use,",
+      "capped at 30,000 there."
     ],
     "forex_live": {
       "enabled": true,

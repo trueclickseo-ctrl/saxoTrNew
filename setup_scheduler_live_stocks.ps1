@@ -1,0 +1,74 @@
+# setup_scheduler_live_stocks.ps1
+# -------------------------------
+# Registers the Windows Scheduled Tasks for the real-money ATOS LIVE STOCKS
+# sleeve (US Blend, SEK LIVE sub-account, 30k SEK). 2026-09-02.
+#
+# SEPARATE module from ATOS LIVE FOREX -- its own tasks, own log
+# (data/stocks_live_scheduler.log), own .bat wrappers. Shares only the Saxo
+# SEK sub-account login.
+#
+# PHASE 1 = OBSERVE ONLY. The .bat wrappers deliberately do NOT pass --live,
+# so atos_live_stocks.py stays in dry-run: would-be orders + AI cards logged,
+# ZERO real orders. Registering these tasks does NOT start real trading.
+# Phase 2 (separate approval): edit run_atos_live_stocks_daily.bat to add
+# --live, AND set (User env, then reboot):
+#   [System.Environment]::SetEnvironmentVariable("SAXO_LIVE_STOCKS_CONFIRMED","1","User")
+#   [System.Environment]::SetEnvironmentVariable("LIVE_STOCKS_DRY_RUN","0","User")
+#
+# Cadence: US Blend is a 14-day rebalance + a daily risk-off/event/stop
+# overlay -- no "still-forming candle" every-45-min logic. One daily run
+# ~40 min after the US close (02:40 PKT) + a 14:00 PKT exit-check backstop.
+#
+# RUN THIS ONCE, AS ADMINISTRATOR (re-run any time the schedule changes):
+#   powershell -ExecutionPolicy Bypass -File "E:\SaxoTrNew\SaxoTrNew\setup_scheduler_live_stocks.ps1"
+
+$vbs  = "E:\SaxoTrNew\SaxoTrNew\run_hidden.vbs"
+$base = "E:\SaxoTrNew\SaxoTrNew"
+$log  = "$base\data\stocks_live_scheduler.log"
+
+$settings = New-ScheduledTaskSettingsSet `
+           -ExecutionTimeLimit (New-TimeSpan -Hours 1) `
+           -StartWhenAvailable -WakeToRun `
+           -RestartCount 1 -RestartInterval (New-TimeSpan -Minutes 10)
+
+# ── Daily Run (rebalance + overlay) ─────────────────────────────────────
+$action1 = New-ScheduledTaskAction -Execute "wscript.exe" `
+           -Argument "`"$vbs`" `"$base\run_atos_live_stocks_daily.bat`" `"$log`""
+$trigger1 = New-ScheduledTaskTrigger -Daily -At "02:40"
+
+$dailyOk = $true
+try {
+    Register-ScheduledTask -TaskName "ATOS Stocks LIVE Daily Run" `
+               -Action $action1 -Trigger $trigger1 -Settings $settings `
+               -Description "Real-money US Blend stocks sleeve (30k SEK, SEK LIVE sub-account). PHASE 1 OBSERVE-ONLY -- .bat has no --live." `
+               -RunLevel Highest -Force -ErrorAction Stop | Out-Null
+} catch {
+    $dailyOk = $false
+    Write-Host "FAILED to register 'ATOS Stocks LIVE Daily Run': $($_.Exception.Message)" -ForegroundColor Red
+}
+
+# ── Exit Check backstop ────────────────────────────────────────────────
+$action2 = New-ScheduledTaskAction -Execute "wscript.exe" `
+           -Argument "`"$vbs`" `"$base\run_atos_live_stocks_exits.bat`" `"$log`""
+$trigger2 = New-ScheduledTaskTrigger -Daily -At "14:00"
+
+$exitOk = $true
+try {
+    Register-ScheduledTask -TaskName "ATOS Stocks LIVE Exit Check" `
+               -Action $action2 -Trigger $trigger2 -Settings $settings `
+               -Description "Real-money US Blend stocks sleeve -- stop/risk-off/event exit check only, once daily. PHASE 1 OBSERVE-ONLY." `
+               -RunLevel Highest -Force -ErrorAction Stop | Out-Null
+} catch {
+    $exitOk = $false
+    Write-Host "FAILED to register 'ATOS Stocks LIVE Exit Check': $($_.Exception.Message)" -ForegroundColor Red
+}
+
+Write-Host ""
+if ($dailyOk) { Write-Host "Registered 'ATOS Stocks LIVE Daily Run'  -> daily 02:40 PKT (rebalance + overlay)." -ForegroundColor Green }
+if ($exitOk)  { Write-Host "Registered 'ATOS Stocks LIVE Exit Check' -> daily 14:00 PKT (exits only)." -ForegroundColor Green }
+Write-Host ""
+Write-Host "PHASE 1: these run OBSERVE-ONLY (no --live in the .bat). No real orders." -ForegroundColor Yellow
+Write-Host ""
+Write-Host "Remove later with:"
+Write-Host "  Unregister-ScheduledTask -TaskName 'ATOS Stocks LIVE Daily Run'  -Confirm:`$false"
+Write-Host "  Unregister-ScheduledTask -TaskName 'ATOS Stocks LIVE Exit Check' -Confirm:`$false"

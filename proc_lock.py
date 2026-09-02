@@ -48,6 +48,18 @@ FUTURES_LOCK    = os.path.join(_DATA_DIR, "futures_runner.lock")
 # protect against between them, only needless contention.
 FOREX_LIVE_LOCK = os.path.join(_DATA_DIR, "forex_live_runner.lock")
 
+# 2026-09-02: the SIM stocks engine (atos_runner.run_cycle / run_intraday_cycle)
+# had NO process lock. ATOS_LOCK serializes atos_runner-vs-atos_runner -- the
+# same read-then-write race proc_lock exists for, for the case where the hourly
+# `ATOS Daily Run` overlaps a watchdog-restarted copy of itself. (Housekeeping /
+# safeguard concurrency vs the DB is left to SQLite WAL for now -- a per-module
+# lock design for those is a separate cleanup.) ATOS_LIVE_STOCKS_LOCK is the
+# real-money stocks engine's OWN lock (atos_live_stocks.py), same
+# LIVE-gets-its-own-lock reasoning as FOREX_LIVE_LOCK above -- it touches
+# data/atos_live_stocks.db, a completely different file from SIM's atos_live.db.
+ATOS_LOCK             = os.path.join(_DATA_DIR, "atos_runner.lock")
+ATOS_LIVE_STOCKS_LOCK = os.path.join(_DATA_DIR, "atos_live_stocks_runner.lock")
+
 STALE_SECONDS = 20 * 60   # generous vs. observed ~3-4 min full scans
 WAIT_TIMEOUT  = 15 * 60   # give up waiting and proceed rather than deadlock forever
 

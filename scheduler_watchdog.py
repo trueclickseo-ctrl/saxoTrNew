@@ -196,7 +196,11 @@ WINDOWS_TASKS = {
     # tightened to 4h (was 30h) so a degraded task silently firing only
     # its last remaining trigger (~24h gaps) gets caught quickly instead of
     # looking like a normal daily cadence. Exit Check stays once/day.
-    "Forex LIVE Daily Run":   ("ATOS Forex LIVE Daily Run",   "forex_live_scheduler.log", 30, 4),
+    # 2026-09-02: `ATOS Forex LIVE Daily Run` (+ the EUR one below) removed
+    # from the watched set -- the user moved all real-money trading to stocks
+    # (atos_live_stocks.py); both entry tasks are Disabled, so watching them
+    # would just fire daily staleness false-alarms. The Exit Check tasks STAY
+    # watched -- they wind the 5 open forex positions down on their stops.
     "Forex LIVE Exit Check":  ("ATOS Forex LIVE Exit Check",  "forex_live_scheduler.log", 30, 30),
     # Second real-money account -- EUR sub-account (2026-08-26), RSI
     # Pullback only, on the same 17-pair HIGH_VOLUME_SYMBOLS universe as
@@ -204,7 +208,8 @@ WINDOWS_TASKS = {
     # SAXO_LIVE_EUR_CONFIRMED flag -- genuinely separate from the SEK
     # account above, so a failure on one is never masked by the other's
     # activity. Same grace/max_wait rationale as the SEK entries.
-    "Forex LIVE EUR Daily Run":  ("ATOS Forex LIVE EUR Daily Run",  "forex_live_eur_scheduler.log", 30, 4),
+    # EUR entry task also removed from the watched set 2026-09-02 (Disabled,
+    # exits-only wind-down). EUR Exit Check stays watched.
     "Forex LIVE EUR Exit Check": ("ATOS Forex LIVE EUR Exit Check", "forex_live_eur_scheduler.log", 30, 30),
     # Added 2026-08-25 alongside saxo_live_token_keepalive.py itself (see
     # that file's docstring for why it exists: LIVE's refresh_token only
@@ -231,6 +236,16 @@ WINDOWS_TASKS = {
     # even though there's a ~12h gap between the two daily runs. first-run
     # wait 13h covers "registered just after 09:00, first fire is 21:00".
     "AI Health Email": ("ATOS AI Health Email", "ai_health_email.log", 20, 13),
+    # ── ATOS LIVE STOCKS sleeve (2026-09-02) ──────────────────────────────
+    # Real-money US Blend sleeve (atos_live_stocks.py), SEPARATE module from
+    # ATOS LIVE FOREX. Both tasks contain "LIVE" -> AUTO_FIX_ELIGIBLE
+    # ("LIVE" not in n) hard-excludes them from any auto-restart; the
+    # watchdog only ALERTS on a stale real-money task. NOT added to
+    # INTRADAY_REPEATING_TASKS -- these are once-daily, not repeating.
+    # Daily Run 02:40 PKT, Exit Check 14:00 PKT, once each. grace=30,
+    # max_first_run_wait=30h (a fresh registration's first fire can be ~24h out).
+    "Stocks LIVE Daily Run":  ("ATOS Stocks LIVE Daily Run",  "stocks_live_scheduler.log", 30, 30),
+    "Stocks LIVE Exit Check": ("ATOS Stocks LIVE Exit Check", "stocks_live_scheduler.log", 30, 30),
 }
 
 # ── Registry: Claude-native scheduled tasks (no Windows entry) ──────────────
@@ -407,7 +422,10 @@ _SUSPICIOUSLY_SMALL_BYTES = 200
 # in the past and their own NextRunTime (tomorrow, same time) looked more
 # than 12h out -- completely normal for a once-daily task, not a failure.
 INTRADAY_REPEATING_TASKS = {
-    "Forex Intraday Scan", "Forex LIVE Daily Run", "Forex LIVE EUR Daily Run",
+    "Forex Intraday Scan",
+    # Forex LIVE Daily Run / Forex LIVE EUR Daily Run removed 2026-09-02 --
+    # both Disabled (real-money trading moved to stocks). The two LIVE Exit
+    # Check tasks are once-daily, so deliberately NOT here.
     "Saxo LIVE Token Keepalive",
     "Stocks Daily Run", "ETF Daily Run", "Futures Daily Run", "Intraday Monitor",
 }

@@ -617,7 +617,19 @@ ACCOUNT_ENV = "sim"
 # broker-side GTC stops but get no ATOS trailing / time-stop management
 # now that donchian isn't in the allowlist (same as while the task was
 # disabled) -- close them manually when convenient.
-LIVE_ALLOWED_STRATEGIES = {"rsi"}
+#
+# 2026-09-02: CONSOLIDATION #2 -- the user is moving all real-money trading
+# OFF forex and ONTO stocks (new atos_live_stocks.py / US Blend, 30k SEK
+# sleeve, same Saxo LIVE SEK sub-account). Emptied like LIVE_EUR was on
+# 2026-09-01: `--account live` takes NO new entries, but the 5 open
+# positions (2 donchian + 3 rsi) stay exit-managed --
+# _run_daily/_run_exits_only call _legacy_exit_strategies(active=[],
+# positions) -> ['donchian','rsi'] -> _run_exits runs their stop / ATR-trail
+# / time-stop / broker-bracket management. The `ATOS Forex LIVE Daily Run`
+# task is already Disabled; the `ATOS Forex LIVE Exit Check` task stays on to
+# wind the 5 positions down. Re-populate this set only on the user's explicit
+# go-ahead to resume live forex.
+LIVE_ALLOWED_STRATEGIES: set[str] = set()
 
 # 2026-08-26: a SECOND, genuinely separate real-money account -- the EUR
 # sub-account under the same Saxo LIVE login (see _account()'s Currency

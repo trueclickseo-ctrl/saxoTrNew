@@ -1,18 +1,30 @@
 # US Equities Strategy Playbook
 
-> **AI observation layer (2026-09-02, shadow — ships OFF).** The forex AI
-> layer now also covers this module: an LLM **Trading Journal** retrospective
-> on each closed trade, a **shadow Trading Copilot** score on every US
-> Reversion entry, and a **shadow basket-ranker** that logs a re-ranked US
-> Blend offense basket next to the deterministic pick. All OBSERVE/LOG only —
-> nothing changes a stocks trade, the rebalance basket, or any sizing.
-> Arm with `config/ai.json` `"stocks": {"enabled": true}`. See
-> [atos_ai_tracker.md](atos_ai_tracker.md).
+> **Real money — ATOS LIVE STOCKS sleeve (2026-09-03, Phase 1 OBSERVE-ONLY).**
+> A separate module — `atos_live_stocks.py` — runs **US Blend only** with
+> **30,000 SEK** on the Saxo LIVE SEK sub-account (the same account forex LIVE
+> used; forex LIVE entries are now stopped). It shares only that broker login;
+> its own ledger / risk state / lock / housekeeping / safeguard / dashboard /
+> scheduler / AI env (`live_stocks`). Phase 1 places **zero real orders** —
+> would-be orders + AI cards logged for ~2 weeks — then a Phase-2 go-live
+> review. See the "Real money" section below and [atos_ai_tracker.md](atos_ai_tracker.md).
 
-**Module**: `atos/` + `atos_runner.py`  
-**Universe**: 385 S&P 500 / large-cap US stocks  
-**Strategies**: 2 concurrent (Momentum Blend + Mean Reversion)  
-**Capital**: 85% of live SIM account (split 50/50 between strategies)  
+> **AI observation layer (2026-09-02 SIM, 2026-09-03 live_stocks — shadow, log-only).**
+> The forex AI layer also covers this module: an LLM **Trading Journal**
+> retrospective on each closed trade, a **shadow Trading Copilot** score on
+> every US Reversion entry (SIM), and a **shadow basket-ranker** that logs a
+> re-ranked US Blend offense basket next to the deterministic pick. All
+> OBSERVE/LOG only — nothing changes a stocks trade, the rebalance basket, or
+> any sizing; `can_apply_decision` is never called for stocks (AST-enforced).
+> SIM: `config/ai.json` `"stocks": {"enabled": …}`. Real-money sleeve:
+> `"stocks_live": {…}` (own block, ARMED). See [atos_ai_tracker.md](atos_ai_tracker.md).
+
+**Module**: `atos/` + `atos_runner.py` (SIM) · `atos_live_stocks.py` (real money, US Blend only)  
+**Universe**: **424** US stocks spanning all 3 major indices — Dow-30 (30/30),
+Nasdaq-100, and the large/mid-cap core of the S&P 500 (`atos/universe.py`
+`US_TICKERS` = `SP500_TICKERS` + `HIGH_GROWTH_TICKERS` + `NASDAQ100_DOW_TICKERS`)  
+**Strategies**: 2 concurrent on SIM (Momentum Blend + Mean Reversion); **US Blend only** on the real-money sleeve  
+**Capital**: SIM = 85% of SIM account (split 50/50); real money = 30,000 SEK (US Blend sleeve, capped)  
 **Scheduled**: 06:00 PKT daily (main) — `ATOS Daily Run` → `daily_run.py` →
 `atos_runner.run_cycle()`, the only Task Scheduler entry point confirmed
 live 2026-08-22. `run_intraday_cycle()` exists in `atos_runner.py` but no
@@ -26,7 +38,8 @@ from Saxo's `/chart/v3/charts` and FX quotes via `saxo_history.py`/
 has no historical stock data was stale/never re-verified — confirmed live
 it does. Yahoo remains correct for `data_loader.py`/`backtest_*.py`
 (genuinely historical/backtest code) and `k4_export.py` (tax export).  
-**Last updated**: 2026-08-19 (price-source note added 2026-08-22)  
+**Last updated**: 2026-09-03 (real-money LIVE STOCKS sleeve + 3-index universe;
+price-source note 2026-08-22; original audit 2026-08-19)  
 
 ---
 
@@ -86,10 +99,28 @@ not signal time, so it never appeared in any log, dashboard, or rejected-signal 
 
 ## Universe
 
-**385 S&P 500 / large-cap US stocks** — defined in `atos/universe.py` (`US_TICKERS`).
+**424 US stocks** — defined in `atos/universe.py` (`US_TICKERS`), the
+deduplicated union of three source lists:
 
-> The universe was expanded from 61 to 385 names. Anything that *derives* a value
-> from `len(US_TICKERS)` scales with it — see the reversion slot ceiling below.
+| List | ~Count | What |
+|---|---|---|
+| `SP500_TICKERS` | 385 | hand-curated large/mega-cap S&P 500 core, sector-organised |
+| `HIGH_GROWTH_TICKERS` | +22 net-new | high-volume growth names (2026-08-28, user request) |
+| `NASDAQ100_DOW_TICKERS` | +17 net-new | Nasdaq-100 gap-fill + DOW Inc (2026-09-03, user request) |
+
+Coverage: **Dow Jones Industrial Average 30/30**, the **Nasdaq-100**, and the
+large/mid-cap core of the **S&P 500** (the small-cap S&P tail is deliberately
+not carried). Deliberately excluded: `GOOG` (dual-class duplicate of `GOOGL` —
+would double-weight Alphabet in the rank-weighted Blend sleeve) and `EA` (went
+private 2026-08-04, delisted).
+
+> The universe grew 61 → 385 → 424. Anything that *derives* a value from
+> `len(US_TICKERS)` scales with it — the reversion slot count is capped at
+> `max_slots = 6` so it does **not** (see the slot ceiling below).
+
+After any `US_TICKERS` edit, run `lookup_missing.py` (SIM UICs → `data/instrument_map.csv`)
+**and** `lookup_instruments_live.py` (LIVE UICs → `data/instrument_map_live.csv`,
+operator-only) — SIM and LIVE UICs are re-derived independently.
 
 ### Selection criteria
 - Daily dollar volume > $200M (sufficient liquidity for the position sizes we trade)
@@ -122,6 +153,87 @@ US Equities total:   85% of account
 ```
 
 All percentages live in `config/capital.json` — the **single source of truth**. Never edit strategy code to change allocation; change only the JSON.
+
+---
+
+## Real money — ATOS LIVE STOCKS sleeve
+
+**Entry point**: `atos_live_stocks.py` (2026-09-03)  
+**Strategy**: **US Blend only** — `LIVE_STOCKS_ALLOWED_STRATEGIES = {"US Blend"}`,
+never a CLI arg. `atos_runner._place_us` raises if `_sx()=="live"` and the tag
+isn't "US Blend". US Reversion / intraday / the legacy per-market engine never
+run here.  
+**Capital**: 30,000 SEK — `config/capital.json` `strategies.stocks_live.risk_equity_sek`.
+Budget each cycle = `min(pooled Saxo TotalValue, 30k) × (1 − 10% cash buffer)` —
+never the pooled raw.  
+**Account**: the Saxo LIVE **SEK sub-account** (`1070996INET`) — the same one
+forex LIVE used. Forex LIVE entries are now stopped (`LIVE_ALLOWED_STRATEGIES =
+set()`); its 5 open positions wind down on their stops. Saxo pools margin +
+positions across sub-accounts, so **every snapshot is filtered by AccountKey
+AND `AssetType=="Stock"`**.
+
+### Separate module — shares only the broker login
+
+| Concern | SIM stocks (`atos_runner`) | LIVE stocks (`atos_live_stocks`) |
+|---|---|---|
+| Ledger | `data/atos_live.db` | `data/atos_live_stocks.db` (`ATOS_DB_PATH`) |
+| Risk state | `data/atos_risk_state.json` | `data/atos_live_stocks_risk_state.json` |
+| Blend clock | `data/us_momentum_state.json` | `data/us_momentum_state_live.json` |
+| Process lock | `proc_lock.ATOS_LOCK` | `proc_lock.ATOS_LIVE_STOCKS_LOCK` |
+| Instrument map | `data/instrument_map.csv` | `data/instrument_map_live.csv` (USD-only) |
+| Housekeeping / safeguard | `housekeeping.py` / `safeguard.py` | `housekeeping_live_stocks.py` / `safeguard_live_stocks.py` |
+| Dashboard | `stocks_dashboard.py` | `live_stocks_dashboard.py` |
+| Scheduler | `ATOS Daily Run` | `ATOS Stocks LIVE Daily Run` (02:40 PKT) + `ATOS Stocks LIVE Exit Check` (14:00 PKT) |
+| AI env | `sim` | `live_stocks` (own `stocks_live` config block) |
+
+### Safety rails (mirror forex LIVE)
+
+- **50% pooled-margin gate** on `MarginUtilizationPct` — fails **open** on a lookup miss.
+- **Daily-loss cap** (~3% ≈ 900 SEK/day) computed against the **30k base + the
+  sleeve's own ledger** — *not* `atos.risk.STARTING_CAPITAL_SEK` (that 10.4M SIM
+  constant reads ~100% drawdown on a fresh empty LIVE risk file). Breach → exits-only.
+- `housekeeping_live_stocks` — 2-snapshot agreement gate, degraded-`/orders`
+  detection, orphan-working-order scan.
+- `safeguard_live_stocks` — conservative 8% protective stop on a naked stock,
+  re-verified against a fresh snapshot. **LIVE never auto-closes** an untracked
+  position — it escalates via `attention.raise_attention("live_stocks:…")`.
+
+### Rollout — PHASED
+
+**Phase 1 = OBSERVE-ONLY (current).** `dry_run` is forced unless **all** of:
+`--live` **and** `SAXO_LIVE_STOCKS_CONFIRMED=1` **and** `LIVE_STOCKS_DRY_RUN=0`
+**and** not `LIVE_STOCKS_TRADING_HALTED`. In dry-run: `run_us_momentum(observe=True)`
+fires the AI hooks + blend-target notification and appends every would-be order
+to `data/us_blend_live_would_be_orders.jsonl` with a would-be AI entry card —
+**zero real orders, no DB row, no `last_rebalance` stamp**. Runs ~2 weeks.
+
+**Phase 2 = go-live flip (separate approval).** Add `--live` to
+`run_atos_live_stocks_daily.bat`, set `SAXO_LIVE_STOCKS_CONFIRMED=1` +
+`LIVE_STOCKS_DRY_RUN=0` (User env, reboot). Pre-flip checklist: `atos_live_stocks.py
+--info` (every Blend ticker has a LIVE Uic, USD; SIM/LIVE diff reviewed), a
+manual 1-share test order in SaxoTraderGO, pooled margin under 50%, the ~2-week
+AI shadow evidence reviewed, real commission schedule confirmed. Kill switch (any
+of): `LIVE_STOCKS_DRY_RUN=1`, remove `SAXO_LIVE_STOCKS_CONFIRMED`, `STOP_TRADING`
+file, `Disable-ScheduledTask`, `LIVE_STOCKS_TRADING_HALTED=True`.
+
+### AI (log-only, governance unchanged)
+
+`ai/config.py` `_AI_SHADOW_ACCOUNTS` includes `"live_stocks"`; `_AI_ACTING_ACCOUNTS`
+does **not** → `can_apply_decision("live_stocks")` is `False` forever (AST-checked).
+Own `config/ai.json` `stocks_live` block (journal + basket-ranker, **armed**) —
+LIVE stocks trades feed the AI Trading Journal (weighed as real money) and the
+shadow basket-ranker, separate rows from the SIM study.
+
+### Commands
+
+```powershell
+python atos_live_stocks.py --info        # SIM vs LIVE Uic diff for every Blend ticker (no orders)
+python atos_live_stocks.py               # observe-only cycle
+python atos_live_stocks.py --exits-only  # observe-only, manage open positions, no new buys
+python atos_live_stocks.py --dashboard   # live_stocks_dashboard.py --once
+python lookup_instruments_live.py        # OPERATOR: build/refresh the LIVE instrument map (hits LIVE ref-data)
+powershell -ExecutionPolicy Bypass -File setup_scheduler_live_stocks.ps1   # OPERATOR: register the 2 tasks
+```
 
 ---
 
@@ -412,8 +524,12 @@ Data source: yfinance (free tier, ~75% accuracy on earnings dates).
 
 | File | Purpose |
 |------|---------|
-| `atos_runner.py` | Daily orchestrator — `run_cycle()` + `run_intraday_cycle()` |
-| `atos/universe.py` | 385-stock universe (`US_TICKERS` list) |
+| `atos_runner.py` | SIM daily orchestrator — `run_cycle()` + `run_intraday_cycle()`; `run_us_blend_live()` wrapper for the real-money sleeve |
+| `atos_live_stocks.py` | **Real-money US Blend sleeve** (30k SEK, SEK LIVE account, Phase 1 observe-only) |
+| `housekeeping_live_stocks.py` / `safeguard_live_stocks.py` | LIVE stocks reconcile + auto-fix (AccountKey+AssetType filter; never auto-closes) |
+| `live_stocks_dashboard.py` | Real-money sleeve dashboard (`--once`) |
+| `lookup_instruments_live.py` | Operator: build `data/instrument_map_live.csv` (LIVE Uics, USD-only) |
+| `atos/universe.py` | **424-stock** universe (`US_TICKERS` = SP500 + HIGH_GROWTH + NASDAQ100_DOW) |
 | `atos/us_momentum.py` | Blend strategy: momentum scoring, rebalance logic, risk-off gate |
 | `atos/us_reversion.py` | Reversion strategy: RSI/dip signal, exits, sleeve drawdown cap |
 | `atos/intraday_reversion.py` | Intraday scanner: live 5-min bars + bad-news filters |
@@ -434,7 +550,7 @@ Data source: yfinance (free tier, ~75% accuracy on earnings dates).
 
 ### US Momentum Blend — LIVE
 ```
-Universe:  385 stocks (S&P 500 / large-cap, market cap >$30B, daily vol >$200M)
+Universe:  424 stocks (Dow-30 + Nasdaq-100 + S&P 500 large/mid-cap core)
 Rebalance: Fortnightly (REBAL_DAYS=14)
 Config:    Top-6 momentum + 2 low-vol, daily risk-off, vol-target 15%
 CAGR:      24.4% | Sharpe: 1.30 | MaxDD: 21.3%
@@ -514,6 +630,12 @@ python intraday_monitor.py
 
 # Start dashboard
 python atos_dashboard.py   # → http://localhost:8070
+
+# ── Real-money US Blend sleeve (Phase 1 observe-only) ──
+python atos_live_stocks.py              # observe-only cycle (no real orders)
+python atos_live_stocks.py --info       # SIM vs LIVE Uic diff
+python atos_live_stocks.py --dashboard  # live_stocks_dashboard.py
+python lookup_instruments_live.py       # OPERATOR: refresh the LIVE instrument map after a universe change
 
 # Refresh Saxo token (expires every ~24h)
 python set_token.py

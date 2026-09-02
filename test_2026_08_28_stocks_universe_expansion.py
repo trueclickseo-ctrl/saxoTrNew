@@ -77,26 +77,31 @@ _run("atos.universe: SQ never present anywhere, XYZ (Block's real ticker) alread
 
 
 def test_us_tickers_includes_both_lists_deduplicated():
-    from atos.universe import SP500_TICKERS, HIGH_GROWTH_TICKERS, US_TICKERS
+    from atos.universe import (SP500_TICKERS, HIGH_GROWTH_TICKERS,
+                               NASDAQ100_DOW_TICKERS, US_TICKERS)
     assert set(SP500_TICKERS) <= set(US_TICKERS)
     assert set(HIGH_GROWTH_TICKERS) <= set(US_TICKERS)
-    assert len(US_TICKERS) == len(set(SP500_TICKERS) | set(HIGH_GROWTH_TICKERS)), (
-        "US_TICKERS must be the deduplicated union of both lists, no double-counting overlaps"
+    assert set(NASDAQ100_DOW_TICKERS) <= set(US_TICKERS)
+    # 2026-09-03: a 3rd source list (Nasdaq-100 + Dow-30 gap-fill) folded in.
+    assert len(US_TICKERS) == len(set(SP500_TICKERS) | set(HIGH_GROWTH_TICKERS)
+                                  | set(NASDAQ100_DOW_TICKERS)), (
+        "US_TICKERS must be the deduplicated union of all 3 lists, no double-counting overlaps"
     )
-_run("atos.universe.US_TICKERS is the deduplicated union of SP500_TICKERS + HIGH_GROWTH_TICKERS",
+_run("atos.universe.US_TICKERS is the deduplicated union of SP500 + HIGH_GROWTH + NASDAQ100_DOW",
      test_us_tickers_includes_both_lists_deduplicated)
 
 
 def test_atos_universe_grew_by_the_expected_net_new_count():
-    from atos.universe import SP500_TICKERS, US_TICKERS
-    # 25 additions, 3 already present in SP500_TICKERS (CROX/PINS/NRG) ->
-    # exactly 22 genuinely net-new tickers (Block/XYZ was caught during
-    # review as already covered under SP500_TICKERS and removed from
-    # HIGH_GROWTH_TICKERS before it became a 4th overlap).
-    assert len(US_TICKERS) - len(SP500_TICKERS) == 22, (
-        f"expected exactly 22 net-new tickers, got {len(US_TICKERS) - len(SP500_TICKERS)}"
+    from atos.universe import SP500_TICKERS, HIGH_GROWTH_TICKERS, NASDAQ100_DOW_TICKERS, US_TICKERS
+    # HIGH_GROWTH: 22 net-new over SP500 (3 overlaps CROX/PINS/NRG).
+    # NASDAQ100_DOW (2026-09-03): 17 net-new, none overlapping either list.
+    assert len(NASDAQ100_DOW_TICKERS) == 17
+    assert not (set(NASDAQ100_DOW_TICKERS) & (set(SP500_TICKERS) | set(HIGH_GROWTH_TICKERS)))
+    assert len(US_TICKERS) - len(SP500_TICKERS) == 22 + 17, (
+        f"expected 22 (high-growth) + 17 (nasdaq100/dow) net-new tickers, "
+        f"got {len(US_TICKERS) - len(SP500_TICKERS)}"
     )
-_run("atos.universe: US_TICKERS grew by exactly 22 net-new tickers over SP500_TICKERS",
+_run("atos.universe: US_TICKERS grew by 22 + 17 net-new tickers over SP500_TICKERS",
      test_atos_universe_grew_by_the_expected_net_new_count)
 
 

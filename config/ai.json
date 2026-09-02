@@ -30,5 +30,12 @@
     "journal": true,
     "shadow_copilot_reversion": true,
     "basket_ranker_blend": true
+  },
+
+  "_stocks_live_comment": "REAL-MONEY US Blend sleeve (atos_live_stocks.py, SEK LIVE sub-account, 30k SEK, Phase 1 = observe-only). Its OWN block so it toggles independently of the SIM `stocks` study. Same OBSERVE/LOG-only contract: can_apply_decision('live_stocks') is False in code forever ('live_stocks' is not in ai/config.py's _AI_ACTING_ACCOUNTS). ARMED 2026-09-02 -- the user asked ATOS AI to record and learn from every LIVE stocks trade from day one. journal = feed LIVE stocks closed trades to the AI Journal (weighed heavier -- real money); basket_ranker_blend = shadow-rank the US Blend fortnightly offense basket (one LLM call per rebalance, log-only). No shadow_copilot_reversion -- the LIVE sleeve trades US Blend only. Reports: ai_trade_journal.py --report, report_ai_basket.py.",
+  "stocks_live": {
+    "enabled": true,
+    "journal": true,
+    "basket_ranker_blend": true
   }
 }

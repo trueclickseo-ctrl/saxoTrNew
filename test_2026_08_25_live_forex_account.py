@@ -324,18 +324,19 @@ _run("forex/runner: _filter_pairs_for_account() is a no-op under SIM (all pairs 
 
 def test_live_allowed_strategies():
     import forex.runner as r
-    assert r.LIVE_ALLOWED_STRATEGIES == {"rsi"}, (
-        "history: {donchian,ema,rsi} -> {bb,rsi} -> ... -> {bb} -> {rsi} "
-        "(2026-08-31). RSI is the one live strategy -- deliberate, not an accident"
+    # 2026-09-02: forex LIVE ENTRIES STOPPED on BOTH accounts -- the user moved
+    # all real-money trading to stocks (atos_live_stocks.py / US Blend). Both
+    # allowlists empty = NO new forex entries, but the open positions on each
+    # account stay exit-managed via _legacy_exit_strategies(active=[], ...).
+    assert r.LIVE_ALLOWED_STRATEGIES == set(), (
+        "history: {donchian,ema,rsi} -> {bb,rsi} -> {bb} -> {rsi} (2026-08-31) "
+        "-> set() (2026-09-02, real money moved to stocks). Exits still managed."
     )
-    # 2026-09-01: CONSOLIDATION -- funds moved to the SEK ('live') account,
-    # the EUR sub-account takes NO new entries (empty allowlist) but its
-    # open positions are still exit-managed via _legacy_exit_strategies.
     assert r.LIVE_EUR_ALLOWED_STRATEGIES == set(), (
-        "EUR sub-account consolidated into SEK 2026-09-01 -- empty allowlist "
-        "= no new entries, exits still managed until its positions close"
+        "EUR sub-account consolidated into SEK 2026-09-01, then all forex live "
+        "stopped 2026-09-02 -- empty allowlist, exits-only wind-down"
     )
-_run("forex/runner: LIVE_ALLOWED_STRATEGIES == {rsi}; LIVE_EUR_ALLOWED_STRATEGIES == set() (consolidated)",
+_run("forex/runner: both LIVE allowlists empty (real money -> stocks 2026-09-02); exits still managed",
      test_live_allowed_strategies)
 
 
@@ -364,12 +365,13 @@ _run("forex/runner CLI: --account live --strategy gap is a hard error (gap is no
 
 
 def test_cli_rejects_live_without_confirmation_envvar():
-    # Uses "rsi" (the actually-allowed strategy for --account live as of
-    # 2026-08-31) so this test isolates the confirmation/halt gate
-    # specifically. It has used "donchian" then "bb" over time as the
-    # allowlist changed -- keep it pointed at whatever's currently allowed
-    # so a real "strategy not allowed" error can't mask the gate under test.
-    proc = _run_cli(["--account", "live", "--strategy", "rsi", "--live"])
+    # 2026-09-02: LIVE_ALLOWED_STRATEGIES is empty (real money moved to
+    # stocks), so every explicit --strategy on live is now an argparse error
+    # BEFORE the confirmation gate. --exits-only (no --strategy) is the only
+    # path that still reaches the SAXO_LIVE_CONFIRMED / LIVE_TRADING_HALTED
+    # gate -- the empty allowlist resolves cleanly, then the confirmation
+    # gate must still refuse a real run.
+    proc = _run_cli(["--account", "live", "--exits-only", "--live"])
     assert proc.returncode == 2, f"expected argparse hard-error exit(2), got {proc.returncode}: {proc.stderr}"
     # Accept either gate: SAXO_LIVE_CONFIRMED (this test's original target) or
     # LIVE_TRADING_HALTED (2026-08-26 emergency stop, checked first when
@@ -380,37 +382,26 @@ _run("forex/runner CLI: --account live --live refuses to run without SAXO_LIVE_C
      test_cli_rejects_live_without_confirmation_envvar)
 
 
-def test_cli_accepts_rsi_strategy_dry_run():
-    # 2026-08-26: the cost-clearance gate (_round_trip_cost_quote_ccy) added a
-    # real live Saxo commission lookup per candidate signal reaching that
-    # point in the entry loop -- a real multi-pair x multi-strategy scan now
-    # legitimately takes longer than this call's old 60s budget. Not a hang,
-    # same "more real work per pair" reasoning as the SIM test's 400s below.
-    # 2026-08-27/28: strategy allowlist changed -- {bb, rsi} replaced
-    # {donchian, ema, rsi} (via a brief {bb, rsi, pullback} step) -> {bb}
-    # only once the two-account pilot moved rsi exclusively to the EUR
-    # account. LIVE narrowed from 34 CORE_SYMBOLS to the 17-pair
-    # HIGH_VOLUME_SYMBOLS subset (unchanged by the 2026-08-28 revert).
-    import forex.universe as _u
-    proc = _run_cli(["--account", "live", "--strategy", "rsi"], timeout=150)
-    assert proc.returncode == 0, f"expected a clean dry-run exit(0), got {proc.returncode}: {proc.stderr}"
-    n = len(_u.PAIRS)
-    assert f"17 of {n}" in proc.stdout or f"17 of {n}" in proc.stderr, (
-        f"the dry-run log should report scanning 17 (HIGH_VOLUME) of {n} total pairs"
-    )
-_run("forex/runner CLI: --account live --strategy rsi dry-runs cleanly and scans only the 17 high-volume pairs",
-     test_cli_accepts_rsi_strategy_dry_run)
+def test_cli_live_exit_check_dry_runs_cleanly_with_empty_allowlist():
+    # 2026-09-02: forex LIVE entries stopped, LIVE_ALLOWED_STRATEGIES empty.
+    # The Exit Check task runs `--account live --exits-only` with NO
+    # `--strategy` -- effective_strats resolves to [] (== sorted(set())), the
+    # not-allowed check passes, and _run_exits_only manages the open positions.
+    proc = _run_cli(["--account", "live", "--exits-only"], timeout=150)
+    assert proc.returncode == 0, f"expected clean dry-run exit(0), got {proc.returncode}: {proc.stderr}"
+_run("forex/runner CLI: --account live --exits-only dry-runs cleanly (empty allowlist, exits-only wind-down)",
+     test_cli_live_exit_check_dry_runs_cleanly_with_empty_allowlist)
 
 
-def test_cli_rejects_bb_on_live_sek_account():
-    # 2026-08-31: both real-money accounts switched to rsi -- bb is no
-    # longer in LIVE_ALLOWED_STRATEGIES, so it must be rejected here the
-    # same way any other disallowed strategy is.
-    proc = _run_cli(["--account", "live", "--strategy", "bb"])
-    assert proc.returncode == 2, f"expected argparse hard-error exit(2), got {proc.returncode}: {proc.stderr}"
-    assert "only allows" in proc.stderr
-_run("forex/runner CLI: --account live --strategy bb is a hard error (both live accounts run rsi now)",
-     test_cli_rejects_bb_on_live_sek_account)
+def test_cli_rejects_any_strategy_on_live_sek_account():
+    # 2026-09-02: LIVE_ALLOWED_STRATEGIES is empty -- EVERY explicit --strategy
+    # on a LIVE account is now a hard error (rsi included), same as bb always was.
+    for strat in ("rsi", "bb"):
+        proc = _run_cli(["--account", "live", "--strategy", strat])
+        assert proc.returncode == 2, f"--strategy {strat}: expected exit(2), got {proc.returncode}: {proc.stderr}"
+        assert "only allows" in proc.stderr
+_run("forex/runner CLI: --account live --strategy <anything> is a hard error (real money moved to stocks)",
+     test_cli_rejects_any_strategy_on_live_sek_account)
 
 
 def test_cli_sim_default_behavior_unaffected():
@@ -965,7 +956,17 @@ def test_live_dashboard_labels_currency_as_sek_not_eur():
     )
     out = proc.stdout
     assert "SEK" in out
-    assert " EUR" not in out, "the live (SEK-denominated) dashboard must never label a P&L figure in EUR"
+    # No P&L *figure* may be denominated in EUR: a digit (optionally with
+    # thousands sep / decimals) immediately followed by "EUR". "EURNOK" (a
+    # pair name) and "· EUR: -98 SEK" (the SEK/EUR sub-account split, which
+    # is itself labelled in SEK) are both fine -- only "<number> EUR" is the
+    # bug this guards against (the SEK-account-treated-as-EUR regression).
+    import re as _re
+    bad = _re.search(r"[\d,]\d\s?EUR\b", out)
+    assert not bad, (
+        f"the live (SEK-denominated) dashboard must never label a P&L figure in "
+        f"EUR -- found {bad.group(0)!r}"
+    )
 _run("forex_live_dashboard.py labels every P&L figure in SEK, never EUR",
      test_live_dashboard_labels_currency_as_sek_not_eur)
 

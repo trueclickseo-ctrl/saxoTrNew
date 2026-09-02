@@ -50,7 +50,8 @@ def _closed_trades(account):
     """{(strategy, symbol, date): (realized_pnl, timestamp_close)} from the ledger."""
     if not os.path.exists(LEDGER):
         return {}
-    module = {"sim": "forex", "live": "forex_live", "live_eur": "forex_live_eur"}.get(account, "forex")
+    module = {"sim": "forex", "live": "forex_live", "live_eur": "forex_live_eur",
+              "live_stocks": "stock_live"}.get(account, "forex")
     con = sqlite3.connect(LEDGER)
     rows = con.execute(
         "select strategy, symbol, realized_pnl, timestamp_open, timestamp_close "

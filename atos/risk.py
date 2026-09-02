@@ -37,8 +37,12 @@ MAX_DAILY_LOSS_PCT    = 0.03     # stop new entries if ATOS down 3% today
 MIN_SCORE_TO_ENTER    = 55       # minimum combined score to place a BUY
 
 KILL_SWITCH_FILE  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "STOP_TRADING")
-RISK_STATE_FILE   = os.path.join(os.path.dirname(os.path.dirname(__file__)),
-                                  "data", "atos_risk_state.json")
+# 2026-09-02: the real-money stocks engine (atos_live_stocks.py) sets
+# ATOS_RISK_STATE_FILE=data/atos_live_stocks_risk_state.json before importing
+# this module, so its record_fill / daily_loss_cap_breached / get_total_equity
+# accounting never touches SIM's atos_risk_state.json. SIM leaves it unset.
+RISK_STATE_FILE   = os.environ.get("ATOS_RISK_STATE_FILE") or os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "data", "atos_risk_state.json")
 
 # -- Commission model (mirrors existing strategy.py) ----------------
 COMMISSION_RATE  = 0.0008   # 0.08% of trade value (Saxo Classic tier)

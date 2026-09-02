@@ -1,7 +1,10 @@
 """
 atos/universe.py
 -----------------
-US equity universe for ATOS — expanded 2026-08-14 from 108 → ~400 tickers.
+US equity universe for ATOS — expanded 2026-08-14 from 108 → ~400 tickers,
+then 2026-09-03 to ~424 (Nasdaq-100 + Dow-30 gap-fill, see NASDAQ100_DOW_TICKERS).
+Spans the Dow Jones Industrial Average (30/30), the Nasdaq-100, and the large/
+mid-cap core of the S&P 500 (the small-cap S&P tail is deliberately not carried).
 
 Sectors: Technology, Financials, Energy, Healthcare, Consumer Discretionary,
          Industrials, Communication Services, Consumer Staples, Materials, Utilities.
@@ -588,8 +591,42 @@ HIGH_GROWTH_TICKERS = [
     "ALNY",  # Alnylam Pharmaceuticals — RNAi therapeutics
 ]
 
+# ── Nasdaq-100 + Dow Jones gap-fill (2026-09-03) ──────────────────────────────
+# Explicit user request: "add the missing nasdaq-100 names plus DOW" so the US
+# equity universe spans all three major US indices. These were the Nasdaq-100
+# constituents (verified against the current index, 2026) NOT already present in
+# SP500_TICKERS / HIGH_GROWTH_TICKERS above, plus DOW Inc (Dow-30 member).
+# Deliberately kept as its own list -- most are quality compounders, not the
+# mega-cap/high-momentum profile of the two lists above, and keeping the name
+# accurate matters. Skipped on purpose:
+#   GOOG  -- dual-class duplicate of GOOGL (already in); holding both would
+#            double-weight Alphabet in a rank-weighted sleeve.
+#   EA    -- went private 4 Aug 2026 (PIF/Silver Lake/Affinity, $55B LBO);
+#            delisted, no longer a Nasdaq-100 member.
+# Run lookup_missing.py (SIM UICs) AND lookup_instruments_live.py (LIVE UICs)
+# after this change, same as any SP500_TICKERS edit.
+NASDAQ100_DOW_TICKERS = [
+    "ADP",   # Automatic Data Processing — payroll/HR software
+    "CTAS",  # Cintas — uniform rental & facility services
+    "MNST",  # Monster Beverage — energy drinks
+    "ROP",   # Roper Technologies — diversified software/instruments (Nasdaq-listed)
+    "PCAR",  # PACCAR — heavy-truck manufacturer (Kenworth/Peterbilt/DAF)
+    "PAYX",  # Paychex — payroll/HR for SMBs
+    "FAST",  # Fastenal — industrial & construction supply distribution
+    "ODFL",  # Old Dominion Freight Line — less-than-truckload freight
+    "CPRT",  # Copart — online salvage-vehicle auctions
+    "CSGP",  # CoStar Group — commercial real-estate data/marketplaces
+    "VRSK",  # Verisk Analytics — insurance/risk data analytics
+    "CCEP",  # Coca-Cola Europacific Partners — largest Coke bottler (Nasdaq-listed)
+    "FANG",  # Diamondback Energy — Permian Basin oil & gas
+    "CDW",   # CDW Corp — IT hardware/software solutions reseller
+    "GFS",   # GlobalFoundries — contract semiconductor manufacturing
+    "TRI",   # Thomson Reuters — professional information/legal/tax data
+    "DOW",   # Dow Inc — commodity & specialty chemicals (Dow-30, NYSE-listed)
+]
+
 # Deduplicated, sector order preserved
-US_TICKERS = list(dict.fromkeys(SP500_TICKERS + HIGH_GROWTH_TICKERS))
+US_TICKERS = list(dict.fromkeys(SP500_TICKERS + HIGH_GROWTH_TICKERS + NASDAQ100_DOW_TICKERS))
 
 # ── Legacy / inactive ─────────────────────────────────────────────────────────
 OMX30_TICKERS    = []

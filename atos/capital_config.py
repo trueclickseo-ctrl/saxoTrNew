@@ -181,6 +181,30 @@ def forex_live_eur_risk_equity_eur() -> float:
         return 500.0
 
 
+def stocks_live_risk_equity_sek() -> float:
+    """Equity base (SEK) for the real-money LIVE stocks sleeve
+    (atos_live_stocks.py, US Blend only). Separate cap from SIM's
+    us_blend/us_reversion budgets and from forex_live_risk_equity_sek().
+    The stocks sleeve runs on the same Saxo LIVE SEK sub-account as forex
+    LIVE (pooled balance ~35,800 SEK); atos_live_stocks.py takes
+    min(real_pooled_TotalValue, this) so the whole US Blend sleeve is
+    capped here regardless of the pooled raw. A cash_buffer_pct() haircut
+    is applied on top. Added 2026-09-02, explicit user decision
+    ("allocate 30K SEK for stocks only").
+    """
+    try:
+        return float(_load()["strategies"]["stocks_live"]["risk_equity_sek"])
+    except Exception:
+        return 30_000.0
+
+
+def stocks_live_enabled() -> bool:
+    try:
+        return bool(_load()["strategies"]["stocks_live"]["enabled"])
+    except Exception:
+        return False
+
+
 def forex_lbo_capital_eur() -> float:
     """Dedicated day-trading capital (EUR) for the London Breakout book.
 
