@@ -266,9 +266,12 @@ STRAT_LABELS_ALL = {
     "ema":        "EMA Trend",
     # 2026-09-01 (user): "RSI Pullback" / "EMA Pullback" read as one combined
     # RSI+Pullback strategy -- they are two SEPARATE strategies. Renamed so
-    # each row is unambiguous: rsi = the RSI(2) mean-reversion one, pullback
+    # each row is unambiguous: rsi = the RSI mean-reversion one, pullback
     # = the EMA(20)-in-EMA(50) one.
-    "rsi":        "RSI (2)",
+    # 2026-09-02 (user): "RSI (2)" -> plain "RSI" -- the core day-1 strategy.
+    # It was reading too close to "RSI2 (A/B)" (advanced_rsi_master, the
+    # separate SIM-only variant just below). "RSI" = core, "RSI2" = variant.
+    "rsi":        "RSI",
     "donchian":   "Donchian Break",
     "bb":         "BB Reversion",
     "pullback":   "Pullback ★",
@@ -289,7 +292,7 @@ STRAT_LABELS_ALL = {
     # Same rule as the 2026-08-29 note above -- no entry here == silently
     # dropped from the per-strategy breakdown even with real closed trades.
     "advanced_ema":               "EMA Adv (A/B)",
-    "advanced_rsi_master":        "RSI Master (A/B)",
+    "advanced_rsi_master":        "RSI2 (A/B)",   # 2026-09-02 (user): call it RSI2 — a separate strategy from the day-1 "rsi", must stay distinct
     "advanced_bb_master":         "BB Master (A/B)",
     "advanced_pullback_master":   "Pullback Mstr (A/B)",
     "advanced_ml":                "ML Adv (A/B)",
@@ -835,7 +838,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     # ── Strategy legend ───────────────────────────────────────────
     L.append(f"  {BD}STRATEGIES{W}   "
              f"{CY}{BD}■ EMA{W}  trend   "
-             f"{MG}{BD}■ RSI(2){W}  mean-rev   "
+             f"{MG}{BD}■ RSI{W}  mean-rev   "
              f"{GR}{BD}■ Donchian(30){W}  breakout   "
              f"{YL}{BD}■ BB(20,2){W}  fade   "
              f"{BL}{BD}■ Pullback{W}  EMA20-in-EMA50   "
@@ -851,7 +854,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
              f"\033[38;5;220m{BD}■ LBO V2{W}  A/B   "
              # 2026-08-30: 6 user-supplied SIM-only A/B "advanced_*" strategies
              f"{STRAT_COL['advanced_ema']}{BD}■ EMA Adv{W}  A/B   "
-             f"{STRAT_COL['advanced_rsi_master']}{BD}■ RSI Mstr{W}  A/B   "
+             f"{STRAT_COL['advanced_rsi_master']}{BD}■ RSI2{W}  A/B   "
              f"{STRAT_COL['advanced_bb_master']}{BD}■ BB Mstr{W}  A/B   "
              f"{STRAT_COL['advanced_pullback_master']}{BD}■ Pullback Mstr{W}  A/B   "
              f"{STRAT_COL['advanced_ml']}{BD}■ ML Adv{W}  A/B   "

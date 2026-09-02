@@ -62,7 +62,7 @@ def test_rows_are_grouped_by_pair_not_strategy():
     i_aaa = next(i for i, l in enumerate(lines) if l.strip().startswith("AAAEUR "))
     trio = lines[i_aaa + 1:i_aaa + 4]
     # rows show the friendly STRAT_LABELS_ALL name now, ordered by strat_order
-    assert [l.split()[0] for l in trio] == ["RSI", "Gap", "ML"]  # RSI (2) / Gap Fill / ML Adv
+    assert [l.split()[0] for l in trio] == ["RSI", "Gap", "ML"]  # RSI / Gap Fill / ML Adv
 
 
 def test_pairs_sorted_by_concentration_then_pnl():

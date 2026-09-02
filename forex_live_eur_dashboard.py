@@ -121,7 +121,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         src_tag = "n/a (token expired)"
     L.append(f"  {fd.BD}{fd.CY}╔{'═'*W_TOTAL}╗{fd.W}")
     L.append(f"  {fd.BD}{fd.CY}║{'  FOREX LIVE-EUR ACCOUNT — REAL MONEY':^{W_TOTAL}}║{fd.W}")
-    L.append(f"  {fd.BD}{fd.CY}║{f'  RSI (2) only  |  17 HIGH_VOLUME Pairs  |  Sizing Cap: {cap_eur:,.0f} EUR  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{fd.W}")
+    L.append(f"  {fd.BD}{fd.CY}║{f'  RSI only  |  17 HIGH_VOLUME Pairs  |  Sizing Cap: {cap_eur:,.0f} EUR  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{fd.W}")
     L.append(f"  {fd.BD}{fd.CY}╚{'═'*W_TOTAL}╝{fd.W}")
     L.append("")
     pooled_s = f"{pooled_total:,.0f} {pooled_ccy}" if pooled_total else "—"
