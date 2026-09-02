@@ -71,6 +71,29 @@ def test_cli_info_is_readonly_and_never_places_orders():
     assert "No orders" in out or "not built yet" in out
 
 
+def test_cli_fast_and_once_imply_dashboard_not_a_scan():
+    # `python atos_live_stocks.py --fast` should open the dashboard, never run
+    # an observe scan (the user hit "unrecognized arguments: --fast").
+    p = _cli(["--fast", "--once"], timeout=60)
+    out = p.stdout + p.stderr
+    assert "unrecognized arguments" not in out
+    assert "ATOS LIVE STOCKS" in out           # the dashboard header
+    assert "Downloading data for" not in out   # no universe download = no scan
+
+
+def test_dashboard_strips_ansi_when_output_is_not_a_tty():
+    import importlib
+    d = importlib.import_module("live_stocks_dashboard")
+    out = d.render()
+    # render() itself emits colour codes; _emit() strips them for a pipe.
+    assert "\033[" in out
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        d._emit(out)                            # buf is not a tty
+    assert "\033[" not in buf.getvalue()
+
+
 def test_dry_run_is_the_default_without_all_three_switches():
     # No --live, no env vars -> observe only. --info path proves argparse +
     # dry-run resolution without needing a full scan.
