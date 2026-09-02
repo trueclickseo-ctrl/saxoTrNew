@@ -11,19 +11,37 @@ Saxo cannot split /balances/me per sub-account in a shared margin group.
 Phase 1 banner: OBSERVE-ONLY — no real orders.
 
 Usage:
-    python live_stocks_dashboard.py --once
+    python live_stocks_dashboard.py --once     # print once and exit
     python live_stocks_dashboard.py            # refresh every 30s
+    python live_stocks_dashboard.py --fast     # refresh every 5s
 """
 
 import os
 import sys
 import json
+import re as _re
 import sqlite3
 import time
 from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
+
+# Enable ANSI/VT colour processing on Windows consoles that don't have it on
+# (older conhost, some PowerShell hosts) -- otherwise every colour code prints
+# as a literal "<-[1m". Same shim as stocks_dashboard.py.
+try:
+    import ctypes as _ct
+    _k32 = _ct.windll.kernel32
+    _h = _k32.GetStdHandle(-11)
+    _mode = _ct.c_ulong()
+    _k32.GetConsoleMode(_h, _ct.byref(_mode))
+    _k32.SetConsoleMode(_h, _mode.value | 0x0004)  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+    _VT_OK = True
+except Exception:
+    _VT_OK = False
+
+_ANSI_RE = _re.compile(r"\033\[[0-9;]*m")
 
 DB_PATH          = os.path.join(BASE_DIR, "data", "atos_live_stocks.db")
 WOULD_BE_ORDERS  = os.path.join(BASE_DIR, "data", "us_blend_live_would_be_orders.jsonl")
@@ -181,16 +199,23 @@ def render() -> str:
     return "\n".join(L)
 
 
+def _emit(out: str) -> None:
+    # Strip colour codes if the console can't render them or output is redirected.
+    if not _VT_OK or not sys.stdout.isatty():
+        out = _ANSI_RE.sub("", out)
+    print(out)
+
+
 def main():
     once = "--once" in sys.argv
     fast = "--fast" in sys.argv
     while True:
         out = render()
         if once:
-            print(out)
+            _emit(out)
             return
         os.system("cls" if os.name == "nt" else "clear")
-        print(out)
+        _emit(out)
         time.sleep(5 if fast else 30)
 
 

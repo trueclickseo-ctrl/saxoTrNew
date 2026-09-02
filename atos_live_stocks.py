@@ -31,7 +31,8 @@ Usage (Claude may run the non---live forms):
     python atos_live_stocks.py --info          # SIM/LIVE Uic diff, no orders
     python atos_live_stocks.py                 # observe-only cycle
     python atos_live_stocks.py --exits-only    # observe-only, no new buys
-    python atos_live_stocks.py --dashboard     # live_stocks_dashboard.py
+    python atos_live_stocks.py --dashboard     # live view (refreshes every 30s)
+    python atos_live_stocks.py --dashboard --fast   # refresh every 5s
 """
 
 from __future__ import annotations
@@ -229,7 +230,10 @@ def run(argv=None) -> int:
     ap.add_argument("--strategy", default=None,
                     help="US Blend only -- any other value is a hard error")
     ap.add_argument("--info", action="store_true", help="SIM/LIVE Uic diff, no orders")
-    ap.add_argument("--dashboard", action="store_true", help="run live_stocks_dashboard.py")
+    ap.add_argument("--dashboard", action="store_true",
+                    help="open live_stocks_dashboard.py (refreshes every 30s)")
+    ap.add_argument("--fast", action="store_true", help="with --dashboard: refresh every 5s")
+    ap.add_argument("--once", action="store_true", help="with --dashboard: print once and exit")
     args = ap.parse_args(argv)
 
     if args.strategy is not None and args.strategy not in LIVE_STOCKS_ALLOWED_STRATEGIES:
@@ -239,9 +243,11 @@ def run(argv=None) -> int:
 
     if args.info:
         return cmd_info()
-    if args.dashboard:
+    if args.dashboard or args.fast or args.once:   # --fast / --once imply --dashboard
         import subprocess
-        return subprocess.call([sys.executable, os.path.join(_ROOT, "live_stocks_dashboard.py"), "--once"])
+        extra = (["--fast"] if args.fast else []) + (["--once"] if args.once else [])
+        return subprocess.call([sys.executable, "-X", "utf8",
+                                os.path.join(_ROOT, "live_stocks_dashboard.py"), *extra])
 
     # ── decide dry-run ──────────────────────────────────────────────────
     halted = LIVE_STOCKS_TRADING_HALTED or os.environ.get("LIVE_STOCKS_TRADING_HALTED") == "1"
