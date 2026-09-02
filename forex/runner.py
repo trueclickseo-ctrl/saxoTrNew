@@ -59,6 +59,7 @@ import saxo_auth
 from forex.universe import PAIRS, ASSET_TYPE, get_pair, price_decimals as get_price_decimals, CORE_SYMBOLS, EXOTIC_SYMBOLS, HIGH_VOLUME_SYMBOLS, METALS_SYMBOLS
 import forex.strategy             as strat_ema
 import forex.strategy_advanced_ema as strat_advanced_ema
+import forex.strategy_ema_trend   as strat_ema_trend
 import forex.strategy_rsi         as strat_rsi
 import forex.strategy_rsi_trend   as strat_rsi_trend
 import forex.strategy_advanced_rsi_master as strat_advanced_rsi_master
@@ -66,12 +67,14 @@ import forex.strategy_donchian    as strat_donchian
 import forex.strategy_donchian_quality as strat_donchian_quality
 import forex.strategy_bb          as strat_bb
 import forex.strategy_advanced_bb_master as strat_advanced_bb_master
+import forex.strategy_bb_quality  as strat_bb_quality
 import forex.strategy_pullback    as strat_pullback
 import forex.strategy_advanced_pullback_master as strat_advanced_pullback_master
 import forex.strategy_gap         as strat_gap
 import forex.strategy_gap_weekend as strat_gap_weekend
 import forex.strategy_supertrend  as strat_supertrend
 import forex.strategy_zscore      as strat_zscore
+import forex.strategy_zscore_quality as strat_zscore_quality
 import forex.strategy_ml                as strat_ml
 import forex.strategy_advanced_ml       as strat_advanced_ml
 # cnn_lstm needs torch (a heavy, optional dep). A missing/broken torch must
@@ -150,6 +153,14 @@ STRATEGIES = {
     # ADX alone. "ema" (forex/strategy.py) is completely untouched. Never
     # added to either LIVE allowlist -- SIM only.
     "advanced_ema": strat_advanced_ema,
+    # 2026-09-02: SIM-only A/B vs "ema" -- IDENTICAL to "ema" except an entry
+    # is only kept when the EMA(5/30) crossover is BOTH fresh (age <= 3 bars,
+    # base allows 15) AND backed by a real +DI/-DI gap (|spread| >= 15). A
+    # 12y/49-pair decomposition showed "ema"'s edge (unstable, CI spans zero)
+    # concentrates entirely in fresh + high-conviction crossovers: that
+    # subset ran +0.30 R/trade, PF ~2, positive in both halves. "ema" is
+    # UNTOUCHED. Never in either LIVE allowlist. See forex/strategy_ema_trend.py.
+    "ema_trend":   strat_ema_trend,
     "rsi":         strat_rsi,
     # 2026-09-02: SIM-only A/B vs "rsi" -- IDENTICAL to "rsi" except entries
     # are gated on ai.regime.classifier: Buy only when TRENDING_BULLISH,
@@ -159,6 +170,12 @@ STRATEGIES = {
     # regime-luck. "rsi" is UNTOUCHED. Never in either LIVE allowlist -- SIM
     # forward-test + walk-forward first. See forex/strategy_rsi_trend.py.
     "rsi_trend":   strat_rsi_trend,
+    # NB: the confirmation-delay idea (module forex/strategy_rsi_confirm.py)
+    # was built + backtested 2026-09-02 and RETIRED before it ever scanned --
+    # a 12,700-signal / 12y backtest showed the delay systematically enters
+    # AFTER the mean reversion it targets (win 56%->42%, every variant worse
+    # than entering on the signal). The module is kept unwired as the
+    # documented negative result; do not re-register without a new backtest.
     # 2026-08-30: SIM-only A/B vs "rsi" (user-supplied "master" design).
     # Robust one-sided RSI(2), EMA50/EMA200 alignment + EMA200 slope, a
     # minimum EMA200-distance gate, ATR-percentile band, a post-extreme
@@ -181,6 +198,14 @@ STRATEGIES = {
     # prior-excursion + today's-reversal confirmation. "bb" is untouched;
     # SIM only, never in either LIVE allowlist.
     "advanced_bb_master": strat_advanced_bb_master,
+    # 2026-09-02: SIM-only A/B vs "bb" -- IDENTICAL to "bb" except an entry
+    # is only kept when the market is non-directional at the signal bar
+    # (|plus_di - minus_di| <= 14). A 12y/49-pair decomposition showed "bb"
+    # (already stable-positive at +0.048 R) gives most of its edge back on
+    # the high-DI-spread signals; the low-DI-spread half ran +0.15-0.22 R,
+    # PF ~2, positive in both halves. "bb" is UNTOUCHED. Never in either LIVE
+    # allowlist. See forex/strategy_bb_quality.py.
+    "bb_quality":  strat_bb_quality,
     "pullback":    strat_pullback,
     # 2026-08-30: SIM-only A/B vs "pullback" (user-supplied "master"
     # design). Adds EMA5>EMA20>EMA50 structure, ATR-percentile band,
@@ -196,6 +221,14 @@ STRATEGIES = {
     "gap_weekend": strat_gap_weekend,
     "supertrend":  strat_supertrend,
     "zscore":      strat_zscore,
+    # 2026-09-02: SIM-only A/B vs "zscore" -- IDENTICAL except an entry is
+    # only kept when the market is non-directional at the signal bar
+    # (|plus_di - minus_di| <= 14). A 12y/49-pair decomposition showed
+    # "zscore" as a whole is a coin flip (+0.002 R, CI spans zero) but the
+    # low-DI-spread quartile ran +0.132 R, positive in both halves -- the
+    # exact same filter that works for "bb". "zscore" is UNTOUCHED. Never in
+    # either LIVE allowlist. See forex/strategy_zscore_quality.py.
+    "zscore_quality": strat_zscore_quality,
     "ml":              strat_ml,
     # 2026-08-30: SIM-only parallel A/B test against "ml" (user-supplied
     # design, "implement this strategy too along our ML, lets see if catch
@@ -229,6 +262,56 @@ STRATEGIES = {
 # missing -- see the guarded import above). Keeps STRATEGIES / _VALID_STRATS
 # honest so nothing downstream calls a None module.
 STRATEGIES = {k: v for k, v in STRATEGIES.items() if v is not None}
+
+# ── Retired strategies (2026-09-02) ─────────────────────────────────────────
+# Still in STRATEGIES (so any OPEN position keeps full exit management via
+# _legacy_exit_strategies, and the dashboard / ledger / reports keep showing
+# their history) -- but excluded from the default entry rotation, so they
+# never open anything new. A 12-year / 49-CORE-pair edge decomposition
+# (docs/strategy_decomposition_2026-09-02.md) showed each is net-negative
+# with no filter that survives a both-halves + bootstrap-CI test:
+#   donchian / donchian_quality -- negative, no rescuing filter
+#   pullback                    -- negative
+#   ml                          -- -0.046 R/trade, bootstrap CI fully negative
+#   supertrend                  -- negative in 10 of 12 years; own score inverted
+# An explicit `--strategy <name>` still runs one (for research) with a warning.
+# To un-retire: remove from this set + re-confirm with a fresh walk-forward.
+RETIRED_STRATEGIES: set[str] = {
+    "donchian", "donchian_quality", "pullback", "ml", "supertrend",
+}
+
+# ── SIM entry roster (2026-09-02, explicit user decision) ───────────────────
+# The user cut the SIM forex book down to the day-1 RSI(2) baseline + the four
+# decomposition-validated "improved" twins, and force-flattened everything
+# else once (close_all_forex_sim.py). Only these take NEW SIM entries and only
+# these show on forex_dashboard.py. Every other strategy -- the untouched
+# originals (ema/bb/zscore), the advanced_*/*_master A/B experiments, the
+# RETIRED_STRATEGIES set, the LBO day-trade book -- is dormant: its module
+# stays importable and any lingering open position still exit-manages
+# (run_exits_only iterates ALL of STRATEGIES; run_daily's _legacy_exit path
+# covers the rest), but it opens nothing new. `--strategy <name>` still runs
+# any one on explicit request, with a warning. Reversible: edit this list.
+# LIVE (SEK rsi / EUR exits-only) is UNAFFECTED -- that path resolves from
+# LIVE_ALLOWED_STRATEGIES, never this.
+SIM_ACTIVE_STRATEGIES: list[str] = [
+    "rsi", "rsi_trend", "ema_trend", "bb_quality", "zscore_quality",
+]
+_ACTIVE_STRATEGIES = [k for k in SIM_ACTIVE_STRATEGIES if k in STRATEGIES]
+
+# ── Disabled `gap` session legs (2026-09-02) ────────────────────────────────
+# A ~2.8y / H1-bar decomposition (docs/strategy_decomposition_2026-09-02.md)
+# of every reconstructed London / NY session gap:
+#   newyork  +0.090 R/trade, PF 1.33, stable both halves          -> KEEP
+#   london   -0.008 R/trade, PF 0.98, 2nd half negative           -> disable
+#   tokyo    untestable (thin yfinance H1 at 23-00 UTC), ~0 ledger -> disable
+# `weekly` (+0.10 R on the 12y ledger) is unaffected. Open london/tokyo
+# positions still exit-manage. Reversible: empty the set.
+DISABLED_GAP_SESSIONS: set[str] = {"london", "tokyo"}
+# Within the surviving `newyork` leg the edge is concentrated in RANGING /
+# TRENDING regimes -- HIGH_VOLATILITY newyork gaps ran -0.357 R at a 43% win
+# rate. Drop those.
+GAP_NEWYORK_SKIP_REGIMES: set[str] = {"HIGH_VOLATILITY"}
+
 _SWING_SLOTS = len(PAIRS)   # 2026-08-28 fix: was hardcoded 117 (stale since the
                             # SCANDI tier alone brought the real universe to 149,
                             # before today's 35-pair currencypairs addition brought
@@ -244,6 +327,8 @@ SLOTS_PER_STRATEGY = {
     # universe was expanded to the full major+EM/exotic set for SIM testing —
     # so every swing strategy can take a position in every pair it signals on.
     "ema": _SWING_SLOTS, "advanced_ema": _SWING_SLOTS,  # advanced_ema (2026-08-30): uncapped, mirrors "ema" for a clean A/B
+    "ema_trend": _SWING_SLOTS,   # 2026-09-02: mirrors "ema" -- full universe, clean A/B
+    "bb_quality": _SWING_SLOTS,  # 2026-09-02: mirrors "bb"  -- full universe, clean A/B
     "rsi": _SWING_SLOTS, "rsi_trend": _SWING_SLOTS, "donchian": _SWING_SLOTS, "bb": _SWING_SLOTS,
     "pullback": _SWING_SLOTS, "gap": _SWING_SLOTS, "gap_weekend": _SWING_SLOTS,
     # 2026-08-30: the 4 user-supplied "advanced_*_master" A/B strategies --
@@ -259,7 +344,8 @@ SLOTS_PER_STRATEGY = {
     # user's design doc flagged ("verify MAX_POSITIONS=4 is actually
     # enforced"). "donchian" itself is left exactly as it was.
     "donchian_quality": strat_donchian_quality.MAX_POSITIONS,
-    "supertrend": _SWING_SLOTS, "zscore": _SWING_SLOTS, "ml": _SWING_SLOTS, "cnn_lstm": _SWING_SLOTS,
+    "supertrend": _SWING_SLOTS, "zscore": _SWING_SLOTS, "zscore_quality": _SWING_SLOTS,
+    "ml": _SWING_SLOTS, "cnn_lstm": _SWING_SLOTS,
     # 2026-08-30: mirrors "ml" -- uncapped slots so the A/B comparison isn't
     # distorted by an artificial concurrency limit one side doesn't have.
     # Its own regime/trend filters + 0.62 threshold are the real selectivity.
@@ -3479,6 +3565,19 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         logger.info(f"  [{strat_name}] Entries skipped — not in a gap session window "
                     f"({datetime.now(timezone.utc).strftime('%A %H:%M UTC')})")
         return 0
+    # 2026-09-02: `london` and `tokyo` session-gap legs disabled. A ~2.8y /
+    # H1-bar decomposition (docs/strategy_decomposition_2026-09-02.md) put
+    # london at -0.008 R/trade (PF 0.98, 2nd half negative) and tokyo
+    # untestable / ~zero ledger volume. `newyork` (+0.090 R, PF 1.33, stable
+    # both halves) and `weekly` (+0.10 R on the 12y ledger) stay on. Existing
+    # open london/tokyo positions still exit-manage normally. Reversible --
+    # drop the session from this set. gap_weekend only ever runs `weekly`, so
+    # it is unaffected.
+    if strat_name == "gap" and gap_session in DISABLED_GAP_SESSIONS:
+        logger.info(f"  [gap] Entries skipped — the '{gap_session}' session leg is "
+                    f"disabled (net-negative, see the 2026-09-02 decomposition); "
+                    f"exits on any open {gap_session} position still run")
+        return 0
 
     # 2026-08-29: on a real-money account, never place a NEW entry while the
     # FX market is closed for the weekend. A signal computed on stale Friday
@@ -3588,6 +3687,25 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             gap_session, h1_data, open_symbols=open_syms, live_prices=live_prices or {},
             exhausted_symbols=gap_exhausted,
         )
+        # 2026-09-02: within the (surviving) newyork leg, drop gaps whose pair
+        # is in a skip-regime -- HIGH_VOLATILITY newyork gaps ran -0.357 R /
+        # 43% WR in the decomposition. regime_data = the full daily-bar dict.
+        if (strat_name == "gap" and gap_session == "newyork"
+                and GAP_NEWYORK_SKIP_REGIMES and regime_data):
+            try:
+                from ai.regime.classifier import classify_regime
+                _kept = []
+                for _s in signals:
+                    _bars = regime_data.get(_s["symbol"])
+                    _lbl = classify_regime(_bars).get("label") if _bars is not None else None
+                    if _lbl in GAP_NEWYORK_SKIP_REGIMES:
+                        logger.info(f"  [gap:newyork] SKIP {_s['symbol']} — {_lbl} regime "
+                                    f"(net-negative for newyork gaps)")
+                    else:
+                        _kept.append(_s)
+                signals = _kept
+            except Exception as _exc:
+                logger.warning(f"  [gap:newyork] regime filter skipped (non-fatal): {_exc}")
         logger.info(f"  [{strat_name}:{gap_session}] {len(h1_data)} pairs scanned → {len(signals)} signal(s)")
     elif getattr(strat_mod, "NEEDS_LIVE_PRICES", False):
         kw: dict = {"open_symbols": open_syms, "live_prices": live_prices or {}}
@@ -4158,6 +4276,16 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 pos_record["regime_fit"] = bool(
                     (_reg == "TRENDING_BULLISH" and direction == "Buy") or
                     (_reg == "TRENDING_BEARISH" and direction == "Sell"))
+        # 2026-09-02: persist the A/B entry-gate values for ema_trend / bb_quality
+        # (the SIM twins of ema / bb) so report/dashboard views can show which
+        # open positions cleared each gate, without re-deriving the indicators.
+        if strat_name == "ema_trend":
+            if sig.get("crossover_age") is not None:
+                pos_record["crossover_age"] = sig["crossover_age"]
+            if sig.get("di_spread") is not None:
+                pos_record["di_spread"] = sig["di_spread"]
+        elif strat_name in ("bb_quality", "zscore_quality") and sig.get("di_spread") is not None:
+            pos_record["di_spread"] = sig["di_spread"]
         if "gap_target" in sig:
             pos_record["gap_target"]   = sig["gap_target"]
             pos_record["friday_close"] = sig.get("friday_close", sig["gap_target"])
@@ -4600,7 +4728,7 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
     # and no signals -- harmless. Skipping outright is the riskier failure
     # mode if the boundary assumption is ever wrong.
     if active_strategies is None:
-        active_strategies = list(STRATEGIES)
+        active_strategies = list(_ACTIVE_STRATEGIES)   # the 5-strategy SIM roster (2026-09-02)
 
     _reset_order_circuit()   # per-run state; explicit reset for in-process re-calls
 
@@ -4753,13 +4881,18 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
                 # donchian, pullback, supertrend, ml, cnn_lstm) should be
                 # momentum-filtered.
                 _NO_MOMENTUM_FILTER = ("gap", "gap_weekend", "london_breakout", "london_breakout_v2",
-                                       "rsi", "rsi_trend", "bb", "zscore",
+                                       "rsi", "rsi_trend", "bb", "zscore", "zscore_quality",
                                        # 2026-08-30: mean-reversion A/B variants -- exempt for the
                                        # same reason as their originals ("rsi"/"bb"): the momentum
                                        # pre-filter ranks by trend strength, which suppresses the
                                        # reversal setups they are designed to catch. (rsi_trend has
                                        # its OWN regime gate -- don't double-filter it.)
-                                       "advanced_rsi_master", "advanced_bb_master")
+                                       "advanced_rsi_master", "advanced_bb_master",
+                                       # 2026-09-02: bb_quality is bb + a non-directional-market
+                                       # gate -- still mean-reversion, exempt like "bb". ema_trend
+                                       # is trend-following (twins "ema") -- deliberately NOT here,
+                                       # it SHOULD be momentum-filtered like its parent.
+                                       "bb_quality")
                 _edata = market_data if strat_name in _NO_MOMENTUM_FILTER else entry_market_data
                 entries = _run_entries(strat_name, strat_mod, positions,
                                        _edata, equity, akey, dry_run, today_str,
@@ -5259,7 +5392,19 @@ if __name__ == "__main__":
 
         sys.exit(0)
 
-    active = requested_strategies if requested_strategies is not None else list(STRATEGIES)
+    active = requested_strategies if requested_strategies is not None else list(_ACTIVE_STRATEGIES)
+    if requested_strategies is not None and ACCOUNT_ENV == "sim":
+        _explicit_retired = sorted(set(active) & RETIRED_STRATEGIES)
+        _explicit_offroster = sorted((set(active) & set(STRATEGIES))
+                                     - set(SIM_ACTIVE_STRATEGIES) - set(_explicit_retired))
+        if _explicit_retired:
+            logger.warning(f"  running RETIRED strateg{'y' if len(_explicit_retired)==1 else 'ies'} "
+                           f"{_explicit_retired} on explicit --strategy request -- net-negative, see "
+                           f"docs/strategy_decomposition_2026-09-02.md; running anyway for research")
+        if _explicit_offroster:
+            logger.warning(f"  {_explicit_offroster} not in the current SIM roster "
+                           f"({SIM_ACTIVE_STRATEGIES}) -- dormant since 2026-09-02, "
+                           f"running on explicit request")
     # Serialize concurrent live invocations project-wide -- see LOCK_FILE's
     # docstring above _acquire_lock() for why this exists (a real double-
     # entry risk between overlapping scheduled tasks, found 2026-08-24, not

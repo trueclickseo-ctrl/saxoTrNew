@@ -1,5 +1,10 @@
 # Forex "Donchian Quality" Strategy (SIM-only A/B)
 
+> **RETIRED 2026-09-02** — its parent `donchian` was retired (net-negative,
+> [strategy_decomposition_2026-09-02.md](strategy_decomposition_2026-09-02.md))
+> and the quality filters did not rescue the edge. In `RETIRED_STRATEGIES`:
+> exits still managed, opens nothing new.
+
 **File**: [`forex/strategy_donchian_quality.py`](../forex/strategy_donchian_quality.py)
 **Runner key**: `"donchian_quality"`
 **Type**: breakout / trend-following — a filtered variant of [`donchian`](forex_donchian_strategy.md)

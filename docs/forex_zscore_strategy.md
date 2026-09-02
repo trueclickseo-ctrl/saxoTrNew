@@ -67,3 +67,12 @@ No `trailing_stop_update` defined.
 
 `python forex/runner.py --scan` → `[ZSCORE]` panel (`*** OVERSOLD → LONG ***` /
 `*** OVERBOUGHT → SHORT ***` flags at ±2.0).
+
+## SIM-only A/B twin
+
+| Twin | Difference | Doc |
+|---|---|---|
+| `zscore_quality` | **non-directional-market gate only**: keep a signal only if `|+DI−−DI| ≤ 14`; everything else delegated to this module. From a 12y decomposition — this module as a whole is a coin flip (+0.002 R, CI spans zero) but the low-DI-spread quartile ran +0.132 R, stable both halves (the *exact same* filter that works for `bb`). The decomposition also found 19/49 CORE pairs stable-positive both halves — losers are the NZD pairs + GBP-commodity crosses. | [forex_zscore_quality_strategy.md](forex_zscore_quality_strategy.md) |
+
+SIM-only, never in a LIVE allowlist. `forex/strategy_zscore.py` is
+byte-unchanged — it is the A/B control.

@@ -133,8 +133,10 @@ def test_render_uses_consolidated_not_8_tables():
     render_src = inspect.getsource(fd._render)
     assert "_consolidated_breakdown(positions, live" in render_src
     # the 8 per-tier _strategy_breakdown_table calls are gone
-    assert render_src.count("_strategy_breakdown_table(") == 1   # only the ALL table
-    assert "ALL {_total_pairs} PAIRS" in render_src
+    assert render_src.count("_strategy_breakdown_table(") == 1   # only the roster table
+    # 2026-09-02: the one full table is now scoped to the 5-strategy SIM roster
+    assert "roster=_SIM_ROSTER" in render_src
+    assert "SIM ROSTER" in render_src
 
 
 def test_never_raises_on_empty_ledger():

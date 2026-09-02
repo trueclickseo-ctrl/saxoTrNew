@@ -1,5 +1,11 @@
 # Forex ML Strategy — Logistic Regression Signals
 
+> **RETIRED 2026-09-02** — a 12y / 49-CORE-pair decomposition
+> ([strategy_decomposition_2026-09-02.md](strategy_decomposition_2026-09-02.md))
+> found −0.046 R/trade, bootstrap 95% CI fully negative, 16/49 pairs positive.
+> Model-confidence >0.70 looked positive but flipped +0.21 R → −0.13 R across
+> the halves. In `RETIRED_STRATEGIES`: exits still managed, opens nothing new.
+
 **File**: [`forex/strategy_ml.py`](../forex/strategy_ml.py)
 **Runner key**: `"ml"` (in `forex/runner.py`'s `STRATEGIES` dict)
 **Type**: data-driven / machine-learning entry strategy

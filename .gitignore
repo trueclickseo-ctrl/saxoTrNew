@@ -51,6 +51,8 @@ data/eur_rate_cache.json
 data/strategy_monitor.json
 # gap strategy cooldown — per-week, per-pair re-entry block (runtime state, machine-local)
 data/gap_cooldown.json
+data/gap_weekend_cooldown.json
+data/lbo_v2_session_cooldown.json
 # Real-money LIVE forex account runtime state (positions/orders/peak-equity) --
 # machine-local, never source-controlled, same as the other risk/state trackers above
 data/forex_live_state.json

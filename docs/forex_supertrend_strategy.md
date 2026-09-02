@@ -1,5 +1,11 @@
 # Forex SuperTrend Strategy
 
+> **RETIRED 2026-09-02** — a 12y / 49-CORE-pair decomposition
+> ([strategy_decomposition_2026-09-02.md](strategy_decomposition_2026-09-02.md))
+> found it negative in 10 of 12 years, its own signal-strength ranking
+> inverted, no rescuing filter. In `RETIRED_STRATEGIES`: exits still managed,
+> opens nothing new.
+
 **File**: [`forex/strategy_supertrend.py`](../forex/strategy_supertrend.py)
 **Runner key**: `"supertrend"`
 **Type**: trend-following

@@ -79,3 +79,13 @@ on LIVE with `block_below_min=True` — but EMA never runs LIVE).
 
 `python forex/runner.py --scan` → `[EMA]` panel (`scan_summary` gives
 close / fast / slow / gap% / ADX / ±DI / trend per pair).
+
+## SIM-only A/B twins
+
+| Twin | Difference | Doc |
+|---|---|---|
+| `advanced_ema` | EMA50 confirm + rising-ADX + vol-percentile band + recent-cross-only + composite score | [forex_advanced_ema_strategy.md](forex_advanced_ema_strategy.md) |
+| `ema_trend` | **fresh crossover only** (age ≤ 3 bars, this file allows 15) **and** `|+DI−−DI| ≥ 15`; everything else delegated to this module. From a 12y decomposition — the fresh + high-conviction subset ran +0.30 R vs this module's unstable +0.036. | [forex_ema_trend_strategy.md](forex_ema_trend_strategy.md) |
+
+Both are SIM-only, never in a LIVE allowlist. `forex/strategy.py` is
+byte-unchanged — it is the A/B control.

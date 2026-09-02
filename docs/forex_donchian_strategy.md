@@ -1,5 +1,12 @@
 # Forex Donchian Breakout Strategy (strict)
 
+> **RETIRED 2026-09-02** — a 12y / 49-CORE-pair decomposition
+> ([strategy_decomposition_2026-09-02.md](strategy_decomposition_2026-09-02.md))
+> found it net-negative with no rescuing filter. In `RETIRED_STRATEGIES`
+> (`forex/runner.py`): open positions still get full exit management, it opens
+> nothing new. `--strategy donchian` still runs it (with a warning) for
+> research. Rules below describe it as it last ran.
+
 **File**: [`forex/strategy_donchian.py`](../forex/strategy_donchian.py)
 **Runner key**: `"donchian"`
 **Type**: breakout / trend-following
