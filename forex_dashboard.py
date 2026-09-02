@@ -202,6 +202,10 @@ def _read_positions() -> list:
                 "entry_date": pos.get("entry_date", ""),
                 "atr":        float(pos.get("atr_at_entry", 0)),
                 "order_id":   pos.get("order_id", "—"),
+                # 2026-09-02: regime at entry, stamped by the runner on
+                # rsi / rsi_trend entries (None on older positions).
+                "regime_at_entry": pos.get("regime_at_entry"),
+                "regime_fit":      pos.get("regime_fit"),
             })
         return out
     except Exception:
@@ -777,6 +781,61 @@ def _positions_section(title: str, positions_subset: list, live: dict,
     return L, total_pnl, total_cost, total_costs_eur
 
 
+def _rsi_regime_fit_section(positions: list, live: dict, W_TOTAL: int, HR: str) -> list:
+    """RSI SIGNAL QUALITY -- splits the open rsi / rsi_trend positions into
+    the ones that entered IN A TREND (regime == TRENDING_BULLISH for a long /
+    TRENDING_BEARISH for a short -- i.e. the setups rsi_trend keeps and the
+    decomposition found a stable +0.08 R edge on) vs the OFF-REGIME ones
+    (RANGING / HIGH_VOL -- the "regime-luck" bucket, ~0 stable edge).
+
+    Reads `regime_at_entry` stamped by the runner at entry -- zero cost, no
+    re-classification. Positions opened before that stamp existed show "?".
+    """
+    rsi_pos = [p for p in positions if p["strategy"] in ("rsi", "rsi_trend")]
+    if not rsi_pos:
+        return []
+    L = _section_header(f"RSI SIGNAL QUALITY  ({len(rsi_pos)} open rsi/rsi_trend positions)", MG, W_TOTAL)
+
+    def _pnl_pct(p):
+        now = live.get(p["symbol"])
+        if not now or not p["entry"]:
+            return None
+        return ((now - p["entry"]) / p["entry"] * 100) if p["direction"] == "Buy" \
+            else ((p["entry"] - now) / p["entry"] * 100)
+
+    fit, off, unknown = [], [], []
+    for p in rsi_pos:
+        rf = p.get("regime_fit")
+        (fit if rf is True else off if rf is False else unknown).append(p)
+
+    def _rows(label, rows, col):
+        out = [f"  {BD}{col}{label}  ({len(rows)}){W}"]
+        if not rows:
+            out.append(f"    {DM}—{W}")
+        for p in sorted(rows, key=lambda x: (_pnl_pct(x) is None, -(_pnl_pct(x) or 0))):
+            pct = _pnl_pct(p)
+            pct_s = f"{pct:+.2f}%" if pct is not None else "  —  "
+            reg = (p.get("regime_at_entry") or "?").replace("TRENDING_", "T-")
+            out.append(f"    {p['symbol']:<9}{p['direction']:<5}{STRAT_LABELS_ALL.get(p['strategy'], p['strategy']):<16}"
+                       f"{DM}entry {reg:<12}{W}{(GR if (pct or 0) >= 0 else RD)}{pct_s:>9}{W}")
+        return out
+
+    L += _rows("✔ IN-TREND at entry  (rsi_trend keeps these — stable edge)", fit, GR)
+    L.append("")
+    L += _rows("✘ OFF-REGIME at entry  (RANGING / HIGH-VOL — regime-luck, rsi_trend skips)", off, YL)
+    if unknown:
+        L.append("")
+        L += _rows("? entered before regime stamping (run backfill_regime_at_entry.py)", unknown, DM)
+    n_known = len(fit) + len(off)
+    if n_known:
+        L.append("")
+        L.append(f"  {DM}fit rate: {len(fit)}/{n_known} of stamped RSI positions entered in a trend "
+                 f"({len(fit)/n_known*100:.0f}%){W}")
+    L.append(HR)
+    L.append("")
+    return L
+
+
 def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     now_ts    = datetime.now().strftime("%Y-%m-%d  %H:%M:%S")
     positions = _read_positions()
@@ -1001,6 +1060,10 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     )
     L.append(HR)
     L.append("")
+
+    # ── RSI signal quality: which open rsi/rsi_trend positions entered in a
+    #    trend (rsi_trend's edge zone) vs off-regime (regime-luck). 2026-09-02.
+    L.extend(_rsi_regime_fit_section(positions, live, W_TOTAL, HR))
 
     # ── Strategy breakdown — the dashboard's main analytical view ──
     # Sorted by realized P&L (best to worst), one row per strategy, every

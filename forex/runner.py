@@ -4138,6 +4138,26 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         }
         if isinstance(entry_oid, str) and entry_oid.startswith("PAPER-"):
             pos_record["paper"] = True   # ATOS-simulated fill; see _sim_paper_fill_enabled()
+        # 2026-09-02: stamp the market regime at entry on rsi / rsi_trend
+        # positions so the dashboard's "RSI REGIME FIT" division can show
+        # which open positions match the TRENDING gate (i.e. which ones
+        # rsi_trend would hold) WITHOUT re-classifying on every render.
+        # rsi_trend's own signal already carries `regime_at_entry`.
+        if strat_name in ("rsi", "rsi_trend"):
+            _reg = sig.get("regime_at_entry")
+            if not _reg and regime_data is not None:
+                try:
+                    from ai.regime.classifier import classify_regime
+                    _rb = regime_data.get(sym)
+                    if _rb is not None:
+                        _reg = classify_regime(_rb).get("label")
+                except Exception:
+                    _reg = None
+            if _reg:
+                pos_record["regime_at_entry"] = _reg
+                pos_record["regime_fit"] = bool(
+                    (_reg == "TRENDING_BULLISH" and direction == "Buy") or
+                    (_reg == "TRENDING_BEARISH" and direction == "Sell"))
         if "gap_target" in sig:
             pos_record["gap_target"]   = sig["gap_target"]
             pos_record["friday_close"] = sig.get("friday_close", sig["gap_target"])
