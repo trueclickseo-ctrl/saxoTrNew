@@ -47,6 +47,11 @@ FUTURES_LOCK    = os.path.join(_DATA_DIR, "futures_runner.lock")
 # forex_state.json) -- there was never a real cross-contamination risk to
 # protect against between them, only needless contention.
 FOREX_LIVE_LOCK = os.path.join(_DATA_DIR, "forex_live_runner.lock")
+# 2026-09-03: the AI-decision SIM twin (forex/runner.py --account ai_sim) gets
+# its OWN lock -- it's a separate scheduled process touching forex_state_ai.json
+# / the forex_ai ledger, never the main SIM book's files, so there's no shared
+# state to serialise against forex_runner.lock (same reasoning as FOREX_LIVE_LOCK).
+FOREX_AI_LOCK   = os.path.join(_DATA_DIR, "forex_ai_runner.lock")
 
 # 2026-09-02: the SIM stocks engine (atos_runner.run_cycle / run_intraday_cycle)
 # had NO process lock. ATOS_LOCK serializes atos_runner-vs-atos_runner -- the
@@ -59,6 +64,9 @@ FOREX_LIVE_LOCK = os.path.join(_DATA_DIR, "forex_live_runner.lock")
 # data/atos_live_stocks.db, a completely different file from SIM's atos_live.db.
 ATOS_LOCK             = os.path.join(_DATA_DIR, "atos_runner.lock")
 ATOS_LIVE_STOCKS_LOCK = os.path.join(_DATA_DIR, "atos_live_stocks_runner.lock")
+# 2026-09-03: the AI-decision stocks twin (atos_ai_stocks.py) -- SIM paper US
+# Blend book on data/atos_ai.db, separate process, its own lock.
+ATOS_AI_STOCKS_LOCK   = os.path.join(_DATA_DIR, "atos_ai_stocks_runner.lock")
 
 STALE_SECONDS = 20 * 60   # generous vs. observed ~3-4 min full scans
 WAIT_TIMEOUT  = 15 * 60   # give up waiting and proceed rather than deadlock forever

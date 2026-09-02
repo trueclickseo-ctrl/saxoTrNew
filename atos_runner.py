@@ -1508,6 +1508,8 @@ def _blend_book_state() -> dict:
                         os.path.join(BASE_DIR, "data", "atos_live.db")),
         "live_stocks": (os.path.join(BASE_DIR, "data", "us_momentum_state_live.json"),
                         os.path.join(BASE_DIR, "data", "atos_live_stocks.db")),
+        "ai_sim":      (os.path.join(BASE_DIR, "data", "us_momentum_state_ai.json"),
+                        os.path.join(BASE_DIR, "data", "atos_ai.db")),
     }
     try:
         from atos import us_momentum as _USM
@@ -1546,23 +1548,37 @@ def _blend_book_state() -> dict:
 
 def _place_us(side: str, ticker: str, shares: int, imap: dict,
               todays_actions: list, price: float, cur_trade: dict = None,
-              strategy: str = "US Blend") -> bool:
+              strategy: str = "US Blend", account_env: str = "sim") -> bool:
     """Place ONE US market order and update DB + local cash on success.
     Routes to _sx() -- "sim" for atos_runner.run_cycle, "live" only when
-    atos_live_stocks.py has set it."""
+    atos_live_stocks.py has set it.
+
+    account_env == "ai_sim" (the AI-decision paper twin, atos_ai_stocks.py):
+    NEVER touches Saxo -- books the fill locally at the scan price and skips
+    the per-trade notifier email. Its DB is data/atos_ai.db (ATOS_DB_PATH),
+    fully isolated from the deterministic SIM / real-money books."""
     # 2026-09-02: real-money hard guard. _place_us is only ever called from the
     # US Blend rebalance path (run_us_momentum). Assert it so a future caller
     # can't route a non-Blend order to the live account.
     if _sx() == "live" and strategy != "US Blend":
         raise RuntimeError(f"_place_us on the LIVE account is US-Blend-only, got {strategy!r}")
+    _paper_twin = account_env == "ai_sim"
     shares = int(shares)
     if side == "Buy":
         shares = _sim_cap_shares(shares, price, _rate_to_sek("USD"))
     if shares < 1 or ticker not in imap:
         return False
     paper = 0
+    entry_oid = stop_oid = None
     try:
-        if side == "Buy":
+        if _paper_twin:
+            # AI SIM twin -- no Saxo order at all (the shared SIM account has
+            # no margin left for a parallel book, and its orders would collide
+            # with the deterministic book's on the same tickers). Book paper.
+            paper = 1
+            if side == "Sell" and cur_trade is None:
+                return False
+        elif side == "Buy":
             # Attach stop-loss/take-profit atomically with the entry — this
             # strategy previously placed a bare market order with no broker-
             # side protection at all (stop_price was hardcoded to 0), relying
@@ -1639,7 +1655,7 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
         record_fill(-(shares * price_sek + comm))
         _append_trade_log("US Blend", "BUY", ticker, shares, price,
                           shares * price_sek, None, "US momentum rebalance")
-        _ae = "live_stocks" if _sx() == "live" else "sim"
+        _ae = "live_stocks" if _sx() == "live" else ("ai_sim" if _paper_twin else "sim")
         if (ai_config is not None and ai_config.stocks_enabled(_ae)
                 and ai_stock_cards is not None):
             try:
@@ -1656,12 +1672,13 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
         todays_actions.append({"action": "BUY", "ticker": ticker, "market_group": "US Equities",
                                "strategy": "US Blend", "score": 0, "shares": shares,
                                "price": price, "reason": "US momentum", "pnl_sek": None})
-        notifier.notify_trade_executed(
-            side="BUY", ticker=ticker, shares=shares, price_usd=price,
-            value_sek=shares * price_sek, strategy="US Blend",
-            account_balance_sek=get_total_equity(db.get_open_trades()),
-            reason=("[PAPER-FILL — Saxo SIM down] " if paper else "") + "Weekly momentum rebalance",
-        )
+        if not _paper_twin:   # AI SIM twin: no per-trade email (paper A/B, watched on ai_dashboard.py)
+            notifier.notify_trade_executed(
+                side="BUY", ticker=ticker, shares=shares, price_usd=price,
+                value_sek=shares * price_sek, strategy="US Blend",
+                account_balance_sek=get_total_equity(db.get_open_trades()),
+                reason=("[PAPER-FILL — Saxo SIM down] " if paper else "") + "Weekly momentum rebalance",
+            )
     else:  # Sell (full close of the tracked position)
         pnl = None
         if cur_trade:
@@ -1691,12 +1708,13 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
         todays_actions.append({"action": "EXIT", "ticker": ticker, "market_group": "US Equities",
                                "strategy": "US Blend", "score": 0, "shares": shares,
                                "price": price, "reason": "US momentum exit", "pnl_sek": pnl})
-        notifier.notify_trade_executed(
-            side="SELL", ticker=ticker, shares=shares, price_usd=price,
-            value_sek=shares * price_sek, strategy="US Blend",
-            account_balance_sek=get_total_equity(db.get_open_trades()),
-            pnl_sek=pnl, reason="Weekly momentum rebalance exit",
-        )
+        if not _paper_twin:
+            notifier.notify_trade_executed(
+                side="SELL", ticker=ticker, shares=shares, price_usd=price,
+                value_sek=shares * price_sek, strategy="US Blend",
+                account_balance_sek=get_total_equity(db.get_open_trades()),
+                pnl_sek=pnl, reason="Weekly momentum rebalance exit",
+            )
     return True
 
 
@@ -1796,14 +1814,15 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
             "momentum": tgt.get("momentum", []),
             "lowvol":   tgt.get("lowvol", []),
         }
-        notifier.notify_blend_targets(
-            targets          = tgt.get("targets", []),
-            risk_off         = tgt.get("risk_off", False),
-            reason           = tgt.get("reason", ""),
-            momentum_tickers = tgt.get("momentum", []),
-            lowvol_tickers   = tgt.get("lowvol", []),
-            sleeve_sek       = available_cash_sek or CAP.blend_allocation_pct() * CAP.starting_capital_sek(),
-        )
+        if account_env != "ai_sim":   # the AI paper twin stays silent -- watched on ai_dashboard.py
+            notifier.notify_blend_targets(
+                targets          = tgt.get("targets", []),
+                risk_off         = tgt.get("risk_off", False),
+                reason           = tgt.get("reason", ""),
+                momentum_tickers = tgt.get("momentum", []),
+                lowvol_tickers   = tgt.get("lowvol", []),
+                sleeve_sek       = available_cash_sek or CAP.blend_allocation_pct() * CAP.starting_capital_sek(),
+            )
 
         # ── AI shadow basket ranker (OBSERVE/LOG ONLY) ──────────────────────
         # Logs what the LLM WOULD do to the offense (momentum) basket next to
@@ -1828,7 +1847,7 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
                     _bstate = _blend_book_state()
                 except Exception:
                     _bstate = {}
-                ai_basket_ranker.rank_basket_shadow(
+                _rk = ai_basket_ranker.rank_basket_shadow(
                     account_env=account_env,
                     det_offense=_mom, det_defense=tgt.get("lowvol", []),
                     det_count=len(_mom), detail=tgt.get("detail", {}),
@@ -1836,6 +1855,16 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
                     as_of_date=date.today().isoformat(),
                     book_state=_bstate,
                 )
+                # ai_sim twin: TRADE the AI's re-ranked pick instead of the
+                # deterministic momentum names. Everywhere else this is
+                # shadow-log only (the ranker's row is logged, tgt untouched).
+                if (ai_config is not None and _rk
+                        and ai_config.basket_ranker_applies(account_env)):
+                    _ai_off = list(_rk.get("ai_offense") or _mom)
+                    if _ai_off and _ai_off != _mom:
+                        print(f"  {tag} AI basket: {_mom} -> {_ai_off} "
+                              f"(conf={_rk.get('confidence')}, {_rk.get('reasoning','')[:80]})")
+                    tgt["momentum"] = _ai_off
             except Exception as _exc:
                 print(f"  [ai] blend basket-ranker hook failed: {_exc}")
 
@@ -1892,7 +1921,7 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
         if observe:
             return _observe_order(side, tk, shares, price, cur_trade=cur_trade)
         return _place_us(side, tk, shares, imap, todays_actions, price=price,
-                         cur_trade=cur_trade, strategy="US Blend")
+                         cur_trade=cur_trade, strategy="US Blend", account_env=account_env)
 
     def _sell_all_us():
         for tk, tr in us_open.items():
@@ -2130,6 +2159,48 @@ def run_us_blend_live(*, budget_sek: float, dry_run: bool, exits_only: bool = Fa
                         exits_only=exits_only)
     except Exception as e:
         print(f"  [live stocks] run_us_momentum error: {e}")
+
+    buy_n  = sum(1 for a in todays_actions if a.get("action") == "BUY")
+    sell_n = sum(1 for a in todays_actions if a.get("action") in ("SELL", "EXIT"))
+    try:
+        _bstate = _blend_book_state()
+    except Exception:
+        _bstate = {}
+    return {"actions": todays_actions, "buy": buy_n, "sell": sell_n,
+            "signal": dict(_blend_signal), "book_state": _bstate}
+
+
+def run_us_blend_ai(*, budget_sek: float) -> dict:
+    """AI-decision stocks twin entry point (atos_ai_stocks.py only).
+
+    Runs ONLY run_us_momentum(account_env="ai_sim") -- a real SIM PAPER
+    rebalance (observe=False; _STOCKS_ENV stays "sim" so orders paper-fill
+    and book to data/atos_ai.db). The basket-ranker's re-ranked pick is
+    swapped in for the deterministic momentum names inside run_us_momentum
+    (ai_config.basket_ranker_applies("ai_sim")). Never run_us_reversion /
+    legacy / dashboard. Returns the same dict shape as run_us_blend_live."""
+    global _blend_signal
+    _blend_signal = {}
+    db.init_db()
+    todays_actions: list = []
+
+    raw = download_universe(list(US_TICKERS))
+    feat_data: dict = {}
+    for tk, dfr in raw.items():
+        try:
+            feat_data[tk] = add_all(dfr)
+        except Exception as e:
+            print(f"  [ai stocks] features failed for {tk}: {e}")
+    if not feat_data:
+        print("  [ai stocks] no market data — aborting")
+        return {"actions": [], "buy": 0, "sell": 0, "signal": {}, "book_state": {}}
+
+    try:
+        run_us_momentum(feat_data, db.get_open_trades(), todays_actions,
+                        available_cash_sek=max(0.0, float(budget_sek)),
+                        account_env="ai_sim")
+    except Exception as e:
+        print(f"  [ai stocks] run_us_momentum error: {e}")
 
     buy_n  = sum(1 for a in todays_actions if a.get("action") == "BUY")
     sell_n = sum(1 for a in todays_actions if a.get("action") in ("SELL", "EXIT"))

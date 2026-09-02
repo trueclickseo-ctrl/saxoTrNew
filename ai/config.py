@@ -35,15 +35,29 @@ _CONFIG_PATH = os.path.join(_BASE_DIR, "config", "ai.json")
 #   live_stocks (2026-09-02) -- the real-money US Blend sleeve
 #   (atos_live_stocks.py). Shadow ONLY: it is deliberately NOT in
 #   _AI_ACTING_ACCOUNTS, so can_apply_decision("live_stocks") is False forever.
-_AI_SHADOW_ACCOUNTS = {"sim", "live", "live_eur", "live_stocks"}
+#   ai_sim (2026-09-03) -- the AI-DECISION SIM twin (forex/runner.py
+#   --account ai_sim + atos_ai_stocks.py). A paper book on the SIM login
+#   where the Copilot's resize/skip (forex) and the basket-ranker's
+#   re-ranked pick (stocks) ARE applied -- a live forward A/B vs the
+#   deterministic SIM books. In _AI_ACTING_ACCOUNTS below.
+_AI_SHADOW_ACCOUNTS = {"sim", "live", "live_eur", "live_stocks", "ai_sim"}
 
-# Accounts an AI decision may ever ACTUALLY CHANGE an order for. SIM only,
-# in code. This is the hard wall between "AI has an opinion on LIVE" and
-# "AI moves real money" -- a config flip cannot cross it.
-_AI_ACTING_ACCOUNTS = {"sim"}
+# Accounts an AI decision may ever ACTUALLY CHANGE an order for. SIM paper
+# only, in code. This is the hard wall between "AI has an opinion on LIVE"
+# and "AI moves real money" -- a config flip cannot cross it.
+#   ai_sim is a paper book (no real orders anywhere) whose whole purpose is
+#   to let the agent act, so it can be A/B'd against the deterministic book.
+_AI_ACTING_ACCOUNTS = {"sim", "ai_sim"}
 
 _DEFAULTS = {
     "enabled_sim": False,
+    # AI-DECISION SIM twin (2026-09-03): forex/runner.py --account ai_sim +
+    # atos_ai_stocks.py. A paper book where the Copilot's resize/skip and the
+    # basket-ranker's re-ranked pick ARE applied -- a live forward A/B vs the
+    # deterministic SIM books, on `ai_dashboard.py`. Needs agent_enabled too
+    # (it makes a paid call per signal). Not gated by `shadow_mode` -- acting
+    # is the twin's whole purpose (shadow_mode("ai_sim") is hardcoded False).
+    "enabled_ai_sim": False,
     # log-only AI opinions on the real LIVE accounts. Cannot ever act on
     # LIVE (see _AI_ACTING_ACCOUNTS) -- this only turns on proposal + agent
     # logging for live / live_eur.
@@ -105,6 +119,16 @@ _DEFAULTS = {
         "journal": True,
         "basket_ranker_blend": True,
     },
+    # ── AI-decision stocks twin (2026-09-03) ──────────────────────────────
+    # atos_ai_stocks.py -- a SIM paper US Blend book that TRADES the
+    # basket-ranker's re-ranked pick instead of the deterministic top-N.
+    # account_env "ai_sim". `basket_ranker_blend` here means "apply", not
+    # "shadow-log". Its own on/off.
+    "stocks_ai": {
+        "enabled": False,
+        "journal": True,
+        "basket_ranker_blend": True,
+    },
 }
 
 
@@ -138,18 +162,24 @@ def ai_enabled_for(account_env: str) -> bool:
     cfg = _load()
     if account_env == "sim":
         return bool(cfg.get("enabled_sim", False))
+    if account_env == "ai_sim":
+        return bool(cfg.get("enabled_ai_sim", False))
     return bool(cfg.get("enabled_live_shadow", False))
 
 
 def shadow_mode(account_env: str = "sim") -> bool:
     """True = AI observes/logs only, never changes an order.
       * any LIVE account -> ALWAYS True (hardcoded, not in _AI_ACTING_ACCOUNTS)
+      * ai_sim -> ALWAYS False when enabled (the paper twin exists to ACT,
+        so it is not gated by the SIM shadow-evidence flag)
       * sim -> from config (a later sprint's evidence gate flips it)
       * AI not enabled at all -> True (safe)"""
     if not ai_enabled_for(account_env):
         return True
     if account_env not in _AI_ACTING_ACCOUNTS:
         return True
+    if account_env == "ai_sim":
+        return False
     return bool(_load().get("shadow_mode", True))
 
 
@@ -209,8 +239,9 @@ def journal_max_trades_per_run() -> int:
 
 def _stocks_cfg(account_env: str = "sim") -> dict:
     """The AI config block for a stocks account: `stocks_live` for the
-    real-money US Blend sleeve, `stocks` for everything else (SIM)."""
-    key = "stocks_live" if account_env == "live_stocks" else "stocks"
+    real-money US Blend sleeve, `stocks_ai` for the AI-decision SIM twin
+    (atos_ai_stocks.py), `stocks` for everything else (SIM)."""
+    key = {"live_stocks": "stocks_live", "ai_sim": "stocks_ai"}.get(account_env, "stocks")
     s = _load().get(key)
     return s if isinstance(s, dict) else {}
 
@@ -240,15 +271,22 @@ def stocks_reversion_copilot_enabled() -> bool:
 
 
 def stocks_basket_ranker_enabled(account_env: str = "sim") -> bool:
-    """Shadow-rank the US Blend fortnightly offense basket (log-only, the
-    deterministic targets are never modified). Requires stocks_enabled(
-    account_env) AND the `basket_ranker_blend` sub-flag AND the agent being
-    enabled for the matching shadow account (sim -> 'sim', live_stocks ->
-    'live_stocks')."""
-    _agent_env = "live_stocks" if account_env == "live_stocks" else "sim"
+    """Run the US Blend basket-ranker for this account. For `sim` /
+    `live_stocks` it is shadow-log only (the deterministic pick is untouched).
+    For **`ai_sim`** the returned pick is what the twin actually trades
+    (atos_ai_stocks.py). Requires stocks_enabled(account_env) AND the
+    `basket_ranker_blend` sub-flag AND agent_enabled_for the matching env."""
+    _agent_env = account_env if account_env in ("live_stocks", "ai_sim") else "sim"
     return (stocks_enabled(account_env)
             and bool(_stocks_cfg(account_env).get("basket_ranker_blend", False))
             and agent_enabled_for(_agent_env))
+
+
+def basket_ranker_applies(account_env: str) -> bool:
+    """True only for the AI-decision twin (`ai_sim`) -- the one place the
+    basket-ranker's pick is TRADED rather than just logged. Everywhere else
+    the deterministic basket is authoritative (governance)."""
+    return account_env == "ai_sim" and stocks_basket_ranker_enabled("ai_sim")
 
 
 def config_path() -> str:

@@ -221,12 +221,20 @@ def test_atos_runner_hooks_are_gated_and_have_no_new_apply_path():
     # run_us_momentum's default, the LIVE stocks sleeve passes "live_stocks".
     assert "ai_config.stocks_basket_ranker_enabled(" in src
     # the hooks never CALL can_apply_decision (a comment saying so is fine).
-    # This is THE structural guarantee that no stocks-AI path (SIM or the new
-    # live_stocks sleeve) can ever resize/skip a real order.
+    # This is THE structural guarantee that no stocks-AI path for SIM or the
+    # real-money live_stocks sleeve can ever resize/skip a real order.
     assert "can_apply_decision(" not in src
-    # the basket ranker's return value is never assigned/used
-    assert "= ai_basket_ranker.rank_basket_shadow" not in src
+    # 2026-09-03: the basket-ranker's return value IS now captured (`_rk = ...`)
+    # -- but it is only ACTED ON (tgt["momentum"] swapped) behind
+    # ai_config.basket_ranker_applies(account_env), which is True ONLY for the
+    # SIM PAPER twin "ai_sim" (paper book, data/atos_ai.db). It stays False for
+    # "sim" and every live account, so the deterministic basket is still what
+    # every real book trades.
     assert "rank_basket_shadow(" in src
+    _i = src.index("_rk = ai_basket_ranker.rank_basket_shadow")
+    _guarded = src[_i:_i + 1400]
+    assert "ai_config.basket_ranker_applies(account_env)" in _guarded
+    assert 'tgt["momentum"] = _ai_off' in _guarded
     # no stocks-AI hook is inside a `not dry_run` order-placing branch by
     # accident: the shadow-Copilot hook must sit before the entry `for` loop
     assert src.index("reversion shadow-Copilot hook") < src.index("for cand in candidates[:slots_free]:\n        ticker = cand")

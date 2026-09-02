@@ -238,7 +238,7 @@ def test_run_us_blend_live_returns_the_signal_basket():
 def test_blend_book_state_covers_both_books():
     import atos_runner
     bs = atos_runner._blend_book_state()
-    assert set(bs) == {"sim", "live_stocks"}
+    assert set(bs) == {"sim", "live_stocks", "ai_sim"}
     for b in bs.values():
         assert set(b) >= {"last_rebalance", "days_since", "next_due_in_days", "holdings"}
         assert isinstance(b["holdings"], dict)

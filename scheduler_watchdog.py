@@ -140,6 +140,11 @@ WINDOWS_TASKS = {
     # since this task should never go more than 30 min without having run
     # under normal operation).
     "Forex Intraday Scan":    ("ATOS Forex Intraday Scan",    "forex_scheduler.log",   45, 2),
+    # AI SIM twin (2026-09-03) -- SIM paper A/B books. Both SIM-named so
+    # AUTO_FIX_ELIGIBLE keeps them (no "LIVE" in the name). Forex twin
+    # mirrors the Intraday Scan's 30-min cadence; stocks twin is once daily.
+    "Forex AI Twin Scan":     ("ATOS Forex AI Twin Scan",     "ai_twin_scheduler.log", 45, 2),
+    "Stocks AI Twin":         ("ATOS Stocks AI Twin",         "ai_twin_scheduler.log", 20, 30),
     "Forex Daily Run":        ("ATOS Forex Daily Run",        "forex_scheduler.log",   20, 30),
     "Forex Exit Check":       ("ATOS Forex Exit Check",       "forex_scheduler.log",   20, 30),
     "Forex London Run":       ("ATOS Forex London Run",       "forex_scheduler.log",   20, 30),
@@ -425,6 +430,7 @@ _SUSPICIOUSLY_SMALL_BYTES = 200
 # than 12h out -- completely normal for a once-daily task, not a failure.
 INTRADAY_REPEATING_TASKS = {
     "Forex Intraday Scan",
+    "Forex AI Twin Scan",   # AI SIM twin, 30-min cadence (2026-09-03)
     # Forex LIVE Daily Run / Forex LIVE EUR Daily Run removed 2026-09-02 --
     # both Disabled (real-money trading moved to stocks). The two LIVE Exit
     # Check tasks are once-daily, so deliberately NOT here.

@@ -4,6 +4,9 @@
   "_enabled_sim_comment": "Turn on AI observe+log for the SIM account (paper). Free by itself -- just writes trade proposals to data/ai_trade_proposals.jsonl.",
   "enabled_sim": true,
 
+  "_enabled_ai_sim_comment": "AI-DECISION SIM TWIN (2026-09-03). forex/runner.py --account ai_sim + atos_ai_stocks.py -- a SIM PAPER book (no real orders anywhere) where the Trading Copilot's resize/skip IS applied and the basket-ranker's re-ranked pick IS traded. A live forward A/B vs the deterministic SIM books, on ai_dashboard.py. Own ledgers (forex_ai / stock_ai). Not gated by shadow_mode -- acting is the twin's whole purpose; shadow_mode('ai_sim') is hardcoded False. Needs agent_enabled (a paid call per signal, evaluated every rescan not deduped). This is the test bed for the future 'AI runs ATOS by itself' plan -- weeks of SIM evidence before any LIVE-autonomy decision (its own written go/no-go; LIVE stays out of _AI_ACTING_ACCOUNTS until then).",
+  "enabled_ai_sim": true,
+
   "_enabled_live_shadow_comment": "Turn on AI observe+log for the REAL LIVE accounts (live = SEK, live_eur = EUR). LOG ONLY -- the agent's decision is recorded next to the real trade, never applied. AI physically cannot change a LIVE order: 'live'/'live_eur' are not in ai/config.py's _AI_ACTING_ACCOUNTS, so can_apply_decision() is always False for them regardless of this file. Use this to check whether the AI's calls line up with the real winners/losers before spending more.",
   "enabled_live_shadow": true,
 
@@ -34,6 +37,13 @@
 
   "_stocks_live_comment": "REAL-MONEY US Blend sleeve (atos_live_stocks.py, SEK LIVE sub-account, 30k SEK, Phase 1 = observe-only). Its OWN block so it toggles independently of the SIM `stocks` study. Same OBSERVE/LOG-only contract: can_apply_decision('live_stocks') is False in code forever ('live_stocks' is not in ai/config.py's _AI_ACTING_ACCOUNTS). ARMED 2026-09-02 -- the user asked ATOS AI to record and learn from every LIVE stocks trade from day one. journal = feed LIVE stocks closed trades to the AI Journal (weighed heavier -- real money); basket_ranker_blend = shadow-rank the US Blend fortnightly offense basket (one LLM call per rebalance, log-only). No shadow_copilot_reversion -- the LIVE sleeve trades US Blend only. Reports: ai_trade_journal.py --report, report_ai_basket.py.",
   "stocks_live": {
+    "enabled": true,
+    "journal": true,
+    "basket_ranker_blend": true
+  },
+
+  "_stocks_ai_comment": "AI-decision stocks twin (atos_ai_stocks.py, account_env 'ai_sim'). SIM paper US Blend book that TRADES the basket-ranker's re-ranked pick (ai_offense[:ai_count]) instead of the deterministic top-N -- ai/config.basket_ranker_applies('ai_sim') is the only True. Own DB data/atos_ai.db. journal feeds its closed trades to the AI Journal.",
+  "stocks_ai": {
     "enabled": true,
     "journal": true,
     "basket_ranker_blend": true

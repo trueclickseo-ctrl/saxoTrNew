@@ -1,5 +1,7 @@
 {
   "forex": "2026-09-03",
-  "_note": "SIM forex P&L VIEW reset to the 5-strategy roster era (SIM_ACTIVE_STRATEGIES). All pre-2026-09-03 forex rows stay in pnl_ledger.db for the audit trail; pnl_tracker aggregation reads and forex_dashboard.py exclude them. Backup: pnl_ledger.db.bak_2026-09-03_pre_forex_reset. Set 2026-09-03 by explicit user request (\"reset all, lets calculate from now\").",
-  "_set": "2026-09-03"
+  "_note": "SIM forex + AI-twin P&L views reset to the 5-strategy roster era (SIM_ACTIVE_STRATEGIES). All pre-2026-09-03 forex rows stay in pnl_ledger.db for the audit trail; pnl_tracker aggregation reads and forex_dashboard.py exclude them. Backup: pnl_ledger.db.bak_2026-09-03_pre_forex_reset. Set 2026-09-03 by explicit user request (\"reset all, lets calculate from now\").",
+  "_set": "2026-09-03",
+  "forex_ai": "2026-09-03",
+  "stock_ai": "2026-09-03"
 }
