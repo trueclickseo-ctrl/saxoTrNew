@@ -1658,7 +1658,8 @@ US_BLEND_LIVE_WOULD_BE_ORDERS = os.path.join(
 
 def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
                     dry_run: bool = False, available_cash_sek: float = 0.0,
-                    account_env: str = "sim", observe: bool = False):
+                    account_env: str = "sim", observe: bool = False,
+                    exits_only: bool = False):
     """Validated US cross-sectional momentum, executed as a monthly rebalance with a
     daily market risk-off overlay. See atos/us_momentum.py + STRATEGY_NOTES.md.
     available_cash_sek: if >0, overrides the fixed sleeve and uses this as the rebalance budget.
@@ -1893,6 +1894,13 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
             _save_us_state(state)
         return
 
+    # exits_only: the corp-event + risk-off overlays above still run (they can
+    # only ever REDUCE exposure), but no new rebalance / buys. Used by the LIVE
+    # stocks Exit Check backstop and when the daily-loss cap is breached.
+    if exits_only:
+        print(f"  {tag} exits-only — overlays ran, skipping the rebalance/buy path")
+        return
+
     # Rebalance when REBAL_DAYS calendar days have elapsed since last rebalance.
     last  = state.get("last_rebalance")
     today = date.today()
@@ -2051,7 +2059,8 @@ def run_us_blend_live(*, budget_sek: float, dry_run: bool, exits_only: bool = Fa
     try:
         run_us_momentum(feat_data, open_trades, todays_actions,
                         available_cash_sek=max(0.0, float(budget_sek)),
-                        account_env="live_stocks", observe=dry_run)
+                        account_env="live_stocks", observe=dry_run,
+                        exits_only=exits_only)
     except Exception as e:
         print(f"  [live stocks] run_us_momentum error: {e}")
 
