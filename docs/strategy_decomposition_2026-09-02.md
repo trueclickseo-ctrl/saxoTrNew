@@ -27,7 +27,7 @@ comparison — R-normalised or win% only.
 | **`bb`** | +0.048 | ✓ | ✅ **filterable** → shipped `bb_quality` |
 | **`rsi`** | +0.021 | ✗ (≈0 pre-2020) | ✅ **filterable** → shipped `rsi_trend` (2026-09-02, PR #7) |
 | **`zscore`** | +0.002 | ✗ (CI spans zero) | ✅ **filterable** → shipped `zscore_quality` (`|+DI−−DI| ≤ 14` = +0.132 R stable, same filter as `bb`); 19/49 pairs stable-positive |
-| `gap` | ≈0 | — | ⚠️ partial — `weekly` gaps survive (+0.10 R); session legs (`newyork`/`london`) net-losing |
+| `gap` | ≈0 | — | ⚠️ partial — `weekly` +0.10 R and `newyork` +0.09 R (PF 1.33, stable) survive; **`london` −0.008 R + `tokyo`** disabled 2026-09-02 (`DISABLED_GAP_SESSIONS`); `newyork` HIGH_VOLATILITY regime also dropped |
 | `rsi_confirm` | −0.11 control / −0.25 delayed | — | ❌ built + backtested + retired same day — delay enters after the reversion |
 | **US Blend momentum** | +1.16%/pick, 57% win | ✓ | ✅ works — **don't concentrate**; see below |
 | `donchian` (+`donchian_quality`) | negative | — | ✗ retire — no rescuing filter |
@@ -65,19 +65,31 @@ into a trend:
 Shipped: [`forex/strategy_bb_quality.py`](../forex/strategy_bb_quality.py) —
 `bb` kept only if `|+DI−−DI| ≤ 14`. [Doc.](forex_bb_quality_strategy.md)
 
-### `gap` — session legs are dead
+### `gap` — `london`/`tokyo` disabled, `newyork` kept + regime-filtered
 
-R-normalised (232 closed SIM trades):
+Two passes. **(1) SIM ledger** (232 closed trades, R-normalised): `weekly`
++0.095 R, `newyork` −0.099 R, `london` −0.63 R — but small and distorted by
+real-fill slippage + the since-fixed `gap_filled` bug.
 
-| gap_type | n | avg R | win% |
-|---|---|---|---|
-| `weekly` (Monday open) | 149 | **+0.095** | 43% |
-| `newyork` (session) | 78 | **−0.099** | 42% |
-| `london` (session) | 5 | −0.63 | 0% |
+**(2) Proper H1 backtest** (899 reconstructed London/NY gaps, ~2.8y of
+yfinance H1 bars, R = `stop_mult × gap_size`):
 
-Weekday / direction / "with-trend" cuts wash out under R-normalisation.
-Recommendation: disable the session-gap legs, run `gap` weekly-only on SIM.
-Not yet actioned (needs user sign-off — it edits live entry behaviour).
+| session | n | avg R | WR | PF | 1st half / 2nd half |
+|---|---|---|---|---|---|
+| **`newyork`** | 328 | **+0.090** | 72% | 1.33 | +0.156 / +0.029 (fading, still +) |
+| `london` | 571 | −0.008 | 65% | 0.98 | +0.018 / −0.035 |
+
+The H1 backtest **reverses the ledger** on `newyork` — it has a real (if
+fading) edge; `london` is the dead one. Stable sub-cuts: RANGING regime
+(+0.063), medium gap size (Q2–Q3 by H1-ATR, +0.10 to +0.15; Q1 tiny gaps
+−0.12 = spread noise), Monday (+0.157), fade-against-daily-trend (+0.047).
+**HIGH_VOLATILITY regime: −0.357 R, 43% WR.**
+
+**Actioned 2026-09-02:** `DISABLED_GAP_SESSIONS = {"london", "tokyo"}` +
+`GAP_NEWYORK_SKIP_REGIMES = {"HIGH_VOLATILITY"}` (both in `forex/runner.py`,
+runner-level — `strategy_gap.py` byte-unchanged). `weekly` + `newyork`
+(ex-HIGH_VOLATILITY) stay on. Caveat: H1 backtest is only ~2.8y and yfinance
+H1 ≠ real Saxo session-open ticks — watch the `newyork` forward data.
 
 ### US Blend momentum — don't concentrate
 
@@ -136,9 +148,8 @@ warning) for research. Their `advanced_*` A/B twins (`advanced_pullback_master`,
 `advanced_ml`) are separate designs and stay active for now — retire them too
 if their own forward data confirms.
 
-Still on the table: the `gap` session-leg disable (`newyork`/`london` legs
-are net-losing; `weekly` survives) — that edits `gap`'s live entry behaviour,
-so it needs its own explicit go-ahead.
+`gap` `london`/`tokyo` disabled + `newyork` regime-filtered — done 2026-09-02
+(see the `gap` section above).
 
 Scratch backtests:
 `~/.claude/.../scratchpad/{rsi_*,ema_decompose,st_bb_decompose,donchian_decompose,pullback_decompose,ml_decompose,gap_ledger_analysis,blend_momentum_decompose,composite_verify,zscore_decompose,rsi_confirm_backtest}.py`.

@@ -281,6 +281,20 @@ RETIRED_STRATEGIES: set[str] = {
 }
 _ACTIVE_STRATEGIES = [k for k in STRATEGIES if k not in RETIRED_STRATEGIES]
 
+# ── Disabled `gap` session legs (2026-09-02) ────────────────────────────────
+# A ~2.8y / H1-bar decomposition (docs/strategy_decomposition_2026-09-02.md)
+# of every reconstructed London / NY session gap:
+#   newyork  +0.090 R/trade, PF 1.33, stable both halves          -> KEEP
+#   london   -0.008 R/trade, PF 0.98, 2nd half negative           -> disable
+#   tokyo    untestable (thin yfinance H1 at 23-00 UTC), ~0 ledger -> disable
+# `weekly` (+0.10 R on the 12y ledger) is unaffected. Open london/tokyo
+# positions still exit-manage. Reversible: empty the set.
+DISABLED_GAP_SESSIONS: set[str] = {"london", "tokyo"}
+# Within the surviving `newyork` leg the edge is concentrated in RANGING /
+# TRENDING regimes -- HIGH_VOLATILITY newyork gaps ran -0.357 R at a 43% win
+# rate. Drop those.
+GAP_NEWYORK_SKIP_REGIMES: set[str] = {"HIGH_VOLATILITY"}
+
 _SWING_SLOTS = len(PAIRS)   # 2026-08-28 fix: was hardcoded 117 (stale since the
                             # SCANDI tier alone brought the real universe to 149,
                             # before today's 35-pair currencypairs addition brought
@@ -3534,6 +3548,19 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         logger.info(f"  [{strat_name}] Entries skipped — not in a gap session window "
                     f"({datetime.now(timezone.utc).strftime('%A %H:%M UTC')})")
         return 0
+    # 2026-09-02: `london` and `tokyo` session-gap legs disabled. A ~2.8y /
+    # H1-bar decomposition (docs/strategy_decomposition_2026-09-02.md) put
+    # london at -0.008 R/trade (PF 0.98, 2nd half negative) and tokyo
+    # untestable / ~zero ledger volume. `newyork` (+0.090 R, PF 1.33, stable
+    # both halves) and `weekly` (+0.10 R on the 12y ledger) stay on. Existing
+    # open london/tokyo positions still exit-manage normally. Reversible --
+    # drop the session from this set. gap_weekend only ever runs `weekly`, so
+    # it is unaffected.
+    if strat_name == "gap" and gap_session in DISABLED_GAP_SESSIONS:
+        logger.info(f"  [gap] Entries skipped — the '{gap_session}' session leg is "
+                    f"disabled (net-negative, see the 2026-09-02 decomposition); "
+                    f"exits on any open {gap_session} position still run")
+        return 0
 
     # 2026-08-29: on a real-money account, never place a NEW entry while the
     # FX market is closed for the weekend. A signal computed on stale Friday
@@ -3643,6 +3670,25 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             gap_session, h1_data, open_symbols=open_syms, live_prices=live_prices or {},
             exhausted_symbols=gap_exhausted,
         )
+        # 2026-09-02: within the (surviving) newyork leg, drop gaps whose pair
+        # is in a skip-regime -- HIGH_VOLATILITY newyork gaps ran -0.357 R /
+        # 43% WR in the decomposition. regime_data = the full daily-bar dict.
+        if (strat_name == "gap" and gap_session == "newyork"
+                and GAP_NEWYORK_SKIP_REGIMES and regime_data):
+            try:
+                from ai.regime.classifier import classify_regime
+                _kept = []
+                for _s in signals:
+                    _bars = regime_data.get(_s["symbol"])
+                    _lbl = classify_regime(_bars).get("label") if _bars is not None else None
+                    if _lbl in GAP_NEWYORK_SKIP_REGIMES:
+                        logger.info(f"  [gap:newyork] SKIP {_s['symbol']} — {_lbl} regime "
+                                    f"(net-negative for newyork gaps)")
+                    else:
+                        _kept.append(_s)
+                signals = _kept
+            except Exception as _exc:
+                logger.warning(f"  [gap:newyork] regime filter skipped (non-fatal): {_exc}")
         logger.info(f"  [{strat_name}:{gap_session}] {len(h1_data)} pairs scanned → {len(signals)} signal(s)")
     elif getattr(strat_mod, "NEEDS_LIVE_PRICES", False):
         kw: dict = {"open_symbols": open_syms, "live_prices": live_prices or {}}

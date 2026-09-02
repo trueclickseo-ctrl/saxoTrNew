@@ -8,7 +8,21 @@
 **`NEEDS_LIVE_PRICES = True`** — the runner fetches the current open price via Saxo infoprices before calling it.
 **A/B sibling**: [`gap_weekend`](forex_gapfill_weekend_strategy.md) — a rebuilt variant; this one is left untouched.
 
-> Not to be changed. Described exactly as it runs today.
+> **2026-09-02 — `london` + `tokyo` session legs DISABLED.** A ~2.8y / H1-bar
+> decomposition ([strategy_decomposition_2026-09-02.md](strategy_decomposition_2026-09-02.md))
+> put `london` at −0.008 R/trade (PF 0.98, 2nd half negative) and `tokyo`
+> untestable / near-zero ledger volume. `newyork` (+0.090 R, PF 1.33, stable
+> both halves) and `weekly` (+0.10 R on the 12y ledger) stay on. The disable
+> is a **runner-level gate** (`DISABLED_GAP_SESSIONS` in `forex/runner.py`) —
+> `strategy_gap.py` still defines all four sessions and is byte-unchanged.
+> Within `newyork`, gaps whose pair is in a **HIGH_VOLATILITY** regime are
+> also dropped (`GAP_NEWYORK_SKIP_REGIMES` — that bucket ran −0.357 R / 43%
+> WR). Open `london`/`tokyo` positions still exit-manage normally. Reversible:
+> empty the set. `gap_weekend` only ever runs the `weekly` window, so it is
+> unaffected.
+
+> The signal / entry / exit **logic** below is unchanged — only which session
+> windows the runner acts on.
 
 ---
 
