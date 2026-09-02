@@ -28,10 +28,11 @@ sys.path.insert(0, BASE_DIR)
 DB_PATH          = os.path.join(BASE_DIR, "data", "atos_live_stocks.db")
 WOULD_BE_ORDERS  = os.path.join(BASE_DIR, "data", "us_blend_live_would_be_orders.jsonl")
 BASKET_SHADOW    = os.path.join(BASE_DIR, "data", "ai_basket_shadow.jsonl")
+STATUS_FILE      = os.path.join(BASE_DIR, "data", "stocks_live_status.json")
 
 import atos.capital_config as CAP
 
-GR = "\033[92m"; RD = "\033[91m"; YL = "\033[93m"; CY = "\033[96m"
+GR = "\033[92m"; RD = "\033[91m"; YL = "\033[93m"; CY = "\033[96m"; BL = "\033[94m"
 W = "\033[0m"; BD = "\033[1m"; DM = "\033[2m"
 
 
@@ -72,6 +73,13 @@ def _pooled_balance():
         return None, None
 
 
+def _status() -> dict:
+    try:
+        return json.load(open(STATUS_FILE, encoding="utf-8")) if os.path.exists(STATUS_FILE) else {}
+    except Exception:
+        return {}
+
+
 def render() -> str:
     cap = CAP.stocks_live_risk_equity_sek()
     L = []
@@ -89,6 +97,44 @@ def render() -> str:
     if util is not None:
         col = RD if util >= 50 else GR
         L.append(f"  Pooled margin utilization : {col}{util:.1f}%{W}  {DM}(50% entry gate){W}")
+
+    # ── Last scan: blend target basket (the "signal") ──────────────────────
+    st = _status()
+    if st:
+        ts = str(st.get("timestamp", ""))[:16].replace("T", " ")
+        mode = f"{YL}OBSERVE{W}" if st.get("dry_run") else f"{RD}LIVE{W}"
+        eo = f"  {DM}exits-only{W}" if st.get("exits_only") else ""
+        L.append("")
+        L.append(f"{BD}  LAST SCAN{W}  {DM}{ts} PKT{W}   [{mode}]{eo}   "
+                 f"{DM}budget {st.get('budget_sek') or 0:,.0f} SEK{W}")
+        sig = st.get("signal") or {}
+        if sig.get("risk_off"):
+            L.append(f"    {RD}{BD}RISK-OFF{W}  {DM}{sig.get('reason','')}{W}  — target = cash, no new buys")
+        else:
+            tgts = sig.get("targets") or []
+            mom  = sig.get("momentum") or []
+            lv   = sig.get("lowvol") or []
+            L.append(f"    signal: {DM}{sig.get('reason','')}{W}")
+            L.append(f"    {CY}offense (momentum){W} : {' '.join(mom) if mom else '—'}")
+            L.append(f"    {BL}defense (low-vol){W}  : {' '.join(lv) if lv else '—'}")
+            L.append(f"    {BD}target basket{W}     : {' '.join(tgts) if tgts else '—'}")
+
+        # ── Scan signals — the orders THIS scan produced (would-be in Phase 1) ─
+        acts = st.get("actions") or []
+        L.append("")
+        L.append(f"{BD}  SCAN SIGNALS{W}  {DM}({len(acts)} this scan — "
+                 f"{st.get('buy',0)} buy / {st.get('sell',0)} sell){W}")
+        if not acts:
+            L.append(f"{DM}    holdings already match target — no orders this scan{W}")
+        else:
+            L.append(f"    {DM}{'Action':<8} {'Ticker':<7} {'Shares':>6} {'Price':>9}  Reason{W}")
+            for a in acts:
+                act = a.get("action", "")
+                acol = GR + BD if act == "BUY" else (CY if act in ("SELL", "EXIT") else DM)
+                wb = f" {DM}(would-be){W}" if a.get("would_be") else ""
+                L.append(f"    {acol}{act:<8}{W} {BD}{(a.get('ticker') or '')[:7]:<7}{W} "
+                         f"{a.get('shares',0):>6} {(a.get('price') or 0):>9.2f}  "
+                         f"{DM}{(a.get('reason') or '')[:34]}{W}{wb}")
 
     openp = _rows("select * from trades where exit_price is null and strategy='US Blend' order by entry_date")
     L.append("")
@@ -112,7 +158,7 @@ def render() -> str:
 
     wb = _tail_jsonl(WOULD_BE_ORDERS, 12)
     L.append("")
-    L.append(f"{BD}  WOULD-BE ORDERS (observe log, last {len(wb)}){W}")
+    L.append(f"{BD}  WOULD-BE ORDERS — full history{W}  {DM}(last {len(wb)}, all scans){W}")
     if not wb:
         L.append(f"{DM}    none logged yet{W}")
     for r in wb:

@@ -27,6 +27,7 @@ data/atos_live_stocks.db-wal
 data/atos_live_stocks_risk_state.json
 data/us_momentum_state_live.json
 data/us_blend_live_would_be_orders.jsonl
+data/stocks_live_status.json
 data/stocks_live_scheduler.log
 # LIVE instrument map is operator-built (lookup_instruments_live.py), not history
 data/instrument_map_live.csv

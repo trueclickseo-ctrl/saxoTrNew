@@ -190,6 +190,48 @@ def test_run_us_momentum_sim_default_is_byte_identical_signature():
     assert sig.parameters["observe"].default is False
 
 
+def test_observe_orders_are_surfaced_in_todays_actions_for_the_dashboard():
+    # the LIVE stocks dashboard's SCAN SIGNALS panel reads result["actions"];
+    # _observe_order must append a would_be-tagged action (SIM path unaffected --
+    # observe is only ever True for account_env="live_stocks").
+    import inspect, atos_runner
+    src = inspect.getsource(atos_runner.run_us_momentum)
+    assert "_observe_order" in src
+    obs = src[src.index("def _observe_order"):src.index("def _do(")]
+    assert "todays_actions.append" in obs and '"would_be": True' in obs
+
+
+def test_run_us_blend_live_returns_the_signal_basket():
+    import inspect, atos_runner
+    src = inspect.getsource(atos_runner.run_us_blend_live)
+    assert '"signal"' in src and "_blend_signal" in src
+
+
+def test_dashboard_renders_scan_signal_from_status_file(tmp=None):
+    import importlib, json, tempfile
+    d = importlib.import_module("live_stocks_dashboard")
+    fd, path = tempfile.mkstemp(suffix=".json"); os.close(fd)
+    real = d.STATUS_FILE
+    try:
+        d.STATUS_FILE = path
+        json.dump({
+            "status": "complete", "timestamp": "2026-09-03T02:40:00", "dry_run": True,
+            "budget_sek": 27000.0, "margin_util_pct": 17.7, "rails_notes": [],
+            "signal": {"targets": ["HUM", "DELL"], "risk_off": False, "reason": "test",
+                       "momentum": ["HUM", "DELL"], "lowvol": []},
+            "actions": [{"action": "BUY", "ticker": "HUM", "shares": 12, "price": 288.5,
+                         "reason": "rebalance", "would_be": True}],
+            "buy": 1, "sell": 0,
+        }, open(path, "w"))
+        out = d.render()
+        assert "LAST SCAN" in out and "SCAN SIGNALS" in out
+        assert "HUM" in out and "target basket" in out
+        assert "OBSERVE" in out
+    finally:
+        d.STATUS_FILE = real
+        os.unlink(path)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 #  4. SIM-pinning of the ordinary stocks path
 # ═══════════════════════════════════════════════════════════════════════

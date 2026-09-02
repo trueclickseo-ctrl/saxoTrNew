@@ -1820,6 +1820,15 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
                 )
             except Exception as _exc:
                 print(f"  [ai] observe entry-card hook failed for {tk}: {_exc}")
+        # Surface the would-be order the same way a real fill would, so the
+        # count + the LIVE stocks dashboard's scan-signal panel see it.
+        todays_actions.append({
+            "action": "BUY" if side == "Buy" else "SELL",
+            "ticker": tk, "market_group": "US Equities", "strategy": "US Blend",
+            "score": 0, "shares": int(shares), "price": round(float(price), 4),
+            "reason": "US Blend rebalance (would-be, observe)", "pnl_sek": None,
+            "would_be": True,
+        })
         return True
 
     def _do(side, tk, shares, price, cur_trade=None):
@@ -2039,8 +2048,12 @@ def run_us_blend_live(*, budget_sek: float, dry_run: bool, exits_only: bool = Fa
                      would-be order is logged to us_blend_live_would_be_orders
                      .jsonl, but no real order / no DB row / no rebalance stamp.
     exits_only=True -> risk-off is forced (sell-all path only); no new buys.
-    Returns {"actions": [...], "buy": n, "sell": n}."""
+    Returns {"actions": [...], "buy": n, "sell": n, "signal": {...}} -- `signal`
+    is the blend target basket (targets / risk_off / reason / momentum / lowvol)
+    from compute_targets(), for the LIVE stocks dashboard's scan-signal panel."""
     assert _sx() == "live", "run_us_blend_live requires set_stocks_env('live') first"
+    global _blend_signal
+    _blend_signal = {}
     db.init_db()
     todays_actions: list = []
 
@@ -2053,7 +2066,7 @@ def run_us_blend_live(*, budget_sek: float, dry_run: bool, exits_only: bool = Fa
             print(f"  [live stocks] features failed for {tk}: {e}")
     if not feat_data:
         print("  [live stocks] no market data — aborting (no orders, no state change)")
-        return {"actions": [], "buy": 0, "sell": 0}
+        return {"actions": [], "buy": 0, "sell": 0, "signal": {}}
 
     open_trades = db.get_open_trades()
     try:
@@ -2066,7 +2079,8 @@ def run_us_blend_live(*, budget_sek: float, dry_run: bool, exits_only: bool = Fa
 
     buy_n  = sum(1 for a in todays_actions if a.get("action") == "BUY")
     sell_n = sum(1 for a in todays_actions if a.get("action") in ("SELL", "EXIT"))
-    return {"actions": todays_actions, "buy": buy_n, "sell": sell_n}
+    return {"actions": todays_actions, "buy": buy_n, "sell": sell_n,
+            "signal": dict(_blend_signal)}
 
 
 def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,

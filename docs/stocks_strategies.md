@@ -527,7 +527,7 @@ Data source: yfinance (free tier, ~75% accuracy on earnings dates).
 | `atos_runner.py` | SIM daily orchestrator — `run_cycle()` + `run_intraday_cycle()`; `run_us_blend_live()` wrapper for the real-money sleeve |
 | `atos_live_stocks.py` | **Real-money US Blend sleeve** (30k SEK, SEK LIVE account, Phase 1 observe-only) |
 | `housekeeping_live_stocks.py` / `safeguard_live_stocks.py` | LIVE stocks reconcile + auto-fix (AccountKey+AssetType filter; never auto-closes) |
-| `live_stocks_dashboard.py` | Real-money sleeve dashboard (`--once`) |
+| `live_stocks_dashboard.py` | Real-money sleeve dashboard — capital/margin, **LAST SCAN** (blend target basket = offense/defense/target — the "signal"), **SCAN SIGNALS** (this scan's would-be orders), open positions, would-be-order history, AI basket-ranker shadow. Reads `data/stocks_live_status.json` (the LIVE analogue of `data/atos_status.json`). |
 | `lookup_instruments_live.py` | Operator: build `data/instrument_map_live.csv` (LIVE Uics, USD-only) |
 | `atos/universe.py` | **424-stock** universe (`US_TICKERS` = SP500 + HIGH_GROWTH + NASDAQ100_DOW) |
 | `atos/us_momentum.py` | Blend strategy: momentum scoring, rebalance logic, risk-off gate |
