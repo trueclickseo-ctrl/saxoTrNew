@@ -1591,7 +1591,8 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
         record_fill(-(shares * price_sek + comm))
         _append_trade_log("US Blend", "BUY", ticker, shares, price,
                           shares * price_sek, None, "US momentum rebalance")
-        if (ai_config is not None and ai_config.stocks_enabled()
+        _ae = "live_stocks" if _sx() == "live" else "sim"
+        if (ai_config is not None and ai_config.stocks_enabled(_ae)
                 and ai_stock_cards is not None):
             try:
                 _blend_stop = round(price * (1 - US_BLEND_STOP_PCT), 2)
@@ -1600,6 +1601,7 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
                     entry_price=price, shares=shares, stop_price=_blend_stop,
                     sek_per_eur=_sek_per_eur(), entry_date=date.today().isoformat(),
                     risk_sek=abs(price - _blend_stop) * shares * rate,
+                    account_env=_ae,
                 )
             except Exception as _exc:
                 print(f"  [ai] blend entry-card hook failed for {ticker}: {_exc}")
@@ -1671,13 +1673,18 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
       row is written, and last_rebalance is NOT stamped. Distinct from dry_run (which
       is silent -- no hooks, no JSONL)."""
     from atos import us_momentum as USM
-    from instrument_map import load_instrument_map
+    from instrument_map import load_instrument_map, MAP_FILE_LIVE
     # In observe mode nothing may mutate the ledger / broker / rebalance clock.
     _mutate = not dry_run and not observe
+    _live_stocks = account_env == "live_stocks"
     if kill_switch_active():
         print("  [US momentum] STOP_TRADING present — skip"); return
     try:
-        imap = load_instrument_map()
+        if _live_stocks:
+            # Real-money sleeve: LIVE Uics (differ from SIM), USD-only.
+            imap = load_instrument_map(path=MAP_FILE_LIVE, require_usd=True)
+        else:
+            imap = load_instrument_map()
     except Exception as e:
         print(f"  [US momentum] instrument_map load failed: {e}"); return
 
@@ -1756,7 +1763,7 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
         # deterministic re-ranking rule (if any) comes out of the user's
         # review of this log, then a backtest -- never from this hook.
         if (ai_config is not None and ai_basket_ranker is not None
-                and ai_config.stocks_basket_ranker_enabled()
+                and ai_config.stocks_basket_ranker_enabled(account_env)
                 and tgt.get("momentum")):
             try:
                 _mom = tgt.get("momentum", [])
@@ -1769,6 +1776,7 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
                 except Exception:
                     pass
                 ai_basket_ranker.rank_basket_shadow(
+                    account_env=account_env,
                     det_offense=_mom, det_defense=tgt.get("lowvol", []),
                     det_count=len(_mom), detail=tgt.get("detail", {}),
                     regime_label=_regime, mom_n_max=USM.MOM_N_MAX,

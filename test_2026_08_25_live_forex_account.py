@@ -365,12 +365,13 @@ _run("forex/runner CLI: --account live --strategy gap is a hard error (gap is no
 
 
 def test_cli_rejects_live_without_confirmation_envvar():
-    # Uses "rsi" (the actually-allowed strategy for --account live as of
-    # 2026-08-31) so this test isolates the confirmation/halt gate
-    # specifically. It has used "donchian" then "bb" over time as the
-    # allowlist changed -- keep it pointed at whatever's currently allowed
-    # so a real "strategy not allowed" error can't mask the gate under test.
-    proc = _run_cli(["--account", "live", "--strategy", "rsi", "--live"])
+    # 2026-09-02: LIVE_ALLOWED_STRATEGIES is empty (real money moved to
+    # stocks), so every explicit --strategy on live is now an argparse error
+    # BEFORE the confirmation gate. --exits-only (no --strategy) is the only
+    # path that still reaches the SAXO_LIVE_CONFIRMED / LIVE_TRADING_HALTED
+    # gate -- the empty allowlist resolves cleanly, then the confirmation
+    # gate must still refuse a real run.
+    proc = _run_cli(["--account", "live", "--exits-only", "--live"])
     assert proc.returncode == 2, f"expected argparse hard-error exit(2), got {proc.returncode}: {proc.stderr}"
     # Accept either gate: SAXO_LIVE_CONFIRMED (this test's original target) or
     # LIVE_TRADING_HALTED (2026-08-26 emergency stop, checked first when
@@ -955,7 +956,17 @@ def test_live_dashboard_labels_currency_as_sek_not_eur():
     )
     out = proc.stdout
     assert "SEK" in out
-    assert " EUR" not in out, "the live (SEK-denominated) dashboard must never label a P&L figure in EUR"
+    # No P&L *figure* may be denominated in EUR: a digit (optionally with
+    # thousands sep / decimals) immediately followed by "EUR". "EURNOK" (a
+    # pair name) and "· EUR: -98 SEK" (the SEK/EUR sub-account split, which
+    # is itself labelled in SEK) are both fine -- only "<number> EUR" is the
+    # bug this guards against (the SEK-account-treated-as-EUR regression).
+    import re as _re
+    bad = _re.search(r"[\d,]\d\s?EUR\b", out)
+    assert not bad, (
+        f"the live (SEK-denominated) dashboard must never label a P&L figure in "
+        f"EUR -- found {bad.group(0)!r}"
+    )
 _run("forex_live_dashboard.py labels every P&L figure in SEK, never EUR",
      test_live_dashboard_labels_currency_as_sek_not_eur)
 

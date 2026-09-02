@@ -36,16 +36,19 @@ _DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), "data")
 STOCK_CARDS_LOG = os.path.join(_DATA_DIR, "stock_observation_cards.jsonl")
 
-_ACCOUNT_ENV = "sim"   # atos_runner.py is SIM-only (_STOCKS_ENV)
+_ACCOUNT_ENV = "sim"   # SIM stocks default; the real-money US Blend sleeve
+                       # (atos_live_stocks.py) passes account_env="live_stocks".
 
 
-def card_id_for(strategy: str, ticker: str, entry_date: str) -> str:
+def card_id_for(strategy: str, ticker: str, entry_date: str,
+                account_env: str = _ACCOUNT_ENV) -> str:
     """Deterministic card id from the trade's own entry_date -- so the exit
     hook (a separate process run) can reconstruct it without a DB column.
     Safe because neither equity strategy opens a second position on the same
     ticker the same day (US Reversion skips tickers it already holds; US
-    Blend rebalances at most once/day)."""
-    return f"{_ACCOUNT_ENV}:{strategy}:{ticker}:{entry_date}"
+    Blend rebalances at most once/day). `account_env` keeps SIM and the
+    real-money LIVE sleeve's cards in separate id namespaces."""
+    return f"{account_env}:{strategy}:{ticker}:{entry_date}"
 
 
 def _append(row: dict) -> None:
@@ -71,18 +74,20 @@ def log_stock_entry_card(*, strategy: str, ticker: str, direction: str,
                          entry_date: str,
                          risk_sek: float | None = None,
                          rsi_at_entry: float | None = None,
-                         sma20_target: float | None = None) -> str:
+                         sma20_target: float | None = None,
+                         account_env: str = _ACCOUNT_ENV) -> str:
     """Written once at entry. `strategy` is "us_reversion" or "us_blend".
     `entry_date` = the trade's DB entry_date ('YYYY-MM-DD'); the returned
-    card_id is derived from it so the exit hook can reconstruct it. Never
-    raises."""
-    card_id = card_id_for(strategy, ticker, entry_date)
+    card_id is derived from it so the exit hook can reconstruct it.
+    `account_env` = "sim" (default) or "live_stocks" (real-money US Blend).
+    Never raises."""
+    card_id = card_id_for(strategy, ticker, entry_date, account_env)
     _append({
         "card_id": card_id,
         "event": "entry",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "market": "equity",
-        "account_env": _ACCOUNT_ENV,
+        "account_env": account_env,
         "strategy": strategy,
         "symbol": ticker,
         "direction": direction,

@@ -97,14 +97,18 @@ def _extract_json(text: str):
 
 def rank_basket_shadow(*, det_offense: list, det_defense: list, det_count: int,
                        detail: dict, regime_label: str | None,
-                       mom_n_max: int, as_of_date: str | None = None) -> None:
+                       mom_n_max: int, as_of_date: str | None = None,
+                       account_env: str = "sim") -> None:
     """One shadow LLM call. Logs deterministic vs AI offense pick to
     data/ai_basket_shadow.jsonl. Returns None. Never raises. The caller must
-    already have checked ai_config.stocks_basket_ranker_enabled()."""
+    already have checked ai_config.stocks_basket_ranker_enabled(). `account_env`
+    ("sim" | "live_stocks") tags the row so the real-money US Blend sleeve's
+    shadow rebalances are separable from SIM's."""
     det_offense = list(det_offense or [])
     row = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "as_of_date": as_of_date or datetime.now(timezone.utc).date().isoformat(),
+        "account_env": account_env,
         "regime": regime_label,
         "mom_n_max": mom_n_max,
         "det_offense": det_offense,

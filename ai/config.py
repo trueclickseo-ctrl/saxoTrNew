@@ -32,7 +32,10 @@ _CONFIG_PATH = os.path.join(_BASE_DIR, "config", "ai.json")
 
 # Accounts the AI layer may OBSERVE + LOG for (shadow). LIVE is here so the
 # agent can be evaluated against real money trades -- log-only.
-_AI_SHADOW_ACCOUNTS = {"sim", "live", "live_eur"}
+#   live_stocks (2026-09-02) -- the real-money US Blend sleeve
+#   (atos_live_stocks.py). Shadow ONLY: it is deliberately NOT in
+#   _AI_ACTING_ACCOUNTS, so can_apply_decision("live_stocks") is False forever.
+_AI_SHADOW_ACCOUNTS = {"sim", "live", "live_eur", "live_stocks"}
 
 # Accounts an AI decision may ever ACTUALLY CHANGE an order for. SIM only,
 # in code. This is the hard wall between "AI has an opinion on LIVE" and
@@ -89,6 +92,17 @@ _DEFAULTS = {
         "enabled": False,
         "journal": True,
         "shadow_copilot_reversion": True,
+        "basket_ranker_blend": True,
+    },
+    # ── LIVE stocks AI (2026-09-02) ───────────────────────────────────────
+    # The real-money US Blend sleeve (atos_live_stocks.py). Same OBSERVE/LOG-
+    # only contract as `stocks`, its OWN on/off so the SIM stocks study and
+    # the real-money sleeve are toggled independently. can_apply_decision(
+    # "live_stocks") is False in code forever (not in _AI_ACTING_ACCOUNTS).
+    # No shadow_copilot_reversion key -- the LIVE sleeve trades US Blend only.
+    "stocks_live": {
+        "enabled": False,
+        "journal": True,
         "basket_ranker_blend": True,
     },
 }
@@ -193,39 +207,48 @@ def journal_max_trades_per_run() -> int:
         return 40
 
 
-def _stocks_cfg() -> dict:
-    s = _load().get("stocks")
+def _stocks_cfg(account_env: str = "sim") -> dict:
+    """The AI config block for a stocks account: `stocks_live` for the
+    real-money US Blend sleeve, `stocks` for everything else (SIM)."""
+    key = "stocks_live" if account_env == "live_stocks" else "stocks"
+    s = _load().get(key)
     return s if isinstance(s, dict) else {}
 
 
-def stocks_enabled() -> bool:
-    """Master switch for the stocks AI layer (atos_runner.py hooks). False if
-    the `stocks` block is missing or `enabled` is not true. Nothing in the
-    stocks AI path does anything while this is False."""
-    return bool(_stocks_cfg().get("enabled", False))
+def stocks_enabled(account_env: str = "sim") -> bool:
+    """Master switch for a stocks AI layer. False if the relevant block
+    (`stocks` / `stocks_live`) is missing or `enabled` is not true. Nothing in
+    that stocks AI path does anything while this is False."""
+    return bool(_stocks_cfg(account_env).get("enabled", False))
 
 
-def stocks_journal_enabled() -> bool:
-    """Feed the SIM stocks module's closed trades to the AI Trading Journal.
-    Requires stocks_enabled() AND the `journal` sub-flag AND journal_enabled()
-    (the Journal's own master switch)."""
-    return stocks_enabled() and bool(_stocks_cfg().get("journal", False)) and journal_enabled()
+def stocks_journal_enabled(account_env: str = "sim") -> bool:
+    """Feed a stocks module's closed trades to the AI Trading Journal.
+    Requires stocks_enabled(account_env) AND the `journal` sub-flag AND
+    journal_enabled() (the Journal's own master switch)."""
+    return (stocks_enabled(account_env) and bool(_stocks_cfg(account_env).get("journal", False))
+            and journal_enabled())
 
 
 def stocks_reversion_copilot_enabled() -> bool:
     """Score every US Reversion entry candidate with the shadow Trading
-    Copilot (log-only, applies nothing). Requires stocks_enabled() AND the
+    Copilot (log-only, applies nothing). SIM-only -- US Reversion never runs
+    on the LIVE sleeve. Requires stocks_enabled() AND the
     `shadow_copilot_reversion` sub-flag AND agent_enabled_for('sim')."""
-    return (stocks_enabled() and bool(_stocks_cfg().get("shadow_copilot_reversion", False))
+    return (stocks_enabled("sim") and bool(_stocks_cfg("sim").get("shadow_copilot_reversion", False))
             and agent_enabled_for("sim"))
 
 
-def stocks_basket_ranker_enabled() -> bool:
+def stocks_basket_ranker_enabled(account_env: str = "sim") -> bool:
     """Shadow-rank the US Blend fortnightly offense basket (log-only, the
-    deterministic targets are never modified). Requires stocks_enabled() AND
-    the `basket_ranker_blend` sub-flag AND agent_enabled_for('sim')."""
-    return (stocks_enabled() and bool(_stocks_cfg().get("basket_ranker_blend", False))
-            and agent_enabled_for("sim"))
+    deterministic targets are never modified). Requires stocks_enabled(
+    account_env) AND the `basket_ranker_blend` sub-flag AND the agent being
+    enabled for the matching shadow account (sim -> 'sim', live_stocks ->
+    'live_stocks')."""
+    _agent_env = "live_stocks" if account_env == "live_stocks" else "sim"
+    return (stocks_enabled(account_env)
+            and bool(_stocks_cfg(account_env).get("basket_ranker_blend", False))
+            and agent_enabled_for(_agent_env))
 
 
 def config_path() -> str:
