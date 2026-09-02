@@ -55,12 +55,16 @@ def test_killswitch_defaults_are_off_in_code():
     # key, falls back to disabled + shadow.
     assert aic._DEFAULTS["enabled_sim"] is False
     assert aic._DEFAULTS["enabled_live_shadow"] is False
+    assert aic._DEFAULTS.get("enabled_ai_sim") is False
     assert aic._DEFAULTS["agent_enabled"] is False
     assert aic._DEFAULTS["shadow_mode"] is True
-    # and LIVE can never be an acting account no matter the config
-    assert "live" not in aic._AI_ACTING_ACCOUNTS
-    assert "live_eur" not in aic._AI_ACTING_ACCOUNTS
-    assert aic._AI_ACTING_ACCOUNTS == {"sim"}
+    # NO real-money account can ever be an acting account, no matter the
+    # config. The acting set is SIM paper only: "sim" (gated by shadow_mode)
+    # and "ai_sim" (the AI-decision paper twin, 2026-09-03).
+    for _live in ("live", "live_eur", "live_stocks"):
+        assert _live not in aic._AI_ACTING_ACCOUNTS
+        assert aic.can_apply_decision(_live) is False
+    assert aic._AI_ACTING_ACCOUNTS == {"sim", "ai_sim"}
 _run("kill-switch fail-safe defaults are OFF in code (config file is mutable)",
      test_killswitch_defaults_are_off_in_code)
 
