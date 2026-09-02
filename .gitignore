@@ -175,3 +175,6 @@ data/strategy_test_logs/
 .DS_Store
 Thumbs.db
 .devtools/
+
+# P&L ledger backups (pre-reset snapshots, machine-local)
+data/pnl_ledger.db.bak_*
