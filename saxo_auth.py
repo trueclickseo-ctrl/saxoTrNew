@@ -112,6 +112,12 @@ def _cfg(env: str) -> dict:
     # duplicate login -- there's only ever one real LIVE authentication.
     if env == "live_eur":
         env = "live"
+    # "ai_sim" (2026-09-03, forex/runner.py's AI-decision SIM twin) is the
+    # SAME Saxo SIM login/token as "sim" -- it just books to its own ledger
+    # / state files and lets the Trading Copilot resize/skip. One shared SIM
+    # token, no second login.
+    if env == "ai_sim":
+        env = "sim"
     if env not in _ENV_CONFIG:
         raise ValueError(f"Unknown Saxo env {env!r} -- expected 'sim' or 'live' "
                          "(or 'live_eur', normalized to 'live').")
