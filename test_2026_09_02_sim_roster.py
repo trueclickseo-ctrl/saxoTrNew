@@ -65,7 +65,10 @@ def test_dormant_positions_still_exit_managed():
 
 
 def test_live_is_unaffected():
-    assert runner.LIVE_ALLOWED_STRATEGIES == {"rsi"}
+    # 2026-09-02: forex LIVE entries stopped on BOTH accounts (real money
+    # moved to the LIVE stocks sleeve). Both allowlists empty -> no new forex
+    # entries; open positions still exit-managed via _legacy_exit_strategies.
+    assert runner.LIVE_ALLOWED_STRATEGIES == set()
     assert runner.LIVE_EUR_ALLOWED_STRATEGIES == set()
     # the LIVE/LIVE_EUR CLI branches resolve from those, not _ACTIVE_STRATEGIES
     src = inspect.getsource(runner)

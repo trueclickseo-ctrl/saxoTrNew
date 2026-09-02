@@ -141,7 +141,7 @@ def test_card_round_trips_through_journal(monkeypatch=None):
 
     real = ai_config.stocks_journal_enabled
     try:
-        ai_config.stocks_journal_enabled = lambda: True
+        ai_config.stocks_journal_enabled = lambda *a, **k: True
         trades = trade_journal._closed_trades()
     finally:
         ai_config.stocks_journal_enabled = real
@@ -166,7 +166,7 @@ def test_journal_ignores_stock_cards_when_disabled():
         net_pnl_sek=1080.0, holding_hours=None, sek_per_eur=11.0)
     real = ai_config.stocks_journal_enabled
     try:
-        ai_config.stocks_journal_enabled = lambda: False
+        ai_config.stocks_journal_enabled = lambda *a, **k: False
         assert trade_journal._closed_trades() == []
     finally:
         ai_config.stocks_journal_enabled = real
@@ -214,10 +214,15 @@ def test_atos_runner_hooks_are_gated_and_have_no_new_apply_path():
     src = open(os.path.join(BASE, "atos_runner.py"), encoding="utf-8").read()
     # every stocks-AI hook block is guarded by ai_config.stocks_enabled() (or a
     # narrower stocks_* gate) inside a try/except that only prints on failure
-    assert "ai_config.stocks_enabled()" in src
+    assert "ai_config.stocks_enabled(" in src
     assert "ai_config.stocks_reversion_copilot_enabled()" in src
-    assert "ai_config.stocks_basket_ranker_enabled()" in src
-    # the hooks never CALL can_apply_decision (a comment saying so is fine)
+    # 2026-09-02: the basket-ranker gate now takes an account_env arg
+    # ("sim" | "live_stocks") -- the SIM path passes it implicitly via
+    # run_us_momentum's default, the LIVE stocks sleeve passes "live_stocks".
+    assert "ai_config.stocks_basket_ranker_enabled(" in src
+    # the hooks never CALL can_apply_decision (a comment saying so is fine).
+    # This is THE structural guarantee that no stocks-AI path (SIM or the new
+    # live_stocks sleeve) can ever resize/skip a real order.
     assert "can_apply_decision(" not in src
     # the basket ranker's return value is never assigned/used
     assert "= ai_basket_ranker.rank_basket_shadow" not in src
@@ -230,6 +235,77 @@ def test_atos_runner_hooks_are_gated_and_have_no_new_apply_path():
 def test_module_parses():
     for m in (ai_config, stock_cards, stock_proposal, basket_ranker, trade_journal):
         ast.parse(inspect.getsource(m))
+
+
+# ── 2026-09-02: the real-money US Blend sleeve (atos_live_stocks.py) ──────
+
+def test_live_stocks_is_shadow_only_never_acting():
+    assert "live_stocks" in ai_config._AI_SHADOW_ACCOUNTS
+    assert "live_stocks" not in ai_config._AI_ACTING_ACCOUNTS
+    # the hard wall: a real-money stocks decision can NEVER change an order
+    assert ai_config.can_apply_decision("live_stocks") is False
+    assert ai_config.shadow_mode("live_stocks") is True
+
+
+def test_live_stocks_cfg_block_is_independent_of_sim():
+    real = ai_config._load
+    try:
+        ai_config._load = lambda: {
+            "journal_enabled": True,
+            "stocks":      {"enabled": False, "journal": True, "basket_ranker_blend": True},
+            "stocks_live": {"enabled": True,  "journal": True, "basket_ranker_blend": True},
+        }
+        # SIM stocks OFF, LIVE stocks ON -- selected by account_env, not shared
+        assert ai_config.stocks_enabled("sim") is False
+        assert ai_config.stocks_enabled("live_stocks") is True
+        assert ai_config.stocks_journal_enabled("live_stocks") is True
+        assert ai_config.stocks_journal_enabled("sim") is False
+    finally:
+        ai_config._load = real
+
+
+def test_live_stocks_card_id_namespace_is_separate():
+    sim = stock_cards.card_id_for("us_blend", "AAPL", "2026-09-02")
+    live = stock_cards.card_id_for("us_blend", "AAPL", "2026-09-02", account_env="live_stocks")
+    assert sim.startswith("sim:") and live.startswith("live_stocks:")
+    assert sim != live
+
+
+def test_live_stocks_entry_card_carries_its_env(tmp=None):
+    fd, path = tempfile.mkstemp(suffix=".jsonl"); os.close(fd)
+    real = stock_cards.STOCK_CARDS_LOG
+    try:
+        stock_cards.STOCK_CARDS_LOG = path
+        cid = stock_cards.log_stock_entry_card(
+            strategy="us_blend", ticker="MSFT", direction="Buy", entry_price=400.0,
+            shares=5, stop_price=368.0, sek_per_eur=11.0, entry_date="2026-09-02",
+            risk_sek=1760.0, account_env="live_stocks")
+        row = json.loads(open(path, encoding="utf-8").read().strip())
+        assert cid.startswith("live_stocks:")
+        assert row["account_env"] == "live_stocks"
+    finally:
+        stock_cards.STOCK_CARDS_LOG = real
+        os.unlink(path)
+
+
+def test_atos_live_stocks_never_calls_can_apply_decision():
+    src = open(os.path.join(BASE, "atos_live_stocks.py"), encoding="utf-8").read()
+    assert "can_apply_decision(" not in src
+    # US Blend hard allowlist, never a free-form strategy arg
+    assert 'LIVE_STOCKS_ALLOWED_STRATEGIES = {"US Blend"}' in src
+
+
+def test_atos_runner_blend_hooks_pass_resolved_env():
+    src = open(os.path.join(BASE, "atos_runner.py"), encoding="utf-8").read()
+    # the blend entry-card + basket-ranker hooks thread the account env
+    assert 'account_env=_ae' in src or 'account_env=account_env' in src
+    assert 'stocks_basket_ranker_enabled(account_env)' in src
+    # run_us_blend_live runs ONLY run_us_momentum, never reversion
+    assert "def run_us_blend_live" in src
+    b = src.index("def run_us_blend_live")
+    e = src.index("\ndef ", b + 1)
+    body = src[b:e]
+    assert "run_us_momentum(" in body and "run_us_reversion(" not in body
 
 
 for _n, _f in list(globals().items()):
