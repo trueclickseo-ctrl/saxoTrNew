@@ -18,14 +18,33 @@ ENTRY:
   Short (all pairs): close < EMA(200) AND RSI(2) > 90
   All 7 pairs are bidirectional.
 
-EXIT (first hit):
+EXIT (first hit), as enforced by should_exit():
   A. RSI recovery: RSI(2) >= 55 (long) or <= 45 (short)
-  B. ATR hard stop: 1.5 × ATR(14)
-  C. Time stop: 12 calendar days
+  B. Hard stop:    price crosses position["stop_price"]
+  C. Time stop:    12 calendar days
 
-SIZING: 1% equity risk per trade, ATR-based.
+  Note on the stop level (B): should_exit() reads position["stop_price"]
+  as-is; it does NOT re-derive 1.5 × ATR every call. The initial level is
+  1.5 × ATR(14) at entry (see generate_signals), but the runner RATCHETS
+  it upward over the life of the trade — it never widens:
+    * trailing_stop_update() (this module, since day 1) — a 1.5 × ATR
+      follow stop, applied generically by forex/runner.py's _run_exits
+      whenever the profit ladder below is NOT active for that account.
+    * RSI(2) profit-protection ladder (forex/runner.py, opt-in via
+      PROFIT_LADDER_ACCOUNTS — ON for sim + both LIVE books since
+      2026-08-31, at the user's explicit request). When active it OWNS
+      this position's stop and REPLACES both trailing_stop_update and the
+      one-shot breakeven stop: entry+0.10R at >=0.75R, entry+0.50R at
+      >=1.0R, max(that, close - 1×ATR) at >=1.25R. Ratchet only.
+  The primary exit (A / the 2R broker take-profit / C) is unchanged by
+  either mechanism.
 
-THIS MODULE IS PURE — no I/O, no orders, no state.
+SIZING: this module's size_position() risks RISK_PCT of equity per trade,
+  ATR-based. The LIVE books override it with a fixed ~€45 per-trade risk
+  ceiling (RSI_LIVE_FIXED_RISK_EUR in forex/runner.py); SIM uses RISK_PCT.
+
+THIS MODULE IS PURE — no I/O, no orders, no state. The stop-management and
+sizing overrides above all live in forex/runner.py, not here.
 """
 
 import numpy as np

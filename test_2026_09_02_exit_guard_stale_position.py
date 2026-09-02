@@ -61,6 +61,19 @@ def test_wrong_side_is_gone_not_open():
     assert fr._live_position_open(33, 9000, "Buy", 3) == "gone"
 
 
+def test_same_direction_size_mismatch_is_open_not_gone():
+    # broker holds a 12,000 LONG on uic 33; we track 10,000. A phantom-book
+    # here would strand the real 12,000 position naked -> must be "open".
+    fr._get = lambda path, *a, **k: _fake_positions([(33, 12000.0), (31, 10000.0)])
+    assert fr._live_position_open(33, 10000, "Buy", 3) == "open"
+
+
+def test_opposite_direction_even_if_size_differs_is_gone():
+    # a 5,000 SHORT on uic 33 is not our LONG at any size -> netted out, "gone"
+    fr._get = lambda path, *a, **k: _fake_positions([(33, -5000.0), (31, 10000.0)])
+    assert fr._live_position_open(33, 10000, "Buy", 3) == "gone"
+
+
 def test_empty_snapshot_with_many_tracked_is_unknown_not_gone():
     # 0 FxSpot rows back while we track several locally -> bad fetch, not flat
     fr._get = lambda path, *a, **k: {"Data": []}
