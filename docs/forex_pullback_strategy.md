@@ -1,5 +1,11 @@
 # Forex Trend-Pullback-to-EMA(20) Strategy
 
+> **RETIRED 2026-09-02** — a 12y / 49-CORE-pair decomposition
+> ([strategy_decomposition_2026-09-02.md](strategy_decomposition_2026-09-02.md))
+> found it net-negative with no rescuing filter. In `RETIRED_STRATEGIES`:
+> exits still managed, opens nothing new. Rules below describe it as it last
+> ran.
+
 **File**: [`forex/strategy_pullback.py`](../forex/strategy_pullback.py)
 **Runner key**: `"pullback"`
 **Type**: trend-following, discounted re-entry

@@ -280,14 +280,14 @@ STRAT_LABELS_ALL = {
     # It was reading too close to "RSI2 (A/B)" (advanced_rsi_master, the
     # separate SIM-only variant just below). "RSI" = core, "RSI2" = variant.
     "rsi":        "RSI",
-    "donchian":   "Donchian Break",
+    "donchian":   "Donchian Break ⊗",   # ⊗ = RETIRED 2026-09-02 (exits only)
     "bb":         "BB Reversion",
-    "pullback":   "Pullback ★",
+    "pullback":   "Pullback ⊗",
     "gap":        "Gap Fill ★★",
-    "supertrend": "SuperTrend",
+    "supertrend": "SuperTrend ⊗",
     "zscore":     "Z-Score Rev",
     "zscore_quality":             "Z-Score Qual (A/B)",   # 2026-09-02: zscore + non-directional-market gate
-    "ml":         "ML Signals",
+    "ml":         "ML Signals ⊗",
     "cnn_lstm":   "CNN-LSTM",
     "london_breakout": "LBO Day Trade",
     # 2026-08-29: without an entry here, a strategy with real closed trades
@@ -295,7 +295,7 @@ STRAT_LABELS_ALL = {
     # `ordered = [s for s in stats_by_strat if s in strat_labels] + ...`
     # below) -- not just badly colored, genuinely invisible.
     "gap_weekend":        "Gap Wknd (A/B)",
-    "donchian_quality":   "Donchian Qual (A/B)",
+    "donchian_quality":   "Donchian Qual ⊗",   # RETIRED 2026-09-02 (parent donchian retired)
     "london_breakout_v2": "LBO V2 (A/B)",
     # 2026-08-30: the 6 user-supplied "advanced_*" SIM-only A/B strategies.
     # Same rule as the 2026-08-29 note above -- no entry here == silently

@@ -125,12 +125,20 @@ top-up/trim.
    trend-prone — bad for mean reversion). Per-pair whitelist NOT baked into
    the module — a SIM-universe config lever to consider. [Doc.](forex_zscore_quality_strategy.md)
 
-## Retire queue
+## Retired (actioned 2026-09-02)
 
-`donchian`, `donchian_quality`, `pullback`, `ml`, `supertrend` — 5
-strategies that are net-negative over 12 years with no filter that survives
-the two-halves + bootstrap test. Recommendation logged; removal not yet
-actioned.
+`donchian`, `donchian_quality`, `pullback`, `ml`, `supertrend` — net-negative
+over 12 years with no filter that survives the two-halves + bootstrap test.
+Now in `RETIRED_STRATEGIES` (`forex/runner.py`): still registered so open
+positions keep full exit management, but excluded from the default entry
+rotation — they open nothing new. `--strategy <name>` still runs one (with a
+warning) for research. Their `advanced_*` A/B twins (`advanced_pullback_master`,
+`advanced_ml`) are separate designs and stay active for now — retire them too
+if their own forward data confirms.
+
+Still on the table: the `gap` session-leg disable (`newyork`/`london` legs
+are net-losing; `weekly` survives) — that edits `gap`'s live entry behaviour,
+so it needs its own explicit go-ahead.
 
 Scratch backtests:
-`~/.claude/.../scratchpad/{rsi_*,ema_decompose,st_bb_decompose,donchian_decompose,pullback_decompose,ml_decompose,gap_ledger_analysis,blend_momentum_decompose,composite_verify}.py`.
+`~/.claude/.../scratchpad/{rsi_*,ema_decompose,st_bb_decompose,donchian_decompose,pullback_decompose,ml_decompose,gap_ledger_analysis,blend_momentum_decompose,composite_verify,zscore_decompose,rsi_confirm_backtest}.py`.

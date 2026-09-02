@@ -262,6 +262,25 @@ STRATEGIES = {
 # missing -- see the guarded import above). Keeps STRATEGIES / _VALID_STRATS
 # honest so nothing downstream calls a None module.
 STRATEGIES = {k: v for k, v in STRATEGIES.items() if v is not None}
+
+# ── Retired strategies (2026-09-02) ─────────────────────────────────────────
+# Still in STRATEGIES (so any OPEN position keeps full exit management via
+# _legacy_exit_strategies, and the dashboard / ledger / reports keep showing
+# their history) -- but excluded from the default entry rotation, so they
+# never open anything new. A 12-year / 49-CORE-pair edge decomposition
+# (docs/strategy_decomposition_2026-09-02.md) showed each is net-negative
+# with no filter that survives a both-halves + bootstrap-CI test:
+#   donchian / donchian_quality -- negative, no rescuing filter
+#   pullback                    -- negative
+#   ml                          -- -0.046 R/trade, bootstrap CI fully negative
+#   supertrend                  -- negative in 10 of 12 years; own score inverted
+# An explicit `--strategy <name>` still runs one (for research) with a warning.
+# To un-retire: remove from this set + re-confirm with a fresh walk-forward.
+RETIRED_STRATEGIES: set[str] = {
+    "donchian", "donchian_quality", "pullback", "ml", "supertrend",
+}
+_ACTIVE_STRATEGIES = [k for k in STRATEGIES if k not in RETIRED_STRATEGIES]
+
 _SWING_SLOTS = len(PAIRS)   # 2026-08-28 fix: was hardcoded 117 (stale since the
                             # SCANDI tier alone brought the real universe to 149,
                             # before today's 35-pair currencypairs addition brought
@@ -4646,7 +4665,7 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
     # and no signals -- harmless. Skipping outright is the riskier failure
     # mode if the boundary assumption is ever wrong.
     if active_strategies is None:
-        active_strategies = list(STRATEGIES)
+        active_strategies = list(_ACTIVE_STRATEGIES)   # retired strategies excluded from the entry rotation
 
     _reset_order_circuit()   # per-run state; explicit reset for in-process re-calls
 
@@ -5310,7 +5329,13 @@ if __name__ == "__main__":
 
         sys.exit(0)
 
-    active = requested_strategies if requested_strategies is not None else list(STRATEGIES)
+    active = requested_strategies if requested_strategies is not None else list(_ACTIVE_STRATEGIES)
+    _explicit_retired = sorted(set(active) & RETIRED_STRATEGIES) if requested_strategies is not None else []
+    if _explicit_retired:
+        logger.warning(f"  running RETIRED strateg{'y' if len(_explicit_retired)==1 else 'ies'} "
+                       f"{_explicit_retired} on explicit --strategy request -- these are excluded "
+                       f"from the default rotation (net-negative, see "
+                       f"docs/strategy_decomposition_2026-09-02.md); running anyway for research")
     # Serialize concurrent live invocations project-wide -- see LOCK_FILE's
     # docstring above _acquire_lock() for why this exists (a real double-
     # entry risk between overlapping scheduled tasks, found 2026-08-24, not
