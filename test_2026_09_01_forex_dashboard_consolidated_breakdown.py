@@ -117,12 +117,12 @@ def test_grid_omits_strategies_with_no_activity():
     lines = _plain()
     grid = "\n".join(lines)
     assert "SuperTrend" not in grid          # not in _FAKE
-    assert "Gap Fill" in grid and "RSI (2)" in grid
+    assert "Gap Fill" in grid and any(l.strip().startswith("RSI ") for l in lines)
 
 
 def test_dot_for_empty_tier_cell():
     lines = _plain()
-    rsi_row = next(l for l in lines if l.strip().startswith("RSI (2)"))
+    rsi_row = next(l for l in lines if l.strip().startswith("RSI "))
     assert "·" in rsi_row   # rsi only traded HIGH VOL -> other tiers are ·
 
 

@@ -205,7 +205,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append(f"  {fd.BD}STRATEGIES{fd.W}   "
              f"{fd.GR}{fd.BD}■ Donchian(30){fd.W}  breakout   "
              f"{fd.CY}{fd.BD}■ EMA{fd.W}  trend   "
-             f"{fd.MG}{fd.BD}■ RSI(2){fd.W}  pullback")
+             f"{fd.MG}{fd.BD}■ RSI{fd.W}  mean-rev")
     L.append(f"  {fd.DM}This is the REAL-MONEY account -- separate state/orders/P&L from SIM. "
              f"SIM's own dashboard (forex_dashboard.py) is unaffected by anything shown here.{fd.W}")
     L.append(HR)

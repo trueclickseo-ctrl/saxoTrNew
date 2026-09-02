@@ -936,20 +936,23 @@ def test_live_dashboard_shows_exactly_1_strategy():
     # 2026-08-27/28: approved set changed {donchian,ema,rsi} -> {bb,rsi}
     # (via a brief {bb,rsi,pullback} step) -> {bb} once the two-account
     # HIGH_VOLUME pilot moved rsi to the LIVE EUR account (SEK now trades
-    # bb only, on HIGH_VOLUME_GROUP_A). "RSI (2)" and "Pullback" are both
+    # bb only, on HIGH_VOLUME_GROUP_A). "RSI" and "Pullback" are both
     # SEPARATE strategies' own display labels (renamed 2026-09-01 from
-    # "RSI Pullback" / "EMA Pullback" which read as one combined thing) --
-    # see forex_dashboard.py's STRAT_LABELS_ALL.
+    # "RSI Pullback" / "EMA Pullback"; "RSI (2)" -> plain "RSI" 2026-09-02
+    # to stay distinct from "RSI2 (A/B)") -- see forex_dashboard.py's
+    # STRAT_LABELS_ALL.
     proc = subprocess.run(
         [sys.executable, "forex_live_dashboard.py", "--once"],
         cwd=BASE_DIR, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
     )
     out = proc.stdout
-    assert "RSI (2)" in out, "expected 'RSI (2)' in the live SEK dashboard's strategy breakdown"
+    assert "RSI" in out, "expected 'RSI' in the live SEK dashboard's strategy breakdown"
     # None of the other strategies (bb removed 2026-08-31, and the earlier
-    # donchian/ema/pullback) should appear on the SEK account's dashboard
+    # donchian/ema/pullback) should appear on the SEK account's dashboard --
+    # nor the separate SIM-only "RSI2 (A/B)" variant.
     for label in ("BB Reversion", "Donchian Break", "EMA Trend", "Pullback ★", "Gap Fill",
-                  "SuperTrend", "Z-Score Rev", "ML Signals", "CNN-LSTM", "LBO Day Trade"):
+                  "SuperTrend", "Z-Score Rev", "ML Signals", "CNN-LSTM", "LBO Day Trade",
+                  "RSI2 (A/B)"):
         assert label not in out, f"'{label}' must NOT appear on the live SEK dashboard -- only rsi is approved for LIVE SEK"
 _run("forex_live_dashboard.py shows exactly the 1 approved strategy (rsi), none of the others",
      test_live_dashboard_shows_exactly_1_strategy)

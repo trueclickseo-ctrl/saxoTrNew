@@ -647,7 +647,9 @@ STRATEGY_LABELS = {
     "ema":             "EMA Trend",
     # 2026-09-01 (user): rsi and pullback are two SEPARATE strategies -- the
     # old "RSI Pullback" / "EMA Pullback" labels read as one combined thing.
-    "rsi":             "RSI (2)",
+    # 2026-09-02 (user): "RSI (2)" -> plain "RSI" (core day-1 strategy;
+    # "RSI2" is the separate advanced_rsi_master variant).
+    "rsi":             "RSI",
     "donchian":        "Donchian Break",
     "bb":              "BB Reversion",
     "pullback":        "Pullback",

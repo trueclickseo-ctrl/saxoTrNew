@@ -105,6 +105,8 @@ data/*.log.fallback
 # Performance trackers — regenerated every run by the *_performance_tracker jobs
 data/*_performance_tracker.xlsx
 data/forex_live_capital_analysis.xlsx
+# RSI tracker workbook — regenerated every run by reports/rsi_tracker.py
+data/rsi_tracker.xlsx
 # Runtime JSONL streams (observation cards, AI shadow baskets, equity curve,
 # cost-gate decisions, currency-exposure snapshots) — machine-local, append-only
 data/*.jsonl
