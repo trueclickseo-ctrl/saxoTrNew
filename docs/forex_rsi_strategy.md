@@ -168,13 +168,14 @@ roadmap #4 (Trade Probability).
 ## SIM-only A/B twins (this strategy is the control)
 
 `strategy_rsi.py` is deliberately **byte-unchanged** so it's a clean control for
-two SIM-only experiments running in parallel with it. Neither can place a
+the SIM-only experiments running in parallel with it. None can place a
 real-money order.
 
 | Variant | Runner key | What differs | Doc |
 |---|---|---|---|
 | Advanced RSI Master | `advanced_rsi_master` | robust one-sided RSI, EMA50/200 alignment + slope, min EMA200-distance, ATR-percentile band, post-extreme reversal-confirm bar, DI confirm. Also the **ladder-vs-no-ladder control** — keeps plain breakeven + 1.5×ATR trail (not in `PROFIT_LADDER_STRATEGIES`). | [forex_advanced_rsi_master_strategy.md](forex_advanced_rsi_master_strategy.md) |
 | **RSI Trend** | `rsi_trend` | **Identical to `rsi` in every way** — delegates `should_exit` / `size_position` / `trailing_stop_update`, re-exports every constant, **shares the profit ladder** — *except one entry gate*: a Buy is only taken when `ai.regime.classifier` says `TRENDING_BULLISH`, a Sell only when `TRENDING_BEARISH`. So the SIM A/B isolates exactly one variable: the regime filter. `classify_regime` failure → signal dropped, never raises. | [forex_rsi_trend_strategy.md](forex_rsi_trend_strategy.md) |
+| **RSI Confirm** | `rsi_confirm` | Not an A/B twin — a **different entry model** on the same RSI(2) signal: the signal is *queued* (not traded), observed 6–30h, and entered only on a confirmed dip-then-recover, as ONE conviction position at a time (`SLOTS = 1`) with a tight `0.6×ATR` take-profit. Bucket persisted by the runner. Backtest pending. | [forex_rsi_confirm_strategy.md](forex_rsi_confirm_strategy.md) |
 
 **Why `rsi_trend` (2026-09-02):** an 11y / 49-CORE-pair backtest decomposition
 showed RSI(2)'s raw edge (+0.021 R/trade) is *unstable* — ≈0 in 2014–2020,

@@ -108,9 +108,11 @@ top-up/trim.
 
 1. ✅ `ema_trend` — shipped (this branch)
 2. ✅ `bb_quality` — shipped (this branch)
-3. ⏳ `rsi_confirm` — the confirmation-delay idea (LIVE-CANDIDATE bucket +
-   1-day observation + reversal-confirmed entry + conviction single-slot).
-   Needs its own backtest before building.
+3. ✅ `rsi_confirm` — shipped (this branch) — the confirmation-delay idea
+   (LIVE-CANDIDATE bucket + 6–30h observation + reversal-confirmed entry +
+   conviction single-slot + fast ATR take-profit). Built at the user's
+   request; **its backtest is the next step**.
+   [Doc.](forex_rsi_confirm_strategy.md)
 
 ## Retire queue
 

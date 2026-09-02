@@ -5,11 +5,11 @@ it runs today** — parameters, entry/exit rules, sizing, where it runs (SIM /
 LIVE), and any known stale docstring notes. **None of these describe changes** —
 the strategies run as-is.
 
-The 23 strategies are the keys of `STRATEGIES` in [`forex/runner.py`](../forex/runner.py).
-The `advanced_*` / `*_master` / `rsi_trend` / `ema_trend` / `bb_quality` ones are
-SIM-only A/B experiments running in parallel with their untouched originals —
-none of them can place a real-money order.
-All 23 appear in the SIM scan and in `forex_dashboard.py` (`STRAT_LABELS_ALL` /
+The 24 strategies are the keys of `STRATEGIES` in [`forex/runner.py`](../forex/runner.py).
+The `advanced_*` / `*_master` / `rsi_trend` / `ema_trend` / `bb_quality` /
+`rsi_confirm` ones are SIM-only experiments running in parallel with their
+untouched originals — none of them can place a real-money order.
+All 24 appear in the SIM scan and in `forex_dashboard.py` (`STRAT_LABELS_ALL` /
 `STRAT_COL` / the strategy legend + per-strategy breakdown tables).
 
 ## Swing strategies (daily bars, SIM scan)
@@ -22,6 +22,7 @@ All 23 appear in the SIM scan and in `forex_dashboard.py` (`STRAT_LABELS_ALL` /
 | `rsi` | [forex_rsi_strategy.md](forex_rsi_strategy.md) | RSI(2) pullback (mean-reversion) | SIM **+ LIVE_EUR (real money)** |
 | `advanced_rsi_master` | [forex_advanced_rsi_master_strategy.md](forex_advanced_rsi_master_strategy.md) | `rsi` + EMA50/200 alignment + slope + distance + reversal-confirm (A/B vs `rsi`) | SIM |
 | `rsi_trend` | [forex_rsi_trend_strategy.md](forex_rsi_trend_strategy.md) | `rsi` + regime gate: Buy only in `TRENDING_BULLISH`, Sell only in `TRENDING_BEARISH` (A/B vs `rsi`, 2026-09-02) | SIM |
+| `rsi_confirm` | [forex_rsi_confirm_strategy.md](forex_rsi_confirm_strategy.md) | `rsi` signal → LIVE-CANDIDATE bucket → observe 6–30h → enter only on a confirmed dip-then-recover; ONE conviction position at a time + fast ATR take-profit (2026-09-02, backtest pending) | SIM |
 | `donchian` | [forex_donchian_strategy.md](forex_donchian_strategy.md) | 30-day channel breakout (strict) | SIM |
 | `donchian_quality` | [forex_donchian_quality_strategy.md](forex_donchian_quality_strategy.md) | `donchian` + breakout-quality filters (A/B) | SIM |
 | `bb` | [forex_bb_strategy.md](forex_bb_strategy.md) | Bollinger(20,2) + RSI reversion | SIM **+ SEK LIVE** (task Disabled) |

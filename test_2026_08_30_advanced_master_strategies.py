@@ -59,10 +59,11 @@ def test_all_registered_sim_only():
         assert r.SLOTS_PER_STRATEGY.get(k) == r._SWING_SLOTS, f"{k} slots wrong"
         assert k not in r.LIVE_ALLOWED_STRATEGIES, f"{k} leaked into LIVE allowlist"
         assert k not in r.LIVE_EUR_ALLOWED_STRATEGIES, f"{k} leaked into LIVE_EUR allowlist"
-    # 23 as of 2026-09-02 (added "rsi_trend", then "ema_trend" + "bb_quality":
-    # the SIM decomposition-filtered A/B twins of rsi / ema / bb)
-    assert len(r.STRATEGIES) == 23
-_run("forex/runner: all 4 advanced_*_master registered, uncapped slots, SIM-only; STRATEGIES == 23",
+    # 24 as of 2026-09-02: "rsi_trend", "ema_trend", "bb_quality" (SIM
+    # decomposition-filtered A/B twins) + "rsi_confirm" (the confirmation-delay
+    # / conviction SIM strategy)
+    assert len(r.STRATEGIES) == 24
+_run("forex/runner: all 4 advanced_*_master registered, uncapped slots, SIM-only; STRATEGIES == 24",
      test_all_registered_sim_only)
 
 

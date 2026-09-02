@@ -62,6 +62,7 @@ import forex.strategy_advanced_ema as strat_advanced_ema
 import forex.strategy_ema_trend   as strat_ema_trend
 import forex.strategy_rsi         as strat_rsi
 import forex.strategy_rsi_trend   as strat_rsi_trend
+import forex.strategy_rsi_confirm as strat_rsi_confirm
 import forex.strategy_advanced_rsi_master as strat_advanced_rsi_master
 import forex.strategy_donchian    as strat_donchian
 import forex.strategy_donchian_quality as strat_donchian_quality
@@ -169,6 +170,15 @@ STRATEGIES = {
     # regime-luck. "rsi" is UNTOUCHED. Never in either LIVE allowlist -- SIM
     # forward-test + walk-forward first. See forex/strategy_rsi_trend.py.
     "rsi_trend":   strat_rsi_trend,
+    # 2026-09-02: SIM-only. The user's confirmation-delay + conviction idea --
+    # an RSI(2) signal is NOT entered on the spot; it goes into a candidate
+    # bucket (data/rsi_confirm_candidates.json), is observed for ~6-30h, and
+    # is entered only once a dip-then-recover (or immediate follow-through) is
+    # confirmed, as ONE concentrated position at a time (SLOTS = 1) with a
+    # tight ATR take-profit. Hypothesis + code now; BACKTEST is the next step
+    # (user's call). "rsi" untouched, never in a LIVE allowlist, not in the
+    # profit ladder. See forex/strategy_rsi_confirm.py.
+    "rsi_confirm": strat_rsi_confirm,
     # 2026-08-30: SIM-only A/B vs "rsi" (user-supplied "master" design).
     # Robust one-sided RSI(2), EMA50/EMA200 alignment + EMA200 slope, a
     # minimum EMA200-distance gate, ATR-percentile band, a post-extreme
@@ -265,6 +275,7 @@ SLOTS_PER_STRATEGY = {
     "ema_trend": _SWING_SLOTS,   # 2026-09-02: mirrors "ema" -- full universe, clean A/B
     "bb_quality": _SWING_SLOTS,  # 2026-09-02: mirrors "bb"  -- full universe, clean A/B
     "rsi": _SWING_SLOTS, "rsi_trend": _SWING_SLOTS, "donchian": _SWING_SLOTS, "bb": _SWING_SLOTS,
+    "rsi_confirm": 1,   # 2026-09-02: conviction -- exactly ONE position at a time (user's design)
     "pullback": _SWING_SLOTS, "gap": _SWING_SLOTS, "gap_weekend": _SWING_SLOTS,
     # 2026-08-30: the 4 user-supplied "advanced_*_master" A/B strategies --
     # each uncapped, mirroring its original (rsi / bb / pullback / cnn_lstm)
@@ -2394,6 +2405,37 @@ def _mark_lbo_v2_session_traded(session_key: str) -> None:
         logger.warning(f"lbo_v2_session_cooldown: could not write {LBO_V2_SESSION_COOLDOWN_FILE}: {e}")
 
 
+# 2026-09-02: "rsi_confirm"'s LIVE-CANDIDATE bucket -- an RSI(2) signal is
+# queued here and observed for ~6-30h before it's entered on a confirmed
+# turn (see forex/strategy_rsi_confirm.py). The strategy module is pure; the
+# runner persists / reloads this plain dict each cycle, like the cooldown
+# files above. Keyed by symbol; each value =
+# {direction, signal_px, signal_ts, signal_rsi, regime, best_adverse_px}.
+RSI_CONFIRM_CANDIDATES_FILE = os.path.join(DATA_DIR, "rsi_confirm_candidates.json")
+
+
+def _load_rsi_confirm_candidates() -> dict:
+    if not os.path.exists(RSI_CONFIRM_CANDIDATES_FILE):
+        return {}
+    try:
+        with open(RSI_CONFIRM_CANDIDATES_FILE) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_rsi_confirm_candidates(cands: dict) -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    try:
+        tmp = RSI_CONFIRM_CANDIDATES_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(cands, f, indent=2)
+        os.replace(tmp, RSI_CONFIRM_CANDIDATES_FILE)
+    except Exception as e:
+        logger.warning(f"rsi_confirm_candidates: could not write {RSI_CONFIRM_CANDIDATES_FILE}: {e}")
+
+
 def _log_order(entry: dict) -> None:
     os.makedirs(DATA_DIR, exist_ok=True)
     orders = []
@@ -3617,6 +3659,22 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 logger.info(f"  [{strat_name}:weekly] cooldown: skipping {sorted(gap_exhausted)}")
             kw["exhausted_symbols"] = gap_exhausted
         signals = strat_mod.generate_signals(market_data, **kw)
+    elif strat_name == "rsi_confirm":
+        # LIVE-CANDIDATE bucket: refresh it (queue fresh RSI signals, age the
+        # rest, drop expired), persist it, then generate_signals returns ONLY
+        # the candidates whose turn is now confirmed. The bucket is the
+        # runner's state, the strategy stays pure. See strategy_rsi_confirm.py.
+        _rc_cands = _load_rsi_confirm_candidates()
+        _rc_cands, _rc_logs = strat_mod.update_candidates(
+            market_data, _rc_cands, open_symbols=open_syms)
+        for _line in _rc_logs:
+            logger.info(f"  [rsi_confirm] {_line}")
+        if not dry_run:
+            _save_rsi_confirm_candidates(_rc_cands)
+        signals = strat_mod.generate_signals(
+            market_data, open_symbols=open_syms, candidates=_rc_cands)
+        logger.info(f"  [rsi_confirm] {len(_rc_cands)} candidate(s) observing "
+                    f"→ {len(signals)} confirmed this cycle")
     else:
         signals = strat_mod.generate_signals(market_data, open_symbols=open_syms)
 
@@ -4188,6 +4246,14 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 pos_record["di_spread"] = sig["di_spread"]
         elif strat_name == "bb_quality" and sig.get("di_spread") is not None:
             pos_record["di_spread"] = sig["di_spread"]
+        elif strat_name == "rsi_confirm":
+            # confirmation-delay diagnostics: how long it observed, how far it
+            # went against the signal first, and the stale signal price
+            for _k in ("observed_hours", "adverse_atr", "signal_px"):
+                if sig.get(_k) is not None:
+                    pos_record[_k] = sig[_k]
+            if sig.get("regime_at_entry"):
+                pos_record["regime_at_entry"] = sig["regime_at_entry"]
         if "gap_target" in sig:
             pos_record["gap_target"]   = sig["gap_target"]
             pos_record["friday_close"] = sig.get("friday_close", sig["gap_target"])
@@ -4269,6 +4335,11 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 # even if this position closes (TP/SL) while price is still
                 # beyond the range boundary.
                 _mark_lbo_v2_session_traded(sig["session_key"])
+            if strat_name == "rsi_confirm":
+                # confirmed & entered -> the candidate has done its job, drop it
+                _rc_cands = _load_rsi_confirm_candidates()
+                if _rc_cands.pop(sym, None) is not None and not dry_run:
+                    _save_rsi_confirm_candidates(_rc_cands)
         # Checkpoint IMMEDIATELY (2026-09-01), not just at the end of this
         # strategy's pass: the real entry order above already happened at
         # the broker. If the process is killed/watchdog-restarted before the
@@ -4783,7 +4854,7 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
                 # donchian, pullback, supertrend, ml, cnn_lstm) should be
                 # momentum-filtered.
                 _NO_MOMENTUM_FILTER = ("gap", "gap_weekend", "london_breakout", "london_breakout_v2",
-                                       "rsi", "rsi_trend", "bb", "zscore",
+                                       "rsi", "rsi_trend", "rsi_confirm", "bb", "zscore",
                                        # 2026-08-30: mean-reversion A/B variants -- exempt for the
                                        # same reason as their originals ("rsi"/"bb"): the momentum
                                        # pre-filter ranks by trend strength, which suppresses the
