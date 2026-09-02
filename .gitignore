@@ -20,6 +20,16 @@ data/atos.db
 data/atos_live.db
 data/atos_live.db-shm
 data/atos_live.db-wal
+# LIVE stocks sleeve (atos_live_stocks.py) — runtime state, machine-local
+data/atos_live_stocks.db
+data/atos_live_stocks.db-shm
+data/atos_live_stocks.db-wal
+data/atos_live_stocks_risk_state.json
+data/us_momentum_state_live.json
+data/us_blend_live_would_be_orders.jsonl
+data/stocks_live_scheduler.log
+# LIVE instrument map is operator-built (lookup_instruments_live.py), not history
+data/instrument_map_live.csv
 # Log files
 data/monitor_log.txt
 data/*.log
