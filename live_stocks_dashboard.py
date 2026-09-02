@@ -1,0 +1,152 @@
+"""
+live_stocks_dashboard.py  —  ATOS LIVE STOCKS (US Blend) sleeve
+--------------------------------------------------------------
+Real-money US Blend stocks sleeve view. SEPARATE from stocks_dashboard.py
+(SIM) and forex_live_dashboard.py (LIVE forex).
+
+Equity base = config/capital.json strategies.stocks_live.risk_equity_sek (30k).
+The pooled Saxo balance is shown LABELLED "pooled / shared with forex LIVE" --
+Saxo cannot split /balances/me per sub-account in a shared margin group.
+
+Phase 1 banner: OBSERVE-ONLY — no real orders.
+
+Usage:
+    python live_stocks_dashboard.py --once
+    python live_stocks_dashboard.py            # refresh every 30s
+"""
+
+import os
+import sys
+import json
+import sqlite3
+import time
+from datetime import datetime
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, BASE_DIR)
+
+DB_PATH          = os.path.join(BASE_DIR, "data", "atos_live_stocks.db")
+WOULD_BE_ORDERS  = os.path.join(BASE_DIR, "data", "us_blend_live_would_be_orders.jsonl")
+BASKET_SHADOW    = os.path.join(BASE_DIR, "data", "ai_basket_shadow.jsonl")
+
+import atos.capital_config as CAP
+
+GR = "\033[92m"; RD = "\033[91m"; YL = "\033[93m"; CY = "\033[96m"
+W = "\033[0m"; BD = "\033[1m"; DM = "\033[2m"
+
+
+def _rows(sql, params=()):
+    if not os.path.exists(DB_PATH):
+        return []
+    con = sqlite3.connect(DB_PATH)
+    con.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in con.execute(sql, params).fetchall()]
+    except Exception:
+        return []
+    finally:
+        con.close()
+
+
+def _tail_jsonl(path, n=12):
+    if not os.path.exists(path):
+        return []
+    out = []
+    with open(path, encoding="utf-8") as f:
+        for ln in f:
+            ln = ln.strip()
+            if ln:
+                try:
+                    out.append(json.loads(ln))
+                except Exception:
+                    pass
+    return out[-n:]
+
+
+def _pooled_balance():
+    try:
+        import saxo_client
+        b = saxo_client.get_balances(env="live")
+        return b.get("TotalValue"), b.get("InitialMargin", {}).get("MarginUtilizationPct")
+    except Exception:
+        return None, None
+
+
+def render() -> str:
+    cap = CAP.stocks_live_risk_equity_sek()
+    L = []
+    L.append(f"{BD}{'='*70}{W}")
+    L.append(f"{BD}  ATOS LIVE STOCKS — US Blend sleeve{W}   REAL MONEY")
+    L.append(f"{YL}  OBSERVE-ONLY — no real orders (Phase 1){W}")
+    L.append(f"{DM}  {datetime.now():%Y-%m-%d %H:%M:%S} PKT{W}")
+    L.append(f"{BD}{'='*70}{W}")
+
+    L.append(f"  Capital cap (this sleeve) : {BD}{cap:,.0f} SEK{W}")
+    pooled, util = _pooled_balance()
+    if pooled is not None:
+        L.append(f"  Saxo balance             : {pooled:,.0f} SEK  "
+                 f"{DM}(pooled / shared with forex LIVE){W}")
+    if util is not None:
+        col = RD if util >= 50 else GR
+        L.append(f"  Pooled margin utilization : {col}{util:.1f}%{W}  {DM}(50% entry gate){W}")
+
+    openp = _rows("select * from trades where exit_price is null and strategy='US Blend' order by entry_date")
+    L.append("")
+    L.append(f"{BD}  OPEN POSITIONS ({len(openp)}){W}")
+    if not openp:
+        L.append(f"{DM}    none — the sleeve holds no real stock positions yet{W}")
+    else:
+        for t in openp:
+            L.append(f"    {t.get('ticker',''):<8} {t.get('shares',0):>6} sh  "
+                     f"entry ${t.get('entry_price',0):.2f}  stop ${t.get('stop_price',0):.2f}")
+
+    closed = _rows("select * from trades where exit_price is not null and strategy='US Blend' "
+                   "order by exit_date desc limit 10")
+    if closed:
+        L.append("")
+        L.append(f"{BD}  RECENT CLOSED ({len(closed)}){W}")
+        for t in closed:
+            pnl = t.get("pnl_sek") or 0
+            col = GR if pnl >= 0 else RD
+            L.append(f"    {t.get('ticker',''):<8} {col}{pnl:+,.0f} SEK{W}  {DM}{t.get('exit_reason','')}{W}")
+
+    wb = _tail_jsonl(WOULD_BE_ORDERS, 12)
+    L.append("")
+    L.append(f"{BD}  WOULD-BE ORDERS (observe log, last {len(wb)}){W}")
+    if not wb:
+        L.append(f"{DM}    none logged yet{W}")
+    for r in wb:
+        L.append(f"    {DM}{str(r.get('ts',''))[:16]}{W}  {r.get('side',''):<4} "
+                 f"{r.get('shares',0):>5} {r.get('ticker',''):<7} @ ${r.get('price_usd',0):.2f}  "
+                 f"~{r.get('notional_sek',0):,.0f} SEK")
+
+    basket = [r for r in _tail_jsonl(BASKET_SHADOW, 40)
+              if r.get("account_env") == "live_stocks"][-3:]
+    if basket:
+        L.append("")
+        L.append(f"{BD}  AI BASKET-RANKER (shadow, log-only){W}")
+        for r in basket:
+            ag = r.get("_agent", {})
+            L.append(f"    {DM}{str(r.get('as_of_date',''))}{W}  det={r.get('det_offense')}  "
+                     f"ai={ag.get('offense') if isinstance(ag, dict) else '?'}")
+
+    L.append("")
+    L.append(f"{DM}  Separate module from ATOS LIVE FOREX. Shares only the Saxo SEK login.{W}")
+    return "\n".join(L)
+
+
+def main():
+    once = "--once" in sys.argv
+    fast = "--fast" in sys.argv
+    while True:
+        out = render()
+        if once:
+            print(out)
+            return
+        os.system("cls" if os.name == "nt" else "clear")
+        print(out)
+        time.sleep(5 if fast else 30)
+
+
+if __name__ == "__main__":
+    main()

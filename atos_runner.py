@@ -2016,6 +2016,50 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
                 pass
 
 
+def run_us_blend_live(*, budget_sek: float, dry_run: bool, exits_only: bool = False) -> dict:
+    """Real-money US Blend sleeve entry point (atos_live_stocks.py only).
+
+    Runs ONLY run_us_momentum with account_env="live_stocks" -- never
+    run_us_reversion, never the legacy per-market engine, never the SIM
+    dashboard / learning pass. The caller (atos_live_stocks.py) has already:
+      * proc_lock.acquire(ATOS_LIVE_STOCKS_LOCK)
+      * set ATOS_DB_PATH / ATOS_RISK_STATE_FILE / ATOS_US_MOMENTUM_STATE
+      * atos_runner.set_stocks_env("live")
+      * verified SAXO_LIVE_STOCKS_CONFIRMED etc.
+
+    dry_run=True  -> observe=True inside run_us_momentum: AI hooks fire, every
+                     would-be order is logged to us_blend_live_would_be_orders
+                     .jsonl, but no real order / no DB row / no rebalance stamp.
+    exits_only=True -> risk-off is forced (sell-all path only); no new buys.
+    Returns {"actions": [...], "buy": n, "sell": n}."""
+    assert _sx() == "live", "run_us_blend_live requires set_stocks_env('live') first"
+    db.init_db()
+    todays_actions: list = []
+
+    raw = download_universe(list(US_TICKERS))
+    feat_data: dict = {}
+    for tk, dfr in raw.items():
+        try:
+            feat_data[tk] = add_all(dfr)
+        except Exception as e:
+            print(f"  [live stocks] features failed for {tk}: {e}")
+    if not feat_data:
+        print("  [live stocks] no market data — aborting (no orders, no state change)")
+        return {"actions": [], "buy": 0, "sell": 0}
+
+    open_trades = db.get_open_trades()
+    try:
+        run_us_momentum(feat_data, open_trades, todays_actions,
+                        available_cash_sek=max(0.0, float(budget_sek)),
+                        account_env="live_stocks", observe=dry_run)
+    except Exception as e:
+        print(f"  [live stocks] run_us_momentum error: {e}")
+
+    buy_n  = sum(1 for a in todays_actions if a.get("action") == "BUY")
+    sell_n = sum(1 for a in todays_actions if a.get("action") in ("SELL", "EXIT"))
+    return {"actions": todays_actions, "buy": buy_n, "sell": sell_n}
+
+
 def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
                      available_cash_sek: float = 0.0):
     """US Mean Reversion — short-term dip-buying strategy (3-10 day holds).

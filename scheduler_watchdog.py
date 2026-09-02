@@ -236,6 +236,16 @@ WINDOWS_TASKS = {
     # even though there's a ~12h gap between the two daily runs. first-run
     # wait 13h covers "registered just after 09:00, first fire is 21:00".
     "AI Health Email": ("ATOS AI Health Email", "ai_health_email.log", 20, 13),
+    # ── ATOS LIVE STOCKS sleeve (2026-09-02) ──────────────────────────────
+    # Real-money US Blend sleeve (atos_live_stocks.py), SEPARATE module from
+    # ATOS LIVE FOREX. Both tasks contain "LIVE" -> AUTO_FIX_ELIGIBLE
+    # ("LIVE" not in n) hard-excludes them from any auto-restart; the
+    # watchdog only ALERTS on a stale real-money task. NOT added to
+    # INTRADAY_REPEATING_TASKS -- these are once-daily, not repeating.
+    # Daily Run 02:40 PKT, Exit Check 14:00 PKT, once each. grace=30,
+    # max_first_run_wait=30h (a fresh registration's first fire can be ~24h out).
+    "Stocks LIVE Daily Run":  ("ATOS Stocks LIVE Daily Run",  "stocks_live_scheduler.log", 30, 30),
+    "Stocks LIVE Exit Check": ("ATOS Stocks LIVE Exit Check", "stocks_live_scheduler.log", 30, 30),
 }
 
 # ── Registry: Claude-native scheduled tasks (no Windows entry) ──────────────
