@@ -197,23 +197,40 @@ def cmd_info() -> int:
     live_map = load_instrument_map(path=MAP_FILE_LIVE, require_usd=True)
 
     from atos.universe import US_TICKERS
-    print(f"US Blend LIVE instrument map — {len(live_map)}/{len(set(US_TICKERS))} US tickers mapped\n")
-    print(f"{'ticker':<10}{'SIM uic':>10}{'LIVE uic':>10}   note")
-    missing = 0
-    for tk in sorted(set(US_TICKERS)):
+    universe = sorted(set(US_TICKERS))
+    print(f"US Blend LIVE instrument map -- {len(live_map)}/{len(universe)} US tickers mapped\n")
+    print("Only rows where SIM and LIVE differ, or LIVE is missing, are shown"
+          " (the rest -- ~418 -- have the same uic on both).\n")
+
+    hdr = f"  {'TICKER':<8}  {'SIM UIC':<12}  {'LIVE UIC':<12}  STATUS"
+    print(hdr)
+    print("  " + "-" * (len(hdr) - 2))
+
+    missing, differ = [], []
+    for tk in universe:
         s = sim_map.get(tk, {}).get("uic")
         l = live_map.get(tk, {}).get("uic")
         if l is None:
-            missing += 1
-            note = "MISSING from LIVE map — excluded from the LIVE Blend set"
+            missing.append(tk)
+            status = "MISSING on LIVE -- excluded from the Blend set"
         elif s == l:
-            note = "same uic on SIM & LIVE (verify a sample in SaxoTraderGO)"
+            continue
+        elif s is None:
+            differ.append(tk)
+            status = "LIVE-only (not in the SIM map -- fine, LIVE is what trades)"
         else:
-            note = "SIM/LIVE uic differ (expected) — LIVE uic is authoritative here"
-        if l is None or s != l:
-            print(f"{tk:<10}{str(s):>10}{str(l):>10}   {note}")
-    print(f"\n{missing} ticker(s) missing from the LIVE map.")
-    print("No orders placed. This is a read-only diff.")
+            differ.append(tk)
+            status = "differ -- LIVE uic is authoritative"
+        print(f"  {tk:<8}  {(str(s) if s is not None else '-'):<12}  "
+              f"{(str(l) if l is not None else '-'):<12}  {status}")
+
+    print()
+    print(f"  {len(differ)} ticker(s) differ SIM vs LIVE (expected -- Saxo assigns per-env uics)")
+    if missing:
+        print(f"  {len(missing)} MISSING on LIVE, excluded from trading: {', '.join(missing)}")
+    else:
+        print("  0 missing on LIVE")
+    print("\nNo orders placed. This is a read-only diff.")
     return 0
 
 
