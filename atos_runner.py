@@ -1814,14 +1814,15 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
             "momentum": tgt.get("momentum", []),
             "lowvol":   tgt.get("lowvol", []),
         }
-        notifier.notify_blend_targets(
-            targets          = tgt.get("targets", []),
-            risk_off         = tgt.get("risk_off", False),
-            reason           = tgt.get("reason", ""),
-            momentum_tickers = tgt.get("momentum", []),
-            lowvol_tickers   = tgt.get("lowvol", []),
-            sleeve_sek       = available_cash_sek or CAP.blend_allocation_pct() * CAP.starting_capital_sek(),
-        )
+        if account_env != "ai_sim":   # the AI paper twin stays silent -- watched on ai_dashboard.py
+            notifier.notify_blend_targets(
+                targets          = tgt.get("targets", []),
+                risk_off         = tgt.get("risk_off", False),
+                reason           = tgt.get("reason", ""),
+                momentum_tickers = tgt.get("momentum", []),
+                lowvol_tickers   = tgt.get("lowvol", []),
+                sleeve_sek       = available_cash_sek or CAP.blend_allocation_pct() * CAP.starting_capital_sek(),
+            )
 
         # ── AI shadow basket ranker (OBSERVE/LOG ONLY) ──────────────────────
         # Logs what the LLM WOULD do to the offense (momentum) basket next to
