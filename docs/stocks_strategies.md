@@ -1,13 +1,14 @@
 # US Equities Strategy Playbook
 
-> **Real money — ATOS LIVE STOCKS sleeve (2026-09-03, Phase 1 OBSERVE-ONLY).**
+> **Real money — ATOS LIVE STOCKS sleeve (LIVE since 2026-09-03).**
 > A separate module — `atos_live_stocks.py` — runs **US Blend only** with
 > **30,000 SEK** on the Saxo LIVE SEK sub-account (the same account forex LIVE
 > used; forex LIVE entries are now stopped). It shares only that broker login;
 > its own ledger / risk state / lock / housekeeping / safeguard / dashboard /
-> scheduler / AI env (`live_stocks`). Phase 1 places **zero real orders** —
-> would-be orders + AI cards logged for ~2 weeks — then a Phase-2 go-live
-> review. See the "Real money" section below and [atos_ai_tracker.md](atos_ai_tracker.md).
+> scheduler / AI env (`live_stocks`). Real orders gate on
+> `SAXO_LIVE_STOCKS_CONFIRMED=1` + `LIVE_STOCKS_DRY_RUN=0` (both set) + `--live`
+> + not `LIVE_STOCKS_TRADING_HALTED`. See the "Real money" section below and
+> [atos_ai_tracker.md](atos_ai_tracker.md).
 
 > **AI observation layer (2026-09-02 SIM, 2026-09-03 live_stocks — shadow, log-only).**
 > The forex AI layer also covers this module: an LLM **Trading Journal**
@@ -198,23 +199,30 @@ AND `AssetType=="Stock"`**.
   re-verified against a fresh snapshot. **LIVE never auto-closes** an untracked
   position — it escalates via `attention.raise_attention("live_stocks:…")`.
 
-### Rollout — PHASED
+### Rollout
 
-**Phase 1 = OBSERVE-ONLY (current).** `dry_run` is forced unless **all** of:
-`--live` **and** `SAXO_LIVE_STOCKS_CONFIRMED=1` **and** `LIVE_STOCKS_DRY_RUN=0`
-**and** not `LIVE_STOCKS_TRADING_HALTED`. In dry-run: `run_us_momentum(observe=True)`
-fires the AI hooks + blend-target notification and appends every would-be order
-to `data/us_blend_live_would_be_orders.jsonl` with a would-be AI entry card —
-**zero real orders, no DB row, no `last_rebalance` stamp**. Runs ~2 weeks.
+**Went LIVE 2026-09-03** (explicit user instruction, Phase 1 observe cut short —
+the first observe scan on the full 424-ticker universe produced a clean 6-name
+basket). Both `.bat` wrappers now pass `--live`; `SAXO_LIVE_STOCKS_CONFIRMED=1`
+and `LIVE_STOCKS_DRY_RUN=0` set as User env vars.
 
-**Phase 2 = go-live flip (separate approval).** Add `--live` to
-`run_atos_live_stocks_daily.bat`, set `SAXO_LIVE_STOCKS_CONFIRMED=1` +
-`LIVE_STOCKS_DRY_RUN=0` (User env, reboot). Pre-flip checklist: `atos_live_stocks.py
---info` (every Blend ticker has a LIVE Uic, USD; SIM/LIVE diff reviewed), a
-manual 1-share test order in SaxoTraderGO, pooled margin under 50%, the ~2-week
-AI shadow evidence reviewed, real commission schedule confirmed. Kill switch (any
-of): `LIVE_STOCKS_DRY_RUN=1`, remove `SAXO_LIVE_STOCKS_CONFIRMED`, `STOP_TRADING`
-file, `Disable-ScheduledTask`, `LIVE_STOCKS_TRADING_HALTED=True`.
+`run()` still forces `dry_run` unless **all** of: `--live` **and**
+`SAXO_LIVE_STOCKS_CONFIRMED=1` **and** `LIVE_STOCKS_DRY_RUN=0` **and** not
+`LIVE_STOCKS_TRADING_HALTED` — so the env vars remain the real gate, not the
+`.bat`. Kill switch (any one): `setx LIVE_STOCKS_DRY_RUN 1`, remove
+`SAXO_LIVE_STOCKS_CONFIRMED`, create a `STOP_TRADING` file, disable the Scheduler
+task, or set `LIVE_STOCKS_TRADING_HALTED=1`.
+
+Not done before go-live (the user chose to skip): a manual 1-share test order,
+and the ~2-week AI shadow-evidence review (`stocks_live` AI observing started
+the same day). The 8% broker stop + 20% TP bracket, 50% margin gate, 10% cash
+buffer, daily-loss cap and `safeguard_live_stocks` are the live backstops.
+
+Earlier observe mode (still the behaviour without the env vars):
+`run_us_momentum(observe=True)` fires the AI hooks + blend-target notification
+and appends every would-be order to `data/us_blend_live_would_be_orders.jsonl`
+with a would-be AI entry card — zero real orders, no DB row, no `last_rebalance`
+stamp.
 
 ### AI (log-only, governance unchanged)
 
