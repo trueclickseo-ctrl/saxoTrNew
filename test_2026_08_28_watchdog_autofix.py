@@ -70,10 +70,17 @@ _run("No 'LIVE'-named task is ever in AUTO_FIX_ELIGIBLE",
 
 def test_known_live_tasks_excluded():
     import scheduler_watchdog as w
-    for live_task in ("Forex LIVE Daily Run", "Forex LIVE EUR Daily Run", "Saxo LIVE Token Keepalive"):
-        assert live_task in w.INTRADAY_REPEATING_TASKS, f"expected {live_task} in INTRADAY_REPEATING_TASKS (test assumption stale)"
-        assert live_task not in w.AUTO_FIX_ELIGIBLE, f"{live_task} must NEVER be auto-restartable"
-_run("Every known LIVE task is present in INTRADAY_REPEATING_TASKS but absent from AUTO_FIX_ELIGIBLE",
+    # 2026-09-02: the two "Forex LIVE ... Daily Run" entry tasks were removed
+    # from INTRADAY_REPEATING_TASKS when forex LIVE trading was stopped (both
+    # Disabled). The keepalive stays. The invariant that matters: NO LIVE-named
+    # task is ever auto-restartable, wherever it sits.
+    assert "Saxo LIVE Token Keepalive" in w.INTRADAY_REPEATING_TASKS
+    for name in w.INTRADAY_REPEATING_TASKS:
+        if "LIVE" in name:
+            assert name not in w.AUTO_FIX_ELIGIBLE, f"{name} must NEVER be auto-restartable"
+    # and the AUTO_FIX_ELIGIBLE filter itself still excludes every LIVE name
+    assert not any("LIVE" in n for n in w.AUTO_FIX_ELIGIBLE)
+_run("No LIVE-named task is ever auto-restartable (INTRADAY set trimmed 2026-09-02)",
      test_known_live_tasks_excluded)
 
 
