@@ -38,9 +38,15 @@ from Saxo's `/chart/v3/charts` and FX quotes via `saxo_history.py`/
 `saxo_fx.py`, not Yahoo. A `data_loader.py` comment claiming Saxo's SIM
 has no historical stock data was stale/never re-verified — confirmed live
 it does. Yahoo remains correct for `data_loader.py`/`backtest_*.py`
-(genuinely historical/backtest code) and `k4_export.py` (tax export).  
-**Last updated**: 2026-09-03 (real-money LIVE STOCKS sleeve + 3-index universe;
-price-source note 2026-08-22; original audit 2026-08-19)  
+(genuinely historical/backtest code) and `k4_export.py` (tax export).
+Saxo **SIM won't quote stocks** via `/trade/v1/infoprices` or return stock
+positions (NoAccess), so `stocks_dashboard.py` (SIM) backfills the **last
+daily close** from `saxo_history.fetch_daily_bars` for any position Saxo
+won't price (paper fills etc.) — labelled as such; not real-time but a real
+number. LIVE has real stock quotes.  
+**Last updated**: 2026-09-03 (LIVE STOCKS live + go-live schedule + book_state
+tracking + SIM dashboard price backfill; 3-index universe; price-source note
+2026-08-22; original audit 2026-08-19)  
 
 ---
 
@@ -232,15 +238,26 @@ Own `config/ai.json` `stocks_live` block (journal + basket-ranker, **armed**) �
 LIVE stocks trades feed the AI Trading Journal (weighed as real money) and the
 shadow basket-ranker, separate rows from the SIM study.
 
+**Both-books context (2026-09-03):** every rebalance scan (SIM *and* LIVE) hands
+the basket-ranker a `book_state` — for each of `sim` and `live_stocks`: its
+`last_rebalance`, `days_since`, `next_due_in_days`, and current `holdings`
+(`atos_runner._blend_book_state()`, from each book's own state file + ledger).
+Logged on the `data/ai_basket_shadow.jsonl` row and in the LLM payload; the
+`_SYSTEM` prompt tells the AI to note when the two books have drifted materially
+(different names, or one overdue) — **observe only, it never changes the pick**.
+The two books run on independent 14-day rebalance clocks (`us_momentum_state.json`
+vs `us_momentum_state_live.json`).
+
 ### Commands
 
 ```powershell
-python atos_live_stocks.py --info        # SIM vs LIVE Uic diff for every Blend ticker (no orders)
-python atos_live_stocks.py               # observe-only cycle
-python atos_live_stocks.py --exits-only  # observe-only, manage open positions, no new buys
-python atos_live_stocks.py --dashboard   # live_stocks_dashboard.py --once
-python lookup_instruments_live.py        # OPERATOR: build/refresh the LIVE instrument map (hits LIVE ref-data)
-powershell -ExecutionPolicy Bypass -File setup_scheduler_live_stocks.ps1   # OPERATOR: register the 2 tasks
+python atos_live_stocks.py --info          # SIM vs LIVE Uic diff -- only the rows that differ / are missing (no orders)
+python atos_live_stocks.py                 # cycle (real if --live + both env vars; else observe-only)
+python atos_live_stocks.py --live          # real orders (needs SAXO_LIVE_STOCKS_CONFIRMED=1 + LIVE_STOCKS_DRY_RUN=0, US market open)
+python atos_live_stocks.py --exits-only    # manage open positions only, no new buys
+python atos_live_stocks.py --dashboard     # live view (refreshes 30s); add --fast for 5s
+python lookup_instruments_live.py          # OPERATOR: build/refresh the LIVE instrument map (hits LIVE ref-data); re-run after any US_TICKERS change
+powershell -ExecutionPolicy Bypass -File setup_scheduler_live_stocks.ps1   # OPERATOR: (re)register the 2 tasks -- Daily 19:20 PKT, Exit 23:30 PKT
 ```
 
 ---
@@ -535,7 +552,7 @@ Data source: yfinance (free tier, ~75% accuracy on earnings dates).
 | `atos_runner.py` | SIM daily orchestrator — `run_cycle()` + `run_intraday_cycle()`; `run_us_blend_live()` wrapper for the real-money sleeve |
 | `atos_live_stocks.py` | **Real-money US Blend sleeve** (30k SEK, SEK LIVE account, Phase 1 observe-only) |
 | `housekeeping_live_stocks.py` / `safeguard_live_stocks.py` | LIVE stocks reconcile + auto-fix (AccountKey+AssetType filter; never auto-closes) |
-| `live_stocks_dashboard.py` | Real-money sleeve dashboard — capital/margin, **LAST SCAN** (blend target basket = offense/defense/target — the "signal"), **SCAN SIGNALS** (this scan's would-be orders), open positions, would-be-order history, AI basket-ranker shadow. Reads `data/stocks_live_status.json` (the LIVE analogue of `data/atos_status.json`). |
+| `live_stocks_dashboard.py` | Real-money sleeve dashboard — capital/margin, **LAST SCAN** (blend target basket = offense/defense/target — the "signal"), **REBALANCE CLOCKS** (LIVE vs SIM: last rebalance, days since / next due, current holdings — the two books run on independent 14-day cycles), **SCAN SIGNALS** (this scan's would-be orders, SIM-dashboard layout), open positions, would-be-order history, AI basket-ranker shadow. Reads `data/stocks_live_status.json` (the LIVE analogue of `data/atos_status.json`). `--fast` (5s) / `--once`; ANSI auto-strips when piped. |
 | `lookup_instruments_live.py` | Operator: build `data/instrument_map_live.csv` (LIVE Uics, USD-only) |
 | `atos/universe.py` | **424-stock** universe (`US_TICKERS` = SP500 + HIGH_GROWTH + NASDAQ100_DOW) |
 | `atos/us_momentum.py` | Blend strategy: momentum scoring, rebalance logic, risk-off gate |
