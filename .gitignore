@@ -89,6 +89,54 @@ data/cnn_lstm/scaler.json
 data/cnn_lstm/report.json
 data/cnn_lstm/config.json
 
+# ── Runtime artifacts — 2026-09-02 sweep (git status was showing ~70 of these) ──
+# Stray root-level DB (duplicate of data/atos_live.db, already ignored above)
+/atos_live.db
+# P&L ledger SQLite DB (machine-local, same class as data/atos_live.db)
+data/pnl_ledger.db
+data/pnl_ledger.db-shm
+data/pnl_ledger.db-wal
+# Every timestamped backup anywhere under data/ (*.db.bak_…, *.json.bak_…, *.jsonl.bak_…)
+data/*.bak_*
+# Test-run scratch databases / state files
+data/_test_*
+# Scheduler fallback logs — written only when the real logger can't open its file
+data/*.log.fallback
+# Performance trackers — regenerated every run by the *_performance_tracker jobs
+data/*_performance_tracker.xlsx
+data/forex_live_capital_analysis.xlsx
+# Runtime JSONL streams (observation cards, AI shadow baskets, equity curve,
+# cost-gate decisions, currency-exposure snapshots) — machine-local, append-only
+data/*.jsonl
+# Machine-local runtime state written on every cycle
+data/forex_watchdog_state.json
+data/watchdog_state.json
+data/safeguard_alert_state.json
+data/atos_status.json
+data/forex_live_eur_state.json
+data/forex_live_eur_orders.json
+data/forex_live_eur_peak_equity.json
+data/forex_live_eur_strategy_weights.json
+data/forex_live_strategy_weights.json
+data/forex_orders.json
+data/forex_peak_equity.json
+data/forex_strategy_weights.json
+data/futures_orders.json
+data/futures_strategy_weights.json
+data/futures_all_results.json
+# Open-scan / run-now sentinel files
+data/open_scan_*.flag
+data/run_now.txt
+# Generated reports, raw API caches, patched Task Scheduler exports
+data/validation_report.txt
+data/test_marker_check.txt
+data/*_task_fixed.xml
+data/saxo_currencypairs_raw.json
+data/saxo_new_pairs_details.json
+data/strategy_test_logs/
+# Archives / exports dropped in the tree
+*.zip
+
 # OS clutter
 .DS_Store
 Thumbs.db
