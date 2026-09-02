@@ -73,8 +73,23 @@ import forex.strategy_supertrend  as strat_supertrend
 import forex.strategy_zscore      as strat_zscore
 import forex.strategy_ml                as strat_ml
 import forex.strategy_advanced_ml       as strat_advanced_ml
-import forex.strategy_cnn_lstm         as strat_cnn_lstm
-import forex.strategy_advanced_cnn_lstm_master as strat_advanced_cnn_lstm_master
+# cnn_lstm needs torch (a heavy, optional dep). A missing/broken torch must
+# NOT take down the whole runner -- every other strategy, the LIVE RSI book
+# included, has to keep trading. Confirmed 2026-09-02: forex.strategy_cnn_lstm
+# does a top-level `import torch`, so a bare `import` here would abort the
+# process before entries/exits on an install without torch. Degrade instead:
+# the two cnn_lstm strategies drop out of STRATEGIES (below) and are rejected
+# as --strategy args; nothing else is affected.
+try:
+    import forex.strategy_cnn_lstm         as strat_cnn_lstm
+    import forex.strategy_advanced_cnn_lstm_master as strat_advanced_cnn_lstm_master
+except Exception as _cnn_import_exc:  # pragma: no cover - env-dependent
+    strat_cnn_lstm = None
+    strat_advanced_cnn_lstm_master = None
+    logging.getLogger("forex.runner").warning(
+        "cnn_lstm strategies unavailable (%s: %s) -- every other strategy, "
+        "including the LIVE RSI book, is unaffected",
+        type(_cnn_import_exc).__name__, _cnn_import_exc)
 import forex.strategy_london_breakout  as strat_lbo
 import forex.strategy_london_breakout_v2 as strat_lbo_v2
 import pnl_tracker
@@ -201,6 +216,10 @@ STRATEGIES = {
     # itself is untouched and keeps running exactly as before.
     "london_breakout_v2": strat_lbo_v2,
 }
+# Drop any strategy whose module failed to import (cnn_lstm when torch is
+# missing -- see the guarded import above). Keeps STRATEGIES / _VALID_STRATS
+# honest so nothing downstream calls a None module.
+STRATEGIES = {k: v for k, v in STRATEGIES.items() if v is not None}
 _SWING_SLOTS = len(PAIRS)   # 2026-08-28 fix: was hardcoded 117 (stale since the
                             # SCANDI tier alone brought the real universe to 149,
                             # before today's 35-pair currencypairs addition brought
@@ -1930,6 +1949,14 @@ def _live_position_open(uic: int, qty: float, direction: str,
     snapshot that looks degraded) FALLS THROUGH to the normal close so a
     genuine exit is never suppressed by a transient API problem.
 
+    A same-Uic, same-DIRECTION position whose size merely differs from
+    pos["quantity"] (aggregation, a partial manual close, a stop-heal that
+    re-placed a different lot) is still "open" -- NOT "gone". Booking a
+    phantom close there would leave a real live position untracked and
+    unprotected (naked). A residual after our normal close is only a
+    reconciliation nit; a naked position is a real hazard. Only a genuinely
+    absent (or opposite-direction / netted-out) position is "gone".
+
     `n_tracked` = how many positions local state currently holds. If the
     broker snapshot is empty but we track several, the snapshot is suspect
     -> "unknown", not "gone".
@@ -1941,15 +1968,26 @@ def _live_position_open(uic: int, qty: float, direction: str,
         return "unknown"
     want_amount = qty if direction in ("Buy", "BUY") else -qty
     fx_rows = 0
+    same_dir_other_size = None
     for p in data:
         pb = p.get("PositionBase", {})
         if pb.get("AssetType") != "FxSpot":
             continue
         fx_rows += 1
         amount = pb.get("Amount", 0) or 0
-        if pb.get("Uic") == uic and abs(amount) == abs(want_amount) \
-                and (amount > 0) == (want_amount > 0):
+        if pb.get("Uic") != uic or amount == 0:
+            continue
+        same_dir = (amount > 0) == (want_amount > 0)
+        if abs(amount) == abs(want_amount) and same_dir:
             return "open"
+        if same_dir:
+            same_dir_other_size = amount
+    if same_dir_other_size is not None:
+        logger.warning(f"  [exit-guard] UIC {uic}: broker holds {same_dir_other_size:+,.0f} "
+                       f"this direction vs tracked {want_amount:+,.0f} — size mismatch, "
+                       f"treating as OPEN (a normal close is safe; a phantom-book would "
+                       f"strand a live position)")
+        return "open"
     # No matching row. Trust that only if the snapshot itself looks healthy:
     # at least one FxSpot position came back, OR we genuinely track nothing
     # else. A totally empty snapshot while we hold several tracked positions
@@ -5059,19 +5097,22 @@ if __name__ == "__main__":
             print(f"  {r['symbol']:<10} {r['close']:>10.5f} {prob:>8.3f}{flag}")
 
         # Panel 10 — CNN-LSTM deep learning
-        print(f"\n[CNN-LSTM] Multi-scale CNN + BiLSTM + Attention  "
-              f"(36.9% val acc, threshold={strat_cnn_lstm.CONFIDENCE_THRESHOLD} — rarely fires)")
-        rows = strat_cnn_lstm.scan_summary(market_data)
-        print(f"  {'Pair':<10} {'Close':>10} {'P(Sell)':>8} {'P(Hold)':>8} {'P(Buy)':>8} {'ADX':>6}  Signal")
-        print("  " + "-" * 70)
-        for r in rows:
-            if r["status"] == "no_model":
-                print(f"  {r['symbol']:<10}  no trained model"); continue
-            if r["status"] != "ok":
-                print(f"  {r['symbol']:<10}  no data"); continue
-            flag = f"  *** {r['signal']} ***" if r["signal"] != "hold" else ""
-            print(f"  {r['symbol']:<10} {r['close']:>10.5f} {r['p_sell']:>8.3f} "
-                  f"{r['p_hold']:>8.3f} {r['p_buy']:>8.3f} {r['adx']:>6.1f}{flag}")
+        if strat_cnn_lstm is None:
+            print("\n[CNN-LSTM] unavailable (torch not installed) — skipping panel")
+        else:
+            print(f"\n[CNN-LSTM] Multi-scale CNN + BiLSTM + Attention  "
+                  f"(36.9% val acc, threshold={strat_cnn_lstm.CONFIDENCE_THRESHOLD} — rarely fires)")
+            rows = strat_cnn_lstm.scan_summary(market_data)
+            print(f"  {'Pair':<10} {'Close':>10} {'P(Sell)':>8} {'P(Hold)':>8} {'P(Buy)':>8} {'ADX':>6}  Signal")
+            print("  " + "-" * 70)
+            for r in rows:
+                if r["status"] == "no_model":
+                    print(f"  {r['symbol']:<10}  no trained model"); continue
+                if r["status"] != "ok":
+                    print(f"  {r['symbol']:<10}  no data"); continue
+                flag = f"  *** {r['signal']} ***" if r["signal"] != "hold" else ""
+                print(f"  {r['symbol']:<10} {r['close']:>10.5f} {r['p_sell']:>8.3f} "
+                      f"{r['p_hold']:>8.3f} {r['p_buy']:>8.3f} {r['adx']:>6.1f}{flag}")
 
         # Panel 11 — London/NY Breakout (day trading)
         print(f"\n[LBO] London/NY Session Breakout — day trading (~58-63% WR)")

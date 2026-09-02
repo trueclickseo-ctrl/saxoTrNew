@@ -47,7 +47,10 @@ regardless of when the task fires).
    reduce-only). Fix: `forex/runner._live_position_open()` verifies the
    position exists at the broker before any LIVE close; "gone" → book
    from Saxo, no order. `test_2026_09_02_exit_guard_stale_position.py`
-   (9). Operational rule: reconcile (or dry-run) before any LIVE trigger.
+   (11 — a 2026-09-02 RSI-audit follow-up added: a same-direction
+   position at a *different* broker size is "open", not a phantom-book
+   that would strand it naked). Operational rule: reconcile (or dry-run)
+   before any LIVE trigger.
 4. **`data/` files created by an elevated task were not writable from a
    normal shell.** RunLevel HIGHEST tasks create Administrator-owned
    files; `data/` granted the user FullControl on the folder but with

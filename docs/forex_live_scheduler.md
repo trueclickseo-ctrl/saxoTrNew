@@ -105,14 +105,21 @@ Fix script: `fix_sim_schedule_conflicts.ps1` (run as Administrator).
 
 - **`"gone"`** (a healthy positions snapshot with no matching row) → book the close from Saxo's own `ClosedPosition` record, send **no order**, raise a low-severity `attention` item. `_reconcile_closed_vs_saxo()` corrects the exact price/P&L afterwards.
 - **`"unknown"`** (the lookup failed, or 0 FxSpot rows came back while several positions are tracked = a degraded fetch) → fall through to the **normal** close, so a genuine exit is never suppressed by a transient API problem.
+- **`"open"`** — an exact signed-size match, **or** (2026-09-02 RSI-audit follow-up) a same-Uic **same-direction** position whose broker `Amount` merely *differs* from `pos["quantity"]` (aggregation / a partial manual close / a stop-heal that re-placed a different lot). The earlier code returned `"gone"` there and phantom-booked the close, stranding the real live position **naked**. A residual after a normal close is only a reconcile nit; a naked position is a real hazard. An opposite-direction position at any size is still `"gone"` (netted out).
 
-Never runs on a dry-run, a paper position, or SIM. Tests: `test_2026_09_02_exit_guard_stale_position.py` (9).
+Never runs on a dry-run, a paper position, or SIM. Tests: `test_2026_09_02_exit_guard_stale_position.py` (11).
 
 **Operational rule this encodes:** never trigger a LIVE run (or a scheduled LIVE task) until local state has been reconciled against Saxo — `python reconcile_closed_trades_vs_saxo.py`, or a dry `--exits-only` run eyeballed against `saxo_client.get_positions()`. The guard is a backstop, not a licence to skip that.
 
 ### Watchdog blind spot that hid the 2-day outage (`1ec531c`)
 
 `scheduler_watchdog.py`'s result-code path trusted a *fresh log* over a non-zero `LastTaskResult` (a non-zero code is often just a mid-run reading). But `run_hidden.vbs` kept appending the argparse reject to the big append-mode `forex_live_eur_scheduler.log` every run, so its mtime stayed perfectly fresh. `_log_content_failure`'s 200-byte size gate never fires on a large log. Fix: **`_log_tail_failure()`** (no size gate) scans the log tail for `_CLI_REJECT_SIGNATURES` (`"runner.py: error:"`, `"usage: runner.py"`, `"only allows"`, …) and the existing crash signatures; on the non-zero-code path a fresh log is trusted **only when the tail is also clean.** Tests: `test_2026_09_02_watchdog_cli_reject.py` (7).
+
+## 2026-09-02 — `torch` no longer aborts the whole runner (RSI audit)
+
+`forex/runner.py` imported `forex.strategy_cnn_lstm` unconditionally, and that module does a top-level `import torch`. On any interpreter without torch (the `.bat` files call bare `pythonw` off `PATH`; the two-phase performance tracker deliberately runs its build step under `py -3.12`, which has no torch) the import raised at module load — **the entire runner died before entries or exits ran**, taking the LIVE RSI book down with it.
+
+Fix: the two `cnn_lstm` imports are wrapped in `try/except` → `None`, `STRATEGIES` is filtered to drop any strategy whose module failed to load (so `_VALID_STRATS` and `--strategy` validation stay honest), and the `--scan` CNN-LSTM panel guards for it. Verified: `import forex.runner` succeeds on system Python (no torch, 18 strategies) and is unchanged under `.venv` (torch 2.13, 20 strategies). No `--strategy cnn_lstm` / `advanced_cnn_lstm_master` on any account without torch — those two are SIM-only and never in a LIVE allowlist anyway.
 
 ## 2026-09-02 — data-folder write permissions (`fix_data_permissions.ps1`)
 
