@@ -137,6 +137,22 @@ def render() -> str:
             L.append(f"    {BL}defense (low-vol){W}  : {' '.join(lv) if lv else '—'}")
             L.append(f"    {BD}target basket{W}     : {' '.join(tgts) if tgts else '—'}")
 
+        # ── Rebalance clocks — LIVE vs SIM (independent 14-day cycles) ─────────
+        bs = st.get("book_state") or {}
+        if bs:
+            L.append("")
+            L.append(f"{BD}  REBALANCE CLOCKS{W}  {DM}(the two books run on independent 14-day cycles){W}")
+            for label, key in (("LIVE", "live_stocks"), ("SIM ", "sim")):
+                b = bs.get(key) or {}
+                last = b.get("last_rebalance") or "never"
+                ds = b.get("days_since")
+                due = b.get("next_due_in_days")
+                when = (f"{ds}d ago, next in {due}d" if ds is not None else "first run pending")
+                hold = b.get("holdings") or {}
+                hs = " ".join(f"{t}×{n}" for t, n in sorted(hold.items())) or "—"
+                L.append(f"    {label}  last {last}  {DM}({when}){W}")
+                L.append(f"          holds: {DM}{hs}{W}")
+
         # ── Today's scan signals — same layout as the SIM stocks dashboard ────
         acts = st.get("actions") or []
         HR = f"{DM}  {'─' * 96}{W}"

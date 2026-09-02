@@ -55,6 +55,13 @@ about: momentum quality vs a single blow-off move, dispersion between the names,
 regime fit (a narrow/late-cycle tape argues for fewer, higher-conviction names), \
 and crowding.
 
+When "book_state" is present it shows both the SIM (paper) and live_stocks \
+(real-money, 30k SEK) US Blend books: each one's last rebalance date, days since, \
+days until the next scheduled rebalance, and current holdings. The two books run \
+on independent 14-day clocks and can hold different baskets -- note in your \
+reasoning if they have drifted materially (different names, or one is overdue), \
+but this is context for tracking, not a reason to change the pick.
+
 This changes NOTHING -- it is logged and reviewed. Be decisive and specific.
 
 Output ONLY raw JSON, no code fence, no prose:
@@ -98,12 +105,18 @@ def _extract_json(text: str):
 def rank_basket_shadow(*, det_offense: list, det_defense: list, det_count: int,
                        detail: dict, regime_label: str | None,
                        mom_n_max: int, as_of_date: str | None = None,
-                       account_env: str = "sim") -> None:
+                       account_env: str = "sim", book_state: dict | None = None) -> None:
     """One shadow LLM call. Logs deterministic vs AI offense pick to
     data/ai_basket_shadow.jsonl. Returns None. Never raises. The caller must
     already have checked ai_config.stocks_basket_ranker_enabled(). `account_env`
     ("sim" | "live_stocks") tags the row so the real-money US Blend sleeve's
-    shadow rebalances are separable from SIM's."""
+    shadow rebalances are separable from SIM's.
+
+    `book_state` (optional): {"sim": {...}, "live_stocks": {...}} where each
+    sub-dict is {last_rebalance, days_since, next_due_in_days, holdings:{tk:sh}}.
+    Logged on the row and handed to the LLM so it can keep track of how the two
+    books' rebalance timing and holdings have drifted -- OBSERVE only, it never
+    changes the deterministic pick."""
     det_offense = list(det_offense or [])
     row = {
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -115,6 +128,7 @@ def rank_basket_shadow(*, det_offense: list, det_defense: list, det_count: int,
         "det_defense": list(det_defense or []),
         "det_count": det_count,
         "detail": detail or {},
+        "book_state": book_state or {},
     }
     if not det_offense:
         row["_agent"] = {"ok": False, "note": "no offense names to rank"}
@@ -127,6 +141,7 @@ def rank_basket_shadow(*, det_offense: list, det_defense: list, det_count: int,
         "offense": det_offense, "defense": list(det_defense or []),
         "count": det_count, "MOM_N_MAX": mom_n_max,
         "regime": regime_label, "stats": detail or {},
+        "book_state": book_state or {},
     }
     try:
         import anthropic
