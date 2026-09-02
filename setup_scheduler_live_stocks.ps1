@@ -15,8 +15,16 @@
 # (or remove SAXO_LIVE_STOCKS_CONFIRMED), then reboot / new logon.
 #
 # Cadence: US Blend is a 14-day rebalance + a daily risk-off/event/stop
-# overlay -- no "still-forming candle" every-45-min logic. One daily run
-# ~40 min after the US close (02:40 PKT) + a 14:00 PKT exit-check backstop.
+# overlay -- no "still-forming candle" logic needed. BUT the run must land
+# INSIDE US regular hours: LIVE places real Market stock orders and Saxo
+# rejects those when the exchange is closed (no paper-fill on LIVE, unlike
+# SIM). US RTH = 09:30-16:00 ET = 18:30-01:00 PKT.
+#   Daily Run  19:20 PKT  (~50 min after the open -- opening prints settled,
+#              full session left for a market order to fill / retry). Still
+#              decides off yesterday's daily close (the momentum reference).
+#   Exit Check 23:30 PKT  (~mid-session, 13:00 ET) -- risk-off / corp-event /
+#              stop management on the open book, no new buys.
+# (Was 02:40 / 14:00 PKT during Phase-1 observe, when fills didn't matter.)
 #
 # RUN THIS ONCE, AS ADMINISTRATOR (re-run any time the schedule changes):
 #   powershell -ExecutionPolicy Bypass -File "E:\SaxoTrNew\SaxoTrNew\setup_scheduler_live_stocks.ps1"
@@ -33,7 +41,7 @@ $settings = New-ScheduledTaskSettingsSet `
 # ── Daily Run (rebalance + overlay) ─────────────────────────────────────
 $action1 = New-ScheduledTaskAction -Execute "wscript.exe" `
            -Argument "`"$vbs`" `"$base\run_atos_live_stocks_daily.bat`" `"$log`""
-$trigger1 = New-ScheduledTaskTrigger -Daily -At "02:40"
+$trigger1 = New-ScheduledTaskTrigger -Daily -At "19:20"
 
 $dailyOk = $true
 try {
@@ -49,7 +57,7 @@ try {
 # ── Exit Check backstop ────────────────────────────────────────────────
 $action2 = New-ScheduledTaskAction -Execute "wscript.exe" `
            -Argument "`"$vbs`" `"$base\run_atos_live_stocks_exits.bat`" `"$log`""
-$trigger2 = New-ScheduledTaskTrigger -Daily -At "14:00"
+$trigger2 = New-ScheduledTaskTrigger -Daily -At "23:30"
 
 $exitOk = $true
 try {
@@ -63,8 +71,8 @@ try {
 }
 
 Write-Host ""
-if ($dailyOk) { Write-Host "Registered 'ATOS Stocks LIVE Daily Run'  -> daily 02:40 PKT (rebalance + overlay)." -ForegroundColor Green }
-if ($exitOk)  { Write-Host "Registered 'ATOS Stocks LIVE Exit Check' -> daily 14:00 PKT (exits only)." -ForegroundColor Green }
+if ($dailyOk) { Write-Host "Registered 'ATOS Stocks LIVE Daily Run'  -> daily 19:20 PKT (in US hours -- rebalance + overlay)." -ForegroundColor Green }
+if ($exitOk)  { Write-Host "Registered 'ATOS Stocks LIVE Exit Check' -> daily 23:30 PKT (mid US session -- exits only)." -ForegroundColor Green }
 Write-Host ""
 Write-Host "LIVE: .bat passes --live. Real orders require SAXO_LIVE_STOCKS_CONFIRMED=1 + LIVE_STOCKS_DRY_RUN=0 (User env)." -ForegroundColor Yellow
 Write-Host ""

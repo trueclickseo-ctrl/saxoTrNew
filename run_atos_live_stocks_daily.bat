@@ -11,7 +11,9 @@ REM SAXO_LIVE_STOCKS_CONFIRMED, create a STOP_TRADING file, disable this task,
 REM or set LIVE_STOCKS_TRADING_HALTED=1.
 REM
 REM Strategy is NOT in this .bat -- atos_live_stocks.py hard-codes US Blend
-REM (LIVE_STOCKS_ALLOWED_STRATEGIES). Runs once daily ~40 min after the US close.
+REM (LIVE_STOCKS_ALLOWED_STRATEGIES). Scheduled 19:20 PKT -- INSIDE US market
+REM hours, so the real Market entry orders actually fill (Saxo rejects stock
+REM market orders when the exchange is closed; LIVE has no paper-fill).
 
 cd /d E:\SaxoTrNew\SaxoTrNew
 pythonw -X utf8 atos_live_stocks.py --live

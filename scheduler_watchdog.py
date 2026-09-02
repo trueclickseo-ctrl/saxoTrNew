@@ -242,7 +242,9 @@ WINDOWS_TASKS = {
     # ("LIVE" not in n) hard-excludes them from any auto-restart; the
     # watchdog only ALERTS on a stale real-money task. NOT added to
     # INTRADAY_REPEATING_TASKS -- these are once-daily, not repeating.
-    # Daily Run 02:40 PKT, Exit Check 14:00 PKT, once each. grace=30,
+    # Daily Run 19:20 PKT, Exit Check 23:30 PKT (both inside US market hours --
+    # LIVE places real Market stock orders that Saxo rejects when the exchange
+    # is closed), once each. grace=30,
     # max_first_run_wait=30h (a fresh registration's first fire can be ~24h out).
     "Stocks LIVE Daily Run":  ("ATOS Stocks LIVE Daily Run",  "stocks_live_scheduler.log", 30, 30),
     "Stocks LIVE Exit Check": ("ATOS Stocks LIVE Exit Check", "stocks_live_scheduler.log", 30, 30),
