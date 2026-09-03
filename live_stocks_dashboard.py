@@ -91,34 +91,74 @@ def _pooled_balance():
         return None, None
 
 
+_PNL_RESET_PATH = os.path.join(BASE_DIR, "data", "pnl_reset.json")
+
+def _load_stock_cutoffs() -> dict:
+    """Returns {strategy: 'YYYY-MM-DD'} from pnl_reset.json[stocks]."""
+    try:
+        if os.path.exists(_PNL_RESET_PATH):
+            return json.load(open(_PNL_RESET_PATH, encoding="utf-8")).get("stocks") or {}
+    except Exception:
+        pass
+    return {}
+
 def _db_stats() -> dict:
-    """Returns per-strategy stats plus a '_total' rollup."""
+    """Per-strategy stats + '_total' rollup.
+    Open positions: unfiltered. Closed stats: filtered by entry_date >= cutoff
+    from pnl_reset.json[stocks] to exclude old-era artifacts."""
     if not os.path.exists(DB_PATH):
         return {}
     try:
+        cutoffs = _load_stock_cutoffs()
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
-        rows = conn.execute("""
+
+        open_rows = conn.execute(
+            "SELECT strategy, COUNT(*) AS n FROM trades WHERE exit_price IS NULL GROUP BY strategy"
+        ).fetchall()
+        opens = {(r["strategy"] or "Unknown"): int(r["n"]) for r in open_rows}
+
+        if cutoffs:
+            parts, params = [], []
+            covered = list(cutoffs.keys())
+            for strat, dt in cutoffs.items():
+                parts.append("(strategy = ? AND entry_date >= ?)")
+                params.extend([strat, dt])
+            ph = ",".join("?" * len(covered))
+            parts.append(f"strategy NOT IN ({ph})")
+            params.extend(covered)
+            extra_where = " AND (" + " OR ".join(parts) + ")"
+        else:
+            extra_where, params = "", []
+
+        closed_rows = conn.execute(f"""
             SELECT
                 strategy,
-                COUNT(*) FILTER (WHERE exit_price IS NULL)                       AS open,
-                COUNT(*) FILTER (WHERE exit_price IS NOT NULL)                   AS closed,
-                SUM(pnl_sek) FILTER (WHERE exit_price IS NOT NULL)               AS realized,
-                COUNT(*) FILTER (WHERE exit_price IS NOT NULL AND pnl_sek > 0)   AS wins,
-                COUNT(*) FILTER (WHERE exit_price IS NOT NULL AND pnl_sek <= 0)  AS losses,
-                SUM(pnl_sek) FILTER (WHERE exit_price IS NOT NULL AND pnl_sek > 0)         AS gross_win,
-                ABS(SUM(pnl_sek) FILTER (WHERE exit_price IS NOT NULL AND pnl_sek <= 0))  AS gross_loss
-            FROM trades GROUP BY strategy""").fetchall()
+                COUNT(*)                                         AS closed,
+                SUM(pnl_sek)                                     AS realized,
+                COUNT(*) FILTER (WHERE pnl_sek > 0)             AS wins,
+                COUNT(*) FILTER (WHERE pnl_sek <= 0)            AS losses,
+                SUM(pnl_sek) FILTER (WHERE pnl_sek > 0)         AS gross_win,
+                ABS(SUM(pnl_sek) FILTER (WHERE pnl_sek <= 0))   AS gross_loss
+            FROM trades WHERE exit_price IS NOT NULL {extra_where}
+            GROUP BY strategy""", params).fetchall()
         conn.close()
+
         out = {}
         totals = {"open": 0, "closed": 0, "wins": 0, "losses": 0,
                   "realized": 0.0, "gross_win": 0.0, "gross_loss": 0.0}
-        for r in rows:
-            d = dict(r)
-            strat = d.pop("strategy") or "Unknown"
+        all_strats = set(opens) | {(r["strategy"] or "Unknown") for r in closed_rows}
+        for strat in all_strats:
+            out[strat] = {"open": opens.get(strat, 0), "closed": 0, "wins": 0,
+                          "losses": 0, "realized": 0.0, "gross_win": 0.0,
+                          "gross_loss": 0.0, "since": cutoffs.get(strat)}
+        for r in closed_rows:
+            strat = r["strategy"] or "Unknown"
+            for k in ("closed", "wins", "losses", "realized", "gross_win", "gross_loss"):
+                out[strat][k] = float(r[k] or 0)
+        for strat, d in out.items():
             for k in totals:
                 totals[k] += d.get(k) or 0
-            out[strat] = d
         out["_total"] = totals
         return out
     except Exception:
@@ -241,10 +281,12 @@ def render() -> str:
 
     # ── per-strategy breakdown ────────────────────────────────────────────────
     stats = _db_stats()
+    cutoffs = _load_stock_cutoffs()
     if stats:
         HD = f"{DM}  {'-' * 79}{W}"
         L.append("")
-        L.append(f"{BD}  STRATEGY BREAKDOWN{W}")
+        L.append(f"{BD}  STRATEGY BREAKDOWN{W}  "
+                 f"{DM}(closed stats since cutoff — open positions always shown){W}")
         L.append(f"  {DM}{'STRATEGY':<24}  {'ACT':>3}  {'CLS':>4}  {'W':>4}  {'L':>4}  "
                  f"{'WR':>7}  {'PF':>7}  {'REALIZED':>14}{W}")
         L.append(HD)
@@ -254,9 +296,11 @@ def render() -> str:
             pfs = f"{pf:.2f}" if pf != float("inf") else "inf"
             rl  = d["realized"] or 0
             rcol = GR if rl >= 0 else RD
+            since = cutoffs.get(strat)
+            since_s = f"  {DM}since {since}{W}" if since else ""
             L.append(f"  {strat:<24}  {d['open']:>3}  {d['closed']:>4}  "
                      f"{d['wins']:>4}  {d['losses']:>4}  {wr:>6.1f}%  "
-                     f"{pfs:>7}  {rcol}{rl:>+14,.0f} SEK{W}")
+                     f"{pfs:>7}  {rcol}{rl:>+14,.0f} SEK{W}{since_s}")
         L.append(HD)
         t = stats["_total"]
         twr = t["wins"] / t["closed"] * 100 if t["closed"] else 0.0

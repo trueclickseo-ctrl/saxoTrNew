@@ -150,35 +150,78 @@ def _db_open() -> dict:
     except Exception:
         return {}
 
+_PNL_RESET_PATH = os.path.join(BASE_DIR, "data", "pnl_reset.json")
+
+def _load_stock_cutoffs() -> dict:
+    """Returns {strategy: 'YYYY-MM-DD'} from pnl_reset.json[stocks]."""
+    try:
+        if os.path.exists(_PNL_RESET_PATH):
+            return json.load(open(_PNL_RESET_PATH, encoding="utf-8")).get("stocks") or {}
+    except Exception:
+        pass
+    return {}
+
 def _db_stats() -> dict:
-    """Returns per-strategy stats plus a '_total' rollup.
-    Each key: {open, closed, wins, losses, realized, gross_win, gross_loss}."""
+    """Per-strategy stats + '_total' rollup.
+    Open positions: unfiltered (always current).
+    Closed stats: filtered by entry_date >= cutoff from pnl_reset.json[stocks]
+    to exclude old-era trades (uncapped sizing bug, churn bug, old daily scan).
+    Each value dict: {open, closed, wins, losses, realized, gross_win, gross_loss, since}."""
     if not os.path.exists(DB_PATH):
         return {}
     try:
+        cutoffs = _load_stock_cutoffs()
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
-        rows = conn.execute("""
+
+        # Open positions — no cutoff filter
+        open_rows = conn.execute(
+            "SELECT strategy, COUNT(*) AS n FROM trades WHERE exit_date IS NULL GROUP BY strategy"
+        ).fetchall()
+        opens = {(r["strategy"] or "Unknown"): int(r["n"]) for r in open_rows}
+
+        # Closed stats — per-strategy entry_date cutoff
+        if cutoffs:
+            parts, params = [], []
+            covered = list(cutoffs.keys())
+            for strat, dt in cutoffs.items():
+                parts.append("(strategy = ? AND entry_date >= ?)")
+                params.extend([strat, dt])
+            ph = ",".join("?" * len(covered))
+            parts.append(f"strategy NOT IN ({ph})")
+            params.extend(covered)
+            extra_where = " AND (" + " OR ".join(parts) + ")"
+        else:
+            extra_where, params = "", []
+
+        closed_rows = conn.execute(f"""
             SELECT
                 strategy,
-                COUNT(*) FILTER (WHERE exit_date IS NULL)                      AS open,
-                COUNT(*) FILTER (WHERE exit_date IS NOT NULL)                  AS closed,
-                SUM(pnl_sek) FILTER (WHERE exit_date IS NOT NULL)              AS realized,
-                COUNT(*) FILTER (WHERE exit_date IS NOT NULL AND pnl_sek > 0)  AS wins,
-                COUNT(*) FILTER (WHERE exit_date IS NOT NULL AND pnl_sek <= 0) AS losses,
-                SUM(pnl_sek) FILTER (WHERE exit_date IS NOT NULL AND pnl_sek > 0)   AS gross_win,
-                ABS(SUM(pnl_sek) FILTER (WHERE exit_date IS NOT NULL AND pnl_sek <= 0)) AS gross_loss
-            FROM trades GROUP BY strategy""").fetchall()
+                COUNT(*)                                         AS closed,
+                SUM(pnl_sek)                                     AS realized,
+                COUNT(*) FILTER (WHERE pnl_sek > 0)             AS wins,
+                COUNT(*) FILTER (WHERE pnl_sek <= 0)            AS losses,
+                SUM(pnl_sek) FILTER (WHERE pnl_sek > 0)         AS gross_win,
+                ABS(SUM(pnl_sek) FILTER (WHERE pnl_sek <= 0))   AS gross_loss
+            FROM trades WHERE exit_date IS NOT NULL {extra_where}
+            GROUP BY strategy""", params).fetchall()
         conn.close()
+
         out = {}
         totals = {"open": 0, "closed": 0, "wins": 0, "losses": 0,
                   "realized": 0.0, "gross_win": 0.0, "gross_loss": 0.0}
-        for r in rows:
-            d = dict(r)
-            strat = d.pop("strategy") or "Unknown"
+        all_strats = set(opens) | {(r["strategy"] or "Unknown") for r in closed_rows}
+        for strat in all_strats:
+            out[strat] = {"open": opens.get(strat, 0), "closed": 0, "wins": 0,
+                          "losses": 0, "realized": 0.0, "gross_win": 0.0,
+                          "gross_loss": 0.0, "since": cutoffs.get(strat)}
+        for r in closed_rows:
+            strat = r["strategy"] or "Unknown"
+            for k in ("closed", "wins", "losses", "realized", "gross_win", "gross_loss"):
+                out[strat][k] = float(r[k] or 0)
+        for strat, d in out.items():
             for k in totals:
                 totals[k] += d.get(k) or 0
-            out[strat] = d
         out["_total"] = totals
         return out
     except Exception:
@@ -533,10 +576,12 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     STRAT_ORDER = ["US Blend", "US Reversion", "US Intraday Reversion"]
     all_strats  = [s for s in STRAT_ORDER if s in stats] + \
                   [s for s in stats if s not in STRAT_ORDER and not s.startswith("_")]
+    cutoffs = _load_stock_cutoffs()
     if all_strats:
         hdr = (f"  {'STRATEGY':<22}  {'ACT':>4}  {'CLS':>4}  "
                f"{'W':>4}  {'L':>4}  {'WR':>7}  {'PF':>6}  {'REALIZED':>12}")
-        L.append(f"  {BD}STRATEGY BREAKDOWN{W}")
+        L.append(f"  {BD}STRATEGY BREAKDOWN{W}  "
+                 f"{DM}(closed stats since cutoff — open positions always shown){W}")
         L.append(f"  {DM}{hdr.strip()}{W}")
         L.append(f"  {DM}{'-'*75}{W}")
         for strat in all_strats:
@@ -548,14 +593,16 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
             wr  = w / cls * 100 if cls else 0.0
             gw  = float(d.get("gross_win", 0) or 0)
             gl  = float(d.get("gross_loss", 0) or 0)
-            pf  = f"{gw/gl:.2f}" if gl else ("∞" if gw else "—")
+            pf  = f"{gw/gl:.2f}" if gl else ("inf" if gw else "--")
             real_s = float(d.get("realized", 0) or 0)
             pc  = GR if real_s >= 0 else RD
+            since = cutoffs.get(strat)
+            since_s = f"  {DM}since {since}{W}" if since else ""
             L.append(
                 f"  {BD}{strat:<22}{W}  {opn:>4}  {cls:>4}  "
                 f"{GR}{w:>4}{W}  {RD}{l:>4}{W}  "
                 f"{BD}{wr:>6.1f}%{W}  {pf:>6}  "
-                f"{pc}{real_s:>+12,.0f} SEK{W}"
+                f"{pc}{real_s:>+12,.0f} SEK{W}{since_s}"
             )
         # total row
         tot = stats.get("_total", {})
@@ -566,7 +613,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
             twr = tw / tc * 100 if tc else 0.0
             tgw = float(tot.get("gross_win",  0) or 0)
             tgl = float(tot.get("gross_loss", 0) or 0)
-            tpf = f"{tgw/tgl:.2f}" if tgl else ("∞" if tgw else "—")
+            tpf = f"{tgw/tgl:.2f}" if tgl else ("inf" if tgw else "--")
             tr  = float(tot.get("realized", 0) or 0)
             pc  = GR if tr >= 0 else RD
             L.append(f"  {DM}{'-'*75}{W}")
