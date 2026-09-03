@@ -1600,11 +1600,29 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
             # that may be hours stale (e.g. a 19:20 PKT run uses yesterday's
             # daily close; the stock may have gapped 3-5% by open).
             _live = saxo_client.get_quote(imap[ticker]["uic"], "Stock", env=_sx())
-            if _live and abs(_live - price) / max(price, 1e-9) > 0.001:
-                print(f"  [US momentum] {ticker}: scan ${price:.2f} → live "
-                      f"${_live:.2f} ({(_live / price - 1) * 100:+.2f}%) "
-                      f"— using live price for stop/TP")
+            if _live:
+                if abs(_live - price) / max(price, 1e-9) > 0.001:
+                    print(f"  [US momentum] {ticker}: scan ${price:.2f} → live "
+                          f"${_live:.2f} ({(_live / price - 1) * 100:+.2f}%) "
+                          f"— using live price for stop/TP")
                 price = _live
+            elif account_env in ("live", "live_eur"):
+                # LIVE trade with no live price — alert prominently; use scan close as fallback
+                import sys as _sys
+                print(f"\n  *** WARNING [{ticker}] LIVE price fetch FAILED — using stale scan "
+                      f"close ${price:.2f}. Saxo token may be expired. ***\n", file=_sys.stderr, flush=True)
+                try:
+                    import atos.notifier as _ntf
+                    from datetime import date as _date
+                    _ntf._send(
+                        f"ATOS ALERT: Live price fetch failed — {ticker} [{_date.today()}]",
+                        f"<p><b style='color:#f87171'>LIVE price fetch FAILED for {ticker}</b></p>"
+                        f"<p>Placing LIVE BUY with <b>stale scan close ${price:.2f}</b>.</p>"
+                        f"<p>Stop/TP anchored to stale price — check Saxo LIVE token.</p>"
+                        f"<p>Run: <code>python saxo_client.py --test-live</code></p>",
+                    )
+                except Exception:
+                    pass
             # Attach stop-loss/take-profit atomically with the entry — this
             # strategy previously placed a bare market order with no broker-
             # side protection at all (stop_price was hardcoded to 0), relying

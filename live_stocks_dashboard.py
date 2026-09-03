@@ -110,17 +110,19 @@ def _load_uic_map() -> dict:
         return {}
 
 
-def _live_prices_from_saxo() -> dict:
-    """Return {ticker: current_price_usd} from LIVE Saxo.
+def _live_prices_from_saxo() -> tuple[dict, str | None]:
+    """Return ({ticker: price_usd}, error_reason | None) from LIVE Saxo.
 
-    Strategy 1 — positions endpoint (fast, one call):
+    Strategy 1 — positions endpoint (fast, single call):
         Saxo symbols look like 'DELL:xnys' — strip after ':'.
-    Strategy 2 — per-ticker infoprices (fallback when market is open but
-        positions endpoint misses a ticker or returns no CurrentPrice):
-        Uses the UIC from data/instrument_map_live.csv.
+    Strategy 2 — per-ticker /infoprices via instrument_map_live.csv UICs
+        (fills gaps when the positions endpoint misses a ticker).
+    Returns an error string when both strategies fail (token expired, network,
+    etc.) so the dashboard can display the reason rather than silent dashes.
     """
     import saxo_client
-    out = {}
+    out: dict = {}
+    s1_err: str | None = None
 
     # Strategy 1: positions endpoint
     try:
@@ -135,23 +137,41 @@ def _live_prices_from_saxo() -> dict:
             price = view.get("CurrentPrice") or base.get("CurrentPrice") or 0
             if sym and price:
                 out[sym] = float(price)
-    except Exception:
-        pass
+    except Exception as _e:
+        s1_err = str(_e)[:120]
 
-    # Strategy 2: infoprices per ticker (fills gaps, also works when
-    # positions are not yet settled / market is open but position not yet in API)
+    # Strategy 2: infoprices per ticker (fills gaps, and also the primary
+    # path when positions endpoint fails due to token/auth error)
     open_tickers = {(r.get("ticker") or "").upper()
                     for r in _rows("SELECT ticker FROM trades WHERE exit_price IS NULL")}
     missing = open_tickers - set(out.keys())
+    s2_err: str | None = None
     if missing:
         uic_map = _load_uic_map()
         for ticker in missing:
             uic = uic_map.get(ticker)
             if uic:
-                px = saxo_client.get_quote(uic, "Stock", env="live")
-                if px:
-                    out[ticker] = px
-    return out
+                try:
+                    px = saxo_client.get_quote(uic, "Stock", env="live")
+                    if px:
+                        out[ticker] = px
+                except Exception as _e2:
+                    if s2_err is None:
+                        s2_err = str(_e2)[:80]
+
+    # Determine error to surface
+    error: str | None = None
+    if not out and (s1_err or s2_err):
+        raw_err = s1_err or s2_err or ""
+        if "401" in raw_err or "Unauthorized" in raw_err or "token" in raw_err.lower():
+            error = "SAXO LIVE TOKEN EXPIRED — run saxo_auth to refresh"
+        elif "429" in raw_err:
+            error = "SAXO RATE-LIMIT — prices delayed"
+        elif raw_err:
+            error = f"SAXO unreachable: {raw_err[:80]}"
+        else:
+            error = "SAXO live prices unavailable"
+    return out, error
 
 
 _PNL_RESET_PATH = os.path.join(BASE_DIR, "data", "pnl_reset.json")
@@ -253,11 +273,14 @@ def render() -> str:
         L.append(f"  Pooled margin utilization : {col}{util:.1f}%{W}  {DM}(50% entry gate){W}")
 
     # ── Open positions — top of dashboard ────────────────────────────────────
-    openp      = _rows("select * from trades where exit_price is null order by entry_date")
-    live_px    = _live_prices_from_saxo()
-    today      = datetime.now().date()
+    openp          = _rows("select * from trades where exit_price is null order by entry_date")
+    live_px, lp_err = _live_prices_from_saxo()
+    today          = datetime.now().date()
     L.append("")
-    L.append(f"{BD}  OPEN POSITIONS ({len(openp)}){W}")
+    px_status = (f"  {RD}⚠ {lp_err}{W}" if lp_err
+                 else (f"  {DM}live prices OK ({len(live_px)} tickers){W}" if live_px
+                       else f"  {DM}live prices: market closed or no open positions{W}"))
+    L.append(f"{BD}  OPEN POSITIONS ({len(openp)}){W}  {px_status}")
     if not openp:
         L.append(f"{DM}    none — the sleeve holds no real stock positions yet{W}")
     else:

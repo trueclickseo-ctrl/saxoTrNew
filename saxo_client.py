@@ -239,23 +239,37 @@ def post(path: str, body: dict, env: str = "sim") -> dict:
 def get_quote(uic: int, asset_type: str, env: str = "sim") -> float | None:
     """Live mid-price for any instrument via /trade/v1/infoprices.
 
-    Returns the mid-price (or (ask+bid)/2) as a float, or None on any
-    failure so callers can fall back to their scan-bar close without crashing.
-    Used by every module to anchor stop/TP to the live price rather than a
-    potentially stale historical bar close.
+    Retries up to 3 times on 429 rate-limit or transient errors. Returns None
+    on persistent failure so callers can fall back gracefully — the failure
+    reason is printed to stderr so it appears in watchdog/scheduler logs.
     """
-    try:
-        params = {"Uic": uic, "AssetType": asset_type, "FieldGroups": "Quote"}
-        resp = _request_with_retry("GET", f"{_base_url(env)}/trade/v1/infoprices",
-                                   headers=_headers(env), params=params)
-        resp.raise_for_status()
-        q = resp.json().get("Quote", {})
-        mid = q.get("Mid")
-        if mid is None and q.get("Ask") and q.get("Bid"):
-            mid = (float(q["Ask"]) + float(q["Bid"])) / 2.0
-        return float(mid) if mid else None
-    except Exception:
-        return None
+    import sys as _sys
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            params = {"Uic": uic, "AssetType": asset_type, "FieldGroups": "Quote"}
+            resp = _request_with_retry("GET", f"{_base_url(env)}/trade/v1/infoprices",
+                                       headers=_headers(env), params=params)
+            if resp.status_code == 429:
+                wait = 3 * (attempt + 1)
+                print(f"  [get_quote] 429 rate-limit UIC={uic} env={env} — retry in {wait}s",
+                      file=_sys.stderr, flush=True)
+                time.sleep(wait)
+                last_exc = RuntimeError(f"429 rate-limit UIC={uic}")
+                continue
+            resp.raise_for_status()
+            q = resp.json().get("Quote", {})
+            mid = q.get("Mid")
+            if mid is None and q.get("Ask") and q.get("Bid"):
+                mid = (float(q["Ask"]) + float(q["Bid"])) / 2.0
+            return float(mid) if mid else None
+        except Exception as exc:
+            last_exc = exc
+            if attempt < 2:
+                time.sleep(1 * (attempt + 1))
+    print(f"  [get_quote] FAILED UIC={uic} asset={asset_type} env={env}: {last_exc}",
+          file=_sys.stderr, flush=True)
+    return None
 
 
 def get_orders(asset_type: str | None = None, env: str = "sim") -> dict:
