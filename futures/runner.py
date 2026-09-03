@@ -1086,6 +1086,10 @@ def run_daily(dry_run: bool = True,
     # ── Fetch history for all markets (once, shared by all strategies) ────
     market_data: dict[str, pd.DataFrame | None] = {}
     for sym, info in universe.items():
+        if info.get("skip_chart"):
+            logger.debug(f"{sym}: chart fetch skipped (skip_chart=True)")
+            market_data[sym] = None
+            continue
         market_data[sym] = _fetch_history(info["uic"], info["asset_type"])
 
     # ── Momentum pre-filter: entries only in top 70% of markets by trend ──

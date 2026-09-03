@@ -63,7 +63,7 @@ MARKETS = [
         "fixed_uic":   False,
         "currency":    "USD",
     },
-    # ── Global Equity Indices ────────────────────────────────────────────
+    # ── European Equity Indices ──────────────────────────────────────────
     {
         "symbol":      "DAX",
         "description": "Germany 40 (DAX) Index CFD",
@@ -74,6 +74,36 @@ MARKETS = [
         "currency":    "EUR",
     },
     {
+        "symbol":      "CAC",
+        "description": "France 40 (CAC 40) Index CFD",
+        "yf_ticker":   "EWQ",
+        "asset_type":  "CfdOnIndex",
+        "search_key":  "France 40",
+        "fixed_uic":   False,
+        "currency":    "EUR",
+    },
+    {
+        "symbol":        "EU50",
+        "description":   "EURO STOXX 50 Index Futures (front-month)",
+        "yf_ticker":     "IEV",
+        "asset_type":    "ContractFutures",     # SIM only has this as ContractFutures, not CdfOnIndex
+        "search_key":    "EURO STOXX 50 Index",
+        "fixed_uic":     False,
+        "currency":      "EUR",
+        "contract_size": 10,    # €10 per index point
+    },
+    {
+        "symbol":        "FTSE",
+        "description":   "FTSE 100 Index Futures (front-month)",
+        "yf_ticker":     "EWU",
+        "asset_type":    "ContractFutures",     # SIM only has this as ContractFutures
+        "search_key":    "FTSE 100 Index",
+        "fixed_uic":     False,
+        "currency":      "GBP",
+        "contract_size": 10,    # £10 per index point
+    },
+    # ── Asian Equity Indices ─────────────────────────────────────────────
+    {
         "symbol":      "HK50",
         "description": "Hong Kong 50 (Hang Seng) Index CFD",
         "yf_ticker":   "EWH",
@@ -81,6 +111,16 @@ MARKETS = [
         "search_key":  "Hong Kong 50",
         "fixed_uic":   False,
         "currency":    "HKD",
+    },
+    {
+        "symbol":        "NK225",
+        "description":   "Nikkei 225 Index Futures (front-month)",
+        "yf_ticker":     "EWJ",
+        "asset_type":    "ContractFutures",     # SIM only has this as ContractFutures
+        "search_key":    "Nikkei 225",
+        "fixed_uic":     False,
+        "currency":      "JPY",
+        "contract_size": 100,   # ¥100 per index point (standard Nikkei contract)
     },
     # ── Precious Metals ──────────────────────────────────────────────────
     {
@@ -100,6 +140,7 @@ MARKETS = [
         "uic":         8178,        # XAGUSD — no expiry
         "fixed_uic":   True,
         "currency":    "USD",
+        "skip_chart":  True,        # Saxo SIM chart API returns 400 for XAG/USD
     },
     # ── Energy ──────────────────────────────────────────────────────────
     {
@@ -121,17 +162,6 @@ MARKETS = [
         "fixed_uic":     False,
         "currency":      "USD",
         "contract_size": 10000,     # 10,000 MMBtu → $1 move = $10,000
-    },
-    # ── Fixed Income ─────────────────────────────────────────────────────
-    {
-        "symbol":        "ZB",
-        "description":   "US 30-Year Treasury Bond Futures",
-        "yf_ticker":     "TLT",
-        "asset_type":    "ContractFutures",
-        "search_key":    "Treasury",
-        "fixed_uic":     False,
-        "currency":      "USD",
-        "contract_size": 1000,
     },
     # ── Agriculture ──────────────────────────────────────────────────────
     {
@@ -167,10 +197,16 @@ MARKETS = [
 ]
 
 # Long-only: equity indices and energy (structural long bias; short edge much weaker)
-LONG_ONLY_MARKETS     = {"ES", "NQ", "YM", "DAX", "HK50", "CL", "NG"}
+# Includes ContractFutures equity indices (EU50/FTSE/NK225 — SIM exposes these
+# as ContractFutures, not CdfOnIndex; long-only bias unchanged).
+LONG_ONLY_MARKETS = {
+    "ES", "NQ", "YM", "DAX", "CAC", "EU50", "FTSE", "HK50", "NK225",
+    "CL", "NG",
+}
 
-# Bidirectional: metals, bonds, grains (trend equally in both directions)
-BIDIRECTIONAL_MARKETS = {"GC", "SI", "ZB", "ZC", "ZW", "ZS"}
+# Bidirectional: metals and grains (trend equally in both directions)
+# Note: ZB / ZN removed — not available on Saxo SIM (Treasury futures not offered)
+BIDIRECTIONAL_MARKETS = {"GC", "SI", "ZC", "ZW", "ZS"}
 
 
 def discover_uics(get_fn) -> dict:
@@ -191,7 +227,7 @@ def discover_uics(get_fn) -> dict:
 
         # ── Fixed UIC (continuous instrument, no API call needed) ─────────
         if market["fixed_uic"]:
-            result[sym] = {
+            entry = {
                 "uic":         market["uic"],
                 "asset_type":  market["asset_type"],
                 "description": market["description"],
@@ -199,6 +235,9 @@ def discover_uics(get_fn) -> dict:
                 "symbol":      sym,
                 "yf_ticker":   market["yf_ticker"],
             }
+            if market.get("skip_chart"):
+                entry["skip_chart"] = True
+            result[sym] = entry
             logger.info(f"  {sym}: UIC={market['uic']} ({market['asset_type']}) — fixed")
             continue
 
