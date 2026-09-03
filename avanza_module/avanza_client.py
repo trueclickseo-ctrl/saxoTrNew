@@ -41,30 +41,60 @@ def get_client() -> Avanza:
     })
 
 
+# ── API response helpers ──────────────────────────────────────────────────────
+
+def _mv(field, default: float = 0.0) -> float:
+    """Extract a monetary value from an Avanza API nested {value, unit} dict.
+
+    The Avanza API wraps every numeric in {"value": x, "unit": "SEK", ...}.
+    Handles the case where the field is already a plain number (old API compat).
+    """
+    if isinstance(field, dict):
+        return float(field.get("value", default))
+    if field is None:
+        return default
+    try:
+        return float(field)
+    except (TypeError, ValueError):
+        return default
+
+
+def _account_name(raw_name) -> str:
+    """Extract display name from Avanza's nested name field."""
+    if isinstance(raw_name, dict):
+        return raw_name.get("userDefinedName") or raw_name.get("defaultName") or ""
+    return str(raw_name) if raw_name else ""
+
+
+# Avanza uses INVESTERINGSSPARKONTO (Swedish) for what marketing calls ISK.
+_ISK_TYPE = "INVESTERINGSSPARKONTO"
+
+
 # ── Account discovery ─────────────────────────────────────────────────────────
 
 def get_isk_account_id(client: Avanza) -> str | None:
-    """Return the account ID for the ISK account. Falls back to first account."""
+    """Return the account ID for the first ISK (INVESTERINGSSPARKONTO) account.
+    Falls back to the first account if none is tagged ISK.
+    """
     overview = client.get_overview()
     accounts = overview.get("accounts", [])
     for acct in accounts:
-        if "ISK" in (acct.get("accountType") or "").upper():
-            return str(acct.get("accountId", acct.get("id", "")))
+        if acct.get("type", "") == _ISK_TYPE:
+            return str(acct.get("id", ""))
     if accounts:
-        return str(accounts[0].get("accountId", accounts[0].get("id", "")))
+        return str(accounts[0].get("id", ""))
     return None
 
 
 def get_account_summary(client: Avanza, account_id: str | None = None) -> dict:
-    """Return {account_id, value_sek, buying_power_sek, account_type}."""
+    """Return {account_id, value_sek, buying_power_sek, account_type, account_name}."""
     overview = client.get_overview()
     accounts = overview.get("accounts", [])
 
     target = None
     if account_id:
         for a in accounts:
-            aid = str(a.get("accountId", a.get("id", "")))
-            if aid == account_id:
+            if str(a.get("id", "")) == account_id:
                 target = a
                 break
     if target is None and accounts:
@@ -73,71 +103,79 @@ def get_account_summary(client: Avanza, account_id: str | None = None) -> dict:
     if target is None:
         return {"account_id": account_id, "value_sek": 0.0, "buying_power_sek": 0.0}
 
+    perf_all = (target.get("performance") or {}).get("ALL_TIME", {})
+    total_profit_pct = _mv(perf_all.get("relative"), 0.0)
+
     return {
-        "account_id":      str(target.get("accountId", target.get("id", ""))),
-        "account_type":    target.get("accountType", ""),
-        "account_name":    target.get("name", ""),
-        "value_sek":       float(target.get("ownCapital", target.get("totalValue", 0))),
-        "buying_power_sek":float(target.get("buyingPower", 0)),
-        "total_profit_sek":float(target.get("totalProfit", 0)),
-        "total_profit_pct":float(target.get("totalProfitPercent", 0)),
+        "account_id":      str(target.get("id", "")),
+        "account_type":    target.get("type", ""),
+        "account_name":    _account_name(target.get("name", "")),
+        "value_sek":       _mv(target.get("totalValue")),
+        "buying_power_sek":_mv(target.get("buyingPower")),
+        "total_profit_sek":_mv((target.get("profit") or {}).get("absolute")),
+        "total_profit_pct":total_profit_pct,
     }
 
 
 # ── Positions ─────────────────────────────────────────────────────────────────
 
 def get_positions(client: Avanza, account_id: str | None = None) -> list[dict]:
-    """Return open stock positions.
+    """Return open positions from all Avanza accounts.
 
     Each item: {order_book_id, ticker, name, qty, avg_price, current_price,
                 value_sek, gain_pct, account_id, currency}
     Filters to account_id if given.
+
+    The Avanza API returns positions under "withOrderbook" as a list of:
+      {account: {id, type, name}, instrument: {orderbook: {id, name, quote},
+       currency}, volume: {value}, value: {value}, averageAcquiredPrice: {value},
+       acquiredValue: {value}}
     """
     raw = client.get_accounts_positions()
     result = []
 
-    # The avanza package returns a dict with instrument-type sections.
-    # Stocks are under key "withOrderbook" or top-level depending on version.
     sections = []
     if isinstance(raw, dict):
-        for key in ("withOrderbook", "stocks", "positions"):
-            if key in raw:
-                sections = raw[key]
-                break
-        if not sections and "instrumentPositions" in raw:
-            for group in raw.get("instrumentPositions", []):
-                sections.extend(group.get("positions", []))
+        sections = raw.get("withOrderbook") or []
     elif isinstance(raw, list):
         sections = raw
 
     for item in sections:
-        # Support both nested {position:{}, orderbook:{}} and flat format
-        if "position" in item and "orderbook" in item:
-            pos = item["position"]
-            ob  = item["orderbook"]
-        else:
-            pos = item
-            ob  = item.get("orderbook", item)
+        acct    = item.get("account") or {}
+        instr   = item.get("instrument") or {}
+        ob      = instr.get("orderbook") or {}
+        quote   = ob.get("quote") or {}
 
-        acct_id = str(pos.get("accountId", pos.get("account", {}).get("id", "")))
+        acct_id = str(acct.get("id", ""))
         if account_id and acct_id != account_id:
             continue
 
-        ob_id = str(ob.get("id", ob.get("orderbookId", pos.get("orderbookId", ""))))
+        ob_id = str(ob.get("id", ""))
         if not ob_id:
             continue
 
+        qty          = _mv(item.get("volume"), 0.0)
+        avg_price    = _mv(item.get("averageAcquiredPrice"))
+        cur_price    = _mv((quote.get("latest") or quote.get("highest")))
+        value_sek    = _mv(item.get("value"))
+        acquired_sek = _mv(item.get("acquiredValue"))
+        gain_pct     = ((value_sek - acquired_sek) / acquired_sek * 100
+                        if acquired_sek else 0.0)
+
+        # tickerSymbol exists on stocks; funds only have a name
+        ticker = ob.get("tickerSymbol") or ob.get("shortName") or ob.get("name", "")
+
         result.append({
             "order_book_id": ob_id,
-            "ticker":        ob.get("tickerSymbol", ob.get("ticker", ob.get("name", ""))),
-            "name":          ob.get("name", ""),
-            "qty":           int(float(pos.get("volume", pos.get("quantity", 0)))),
-            "avg_price":     float(pos.get("averageAcquiredPrice", pos.get("averageCost", 0))),
-            "current_price": float(pos.get("lastPrice", pos.get("currentPrice", 0))),
-            "value_sek":     float(pos.get("value", pos.get("marketValue", 0))),
-            "gain_pct":      float(pos.get("developmentInPercent", pos.get("gainPercent", 0))),
+            "ticker":        ticker,
+            "name":          instr.get("name") or ob.get("name", ""),
+            "qty":           qty,
+            "avg_price":     avg_price,
+            "current_price": cur_price,
+            "value_sek":     value_sek,
+            "gain_pct":      round(gain_pct, 2),
             "account_id":    acct_id,
-            "currency":      ob.get("currency", "USD"),
+            "currency":      instr.get("currency", "USD"),
         })
 
     return result
@@ -148,12 +186,12 @@ def get_positions(client: Avanza, account_id: str | None = None) -> list[dict]:
 def get_stock_price(client: Avanza, order_book_id: str) -> dict:
     """Return {price, currency, name} for a stock. price is 0.0 on failure."""
     try:
-        info = client.get_stock_info(order_book_id)
-        price = float(
-            info.get("lastPrice") or
-            info.get("lastPriceSek") or
-            info.get("currentPrice") or 0
-        )
+        info  = client.get_stock_info(order_book_id)
+        quote = info.get("quote") or info.get("latestTrades") or {}
+        # quote may be a dict with nested {latest: {value}} or a flat lastPrice
+        raw_price = (quote.get("latest") or quote.get("lastPrice")
+                     or info.get("lastPrice") or info.get("currentPrice"))
+        price = _mv(raw_price) if raw_price else 0.0
         return {
             "price":    price,
             "currency": info.get("currency", "USD"),
