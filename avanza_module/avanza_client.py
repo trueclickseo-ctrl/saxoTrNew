@@ -17,7 +17,11 @@ import os
 from datetime import date, timedelta
 from typing import Any
 
+import sys
+
 from avanza import Avanza, OrderType
+from avanza.entities import StopLossOrderEvent, StopLossTrigger
+from avanza.constants import StopLossPriceType, StopLossTriggerType
 
 _REQUIRED = ("AVANZA_USERNAME", "AVANZA_PASSWORD", "AVANZA_TOTP_SECRET")
 
@@ -210,6 +214,85 @@ def place_sell(client: Avanza, account_id: str, order_book_id: str,
         valid_until=date.today() + timedelta(days=7),
         volume=qty,
     )
+
+
+# ── Stop-loss orders ──────────────────────────────────────────────────────────
+
+def place_stop_loss(client: Avanza, account_id: str, order_book_id: str,
+                    qty: int, stop_price: float,
+                    sell_slippage_pct: float = 0.01) -> dict:
+    """Place a LESS_OR_EQUAL stop-loss that sells qty shares when price hits stop_price.
+
+    The sell order is a limit at stop_price × (1 - sell_slippage_pct) to
+    ensure fill through normal bid/ask spread. Valid 365 days (GTC equivalent).
+
+    Returns Avanza response: {status: 'SUCCESS', stoplossOrderId: str} or error dict.
+    """
+    trigger = StopLossTrigger(
+        type=StopLossTriggerType.LESS_OR_EQUAL,
+        value=round(stop_price, 2),
+        valid_until=date.today() + timedelta(days=365),
+        value_type=StopLossPriceType.MONETARY,
+        trigger_on_market_maker_quote=False,
+    )
+    sell_price = round(stop_price * (1 - sell_slippage_pct), 2)
+    event = StopLossOrderEvent(
+        type=OrderType.SELL,
+        price=sell_price,
+        volume=qty,
+        valid_days=1,
+        price_type=StopLossPriceType.MONETARY,
+        short_selling_allowed=False,
+    )
+    return client.place_stop_loss_order(
+        parent_stop_loss_id="0",
+        account_id=account_id,
+        order_book_id=order_book_id,
+        stop_loss_trigger=trigger,
+        stop_loss_order_event=event,
+    )
+
+
+def delete_stop_loss(client: Avanza, account_id: str, stop_loss_id: str) -> bool:
+    """Cancel an existing stop-loss order. Returns True on success."""
+    try:
+        client.delete_stop_loss_order(account_id=account_id, stop_loss_id=stop_loss_id)
+        return True
+    except Exception as exc:
+        print(f"  [avanza] delete_stop_loss {stop_loss_id}: {exc}", file=sys.stderr)
+        return False
+
+
+def get_stop_losses(client: Avanza) -> list[dict]:
+    """Return all open Avanza stop-loss orders.
+
+    Each item: {stop_loss_id, order_book_id, ticker, account_id,
+                trigger_price, volume, status, deletable}
+    """
+    try:
+        raw = client.get_all_stop_losses()
+        if not isinstance(raw, list):
+            return []
+        result = []
+        for sl in raw:
+            trigger = sl.get("trigger", {})
+            order   = sl.get("order", {})
+            ob      = sl.get("orderbook", {})
+            acct    = sl.get("account", {})
+            result.append({
+                "stop_loss_id":  str(sl.get("id", "")),
+                "order_book_id": str(ob.get("id", "")),
+                "ticker":        ob.get("shortName", ob.get("name", "")),
+                "account_id":    str(acct.get("id", "")),
+                "trigger_price": float(trigger.get("value", 0)),
+                "volume":        int(order.get("volume", 0)),
+                "status":        sl.get("status", ""),
+                "deletable":     bool(sl.get("deletable", False)),
+            })
+        return result
+    except Exception as exc:
+        print(f"  [avanza] get_stop_losses: {exc}", file=sys.stderr)
+        return []
 
 
 def search_stocks(client: Avanza, query: str, limit: int = 10) -> list[dict]:

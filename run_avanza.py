@@ -49,11 +49,14 @@ def _load_config() -> dict:
     cfg_path = os.path.join(_ROOT, "avanza_module", "config", "avanza_config.json")
     with open(cfg_path, encoding="utf-8") as f:
         raw = json.load(f)
+    risk = raw.get("risk", {})
     return {
-        "budget_sek":      float(raw["capital"]["budget_sek"]),
-        "max_positions":   int(raw["capital"]["max_positions"]),
-        "cash_buffer_pct": float(raw["capital"]["cash_buffer_pct"]),
-        "min_trade_sek":   float(raw["capital"]["min_trade_sek"]),
+        "budget_sek":             float(raw["capital"]["budget_sek"]),
+        "max_positions":          int(raw["capital"]["max_positions"]),
+        "cash_buffer_pct":        float(raw["capital"]["cash_buffer_pct"]),
+        "min_trade_sek":          float(raw["capital"]["min_trade_sek"]),
+        "stop_pct":               float(risk.get("stop_pct", 0.08)),
+        "stop_sell_slippage_pct": float(risk.get("stop_sell_slippage_pct", 0.01)),
     }
 
 
@@ -175,6 +178,9 @@ def main() -> None:
                         help="Show account summary and exit")
     parser.add_argument("--dashboard", action="store_true",
                         help="Live refreshing dashboard")
+    parser.add_argument("--trail-stops", action="store_true",
+                        help="Ratchet stop-loss orders up as positions appreciate "
+                             "(dry-run unless --execute is also passed)")
     parser.add_argument("--resolve-tickers", nargs="+", metavar="TICKER",
                         help="Test ticker → order_book_id lookup and exit")
     parser.add_argument("--interval",  type=int, default=30,
@@ -216,6 +222,11 @@ def main() -> None:
 
     if args.dashboard:
         cmd_dashboard(client, account_id, interval=args.interval)
+        return
+
+    if args.trail_stops:
+        config = _load_config()
+        ex.trail_stops(client, account_id, config, dry_run=not args.execute)
         return
 
     # Default: rebalance (dry-run unless --execute)

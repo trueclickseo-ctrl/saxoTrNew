@@ -21,5 +21,10 @@
   "account": {
     "type": "ISK",
     "account_id_env": "AVANZA_ACCOUNT_ID"
+  },
+
+  "risk": {
+    "stop_pct":              0.08,
+    "stop_sell_slippage_pct": 0.01
   }
 }

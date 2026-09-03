@@ -337,9 +337,28 @@ def run_rebalance(client: "Avanza", account_id: str,
             if status == "SUCCESS" or order_id:
                 print(f"  ✓ {side} order placed — orderId={order_id}")
                 if side == "BUY":
-                    state.record_order(ticker, ob_id, "BUY", qty, price,
-                                       order_id, value_sek=action["value_sek"])
+                    trade_id = state.record_order(ticker, ob_id, "BUY", qty, price,
+                                                  order_id, value_sek=action["value_sek"])
                     executed_buys += 1
+                    # ── Place stop-loss immediately after entry ────────────────
+                    stop_pct      = float(config.get("stop_pct", 0.08))
+                    slippage_pct  = float(config.get("stop_sell_slippage_pct", 0.01))
+                    initial_stop  = round(price * (1 - stop_pct), 2)
+                    try:
+                        sl_resp   = ac.place_stop_loss(client, account_id, ob_id, qty,
+                                                       initial_stop, slippage_pct)
+                        sl_id     = sl_resp.get("stoplossOrderId") if isinstance(sl_resp, dict) else None
+                        sl_status = sl_resp.get("status", "") if isinstance(sl_resp, dict) else ""
+                        if sl_id or sl_status == "SUCCESS":
+                            state.update_stop(trade_id, sl_id, initial_stop, price)
+                            print(f"    ✓ Stop-loss @ {initial_stop:.2f} "
+                                  f"({stop_pct*100:.0f}% below {price:.2f}) — id={sl_id}")
+                        else:
+                            print(f"    ⚠ Stop-loss FAILED: {sl_resp} — "
+                                  f"position unprotected, place manually @ {initial_stop:.2f}")
+                    except Exception as sl_exc:
+                        print(f"    ⚠ Stop-loss error: {sl_exc} — "
+                              f"position unprotected, place manually @ {initial_stop:.2f}")
                 else:
                     state.record_close(ticker, ob_id, qty, price, order_id,
                                        pnl_sek=0.0)
@@ -368,3 +387,114 @@ def run_rebalance(client: "Avanza", account_id: str,
     }
     state.write_status(summary)
     return summary
+
+
+# ── Trailing stop management ──────────────────────────────────────────────────
+
+def trail_stops(client: "Avanza", account_id: str,
+                config: dict, dry_run: bool = True) -> dict:
+    """Ratchet Avanza stop-loss orders upward as positions appreciate.
+
+    For each open BUY position, computes:
+        trailing_high = max(recorded high, current price)
+        new_stop      = trailing_high × (1 - stop_pct)
+
+    If new_stop > current stop by more than $0.01, cancels the existing
+    stop-loss and places a fresh one. DB is updated with the new IDs.
+
+    Returns {updated, skipped, errors}.
+    """
+    stop_pct     = float(config.get("stop_pct", 0.08))
+    slippage_pct = float(config.get("stop_sell_slippage_pct", 0.01))
+    min_move     = 0.01  # ignore sub-cent ratchets
+
+    open_buys = state.get_open_buy_positions()
+    if not open_buys:
+        print("  No open buy positions to trail.")
+        return {"updated": 0, "skipped": 0, "errors": 0}
+
+    # Live prices from Avanza account positions
+    live_positions = ac.get_positions(client, account_id)
+    price_map  = {p["order_book_id"]: p["current_price"] for p in live_positions}
+    price_map2 = {p["ticker"].upper(): p["current_price"] for p in live_positions}
+
+    # Existing stop-losses on Avanza (to confirm IDs are still live)
+    live_stops = {sl["stop_loss_id"]: sl for sl in ac.get_stop_losses(client)}
+
+    w = 72
+    print(f"\n  {'─' * w}")
+    print(f"  AVANZA TRAILING STOP UPDATE  "
+          f"({'DRY RUN — no changes' if dry_run else 'LIVE'})")
+    print(f"  {'─' * w}")
+    print(f"  {'Ticker':<8} {'Entry':>8} {'CurPrice':>9} {'TrailHigh':>10} "
+          f"{'CurStop':>9} {'NewStop':>9}  Action")
+    print(f"  {'─' * w}")
+
+    updated = skipped = errors = 0
+
+    for trade in open_buys:
+        ticker    = trade.get("ticker", "?")
+        ob_id     = trade.get("order_book_id", "")
+        qty       = int(trade.get("qty") or 0)
+        trade_id  = trade["id"]
+
+        entry_price  = float(trade.get("entry_price") or trade.get("price") or 0)
+        trail_high   = float(trade.get("trailing_stop_high") or entry_price)
+        cur_stop     = float(trade.get("stop_price") or (entry_price * (1 - stop_pct)))
+        old_sl_id    = trade.get("stop_order_id")
+
+        # Resolve live price — prefer order_book_id, fall back to ticker symbol
+        cur_price = price_map.get(ob_id) or price_map2.get(ticker.upper()) or 0.0
+        if not cur_price:
+            print(f"  {ticker:<8} — no live price, skipping")
+            skipped += 1
+            continue
+
+        new_high = max(trail_high, cur_price)
+        new_stop = round(new_high * (1 - stop_pct), 2)
+
+        # Determine action label
+        if new_stop > cur_stop + min_move:
+            action = "RATCHET UP"
+        elif not old_sl_id or (old_sl_id and old_sl_id not in live_stops):
+            action = "PLACE MISSING"
+        else:
+            action = "hold"
+
+        print(f"  {ticker:<8} {entry_price:>8.2f} {cur_price:>9.2f} "
+              f"{new_high:>10.2f} {cur_stop:>9.2f} {new_stop:>9.2f}  {action}")
+
+        if action == "hold":
+            skipped += 1
+            continue
+
+        if dry_run:
+            continue
+
+        # ── Cancel existing stop if present and still live ────────────────────
+        if old_sl_id and old_sl_id in live_stops and live_stops[old_sl_id].get("deletable"):
+            ac.delete_stop_loss(client, account_id, old_sl_id)
+
+        # ── Place new (or first) stop ──────────────────────────────────────────
+        try:
+            sl_resp = ac.place_stop_loss(client, account_id, ob_id, qty,
+                                         new_stop, slippage_pct)
+            new_sl_id = sl_resp.get("stoplossOrderId") if isinstance(sl_resp, dict) else None
+            sl_status = sl_resp.get("status", "") if isinstance(sl_resp, dict) else ""
+            if new_sl_id or sl_status == "SUCCESS":
+                state.update_stop(trade_id, new_sl_id, new_stop, new_high)
+                print(f"    ✓ {ticker}: stop {cur_stop:.2f} → {new_stop:.2f} "
+                      f"(high={new_high:.2f}) id={new_sl_id}")
+                updated += 1
+            else:
+                print(f"    ✗ {ticker}: stop placement failed: {sl_resp}")
+                errors += 1
+        except Exception as exc:
+            print(f"    ✗ {ticker}: {exc}")
+            errors += 1
+
+    print(f"  {'─' * w}")
+    print(f"  Result: {updated} updated, {skipped} unchanged, {errors} errors")
+    if dry_run and (updated + errors) > 0:
+        print("  [DRY RUN] Pass --execute to apply.")
+    return {"updated": updated, "skipped": skipped, "errors": errors}

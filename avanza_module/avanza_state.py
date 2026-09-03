@@ -41,6 +41,22 @@ CREATE TABLE IF NOT EXISTS trades (
 );
 """
 
+# Columns added after the initial schema — applied once if missing.
+_MIGRATIONS = [
+    "ALTER TABLE trades ADD COLUMN stop_order_id     TEXT",
+    "ALTER TABLE trades ADD COLUMN stop_price        REAL",
+    "ALTER TABLE trades ADD COLUMN trailing_stop_high REAL",
+]
+
+
+def _apply_migrations(con: sqlite3.Connection) -> None:
+    for sql in _MIGRATIONS:
+        try:
+            con.execute(sql)
+            con.commit()
+        except sqlite3.OperationalError:
+            pass  # column already exists — safe to ignore
+
 
 def _conn() -> sqlite3.Connection:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -48,6 +64,7 @@ def _conn() -> sqlite3.Connection:
     con.row_factory = sqlite3.Row
     con.execute(_SCHEMA)
     con.commit()
+    _apply_migrations(con)
     return con
 
 
@@ -69,6 +86,26 @@ def record_order(ticker: str, order_book_id: str, side: str, qty: int,
              value_sek, order_id, "OPEN", today, price, note)
         )
         return cur.lastrowid
+
+
+def update_stop(trade_id: int, stop_order_id: str | None,
+                stop_price: float, trailing_stop_high: float) -> None:
+    """Persist stop-loss tracking fields on an open BUY trade."""
+    with _conn() as con:
+        con.execute(
+            "UPDATE trades SET stop_order_id=?, stop_price=?, trailing_stop_high=? WHERE id=?",
+            (stop_order_id, round(stop_price, 4), round(trailing_stop_high, 4), trade_id),
+        )
+
+
+def get_open_buy_positions() -> list[dict]:
+    """Return all open BUY rows (status OPEN or FILLED) — i.e. positions currently held."""
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM trades WHERE side='BUY' AND status IN ('OPEN','FILLED') "
+            "ORDER BY entry_date DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def mark_filled(order_id: str, fill_price: float | None = None,
