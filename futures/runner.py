@@ -854,7 +854,15 @@ def _run_strategy_exits(strat_name: str, strat_mod, positions: dict,
             logger.info(f"[DRY][{strat_name}] {close_side} {qty}x {sym}[{tag}] "
                         f"— {reason} @ ~{live_px:.4f}  P&L {pnl_pct:+.1f}%")
         else:
-            resp = _post("/trade/v2/orders", order)
+            try:
+                resp = _post("/trade/v2/orders", order)
+            except requests.exceptions.HTTPError as _close_err:
+                _sc = _close_err.response.status_code if _close_err.response is not None else 0
+                logger.warning(
+                    f"[{strat_name}] EXIT {sym}: close order FAILED ({_sc}) — "
+                    f"{_close_err}; will retry next run (market may be closed)"
+                )
+                continue  # leave position in state; retry on next hourly run
             logger.info(f"[{strat_name}] {close_side} {resp.get('OrderId','?')}: "
                         f"{qty}x {sym}[{tag}] — {reason} @ ~{live_px:.4f}  P&L {pnl_pct:+.1f}%")
 
