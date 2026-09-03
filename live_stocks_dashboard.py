@@ -110,18 +110,23 @@ def _load_uic_map() -> dict:
         return {}
 
 
-def _live_prices_from_saxo() -> tuple[dict, str | None]:
-    """Return ({ticker: price_usd}, error_reason | None) from LIVE Saxo.
+def _live_prices_from_saxo() -> tuple[dict, dict, str | None]:
+    """Return ({ticker: price_usd}, {ticker: saxo_pnl_usd}, error | None).
+
+    saxo_pnl_usd is ProfitLossOnTrade from Saxo's positions endpoint — the
+    same net-of-commission figure shown in Saxo's own positions view. When
+    available it should be used instead of (now-entry)*shares so the dashboard
+    P&L matches what Saxo displays.
 
     Strategy 1 — positions endpoint (fast, single call):
         Saxo symbols look like 'DELL:xnys' — strip after ':'.
     Strategy 2 — per-ticker /infoprices via instrument_map_live.csv UICs
-        (fills gaps when the positions endpoint misses a ticker).
-    Returns an error string when both strategies fail (token expired, network,
-    etc.) so the dashboard can display the reason rather than silent dashes.
+        (fills gaps when the positions endpoint misses a ticker, prices only,
+        no P&L — those rows keep the gross (now-entry)*shares fallback).
     """
     import saxo_client
-    out: dict = {}
+    out: dict     = {}
+    pnl_out: dict = {}
     s1_err: str | None = None
 
     # Strategy 1: positions endpoint
@@ -137,6 +142,12 @@ def _live_prices_from_saxo() -> tuple[dict, str | None]:
             price = view.get("CurrentPrice") or base.get("CurrentPrice") or 0
             if sym and price:
                 out[sym] = float(price)
+            # ProfitLossOnTrade is in the instrument's trade currency (USD for
+            # US stocks). It matches Saxo's own UI figure (includes commission
+            # provision) so we prefer it over (now-entry)*shares.
+            pnl = view.get("ProfitLossOnTrade")
+            if sym and pnl is not None:
+                pnl_out[sym] = float(pnl)
     except Exception as _e:
         s1_err = str(_e)[:120]
 
@@ -171,7 +182,7 @@ def _live_prices_from_saxo() -> tuple[dict, str | None]:
             error = f"SAXO unreachable: {raw_err[:80]}"
         else:
             error = "SAXO live prices unavailable"
-    return out, error
+    return out, pnl_out, error
 
 
 _PNL_RESET_PATH = os.path.join(BASE_DIR, "data", "pnl_reset.json")
@@ -273,8 +284,8 @@ def render() -> str:
         L.append(f"  Pooled margin utilization : {col}{util:.1f}%{W}  {DM}(50% entry gate){W}")
 
     # ── Open positions — top of dashboard ────────────────────────────────────
-    openp          = _rows("select * from trades where exit_price is null order by entry_date")
-    live_px, lp_err = _live_prices_from_saxo()
+    openp                    = _rows("select * from trades where exit_price is null order by entry_date")
+    live_px, live_pnl, lp_err = _live_prices_from_saxo()
     today          = datetime.now().date()
     L.append("")
     px_status = (f"  {RD}⚠ {lp_err}{W}" if lp_err
@@ -306,10 +317,14 @@ def render() -> str:
                 mom_day = (today - ed_date).days + 1
             except Exception:
                 mom_day = 0
-            # live price (fall back to trailing_stop_high reference if unavailable)
-            now_px = live_px.get(ticker.upper(), 0)
+            # live price + P&L from Saxo's positions endpoint.
+            # ProfitLossOnTrade is Saxo's own net figure (matches their UI,
+            # includes commission provision). Falls back to gross (now-entry)*shrs
+            # when positions endpoint didn't return P&L for this ticker.
+            now_px  = live_px.get(ticker.upper(), 0)
+            saxo_pl = live_pnl.get(ticker.upper())   # None when not from positions endpoint
             if now_px > 0:
-                pnl_usd = (now_px - entry) * shrs
+                pnl_usd = saxo_pl if saxo_pl is not None else (now_px - entry) * shrs
                 chg_pct = (now_px - entry) / entry * 100 if entry else 0
             else:
                 pnl_usd = 0.0
