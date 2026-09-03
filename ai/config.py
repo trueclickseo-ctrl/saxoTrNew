@@ -129,6 +129,23 @@ _DEFAULTS = {
         "journal": True,
         "basket_ranker_blend": True,
     },
+    # ── AI Research Analyst (2026-09-03, roadmap #19) ─────────────────────
+    # ai/features/research_analyst.py -- OFFLINE, READ-ONLY. Aggregates the
+    # closed-trade record + the Journal + the decomposition harness into a
+    # digest, has an LLM propose SPECIFIED testable strategy filters, auto-
+    # runs the cheap decomposition gate, and keeps a triaged backlog
+    # (data/ai_research_hypotheses.jsonl). It NEVER edits a strategy or
+    # touches an order -- a human writes the deterministic gate and ships a
+    # SIM A/B twin. Ships OFF. Needs an ANTHROPIC_API_KEY for the propose
+    # step (degrades to digest-only without one).
+    #   sweep_years            -- how far back the decomposition replay goes
+    #   max_hypotheses_per_run -- hard cap on LLM-proposed hypotheses/run
+    "research_analyst": {
+        "enabled": False,
+        "model": "claude-sonnet-5",
+        "sweep_years": 13,
+        "max_hypotheses_per_run": 8,
+    },
 }
 
 
@@ -287,6 +304,21 @@ def basket_ranker_applies(account_env: str) -> bool:
     basket-ranker's pick is TRADED rather than just logged. Everywhere else
     the deterministic basket is authoritative (governance)."""
     return account_env == "ai_sim" and stocks_basket_ranker_enabled("ai_sim")
+
+
+def research_analyst_cfg() -> dict:
+    """The config/ai.json `research_analyst` block (merged over defaults)."""
+    s = _load().get("research_analyst")
+    return s if isinstance(s, dict) else dict(_DEFAULTS["research_analyst"])
+
+
+def research_analyst_enabled() -> bool:
+    """Master switch for ai/features/research_analyst.py. OFF unless the
+    `research_analyst` block's `enabled` is true. The analyst is offline and
+    read-only -- it never trades -- so it is NOT gated by agent_enabled /
+    shadow_mode / any account; it only needs its own flag (and an API key,
+    which it degrades gracefully without)."""
+    return bool(research_analyst_cfg().get("enabled", False))
 
 
 def config_path() -> str:
