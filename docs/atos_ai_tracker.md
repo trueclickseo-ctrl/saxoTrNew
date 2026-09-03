@@ -186,6 +186,29 @@ Not in the v1 sprint plan. Cheap interim version (hardcoded economic-calendar bl
 
 ## Change log for THIS file
 
+- **2026-09-04 — Avanza ISK sleeve (US Blend mirror, semi-automatic)**
+
+  New module `avanza_module/` — a semi-manual execution sleeve that mirrors the ATOS US Blend signal onto a Swedish Avanza ISK account. No automatic unattended execution of new positions; every BUY/SELL requires interactive confirmation (`run_avanza.py --execute`). The daily trail-stops pass (`--trail-stops --execute`) is scheduled and runs unattended (protective only — raises existing stop-losses, never opens positions).
+
+  **What shipped:**
+  - `avanza_module/avanza_client.py` — authenticated Avanza client (TOTP 2FA via `.env.avanza`); `get_account_summary`, `get_positions`, `get_stock_price` (quote.last), `place_buy/sell`, `place_stop_loss/delete_stop_loss/get_stop_losses`; `search_stocks` correctly parses `orderBookId` and extracts ticker from `title` field ("Dell Technologies C (DELL)" → "DELL"); `confirm_fill` polls open orders every 10s (up to 120s) then cancels if unfilled; `cancel_order` wrapper.
+  - `avanza_module/avanza_instrument_cache.py` — disk-backed ticker → `orderBookId` cache; scoring prefers exact ticker + US + USD + NYSE/NASDAQ.
+  - `avanza_module/avanza_state.py` — SQLite ledger (`data/avanza_trades.db`); `record_order`, `mark_filled`, `mark_cancelled`, `update_stop`, `get_open_buy_positions`; idempotent column migrations for `stop_order_id`, `stop_price`, `trailing_stop_high`.
+  - `avanza_module/avanza_executor.py` — `run_rebalance` reads US Blend signal from `data/stocks_live_status.json`; computes BUY/SELL/HOLD/SKIP actions equal-weight across budget; for each confirmed BUY: polls fill, records actual fill price, places native Avanza stop-loss at 8% below fill. `trail_stops` ratchets stop-loss orders upward daily.
+  - `avanza_module/config/avanza_config.json` — `budget_sek:36000`, `max_positions:10`, `stop_pct:0.08`, `stop_sell_slippage_pct:0.01`.
+  - `run_avanza.py` — CLI (`--execute`, `--positions`, `--info`, `--dashboard`, `--trail-stops`, `--resolve-tickers`). Credentials from `.env.avanza` (gitignored).
+  - `run_avanza_trail_stops.bat` + `setup_scheduler_avanza_trail_stops.ps1` — registers "ATOS Avanza Trail Stops" in Task Scheduler, daily 21:00 PKT (12:00 ET).
+  - `scheduler_watchdog.py` — "Avanza Trail Stops" added to `WINDOWS_TASKS` (`max_log_age_hours=26`, once-daily; not in `INTRADAY_REPEATING_TASKS`; watchdog alerts but does not auto-restart).
+  - `test_2026_09_04_avanza_module.py` — **39 tests** (all pure-logic, no live API): `_mv` nested dict parsing, ticker extraction, `search_stocks` field mapping, `_score_hit` scoring, `lookup` cache hit/miss/sentinel, state CRUD, `compute_actions` BUY/SELL/HOLD/SKIP, `confirm_fill` filled + timeout paths. All 39 ✅.
+
+  **Operator steps** (run once after funds are transferred tomorrow):
+  1. `python run_avanza.py --resolve-tickers HUM DELL STT HPE U FTNT AES PEN` — rebuild cache.
+  2. `python run_avanza.py` — verify dry-run plan looks correct.
+  3. `python run_avanza.py --execute` — place orders interactively.
+  4. `powershell -ExecutionPolicy Bypass -File setup_scheduler_avanza_trail_stops.ps1` (as Admin) — register the daily trail-stops task.
+
+  **Claude never places Avanza trades / runs `--execute`.** Account 9551-5834714 (Avanza Swing ISK). Credentials in `.env.avanza` (gitignored, never committed).
+
 - **2026-09-04 (`aa57ca0`) — Futures + ETF twice daily during US market hours**
 
   - Futures scanner rescheduled to **19:30 PKT (10:30 ET)** + new **23:00 PKT (14:00 ET)** midday run. Both inside US market hours (18:30–01:00 PKT / 09:30–16:00 ET). Operator runs `setup_scheduler_futures_midday.ps1` as Administrator to register.
