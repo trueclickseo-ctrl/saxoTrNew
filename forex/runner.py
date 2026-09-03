@@ -337,7 +337,8 @@ SLOTS_PER_STRATEGY = {
     "ema": _SWING_SLOTS, "advanced_ema": _SWING_SLOTS,  # advanced_ema (2026-08-30): uncapped, mirrors "ema" for a clean A/B
     "ema_trend": _SWING_SLOTS,   # 2026-09-02: mirrors "ema" -- full universe, clean A/B
     "bb_quality": _SWING_SLOTS,  # 2026-09-02: mirrors "bb"  -- full universe, clean A/B
-    "rsi": _SWING_SLOTS, "rsi_trend": _SWING_SLOTS, "donchian": _SWING_SLOTS, "bb": _SWING_SLOTS,
+    "rsi": _SWING_SLOTS, "rsi_trend": _SWING_SLOTS, "rsi_atr": _SWING_SLOTS,  # 2026-09-03: rsi_atr SIM twin
+    "donchian": _SWING_SLOTS, "bb": _SWING_SLOTS,
     "pullback": _SWING_SLOTS, "gap": _SWING_SLOTS, "gap_weekend": _SWING_SLOTS,
     # 2026-08-30: the 4 user-supplied "advanced_*_master" A/B strategies --
     # each uncapped, mirroring its original (rsi / bb / pullback / cnn_lstm)

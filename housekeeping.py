@@ -64,6 +64,7 @@ FOREX_STATE   = os.path.join(_DATA, "forex_state.json")
 FUTURES_STATE = os.path.join(_DATA, "futures_state.json")
 ETF_STATE     = os.path.join(_ROOT, "saxo_etf_strategy", "data", "etf_positions.json")
 ATOS_DB       = os.path.join(_DATA, "atos_live.db")
+ATOS_AI_DB    = os.path.join(_DATA, "atos_ai.db")    # AI SIM twin trades
 
 
 # ── Normalized record ─────────────────────────────────────────────────────
@@ -411,34 +412,44 @@ class StocksAdapter(BaseAdapter):
         return load_instrument_map()
 
     def load(self) -> list[LocalPosition]:
-        if not os.path.exists(ATOS_DB):
-            return []
         imap = self._imap()
-        by_ticker = {}
-        for _, info in imap.items():
-            by_ticker[info.get("symbol", "")] = info
-        con = sqlite3.connect(ATOS_DB)
-        con.row_factory = sqlite3.Row
-        cur = con.cursor()
-        # COALESCE(paper,0)=0 -- skip locally-simulated fills (Saxo SIM order
-        # engine was down; booked with paper=1 in atos_runner). They have no
-        # Saxo counterpart and are managed entirely by ATOS's own should_exit()
-        # logic; reconciliation must not see them or it flags ledger drift.
-        # Same treatment as ForexAdapter's `if v.get("paper"): continue`.
-        cur.execute("SELECT id, ticker, direction, shares FROM trades "
-                    "WHERE exit_date IS NULL AND COALESCE(paper, 0) = 0")
-        out = []
-        for row in cur.fetchall():
-            info = by_ticker.get(row["ticker"])
-            if not info:
+        # Key by the Yahoo ticker (imap key), which is what atos_live.db stores
+        # in the `ticker` column.  The old code used info.get("symbol","") which
+        # is the Saxo format ('HUM:xnys') — a mismatch that silently returned []
+        # for every DB row, making ALL real stock positions appear unattributable.
+        by_ticker: dict[str, dict] = dict(imap)
+        out: list[LocalPosition] = []
+        # Read both the main ATOS SIM DB and the AI SIM twin DB so housekeeping
+        # can see positions opened by atos_ai_stocks.py (which writes atos_ai.db
+        # and uses the same Saxo SIM account).  Positions absent from both DBs
+        # are genuinely unattributable; positions in either one are tracked.
+        for db_path in (ATOS_DB, ATOS_AI_DB):
+            if not os.path.exists(db_path):
                 continue
-            direction = "Buy" if (row["direction"] or "BUY").upper() == "BUY" else "Sell"
-            out.append(LocalPosition(
-                module=self.module, key=str(row["id"]), uic=info["uic"], symbol=row["ticker"],
-                direction=direction, quantity=int(row["shares"]), asset_type="Stock",
-                stop_order_id=None,
-            ))
-        con.close()
+            try:
+                con = sqlite3.connect(db_path)
+                con.row_factory = sqlite3.Row
+                # COALESCE(paper,0)=0 -- skip locally-simulated fills (Saxo SIM
+                # order engine was down; booked with paper=1 in atos_runner).
+                rows = con.execute(
+                    "SELECT id, ticker, direction, shares FROM trades "
+                    "WHERE exit_date IS NULL AND COALESCE(paper, 0) = 0"
+                ).fetchall()
+                for row in rows:
+                    info = by_ticker.get(row["ticker"])
+                    if not info:
+                        continue
+                    direction = "Buy" if (row["direction"] or "BUY").upper() == "BUY" else "Sell"
+                    out.append(LocalPosition(
+                        module=self.module,
+                        key=f"{os.path.basename(db_path)}:{row['id']}",
+                        uic=info["uic"], symbol=row["ticker"],
+                        direction=direction, quantity=int(row["shares"]),
+                        asset_type="Stock", stop_order_id=None,
+                    ))
+                con.close()
+            except Exception:
+                pass
         return out
 
     def save(self, positions: list[LocalPosition], removed_keys: list[str]) -> None:

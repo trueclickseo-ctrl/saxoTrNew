@@ -202,6 +202,15 @@ def _close_untracked_sim(f: "housekeeping.Finding") -> FixOutcome:
                           f"money, so ATOS closed it rather than paging a human.",
                           uic=uic, auto_resolved=True)
     except Exception as exc:
+        exc_str = str(exc)
+        if "SellOrdersAlreadyExistForOwnedContracts" in exc_str:
+            # Position already has a stop/sell order — it is covered.
+            # No flat-close needed; clear any outstanding attention for it.
+            return FixOutcome(
+                "mismatch", f.module, f.symbol, "auto_close_untracked_stop_covered", True,
+                f"SIM: unattributable {side.lower()} of {abs(net):,.0f} (uic {uic}) is "
+                f"already covered by an existing stop/sell order — no flat-close sent. "
+                f"Position is protected; attention cleared.", uic=uic, auto_resolved=True)
         return FixOutcome("mismatch", f.module, f.symbol, "auto_close_untracked", False,
                           f"SIM: tried to flat-close an unattributable {side.lower()} of "
                           f"{abs(net):,.0f} (uic {uic}) but Saxo rejected it: {exc}", uic=uic)
@@ -352,11 +361,14 @@ def _escalate_unfixed(outcomes: list[FixOutcome]) -> None:
     also delivers items raised by the LIVE agents and the runner."""
     try:
         for o in outcomes:
-            if o.action != "auto_close_untracked":
+            if o.action not in ("auto_close_untracked", "auto_close_untracked_stop_covered"):
                 continue
             key = f"safeguard-sim:untracked:{o.module}:{o.symbol}"
             if o.fixed or o.auto_resolved:
-                attention.clear_attention(key, note="ATOS flat-closed it")
+                note = ("covered by existing stop — no flat-close needed"
+                        if o.action == "auto_close_untracked_stop_covered"
+                        else "ATOS flat-closed it")
+                attention.clear_attention(key, note=note)
             else:
                 attention.raise_attention(
                     key, source="safeguard (SIM)",
