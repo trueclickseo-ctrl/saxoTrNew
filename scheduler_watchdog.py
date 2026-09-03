@@ -270,6 +270,7 @@ WINDOWS_TASKS = {
     # grace 30 min (fast run, < 1 min once sklearn is loaded); max_first_run_wait
     # 26h (daily task -- allow for one missed midnight before alerting).
     "AI Outcome Predictor": ("ATOS AI Outcome Predictor", "ai_outcome_predictor.log", 30, 26),
+    "Stock Outcome Predictor": ("ATOS Stock Outcome Predictor", "ai_stock_outcome_predictor.log", 30, 26),
 }
 
 # ── Registry: Claude-native scheduled tasks (no Windows entry) ──────────────

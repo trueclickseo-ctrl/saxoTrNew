@@ -197,6 +197,14 @@ LEGACY_PER_MARKET_STRATEGY_ENABLED = False
 # Then flip this to True when the verdict is ENABLE.
 US_REVERSION_ENABLED = True   # SIM enabled 2026-08-08 — honest OOS validated (Sharpe 2.39, WR 70%)
 
+# ── USA Strategy signals (2026-09-03) ──────────────────────────────────────
+# 4 independent SIM-only strategies from the usa_strategy package:
+#   SMAStrategy (US SMA Crossover), RSIStrategy (US RSI Reversal),
+#   MomentumStrategy (US Momentum), EnsembleStrategy (US Ensemble).
+# Runs on the same US universe; tracked in the trades table with distinct
+# strategy names; visible on the dashboard. CORE STRATEGIES UNTOUCHED.
+US_SIGNALS_ENABLED = True
+
 # ── SIM paper-fill fallback (2026-09-01) ──────────────────────────────────
 # Mirrors forex/runner.py's SIM_PAPER_FILL_ON_REJECT. Saxo SIM's order
 # engine has been rejecting essentially every order with
@@ -1197,6 +1205,14 @@ def run_cycle():
                              available_cash_sek=rev_budget)
         except Exception as e:
             print(f"  [US reversion] ERROR: {e}")
+
+    # ── 6e. USA Strategy signals (SIM-only, 4 strategies) ─────────
+    if US_SIGNALS_ENABLED:
+        print("  Running USA strategy signals (SMA/RSI/Momentum/Ensemble)...")
+        try:
+            run_us_signals(feat_data, db.get_open_trades(), todays_actions)
+        except Exception as e:
+            print(f"  [US signals] ERROR: {e}")
 
     # ── 7. Learning pass ──────────────────────────────────────────
     print("  Running learning pass...")
@@ -2597,6 +2613,197 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
                 })
         except Exception as _sig_err:
             print(f"  {tag} signal log failed for {tk}: {_sig_err}")
+
+
+# ── USA Strategy signals — SIM only ───────────────────────────────────────────
+
+def run_us_signals(feat_data: dict, open_trades: list, todays_actions: list) -> None:
+    """
+    Run the 4 usa_strategy strategies (SMA Crossover, RSI Reversal, Momentum,
+    Ensemble) on the US universe. SIM-only — never called from
+    atos_live_stocks.py. Core strategies (US Blend, US Reversion) untouched.
+
+    Entry: BUY signal from a strategy; max MAX_POSITIONS_PER_STRATEGY open
+           simultaneously per strategy; 1 position per (ticker, strategy) pair.
+    Stop:  ATR * 2.0, floor at 6% below entry.
+    Exit:  SELL signal from same strategy, hard stop hit, or 30-day time limit.
+    Size:  SIGNALS_SLOT_SEK SEK per slot (fixed, SIM only).
+    """
+    from atos.us_signals import (
+        get_entry_signals, should_exit, compute_stop,
+        ALL_SIGNAL_STRATEGY_NAMES, MAX_POSITIONS_PER_STRATEGY,
+    )
+    from instrument_map import load_instrument_map
+
+    SIGNALS_SLOT_SEK = 5_000.0     # SEK per position slot (SIM paper money)
+
+    tag = "[US signals]"
+    if kill_switch_active():
+        print(f"  {tag} STOP_TRADING present — skip"); return
+
+    try:
+        imap = load_instrument_map()
+    except Exception as e:
+        print(f"  {tag} instrument_map load failed: {e}"); return
+
+    fx_usd = _rate_to_sek("USD")
+    today_str = date.today().isoformat()
+
+    # Current open US Signals positions, keyed by (ticker, strategy)
+    sig_open: dict[tuple, dict] = {
+        (t["ticker"], t["strategy"]): t
+        for t in open_trades
+        if t.get("strategy") in ALL_SIGNAL_STRATEGY_NAMES
+    }
+
+    def _price(tk: str) -> float:
+        try:
+            return float(feat_data[tk]["Close"].iloc[-1])
+        except Exception:
+            return 0.0
+
+    # ── 1. Exits ──────────────────────────────────────────────────────────────
+    for (ticker, strategy), trade in list(sig_open.items()):
+        cur_price = _price(ticker)
+        if cur_price <= 0 or ticker not in feat_data:
+            continue
+        exit_flag, reason = should_exit(trade, feat_data[ticker], cur_price)
+        if not exit_flag:
+            continue
+        sh = trade.get("shares", 0) or 0
+        is_paper = bool(trade.get("paper"))
+        print(f"  {tag} EXIT {ticker} [{strategy}]: {reason}{' [PAPER]' if is_paper else ''}")
+        uic = imap.get(ticker, {}).get("uic")
+        try:
+            if uic and sh > 0 and not is_paper:
+                saxo_client.place_market_order(uic, "Stock", "Sell", sh)
+            comm_exit = commission_sek(sh, sh * cur_price * fx_usd)
+            pnl_sek = (cur_price - trade.get("entry_price", 0)) * sh * fx_usd - comm_exit
+            db.close_trade(trade["id"], exit_price=cur_price,
+                           exit_reason=reason, pnl_sek=pnl_sek,
+                           commission_sek=comm_exit)
+            _append_trade_log(
+                strategy, "SELL", ticker, sh, cur_price,
+                sh * cur_price * fx_usd, pnl_sek, reason,
+                entry_date=trade.get("entry_date", ""), days_held=0,
+            )
+            todays_actions.append({
+                "action": "SELL", "ticker": ticker, "market_group": "US Equities",
+                "strategy": strategy, "score": 0, "shares": sh,
+                "price": cur_price, "reason": f"signals exit: {reason}",
+                "pnl_sek": pnl_sek,
+            })
+        except Exception as e:
+            print(f"  {tag} sell {ticker} FAILED: {e}")
+
+    # ── 2. Entries ────────────────────────────────────────────────────────────
+    # Re-read to reflect exits that just happened
+    sig_open_now: dict[tuple, bool] = {
+        (t["ticker"], t["strategy"]): True
+        for t in db.get_open_trades()
+        if t.get("strategy") in ALL_SIGNAL_STRATEGY_NAMES
+    }
+    # Count open positions per strategy
+    per_strategy_open: dict[str, int] = {}
+    for _, strat in sig_open_now:
+        per_strategy_open[strat] = per_strategy_open.get(strat, 0) + 1
+
+    for ticker in US_TICKERS:
+        if ticker not in feat_data:
+            continue
+        cur_price = _price(ticker)
+        if cur_price <= 0:
+            continue
+        uic = imap.get(ticker, {}).get("uic")
+        if not uic:
+            continue
+
+        signals = get_entry_signals(ticker, feat_data[ticker])
+        for sig in signals:
+            strategy = sig["strategy_name"]
+            pair_key = (ticker, strategy)
+            if pair_key in sig_open_now:
+                continue   # already holding this (ticker, strategy) pair
+            if per_strategy_open.get(strategy, 0) >= MAX_POSITIONS_PER_STRATEGY:
+                continue   # strategy's slot limit reached
+
+            shares = max(1, int(SIGNALS_SLOT_SEK / (cur_price * fx_usd)))
+            shares = _sim_cap_shares(shares, cur_price, fx_usd)
+            stop = compute_stop(feat_data[ticker], cur_price)
+
+            print(f"  {tag} BUY {ticker} [{strategy}] "
+                  f"@ {cur_price:.2f} x{shares} "
+                  f"(conf={sig['confidence']:.2f}) stop={stop:.2f}")
+
+            entry_oid = None
+            is_paper  = False
+            try:
+                entry_oid = saxo_client.place_market_order(
+                    uic, "Stock", "Buy", shares, env="sim")
+            except Exception as e:
+                print(f"  {tag} order {ticker} rejected: {e}")
+
+            filled_price = cur_price
+            if entry_oid:
+                ok, fp = _confirm_stock_fill(entry_oid, uic)
+                if ok:
+                    filled_price = fp
+                else:
+                    if _stocks_paper_fill_enabled():
+                        is_paper = True
+                        print(f"  {tag} {ticker} unfilled → paper fill @ {cur_price:.2f}")
+                    else:
+                        print(f"  {tag} {ticker} unfilled, skipping")
+                        continue
+            else:
+                if _stocks_paper_fill_enabled():
+                    is_paper = True
+                    print(f"  {tag} {ticker} no order id → paper fill @ {cur_price:.2f}")
+                else:
+                    continue
+
+            stop_oid = None
+            if not is_paper and uic:
+                try:
+                    ak = saxo_client.get_account_key(env="sim")
+                    stop_oid = saxo_order.place_stop_only(
+                        post_fn=lambda path, body: saxo_client.post(path, body, env="sim"),
+                        account_key=ak, uic=uic, asset_type="Stock",
+                        amount=shares, entry_side="Buy",
+                        stop_price=stop, symbol=ticker,
+                    )
+                except Exception as e:
+                    print(f"  {tag} stop order failed for {ticker}: {e}")
+
+            comm = commission_sek(shares, shares * filled_price * fx_usd)
+            trade_id = db.insert_trade({
+                "strategy":       strategy,
+                "market_group":   "US Equities",
+                "ticker":         ticker,
+                "direction":      "BUY",
+                "entry_date":     today_str,
+                "entry_price":    filled_price,
+                "shares":         shares,
+                "commission_sek": comm,
+                "stop_price":     stop,
+                "paper":          1 if is_paper else 0,
+                "stop_order_id":  stop_oid or None,
+            })
+            print(f"  {tag} recorded trade id={trade_id} "
+                  f"{'[PAPER]' if is_paper else ''}")
+            _append_trade_log(
+                strategy, "BUY", ticker, shares, filled_price,
+                shares * filled_price * fx_usd, None, sig["reason"][:80],
+                entry_date=today_str, days_held=0,
+            )
+            todays_actions.append({
+                "action": "BUY", "ticker": ticker, "market_group": "US Equities",
+                "strategy": strategy, "score": sig["confidence"],
+                "shares": shares, "price": filled_price, "reason": sig["reason"],
+                "pnl_sek": None,
+            })
+            sig_open_now[pair_key] = True
+            per_strategy_open[strategy] = per_strategy_open.get(strategy, 0) + 1
 
 
 def _currency_for(market_group: str) -> str:

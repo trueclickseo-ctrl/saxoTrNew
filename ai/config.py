@@ -159,6 +159,15 @@ _DEFAULTS = {
         "sweep_years": 13,
         "max_hypotheses_per_run": 8,
     },
+    # ── Stock Trade Outcome Predictor (2026-09-03, roadmap #20 sibling) ──
+    # ai/models/stock_outcome_predictor.py — GradientBoosting classifier
+    # trained on data/stock_observation_cards.jsonl (stock entry/exit pairs).
+    # Sibling of forex TOP. Gate: 50 closed non-orphaned stock trades.
+    # Ships OFF until gate clears. Retrain: python ai_stock_outcome_predictor.py --train.
+    "stock_outcome_predictor": {
+        "enabled": False,
+        "min_samples": 50,
+    },
 }
 
 
@@ -345,6 +354,17 @@ def research_analyst_enabled() -> bool:
     shadow_mode / any account; it only needs its own flag (and an API key,
     which it degrades gracefully without)."""
     return bool(research_analyst_cfg().get("enabled", False))
+
+
+def stock_outcome_predictor_cfg() -> dict:
+    """The config/ai.json `stock_outcome_predictor` block (merged over defaults)."""
+    s = _load().get("stock_outcome_predictor")
+    return s if isinstance(s, dict) else dict(_DEFAULTS["stock_outcome_predictor"])
+
+
+def stock_outcome_predictor_enabled() -> bool:
+    """True if the stock TOP model may score proposals. Sibling of outcome_predictor_enabled."""
+    return bool(stock_outcome_predictor_cfg().get("enabled", False))
 
 
 def config_path() -> str:

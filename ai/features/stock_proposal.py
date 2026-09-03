@@ -68,6 +68,30 @@ def build_stock_proposal(*, strategy: str, ticker: str, entry_price: float,
 
         econ = _stock_economics(entry, stop, target_price, risk_eur, est_commission_eur)
 
+        # Stock Outcome Predictor (roadmap #20, sibling of forex TOP).
+        # Lazy, best-effort: None until gate clears (50 closed stock trades).
+        # Ships OFF (config/ai.json stock_outcome_predictor.enabled: false).
+        stock_top_win_prob = None
+        try:
+            import ai.config as _ai_cfg
+            if _ai_cfg.stock_outcome_predictor_enabled():
+                from ai.models.stock_outcome_predictor import predict as _stop_predict
+                stock_top_win_prob = _stop_predict({
+                    "strategy_name": strategy,
+                    "entry_price": entry,
+                    "stop_loss": stop,
+                    "take_profit": float(target_price) if target_price is not None else None,
+                    "rsi2": rsi14,
+                    "atr_pct": vol_pct,
+                    "side": "BUY",
+                    "n_open_positions": len(open_positions or []),
+                    "regime": regime,
+                    "trade_economics": econ,
+                    "pair_history": pair_stats,
+                })
+        except Exception:
+            pass
+
         return {
             "ts": datetime.now(timezone.utc).isoformat(),
             "account_env": _ACCOUNT_ENV,
@@ -85,6 +109,7 @@ def build_stock_proposal(*, strategy: str, ticker: str, entry_price: float,
             "raw_score": None,
             "agreement_count": 1,
             "ml_prob": None,
+            "stock_top_win_prob": stock_top_win_prob,
             "account_equity": equity_eur,
             "open_positions": open_positions or [],
             "n_open_positions": len(open_positions or []),

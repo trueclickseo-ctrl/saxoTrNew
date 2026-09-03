@@ -61,5 +61,11 @@
     "model": "claude-sonnet-5",
     "sweep_years": 13,
     "max_hypotheses_per_run": 8
+  },
+
+  "_stock_outcome_predictor_comment": "Stock Trade Outcome Predictor (2026-09-03, roadmap #20 sibling): ai/models/stock_outcome_predictor.py. GradientBoosting classifier trained on data/stock_observation_cards.jsonl (entry context + r_multiple label) to predict whether a new US stock entry will be profitable. Sibling of the forex TOP. Features: rsi14, stop_pct, target_pct, risk_reward, daily_vol_pct, regime, adx, ticker_win_rate, day_of_week. Gate: 50 closed non-orphaned stock trades (accumulating from 2026-09-03). enabled:true wires stock_top_win_prob into every stock proposal. Ships OFF until gate clears. Retrain: python ai_stock_outcome_predictor.py --train (daily at 22:00 PKT).",
+  "stock_outcome_predictor": {
+    "enabled": false,
+    "min_samples": 50
   }
 }

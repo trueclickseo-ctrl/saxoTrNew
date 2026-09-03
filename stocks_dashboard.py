@@ -89,6 +89,10 @@ def _days_held(s: str) -> int:
     except Exception:
         return 0
 
+_US_SIGNAL_STRATEGIES = {
+    "US SMA Crossover", "US RSI Reversal", "US Momentum", "US Ensemble",
+}
+
 def _exit_info(drow: dict) -> str:
     strategy   = (drow.get("strategy") or "").strip()
     days       = _days_held(drow.get("entry_date", ""))
@@ -100,6 +104,10 @@ def _exit_info(drow: dict) -> str:
             MAX_HOLD_DAYS = 10
         left = max(MAX_HOLD_DAYS - days, 0)
         return f"Day {days}/{MAX_HOLD_DAYS} ({left}d left)"
+    if strategy in _US_SIGNAL_STRATEGIES:
+        max_hold = 30
+        left = max(max_hold - days, 0)
+        return f"Day {days}/{max_hold} ({left}d left)"
     return f"Day {days}  (monthly reb)"
 
 def _et_now():
@@ -334,6 +342,12 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         f"  {BD}STRATEGIES{W}   "
         f"{BL}{BD}■ US Blend{W}  {DM}Monthly momentum rebalance, SPY+QQQ+IWM regime filter{W}   "
         f"{CY}{BD}■ US Reversion{W}  {DM}RSI(2)<5 mean-reversion, max 10 trading days{W}"
+    )
+    L.append(
+        f"  {MG}{BD}■ US SMA Crossover{W}  {DM}SMA10/50/200 + volume{W}   "
+        f"{MG}{BD}■ US RSI Reversal{W}  {DM}RSI(14) oversold/overbought{W}   "
+        f"{MG}{BD}■ US Momentum{W}  {DM}ROC + 52w breakout{W}   "
+        f"{MG}{BD}■ US Ensemble{W}  {DM}Weighted vote (SIM only){W}"
     )
     L.append(HR)
     L.append("")
@@ -573,7 +587,10 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append(HR)
 
     # ── Per-strategy breakdown ─────────────────────────────────────
-    STRAT_ORDER = ["US Blend", "US Reversion", "US Intraday Reversion"]
+    STRAT_ORDER = [
+        "US Blend", "US Reversion", "US Intraday Reversion",
+        "US SMA Crossover", "US RSI Reversal", "US Momentum", "US Ensemble",
+    ]
     all_strats  = [s for s in STRAT_ORDER if s in stats] + \
                   [s for s in stats if s not in STRAT_ORDER and not s.startswith("_")]
     cutoffs = _load_stock_cutoffs()
