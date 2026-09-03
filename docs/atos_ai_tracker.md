@@ -90,7 +90,9 @@ Nothing here is started. Each is gated on the evidence above and follows the gov
 | — | **SuperTrend V2** (user-provided, prior session — **file not in repo**, must be re-shared) | after P2 | Do not build against corrupted give-back evidence. Decision comes out of module #2. |
 | — | **Autochartist pattern signals** — PARKED 2026-09-02 | not reachable + paid | See "Autochartist" note below. Public perf-stats saved as a reference prior (`reports/autochartist_pattern_stats.py`); the live signal feed needs a paid Autochartist data subscription, not our Saxo credentials. Revisit only if a pattern-based strategy idea makes the 56–89% hit-rates worth a real backtest. |
 
-Deferred to the roadmap's later-phase list: full news/sentiment agent, strategy discovery (#19), the 6-agent split, adaptive scan cadence.
+Deferred to the roadmap's later-phase list: full news/sentiment agent, the 6-agent split, adaptive scan cadence.
+
+**Strategy discovery (#19) — SHIPPED 2026-09-03** as the **AI Research Analyst** (PR #27). Weekly offline pipeline: replays each SIM-roster strategy over ~13y Yahoo daily bars → buckets by entry-context feature → bootstrap 95% CI gate → digest → LLM proposes testable hypotheses → `data/ai_research_hypotheses.jsonl` backlog. Ships OFF (`config/ai.json research_analyst.enabled: false`). Enable + add `ANTHROPIC_API_KEY` when ready. Operator: run `setup_scheduler_research_analyst.ps1` to register the weekly Sunday 04:00 task.
 
 ### Autochartist pattern signals — investigated + parked (2026-09-02)
 
