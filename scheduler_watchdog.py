@@ -167,8 +167,10 @@ WINDOWS_TASKS = {
     # combine entry AND exit checking in one pass, same as forex) and were
     # added to INTRADAY_REPEATING_TASKS above so the "hasn't advanced
     # recently enough" check actually watches them now.
-    "Futures Daily Run":      ("ATOS Futures Daily Run",      "futures_scheduler.log", 30, 2),
-    "ETF Daily Run":          ("ATOS ETF Daily Run",          "etf_scheduler.log",     20, 2),
+    "Futures Daily Run":      ("ATOS Futures Daily Run",      "futures_scheduler.log",         30, 22),
+    "Futures Midday Run":     ("ATOS Futures Midday Run",     "futures_midday_scheduler.log",  30, 22),
+    "ETF Daily Run":          ("ATOS ETF Daily Run",          "etf_scheduler.log",             20, 22),
+    "ETF Midday Run":         ("ATOS ETF Midday Run",         "etf_midday_scheduler.log",      20, 22),
     "Stocks Daily Run":       ("ATOS Daily Run",              "engine_TODAY.log",      15, 2),  # special-cased below
     # log_file fixed 2026-08-25: this was pointed at data/intraday_monitor.log,
     # a dead file only a crash traceback ever touches -- the script's real
@@ -453,7 +455,7 @@ INTRADAY_REPEATING_TASKS = {
     # both Disabled (real-money trading moved to stocks). The two LIVE Exit
     # Check tasks are once-daily, so deliberately NOT here.
     "Saxo LIVE Token Keepalive",
-    "Stocks Daily Run", "ETF Daily Run", "Futures Daily Run", "Intraday Monitor",
+    "Stocks Daily Run", "ETF Daily Run", "ETF Midday Run", "Futures Daily Run", "Futures Midday Run", "Intraday Monitor",
 }
 
 # Tasks the watchdog is allowed to auto-restart (Start-ScheduledTask) the
