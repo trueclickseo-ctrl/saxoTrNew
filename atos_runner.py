@@ -790,6 +790,14 @@ def run_open_scan(log_fn=None) -> dict:
     except Exception as e:
         _log(f"  [US Reversion ERROR] {e}")
 
+    # ── US Signals (4 SIM-only strategies) ───────────────────────
+    if US_SIGNALS_ENABLED:
+        _log("  Running USA strategy signals (SMA/RSI/Momentum/Ensemble)...")
+        try:
+            run_us_signals(feat_data, db.get_open_trades(), todays_actions)
+        except Exception as e:
+            _log(f"  [US signals ERROR] {e}")
+
     buy_n     = sum(1 for a in todays_actions if a["action"] == "BUY")
     exit_n    = sum(1 for a in todays_actions if a["action"] == "EXIT")
     blocked_n = sum(1 for a in todays_actions if a["action"] == "BLOCKED")
