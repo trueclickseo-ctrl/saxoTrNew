@@ -339,29 +339,53 @@ def run_rebalance(client: "Avanza", account_id: str,
                 if side == "BUY":
                     trade_id = state.record_order(ticker, ob_id, "BUY", qty, price,
                                                   order_id, value_sek=action["value_sek"])
+                    # ── Poll until limit order fills (up to 2 min) ────────────
+                    fill_price = ac.confirm_fill(client, account_id, order_id, ob_id,
+                                                 timeout_s=120, poll_s=10)
+                    if fill_price is None:
+                        # Order timed out — already cancelled by confirm_fill
+                        state.mark_cancelled(order_id)
+                        print(f"  ✗ {ticker}: limit order not filled within 2 min — cancelled.")
+                        skips += 1
+                        continue
+                    # fill_price==0 means filled but price unreadable; fall back to limit
+                    actual_fill = fill_price if fill_price > 0 else price
+                    state.mark_filled(order_id, fill_price=actual_fill)
+                    print(f"  ✓ {ticker} filled @ {actual_fill:.2f}")
                     executed_buys += 1
-                    # ── Place stop-loss immediately after entry ────────────────
-                    stop_pct      = float(config.get("stop_pct", 0.08))
-                    slippage_pct  = float(config.get("stop_sell_slippage_pct", 0.01))
-                    initial_stop  = round(price * (1 - stop_pct), 2)
+
+                    # ── Place stop-loss at actual fill price ──────────────────
+                    stop_pct     = float(config.get("stop_pct", 0.08))
+                    slippage_pct = float(config.get("stop_sell_slippage_pct", 0.01))
+                    initial_stop = round(actual_fill * (1 - stop_pct), 2)
                     try:
-                        sl_resp   = ac.place_stop_loss(client, account_id, ob_id, qty,
-                                                       initial_stop, slippage_pct)
-                        sl_id     = sl_resp.get("stoplossOrderId") if isinstance(sl_resp, dict) else None
+                        sl_resp  = ac.place_stop_loss(client, account_id, ob_id, qty,
+                                                      initial_stop, slippage_pct)
+                        sl_id    = sl_resp.get("stoplossOrderId") if isinstance(sl_resp, dict) else None
                         sl_status = sl_resp.get("status", "") if isinstance(sl_resp, dict) else ""
                         if sl_id or sl_status == "SUCCESS":
-                            state.update_stop(trade_id, sl_id, initial_stop, price)
+                            state.update_stop(trade_id, sl_id, initial_stop, actual_fill)
                             print(f"    ✓ Stop-loss @ {initial_stop:.2f} "
-                                  f"({stop_pct*100:.0f}% below {price:.2f}) — id={sl_id}")
+                                  f"({stop_pct*100:.0f}% below fill {actual_fill:.2f}) — id={sl_id}")
                         else:
                             print(f"    ⚠ Stop-loss FAILED: {sl_resp} — "
-                                  f"position unprotected, place manually @ {initial_stop:.2f}")
+                                  f"place manually @ {initial_stop:.2f}")
                     except Exception as sl_exc:
                         print(f"    ⚠ Stop-loss error: {sl_exc} — "
-                              f"position unprotected, place manually @ {initial_stop:.2f}")
+                              f"place manually @ {initial_stop:.2f}")
                 else:
-                    state.record_close(ticker, ob_id, qty, price, order_id,
-                                       pnl_sek=0.0)
+                    state.record_close(ticker, ob_id, qty, price, order_id, pnl_sek=0.0)
+                    # Poll until the sell fills too
+                    fill_price = ac.confirm_fill(client, account_id, order_id, ob_id,
+                                                 timeout_s=120, poll_s=10)
+                    if fill_price is None:
+                        state.mark_cancelled(order_id)
+                        print(f"  ✗ {ticker}: sell order not filled within 2 min — cancelled.")
+                        skips += 1
+                        continue
+                    actual_fill = fill_price if fill_price > 0 else price
+                    state.mark_filled(order_id, fill_price=actual_fill)
+                    print(f"  ✓ {ticker} sold @ {actual_fill:.2f}")
                     executed_sells += 1
             else:
                 print(f"  ✗ Order REJECTED: {msg} (status={status})")

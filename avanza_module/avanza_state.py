@@ -114,13 +114,23 @@ def mark_filled(order_id: str, fill_price: float | None = None,
     with _conn() as con:
         if fill_price is not None:
             con.execute(
-                "UPDATE trades SET status='FILLED', exit_price=? WHERE order_id=?",
+                "UPDATE trades SET status='FILLED', entry_price=? WHERE order_id=? AND side='BUY'",
+                (fill_price, order_id)
+            )
+            con.execute(
+                "UPDATE trades SET status='FILLED', exit_price=? WHERE order_id=? AND side='SELL'",
                 (fill_price, order_id)
             )
         else:
             con.execute("UPDATE trades SET status='FILLED' WHERE order_id=?", (order_id,))
         if value_sek is not None:
             con.execute("UPDATE trades SET value_sek=? WHERE order_id=?", (value_sek, order_id))
+
+
+def mark_cancelled(order_id: str) -> None:
+    """Mark an order as CANCELLED (order timed out or was rejected after placement)."""
+    with _conn() as con:
+        con.execute("UPDATE trades SET status='CANCELLED' WHERE order_id=?", (order_id,))
 
 
 def record_close(ticker: str, order_book_id: str, qty: int,

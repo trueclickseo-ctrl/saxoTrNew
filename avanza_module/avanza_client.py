@@ -14,10 +14,10 @@ avanza package directly; all other avanza_module files go through this one.
 from __future__ import annotations
 
 import os
+import sys
+import time
 from datetime import date, timedelta
 from typing import Any
-
-import sys
 
 from avanza import Avanza, OrderType
 from avanza.entities import StopLossOrderEvent, StopLossTrigger
@@ -206,6 +206,63 @@ def get_stock_price(client: Avanza, order_book_id: str) -> dict:
 
 
 # ── Orders ────────────────────────────────────────────────────────────────────
+
+def cancel_order(client: Avanza, account_id: str, order_id: str) -> bool:
+    """Cancel an open limit order. Returns True on success."""
+    try:
+        client.delete_order(account_id=account_id, order_id=order_id)
+        return True
+    except Exception as exc:
+        print(f"  [avanza] cancel_order {order_id}: {exc}", file=sys.stderr)
+        return False
+
+
+def confirm_fill(client: Avanza, account_id: str, order_id: str, ob_id: str,
+                 timeout_s: int = 120, poll_s: int = 10) -> float | None:
+    """Poll until a limit order fills, then return the actual fill price.
+
+    Polls open orders every `poll_s` seconds. When the order disappears from
+    open orders, reads the position's averageAcquiredPrice as the fill price.
+
+    If the order is still pending after `timeout_s` seconds, it is cancelled
+    and None is returned.
+
+    Returns: fill_price (float) on success, None if cancelled/timeout.
+    """
+    deadline = time.monotonic() + timeout_s
+    print(f"    Polling fill (order={order_id}, up to {timeout_s}s)...", end="", flush=True)
+
+    while time.monotonic() < deadline:
+        time.sleep(poll_s)
+        print(".", end="", flush=True)
+
+        try:
+            open_orders = get_open_orders(client)
+        except Exception:
+            continue
+
+        still_open = any(str(o.get("order_id", "")) == str(order_id) for o in open_orders)
+        if not still_open:
+            print(" filled")
+            # Read fill price from the position that just opened
+            try:
+                positions = get_positions(client, account_id)
+                for pos in positions:
+                    if str(pos.get("order_book_id", "")) == str(ob_id):
+                        fill_price = pos.get("avg_price") or pos.get("current_price") or 0.0
+                        if fill_price:
+                            return float(fill_price)
+            except Exception:
+                pass
+            # Fallback: we know it filled but can't read price; return 0 signals caller to
+            # use the limit price as a proxy
+            return 0.0
+
+    # Timeout — cancel
+    print(" timeout → cancelling")
+    cancel_order(client, account_id, order_id)
+    return None
+
 
 def get_open_orders(client: Avanza) -> list[dict]:
     """Return currently open orders."""
