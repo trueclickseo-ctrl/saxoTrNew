@@ -155,7 +155,8 @@ def _db_open() -> dict:
         out = {}
         for r in rows:
             base = (r["ticker"] or "").split(".")[0].split(":")[0].upper()
-            out[base] = dict(r)
+            if base not in out:   # keep the oldest (lowest id) open row per ticker
+                out[base] = dict(r)
         return out
     except Exception:
         return {}

@@ -2122,6 +2122,12 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
             px = _price(tk)
             if px <= 0:
                 continue
+            if tk in us_open:
+                # Ticker already held — skip delta-add to avoid a second open DB row.
+                # The existing position carries forward unchanged to the next rebalance.
+                print(f"  {tag} {tk}: already held ({us_open[tk].get('shares', 0)} shares"
+                      f" @ ${us_open[tk].get('entry_price', 0):.2f}) — leaving unchanged")
+                continue
             if _do("Buy", tk, a["shares"], px):
                 deployed_sek += a["shares"] * px * fx_usd
                 filled_any    = True
@@ -2744,6 +2750,9 @@ def run_us_signals(feat_data: dict, open_trades: list, todays_actions: list) -> 
     for _, strat in sig_open_now:
         per_strategy_open[strat] = per_strategy_open.get(strat, 0) + 1
 
+    # All currently-open tickers (any strategy) — prevents cross-strategy duplicates
+    all_open_tickers: set[str] = {t["ticker"] for t in db.get_open_trades()}
+
     for ticker in US_TICKERS:
         if ticker not in feat_data:
             continue
@@ -2760,6 +2769,8 @@ def run_us_signals(feat_data: dict, open_trades: list, todays_actions: list) -> 
             pair_key = (ticker, strategy)
             if pair_key in sig_open_now:
                 continue   # already holding this (ticker, strategy) pair
+            if ticker in all_open_tickers:
+                continue   # already held by US Blend / Reversion / another signal
             if per_strategy_open.get(strategy, 0) >= MAX_POSITIONS_PER_STRATEGY:
                 continue   # strategy's slot limit reached
 
@@ -2851,6 +2862,7 @@ def run_us_signals(feat_data: dict, open_trades: list, todays_actions: list) -> 
             })
             sig_open_now[pair_key] = True
             per_strategy_open[strategy] = per_strategy_open.get(strategy, 0) + 1
+            all_open_tickers.add(ticker)
 
 
 def _currency_for(market_group: str) -> str:
