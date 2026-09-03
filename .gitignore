@@ -31,6 +31,17 @@ data/stocks_live_status.json
 data/stocks_live_scheduler.log
 # LIVE instrument map is operator-built (lookup_instruments_live.py), not history
 data/instrument_map_live.csv
+# AI SIM twin (forex/runner.py --account ai_sim + atos_ai_stocks.py) — paper
+# runtime state, machine-local, same class as the deterministic books above
+data/forex_state_ai.json
+data/forex_orders_ai.json
+data/forex_peak_equity_ai.json
+data/atos_ai.db
+data/atos_ai.db-shm
+data/atos_ai.db-wal
+data/atos_ai_risk_state.json
+data/atos_ai_stocks_status.json
+data/us_momentum_state_ai.json
 # Log files
 data/monitor_log.txt
 data/*.log

@@ -156,6 +156,46 @@ def test_modules_parse():
         ast.parse(inspect.getsource(m))
 
 
+# ── 2026-09-03: portal-24h-token (no refresh_token) detection ──────────
+def test_wrong_token_type_flags_a_portal_token_and_passes_a_pkce_one():
+    o_load = saxo_auth._load_tokens
+    try:
+        # A Developer-Portal 24h token: no refresh_token, expires_in 86400.
+        saxo_auth._load_tokens = lambda env="sim": {
+            "access_token": _GOOD, "expires_in": 86400, "obtained_at": time.time()}
+        msg = sk._wrong_token_type()
+        assert msg and "PKCE" in msg and "set_token" in msg
+        # A proper PKCE token: has a refresh_token -> not flagged.
+        saxo_auth._load_tokens = lambda env="sim": {
+            "access_token": _GOOD, "expires_in": 1180,
+            "refresh_token": "x" * 40, "obtained_at": time.time()}
+        assert sk._wrong_token_type() is None
+    finally:
+        saxo_auth._load_tokens = o_load
+
+
+def test_portal_token_makes_the_failure_alert_explicit():
+    import saxo_client
+    o_load = saxo_auth._load_tokens
+    o_gvat = saxo_auth.get_valid_access_token
+    o_tc = saxo_client.test_connection
+    o_alert = sk._send_alert
+    sent = []
+    saxo_auth._load_tokens = lambda env="sim": {
+        "access_token": _GOOD, "expires_in": 86400, "obtained_at": time.time()}
+    saxo_auth.get_valid_access_token = lambda env="sim": _GOOD
+    saxo_client.test_connection = lambda env="sim": (_ for _ in ()).throw(RuntimeError("401"))
+    sk._send_alert = lambda d: sent.append(d)
+    try:
+        assert sk.run_once() is False
+        assert sent and "401" in sent[0] and "PKCE" in sent[0]   # both, not one
+    finally:
+        saxo_auth._load_tokens = o_load
+        saxo_auth.get_valid_access_token = o_gvat
+        saxo_client.test_connection = o_tc
+        sk._send_alert = o_alert
+
+
 for _n, _f in list(globals().items()):
     if _n.startswith("test_") and callable(_f):
         _run(_n, _f)
