@@ -186,6 +186,13 @@ Not in the v1 sprint plan. Cheap interim version (hardcoded economic-calendar bl
 
 ## Change log for THIS file
 
+- **2026-09-04 (`aa57ca0`) — Futures + ETF twice daily during US market hours**
+
+  - Futures scanner rescheduled to **19:30 PKT (10:30 ET)** + new **23:00 PKT (14:00 ET)** midday run. Both inside US market hours (18:30–01:00 PKT / 09:30–16:00 ET). Operator runs `setup_scheduler_futures_midday.ps1` as Administrator to register.
+  - ETF scanner same pattern: **19:30 + 23:00 PKT** via `setup_scheduler_etf_twice.ps1`. `trim_out_of_ranking()` runs every pass — positions outside top-10 sold automatically within hours instead of waiting until next day.
+  - `scheduler_watchdog.py`: "Futures Midday Run" + "ETF Midday Run" added to `WINDOWS_TASKS` (`max_log_age_hours=22`, covers the 23:00→19:30 overnight gap) and `INTRADAY_REPEATING_TASKS` (watched + auto-restartable via `AUTO_FIX_ELIGIBLE`).
+  - ZC position (entry 524.25, now ~1,424.00): the futures 8% profit-lock trailing introduced in `f297fb8` now advances on every twice-daily run using the live Saxo quote fallback (no chart data needed for ContractFutures on SIM).
+
 - **2026-09-04 (`6d0b8a0`, `f297fb8`, `c7af58c`) — Trailing stops across all three modules**
 
   **US Blend LIVE trailing stop (`6d0b8a0`):**
