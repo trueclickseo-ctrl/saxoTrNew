@@ -307,7 +307,7 @@ class ETFExecutor:
             symbol = pos.get("symbol", uic_str)
             if symbol in top_symbols:
                 continue  # still in top-N — keep
-            live_price = self._live_price(uic, pos)
+            live_price = self._get_live_price(uic, symbol)
             if live_price is None:
                 logger.warning(f"[trim] {symbol}: can't fetch live price — skipping trim")
                 continue
