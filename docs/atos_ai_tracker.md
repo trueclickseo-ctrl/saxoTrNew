@@ -186,6 +186,26 @@ Not in the v1 sprint plan. Cheap interim version (hardcoded economic-calendar bl
 
 ## Change log for THIS file
 
+- **2026-09-04 (`6d0b8a0`, `f297fb8`, `c7af58c`) — Trailing stops across all three modules**
+
+  **US Blend LIVE trailing stop (`6d0b8a0`):**
+  - `trail_us_blend_stops()` in `atos_runner.py` — runs every scheduled cycle (not gated by `dry_run`). Each pass: `new_stop = max(trailing_stop_high, live_quote) × 0.92`; if `new_stop > cur_stop + $1.00` → PATCH the broker-side GTC stop order on Saxo. Cancel+replace fallback if PATCH is rejected (Saxo sometimes does a cancel-and-reissue internally; the new order ID is persisted to DB).
+  - Fixed `cur_stop = 0` silent-skip bug: when `stop_price` was never stored (NULL), `(0 or new_stop)` always short-circuited the update. Fixed by gating the skip only when `cur_stop > 0`.
+  - `atos/database.py` — `update_stop_trailing(trade_id, trailing_stop_high, stop_price, stop_order_id=None)`.
+  - `saxo_client.py` — `patch_order(order_id, body, env)` and `saxo_order.modify_stop_price()`.
+  - **Verified LIVE 2026-09-04**: DELL stop ratcheted $471.75 → $474.63 on a $515.90 running high.
+
+  **ETF trailing stop (`f297fb8`):**
+  - `saxo_etf_strategy/core/etf_executor.py` — `trail_stops()`, 8% below running high, updates ETF JSON state; PATCH with cancel+replace fallback. Wired into `ETFBot.run_once()` after `review_exits()`, before `generate_signals()`.
+
+  **Futures 8% profit-lock trailing (`f297fb8`):**
+  - `futures/runner.py` — after the existing ATR trailing computation, a second layer locks in gains at 8% from the running high (longs) or low (shorts). Only ever tightens; never overrides the ATR stop if it's already tighter.
+
+  **Auto-cancel orphaned sell orders (`c7af58c`):**
+  - `saxo_client.cancel_sell_orders_for_uic(uic, asset_type, env)` — cancels every working Sell order for a UIC (e.g. orphaned TP left behind after a stop cancel).
+  - `trail_us_blend_stops()` — when `place_protective_stop` fails due to `SellOrdersAlreadyExistForOwnedContracts`, automatically clears the conflicting orders and retries once. Also handles naked positions (no `stop_order_id`) directly instead of skipping.
+  - **Root cause (2026-09-03 incident)**: trail run cancelled DELL/STT stops via cancel+replace path; Saxo cancelled the stop but left the bracket TP (Limit Sell) alive. Next PATCH attempt got a 404 on the old order ID, fell through to cancel+replace again, and `place_protective_stop` was rejected because the TP counted as a sell order. Positions were naked for ~hours until manually resolved. This automation prevents recurrence.
+
 - **2026-09-03 (`b0c504a` + `eaaa899`) — Bug fixes + Donchian AI SIM strategy + ETF top-10 rebalance**
 
   **Bug fixes (`eaaa899`):**
