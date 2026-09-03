@@ -14,7 +14,7 @@ Running log of the AI layer's build. Update this file **whenever an AI change la
 |---|---|
 | **AI live in production?** | **Shadow study RUNNING** (`327e204`) — `enabled_sim` + `enabled_live_shadow` + `agent_enabled` all true. `claude-sonnet-5` scores every RSI signal on SIM + both LIVE accounts, logs it, **applies nothing** (`shadow_mode` true on SIM; `can_apply_decision` hardcoded False for LIVE). **AI Trading Journal** also live (`journal_enabled:true`) — read-only per-trade retrospective, all forex accounts. |
 | **AI touching money (SIM or LIVE)?** | **No.** Sprint 4 code (SIM sizing) is shipped but inert. LIVE acting is impossible without a code change (`_AI_ACTING_ACCOUNTS = {"sim"}`). |
-| **Last thing shipped** | Copilot prompt fix — was 21/21 MODIFY, now APPROVE/MODIFY/REJECT contrast (`2a554f3`, live A/B 4 APPROVE / 1 MODIFY) · `MAX_TOKENS`→2048 + truncation salvage (`d00c019`) · shadow-study **green heartbeat email** 09:00 + 21:00 PKT + daily-digest section (`bcf5407`) · AI-data integrity sweep — net-P&L gate, stale-chart-bar repair, `verify_ai_data.py`, MAE/MFE write-time cap, ledger dedup (`e292ce4`→`c9751e1`) · fill-price confirmation + Saxo closed-trade reconciliation (`2aa38c0`, `7bd1f31`) |
+| **Last thing shipped** | **`b0c504a` (2026-09-03)** — `strategy_donchian_ai` (SIM-only, 7th active strategy: Donchian + DI-spread + regime + ATR-percentile gates); ETF strict top-10 rebalance (`trim_out_of_ranking`); `eaaa899` — 3 bug fixes (rsi_atr SLOTS_PER_STRATEGY, housekeeping StocksAdapter by_ticker, safeguard stop-covered auto-resolve). |
 | **Operator tasks** | ✅ Reboot · ✅ Anthropic console monthly spend cap **$10** · ✅ "ATOS AI Health Email" task registered (09:00 + 21:00 PKT) |
 | **`anthropic` SDK** | `1.2.0`. `ANTHROPIC_API_KEY` set (User scope), inherited by scheduled tasks — verified with real `agent_meta.ok=true` calls on SIM + `live` + `live_eur` (2026-09-01: 21 real timed decisions, 5–28 s latency). |
 | **Data the AI reads** | Post the 2026-09-01 sweep: entry/exit = **real Saxo fills** (LIVE re-verified vs `closedpositions` every run); net P&L sanity-gated for the unreliable SIM feed; stale SIM chart bars repaired to the live quote; MAE/MFE capped at write time; ledger deduped (incl. 26 stacked SIM re-entry rows, `1c00c12`); state is checkpointed after every entry/exit so a mid-pass kill can't erase closes and cause a re-entry. `python verify_ai_data.py` = repeatable audit (currently 3 pre-fix historical rows, flagged). |
@@ -24,6 +24,7 @@ Running log of the AI layer's build. Update this file **whenever an AI change la
 
 1. **Shadow evidence (M4)** — **21 decisions** logged (SIM+LIVE) as of 2026-09-01, target ~40. The prompt fix (`2a554f3`) means decisions from here carry real APPROVE/MODIFY/REJECT variety (before, 21/21 were MODIFY). Weekly: `python ai_shadow_report.py`. Then the **M5 review**, then flip `config/ai.json shadow_mode → false` to activate Sprint 4 on SIM.
 2. **Clean give-back data (P2)** — the 2026-09-01 MAE/MFE + fill-price + net-P&L fixes mean clean data only starts now (~15–30 SIM closes/day). Weekly: `python report_giveback.py`. When mature (~1 week, ≥10–15 clean trades/strategy), it drives the exit-improvement / SuperTrend-V2 decision.
+3. **Donchian AI forward study** — `donchian_ai` is now in `SIM_ACTIVE_STRATEGIES` (7th strategy). The Research Analyst will run its decomposition sweep against it weekly once there are enough forward-SIM trades. Gate: same as the rsi_atr study — wait for ~2 weeks of signals then run `ai_research_analyst.py --sweep --strategy donchian_ai`.
 
 Everything else (opportunity ranking, calendar blackout, correlation gate, PLN-slippage measurement) is queued — see **Next modules queue** below.
 
@@ -184,6 +185,28 @@ Not in the v1 sprint plan. Cheap interim version (hardcoded economic-calendar bl
 ---
 
 ## Change log for THIS file
+
+- **2026-09-03 (`b0c504a` + `eaaa899`) — Bug fixes + Donchian AI SIM strategy + ETF top-10 rebalance**
+
+  **Bug fixes (`eaaa899`):**
+  - `forex/runner.py` — `rsi_atr` was missing from `SLOTS_PER_STRATEGY` → every SIM forex scan crashed with `KeyError: 'rsi_atr'`. Added `"rsi_atr": _SWING_SLOTS`. The strategy was already in `SIM_ACTIVE_STRATEGIES` since `75b97bd` but the slots dict was never updated.
+  - `housekeeping.StocksAdapter.load()` — root cause of 10 safeguard "unattributable position" false alerts. `by_ticker` was keyed by Saxo symbol format (`'HUM:xnys'`) but the DB `ticker` column stores Yahoo format (`'HUM'`) → every stock position returned empty → all 10 real holdings appeared unattributable → safeguard tried to flat-close them. Fix: `by_ticker = dict(imap)` (imap is already keyed by Yahoo ticker). Also reads `data/atos_ai.db` (the AI SIM twin DB) in the same pass.
+  - `safeguard._close_untracked_sim()` — when a flat-close SELL is rejected with `SellOrdersAlreadyExistForOwnedContracts` (position already has a stop order), now returns `auto_resolved=True` instead of escalating to human attention. `_escalate_unfixed()` calls `attention.clear_attention()` on the "stop-covered" outcome, ending the alert storm.
+
+  **Donchian AI SIM strategy (`b0c504a`) — uses `ai/regime/classifier.py`:**
+  - New `forex/strategy_donchian_ai.py` — SIM-only A/B twin of `strategy_donchian` with three AI-learnable quality gates on top of the standard 30-day breakout + EMA200 + ADX≥25 kernel:
+    1. **DI-spread gate**: `|+DI(14) − −DI(14)| ≥ 18` — same gate proven in `bb_quality`/`zscore_quality`; blocks false breakouts in low-momentum tape.
+    2. **Regime gate**: `classify_regime()` must return `TRENDING_BULLISH` (long) or `TRENDING_BEARISH` (short) — same gate as `rsi_trend`; degrades gracefully if the classifier is unavailable (UNKNOWN → pass through).
+    3. **ATR-percentile gate**: current ATR(14) ≥ rolling 50-bar median ATR — real breakout has elevated volatility; compressed ATR = noise.
+  - Exit / sizing / trailing-stop delegate unchanged to `strategy_donchian`.
+  - Added to `SIM_ACTIVE_STRATEGIES` (7th, after `zscore_quality`) and `SLOTS_PER_STRATEGY` (cap = `MAX_POSITIONS = 4`).
+  - `LIVE_ALLOWED_STRATEGIES` **untouched** — `donchian_ai` is never in any LIVE allowlist.
+  - The Research Analyst (`ai_research_analyst.py --sweep --strategy donchian_ai`) will run the decomposition on forward trades once enough accumulate.
+
+  **ETF strict top-10 rebalance (`b0c504a`):**
+  - `saxo_etf_strategy/core/etf_executor.py` — new `trim_out_of_ranking(signals) -> int`: sells every open position whose symbol is NOT in the current top-N signal list. Called between `generate_signals()` and `process_signals()` in `run_etf_bot.py`.
+  - `saxo_etf_strategy/config/etf_config.py` — `max_candidates_per_run` + `max_positions`: 20 → 10.
+  - Confirmed live: ETF trimmed positions outside the top 10 on next run.
 
 - **2026-09-03 (Stock Trade Outcome Predictor — roadmap #20 sibling, `24c4635`)** — GradientBoostingClassifier trained on `data/stock_observation_cards.jsonl` entry+exit pairs; sibling of the forex Trade Outcome Predictor (`trade_outcome_predictor.py`). **`ai/models/stock_outcome_predictor.py`** — `train()` / `predict()` / `status()`. Join key: `{account_env}:{strategy}:{ticker}:{entry_date}` (card_id split directly, no ISO8601 suffix). Active-strategy filter: `_ACTIVE_STRATEGIES = {"us_reversion", "us_blend"}`. Feature set (27-element vector): 10 numerical (`rsi14`, `adx`, `daily_vol_pct`, `stop_pct`, `target_pct`, `risk_reward`, `n_open_positions`, `day_of_week`, `ticker_win_rate`, `ticker_n_closed`) + 3 strategy one-hot + 8 regime one-hot + 2 direction one-hot. Gate: **50 closed non-orphaned stock trades** (currently accruing — 1 as of 2026-09-03). Output: `data/stock_outcome_model/model.pkl` + `report.json`. **`ai_stock_outcome_predictor.py`** CLI (`--status / --train / --report`). `ai/config.py` gains `stock_outcome_predictor_cfg()` + `stock_outcome_predictor_enabled()`. `config/ai.json` gains `stock_outcome_predictor` block. `ai/features/stock_proposal.py` wires `stock_top_win_prob` (lazy, best-effort, additive to the Copilot's existing signal). **Ships OFF** (`enabled: false`); auto-trains daily at **22:10 PKT** once gate clears (`run_ai_stock_outcome_predictor.bat` → `setup_scheduler_stock_outcome_predictor.ps1`, registered once by operator as Administrator). `scheduler_watchdog.py` entry added (30-min execution limit). Lift thresholds: ≥5% meaningful, 2–5% marginal, <2% no edge. 70/30 chronological walk-forward split (consistent with `decompose.py`). AST-locked: no `forex.runner` / `saxo_*` imports.
 
