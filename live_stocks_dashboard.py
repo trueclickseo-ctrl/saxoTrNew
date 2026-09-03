@@ -53,6 +53,15 @@ import atos.capital_config as CAP
 GR = "\033[92m"; RD = "\033[91m"; YL = "\033[93m"; CY = "\033[96m"; BL = "\033[94m"
 W = "\033[0m"; BD = "\033[1m"; DM = "\033[2m"
 
+# Saxo charges $1 USD flat per trade on US stocks (confirmed from live trade
+# confirmations). For an open position Saxo Trader Go shows:
+#   P&L = (now - entry) × shares  −  $1 entry commission (already paid)
+#                                  −  $1 exit commission (provisioned)
+# When ProfitLossOnTrade comes from the Saxo API it already includes this
+# deduction. The gross-fallback path uses COMMISSION_PER_TRADE_USD × 2 to
+# match Saxo's display when the API field is unavailable.
+COMMISSION_PER_TRADE_USD = 1.0
+
 
 def _rows(sql, params=()):
     if not os.path.exists(DB_PATH):
@@ -337,10 +346,13 @@ def render() -> str:
             saxo_sek = live_pnl_sek.get(ticker.upper())
             if now_px > 0:
                 if saxo_pl is not None:
+                    # Saxo API: ProfitLossOnTrade already deducts commissions
                     pnl_usd = saxo_pl
                     n_from_api += 1
                 else:
-                    pnl_usd = (now_px - entry) * shrs
+                    # Gross fallback: match Saxo Trader Go by deducting entry
+                    # commission already paid ($1) + exit commission provisioned ($1)
+                    pnl_usd = (now_px - entry) * shrs - 2 * COMMISSION_PER_TRADE_USD
                     n_from_gross += 1
                 chg_pct = (now_px - entry) / entry * 100 if entry else 0
             else:
