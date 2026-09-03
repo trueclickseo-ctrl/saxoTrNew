@@ -42,7 +42,33 @@ import saxo_auth
 logger = logging.getLogger("saxo_sim_token_keepalive")
 
 
+def _wrong_token_type() -> str | None:
+    """A Saxo Developer-Portal 24h token (from `set_token.py` / a manual
+    paste) has NO refresh_token and expires_in == 86400. This keepalive
+    cannot roll such a token -- there is nothing to refresh FROM -- so when
+    Saxo's SIM environment drops the session a few hours later it just
+    reports the death, it never prevents it. Only a PKCE login
+    (`python saxo_auth.py`) gives an access_token + refresh_token pair the
+    keepalive can actually keep alive. Detect the wrong artefact and say so
+    explicitly rather than emitting the generic "re-login required".
+    Returns an explanation string when the saved token is the wrong type,
+    else None."""
+    try:
+        toks = saxo_auth._load_tokens(env="sim") or {}
+    except Exception:
+        return None
+    if not toks:
+        return None
+    if not toks.get("refresh_token") and int(toks.get("expires_in", 0) or 0) > 3600:
+        return ("saxo_token.json is a Developer-Portal 24h token (no "
+                "refresh_token) -- the keepalive cannot roll it. Saxo SIM "
+                "usually drops these after a few hours. Log in with PKCE "
+                "instead: `python saxo_auth.py` (NOT set_token.py).")
+    return None
+
+
 def run_once() -> bool:
+    _wrong = _wrong_token_type()
     try:
         saxo_auth.get_valid_access_token(env="sim")
         # get_valid_access_token only does time math on the file's own
@@ -55,10 +81,16 @@ def run_once() -> bool:
         me = saxo_client.test_connection(env="sim")
         logger.info(f"[keepalive] SIM token OK — {me.get('Name', '?')} "
                     f"(UserId {me.get('UserId', '?')})")
+        if _wrong:
+            # The call succeeded for now, but this token WILL die with
+            # nothing to refresh from -- warn once per tick so it is on the
+            # record before the failure email lands.
+            logger.warning(f"[keepalive] {_wrong}")
         return True
     except Exception as exc:
         logger.error(f"[keepalive] SIM token check FAILED: {exc}")
-        _send_alert(str(exc))
+        detail = str(exc) + (f"\n\n>>> {_wrong}" if _wrong else "")
+        _send_alert(detail)
         return False
 
 
