@@ -129,6 +129,19 @@ _DEFAULTS = {
         "journal": True,
         "basket_ranker_blend": True,
     },
+    # ── Trade Outcome Predictor (2026-09-03, roadmap #20) ────────────────
+    # ai/models/trade_outcome_predictor.py — a GradientBoosting classifier
+    # trained on our actual closed observation cards (entry context + real
+    # r_multiple outcomes). Replaces the CNN-LSTM's raw price-direction
+    # approach with direct trade-profitability prediction.
+    # Gate: won't train below min_samples (100) closed, non-orphaned cards.
+    # Output feeds top_win_prob in the trade proposal; the Copilot can use it
+    # alongside signal_filter's ml_prob. Ships OFF.
+    # Retrain: python ai_outcome_predictor.py --train (weekly once gate clears).
+    "outcome_predictor": {
+        "enabled": False,
+        "min_samples": 100,
+    },
     # ── AI Research Analyst (2026-09-03, roadmap #19) ─────────────────────
     # ai/features/research_analyst.py -- OFFLINE, READ-ONLY. Aggregates the
     # closed-trade record + the Journal + the decomposition harness into a
@@ -304,6 +317,19 @@ def basket_ranker_applies(account_env: str) -> bool:
     basket-ranker's pick is TRADED rather than just logged. Everywhere else
     the deterministic basket is authoritative (governance)."""
     return account_env == "ai_sim" and stocks_basket_ranker_enabled("ai_sim")
+
+
+def outcome_predictor_cfg() -> dict:
+    """The config/ai.json `outcome_predictor` block (merged over defaults)."""
+    s = _load().get("outcome_predictor")
+    return s if isinstance(s, dict) else dict(_DEFAULTS["outcome_predictor"])
+
+
+def outcome_predictor_enabled() -> bool:
+    """True if the TOP model may score proposals.  Read-only / offline --
+    independent of account gates.  Only needs its own flag (and a trained
+    model on disk -- gracefully returns None without one)."""
+    return bool(outcome_predictor_cfg().get("enabled", False))
 
 
 def research_analyst_cfg() -> dict:

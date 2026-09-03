@@ -74,7 +74,7 @@ def build_proposal(*, account_env: str, strategy: str, symbol: str, direction: s
     else:
         regime = {"label": "UNKNOWN"}
 
-    return {
+    proposal = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "account_env": account_env,
         "symbol": symbol,
@@ -118,7 +118,25 @@ def build_proposal(*, account_env: str, strategy: str, symbol: str, direction: s
         # closed trades yet). A high, well-sampled win rate is a reason to
         # lean APPROVE; a poor one is a reason to MODIFY or REJECT.
         "pair_history": pair_stats,
+        # ── Trade Outcome Predictor (TOP) win probability ─────────────────
+        # GradientBoosting score from ai/models/trade_outcome_predictor.py:
+        # "probability this entry produces r_multiple > 0", trained on our
+        # real closed observation cards. None when model not available or
+        # outcome_predictor.enabled is false. Supplements signal_filter's
+        # ml_prob (consensus + agreement features) with a history-based score.
+        "top_win_prob": None,   # filled below if the model is ready
     }
+
+    # Score with the TOP model if enabled — lazy import, best-effort.
+    try:
+        from ai import config as _ai_cfg
+        if _ai_cfg.outcome_predictor_enabled():
+            from ai.models.trade_outcome_predictor import predict as _top_predict
+            proposal["top_win_prob"] = _top_predict(proposal)
+    except Exception:
+        pass
+
+    return proposal
 
 
 def _economics(entry, stop, tp, commission_eur, risk_eur, all_in_cost_eur=None):
