@@ -94,6 +94,8 @@ _US_SIGNAL_STRATEGIES = {
 }
 
 def _exit_info(drow: dict) -> str:
+    if not drow:
+        return "(no local record)"
     strategy   = (drow.get("strategy") or "").strip()
     days       = _days_held(drow.get("entry_date", ""))
     if "Reversion" in strategy:
@@ -381,7 +383,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
                 "ticker": base, "shs": shs, "entry": ep, "now": now,
                 "stop": stop, "pnl": pnl, "ppc": ppc,
                 "regime": (drow.get("regime_at_entry") or "—")[:10],
-                "strategy": (drow.get("strategy") or "—")[:12],
+                "strategy": (drow.get("strategy") or "untracked")[:12],
                 "exit": _exit_info(drow), "live": True,
             })
             total_pnl += pnl

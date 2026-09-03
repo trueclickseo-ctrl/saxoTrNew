@@ -311,10 +311,10 @@ def render() -> str:
     if not openp:
         L.append(f"{DM}    none — the sleeve holds no real stock positions yet{W}")
     else:
-        HDR = (f"  {DM}{'Ticker':<7} {'Shrs':>4}  {'Entry':>7}  {'Now':>7}  "
-               f"{'Stop':>7}  {'P&L USD':>9}  {'Chg%':>6}  "
-               f"{'Strategy':<12}  {'Exit Trigger':<18}  {'Regime':<12}  {'Day':>3}{W}")
-        SEP = f"  {DM}{'─'*106}{W}"
+        HDR = (f"  {DM}{'Ticker':<7} {'Shrs':>4}   {'Entry':>7}   {'Now':>7}   "
+               f"{'Stop':>7}   {'P&L USD':>9}   {'Chg%':>6}   "
+               f"{'Strategy':<14}  {'Exit Trigger':<18}  {'Regime':<12}  {'Day':>4}{W}")
+        SEP = f"  {DM}{'─'*116}{W}"
         L.append(HDR)
         L.append(SEP)
         total_pnl_usd = 0.0
@@ -328,7 +328,7 @@ def render() -> str:
             stop    = t.get("stop_price", 0) or 0
             tsh     = t.get("trailing_stop_high", entry) or entry
             regime  = (t.get("regime_at_entry") or "—").replace("_", " ")
-            strat   = (t.get("strategy") or "US Blend").replace("US ", "")
+            strat   = (t.get("strategy") or "US Blend")
             ed      = t.get("entry_date", "")
             # momentum day
             try:
@@ -373,11 +373,11 @@ def render() -> str:
             chg_col = GR if chg_pct >= 0 else RD
             now_str = f"${now_px:.2f}" if now_px else "  —   "
             L.append(
-                f"  {BD}{ticker:<7}{W} {shrs:>4}  ${entry:>6.2f}  {now_str:>7}  "
-                f"${stop:>6.2f}  "
-                f"{pnl_col}{pnl_usd:>+9.2f}{W}  "
-                f"{chg_col}{chg_pct:>+5.1f}%{W}  "
-                f"{DM}{strat:<12}{W}  {DM}{exit_trig:<18}{W}  "
+                f"  {BD}{ticker:<7}{W} {shrs:>4}   ${entry:>6.2f}   {now_str:>7}   "
+                f"${stop:>6.2f}   "
+                f"{pnl_col}{pnl_usd:>+9.2f}{W}   "
+                f"{chg_col}{chg_pct:>+5.1f}%{W}   "
+                f"{DM}{strat:<14}{W}  {DM}{exit_trig:<18}{W}  "
                 f"{DM}{regime:<12}{W}  {DM}{mom_day:>3}d{W}"
             )
         L.append(SEP)
@@ -388,8 +388,8 @@ def render() -> str:
                     else f"mixed ({n_from_api} API / {n_from_gross} gross)")
         sek_part = (f"  {DM}≈{W} {tc}{total_pnl_sek:>+,.0f} SEK{W}" if total_pnl_sek else "")
         L.append(
-            f"  {BD}{'TOTAL':>7}{W} {'':>4}  {'':>7}  {'':>7}  "
-            f"{'':>7}  {tc}{BD}{total_pnl_usd:>+9.2f} USD{W}"
+            f"  {BD}{'TOTAL':>7}{W} {'':>4}   {'':>7}   {'':>7}   "
+            f"{'':>7}   {tc}{BD}{total_pnl_usd:>+9.2f} USD{W}"
             f"{sek_part}  {DM}({src_note}){W}"
         )
 
