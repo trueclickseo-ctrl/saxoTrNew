@@ -333,19 +333,36 @@ def get_stop_losses(client: Avanza) -> list[dict]:
         return []
 
 
+def _extract_ticker_from_title(title: str) -> str:
+    """Extract ticker symbol from Avanza title like 'Dell Technologies C (DELL)'.
+    Returns the text inside the last parentheses pair, or '' if none.
+    """
+    if title and "(" in title and title.endswith(")"):
+        return title.rsplit("(", 1)[-1].rstrip(")")
+    return ""
+
+
 def search_stocks(client: Avanza, query: str, limit: int = 10) -> list[dict]:
-    """Search for stocks. Returns [{id, name, ticker, currency, country}]."""
+    """Search for stocks. Returns [{id, name, ticker, currency, country, market}].
+
+    Avanza search results use 'orderBookId' for the instrument ID and embed
+    the ticker inside 'title' as 'Name (TICKER)'. price fields use Swedish
+    comma-decimal strings — we don't parse them here.
+    """
     try:
         hits = client.search_for_stock(query, limit=limit)
         result = []
         for h in (hits or []):
+            title  = h.get("title", "")
+            ticker = _extract_ticker_from_title(title) or h.get("ticker", "")
+            price  = h.get("price") or {}
             result.append({
-                "id":       str(h.get("id", h.get("orderbookId", ""))),
-                "name":     h.get("name", ""),
-                "ticker":   h.get("tickerSymbol", h.get("ticker", "")),
-                "currency": h.get("currency", ""),
+                "id":       str(h.get("orderBookId", h.get("orderbookId", h.get("id", "")))),
+                "name":     title.rsplit("(", 1)[0].strip() if "(" in title else title,
+                "ticker":   ticker,
+                "currency": price.get("currency", h.get("currency", "")),
                 "country":  h.get("flagCode", h.get("country", "")),
-                "market":   h.get("marketList", h.get("market", "")),
+                "market":   h.get("marketPlaceName", h.get("marketList", h.get("market", ""))),
             })
         return result
     except Exception:
