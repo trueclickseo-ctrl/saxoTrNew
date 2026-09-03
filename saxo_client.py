@@ -335,6 +335,27 @@ def cancel_order(order_id: str, env: str = "sim") -> bool:
         return False
 
 
+def cancel_sell_orders_for_uic(uic: int, asset_type: str, env: str = "sim") -> list[str]:
+    """Cancel every working Sell order for a UIC (e.g. orphaned TP after a stop cancel).
+
+    Returns the list of order IDs that were successfully cancelled.
+    Safe to call when there are no such orders — returns [].
+    """
+    try:
+        data = get_orders(asset_type=asset_type, env=env).get("Data", [])
+        cancelled = []
+        for o in data:
+            if o.get("Uic") == uic and o.get("BuySell") == "Sell":
+                oid = str(o.get("OrderId", ""))
+                if oid and cancel_order(oid, env=env):
+                    cancelled.append(oid)
+        return cancelled
+    except Exception as e:
+        import sys
+        print(f"  [cancel-sell-orders] UIC {uic}: {e}", file=sys.stderr)
+        return []
+
+
 _decimals_cache: dict = {}
 
 

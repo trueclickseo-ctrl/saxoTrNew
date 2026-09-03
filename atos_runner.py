@@ -2249,25 +2249,40 @@ def trail_us_blend_stops(feat_data: dict) -> None:
         stop_oid = trade.get("stop_order_id")
         saxo_ok  = is_paper   # paper fills need no Saxo call
 
-        if not is_paper and uic and stop_oid:
-            saxo_ok = _sxo.modify_stop_price(
-                patch_fn=patch_fn, account_key=ak, order_id=stop_oid,
-                uic=uic, asset_type="Stock", amount=shares,
-                new_stop_price=new_stop, symbol=ticker,
-            )
+        if not is_paper and uic:
+            if stop_oid:
+                saxo_ok = _sxo.modify_stop_price(
+                    patch_fn=patch_fn, account_key=ak, order_id=stop_oid,
+                    uic=uic, asset_type="Stock", amount=shares,
+                    new_stop_price=new_stop, symbol=ticker,
+                )
+                if not saxo_ok:
+                    # PATCH rejected — cancel the old stop and fall through to place fresh
+                    print(f"  {tag} {ticker}: PATCH rejected, trying cancel+replace")
+                    saxo_client.cancel_order(stop_oid, env=_sx())
+                    stop_oid = None
+
             if not saxo_ok:
-                # PATCH rejected — cancel the old order and place a fresh one
-                print(f"  {tag} {ticker}: PATCH rejected, trying cancel+replace")
-                if saxo_client.cancel_order(stop_oid, env=_sx()):
-                    new_oid = _sxo.place_protective_stop(
-                        post_fn=post_fn, account_key=ak,
-                        uic=uic, asset_type="Stock", amount=shares,
-                        direction="Buy", stop_price=new_stop,
-                        label=f"trail:{ticker}",
-                    )
-                    if new_oid:
-                        stop_oid = new_oid
-                        saxo_ok  = True
+                # No stop order (naked) OR old stop just cancelled: place a fresh stop.
+                # If Saxo rejects with SellOrdersAlreadyExist (orphaned TP), cancel those
+                # sell orders automatically and retry once.
+                new_oid = _sxo.place_protective_stop(
+                    post_fn=post_fn, account_key=ak,
+                    uic=uic, asset_type="Stock", amount=shares,
+                    direction="Buy", stop_price=new_stop, label=f"trail:{ticker}",
+                )
+                if not new_oid:
+                    cleared = saxo_client.cancel_sell_orders_for_uic(uic, "Stock", env=_sx())
+                    if cleared:
+                        print(f"  {tag} {ticker}: cleared {len(cleared)} conflicting sell order(s), retrying")
+                        new_oid = _sxo.place_protective_stop(
+                            post_fn=post_fn, account_key=ak,
+                            uic=uic, asset_type="Stock", amount=shares,
+                            direction="Buy", stop_price=new_stop, label=f"trail:{ticker}",
+                        )
+                if new_oid:
+                    stop_oid = new_oid
+                    saxo_ok  = True
 
         if saxo_ok:
             db.update_stop_trailing(trade_id, new_trail, new_stop,
