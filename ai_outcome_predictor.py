@@ -36,9 +36,10 @@ def _cli_status() -> None:
     print("\n=== Trade Outcome Predictor STATUS ===")
     n = s["n_closed_cards"]
     if s["gate_cleared"]:
-        print(f"  Closed cards       : {n}  (gate CLEARED >= {MIN_SAMPLES})")
+        print(f"  Active-strategy cards : {n}  (gate CLEARED >= {MIN_SAMPLES})")
     else:
-        print(f"  Closed cards       : {n}  ({s['needed_for_train']} more needed to train)")
+        print(f"  Active-strategy cards : {n}  ({s['needed_for_train']} more needed to train)")
+        print(f"  (counts rsi/rsi_trend/rsi_atr/ema_trend/bb_quality/zscore_quality only)")
     print(f"  Model on disk      : {'YES' if s['model_exists'] else 'NO'}")
     if s["model_exists"]:
         print(f"  Trained at         : {s['trained_at'] or 'unknown'}")

@@ -85,6 +85,14 @@ _STRATEGIES = [
     "rsi", "rsi_trend", "rsi_atr", "ema_trend",
     "bb_quality", "zscore_quality", "unknown",
 ]
+
+# Only train and score on the current active SIM roster.  Retired strategies
+# (gap, ema, pullback, donchian, supertrend, ml, london_breakout, …) have
+# completely different entry/exit mechanics and would pollute the model.
+# This set is derived from SIM_ACTIVE_STRATEGIES in forex/runner.py.
+_ACTIVE_STRATEGIES: frozenset[str] = frozenset(
+    {"rsi", "rsi_trend", "rsi_atr", "ema_trend", "bb_quality", "zscore_quality"}
+)
 _REGIMES = [
     "TRENDING_BULLISH", "TRENDING_BEARISH", "RANGING", "BREAKOUT",
     "HIGH_VOLATILITY", "LOW_VOLATILITY", "CHAOTIC", "UNKNOWN",
@@ -195,6 +203,13 @@ def _load_raw_data() -> list[dict]:
         if r_mult is None:
             continue
 
+        # Determine strategy early so we can skip retired strategies before
+        # paying the cost of the proposal lookup.
+        parts_check = card_id.split(":", 3)
+        _strat_check = parts_check[1] if len(parts_check) > 1 else ""
+        if _strat_check not in _ACTIVE_STRATEGIES:
+            continue
+
         # card_id format: "env:strategy:symbol:ISO8601"
         # Split at most 3 times so the datetime suffix stays intact.
         parts    = card_id.split(":", 3)
@@ -292,6 +307,7 @@ def _train_inner(min_samples: int) -> dict:
         from sklearn.ensemble import GradientBoostingClassifier
         from sklearn.preprocessing import StandardScaler
         from sklearn.metrics import accuracy_score, precision_score
+        from sklearn.utils.class_weight import compute_sample_weight
     except ImportError:
         return {"trained": False, "reason": "scikit-learn not installed"}
 
@@ -299,7 +315,7 @@ def _train_inner(min_samples: int) -> dict:
     if len(rows) < min_samples:
         return {
             "trained":      False,
-            "reason":       f"not enough data: {len(rows)}/{min_samples} closed trades",
+            "reason":       f"not enough data: {len(rows)}/{min_samples} closed trades from active strategies",
             "n_available":  len(rows),
             "n_needed":     min_samples,
         }
@@ -319,11 +335,15 @@ def _train_inner(min_samples: int) -> dict:
     X_train_sc = scaler.fit_transform(X_train)
     X_test_sc  = scaler.transform(X_test)
 
+    # Balanced sample weights: upweight the minority class (wins) so the model
+    # doesn't collapse to predicting "loss" for every trade when WR < 40%.
+    sample_weights = compute_sample_weight("balanced", y_train)
+
     model = GradientBoostingClassifier(
         n_estimators=200, max_depth=3, learning_rate=0.05,
         subsample=0.8, min_samples_leaf=5, random_state=42,
     )
-    model.fit(X_train_sc, y_train)
+    model.fit(X_train_sc, y_train, sample_weight=sample_weights)
 
     y_pred    = model.predict(X_test_sc)
     acc       = accuracy_score(y_test, y_pred)
@@ -433,8 +453,10 @@ def status() -> dict:
     at any time, even with no data or model on disk.
     """
     try:
-        n_closed = len(_load_raw_data())
+        rows = _load_raw_data()
+        n_closed = len(rows)
     except Exception:
+        rows = []
         n_closed = 0
 
     report: dict = {}
@@ -446,7 +468,7 @@ def status() -> dict:
             pass
 
     return {
-        "n_closed_cards":   n_closed,
+        "n_closed_cards":   n_closed,          # active-strategy closed trades only
         "needed_for_train": max(0, MIN_SAMPLES - n_closed),
         "gate_cleared":     n_closed >= MIN_SAMPLES,
         "model_exists":     os.path.exists(MODEL_PKL),
