@@ -91,6 +91,25 @@ def _pooled_balance():
         return None, None
 
 
+def _live_prices_from_saxo() -> dict:
+    """Return {ticker: current_price_usd} from LIVE Saxo positions endpoint."""
+    try:
+        import saxo_client
+        data = saxo_client.get_positions(env="live")
+        out = {}
+        for item in data.get("Data", []):
+            base  = item.get("PositionBase", {})
+            view  = item.get("PositionView", {})
+            disp  = item.get("DisplayAndFormat", {})
+            sym   = (disp.get("Symbol") or base.get("Symbol") or "").split(".")[0].upper()
+            price = view.get("CurrentPrice") or base.get("CurrentPrice") or 0
+            if sym and price:
+                out[sym] = float(price)
+        return out
+    except Exception:
+        return {}
+
+
 _PNL_RESET_PATH = os.path.join(BASE_DIR, "data", "pnl_reset.json")
 
 def _load_stock_cutoffs() -> dict:
@@ -176,8 +195,7 @@ def render() -> str:
     cap = CAP.stocks_live_risk_equity_sek()
     L = []
     L.append(f"{BD}{'='*70}{W}")
-    L.append(f"{BD}  ATOS LIVE STOCKS — US Blend sleeve{W}   REAL MONEY")
-    L.append(f"{YL}  OBSERVE-ONLY — no real orders (Phase 1){W}")
+    L.append(f"{BD}  ATOS LIVE STOCKS — US Blend sleeve{W}   {RD}REAL MONEY{W}")
     L.append(f"{DM}  {datetime.now():%Y-%m-%d %H:%M:%S} PKT{W}")
     L.append(f"{BD}{'='*70}{W}")
 
@@ -191,16 +209,63 @@ def render() -> str:
         L.append(f"  Pooled margin utilization : {col}{util:.1f}%{W}  {DM}(50% entry gate){W}")
 
     # ── Open positions — top of dashboard ────────────────────────────────────
-    openp = _rows("select * from trades where exit_price is null order by entry_date")
+    openp      = _rows("select * from trades where exit_price is null order by entry_date")
+    live_px    = _live_prices_from_saxo()
+    today      = datetime.now().date()
     L.append("")
     L.append(f"{BD}  OPEN POSITIONS ({len(openp)}){W}")
     if not openp:
         L.append(f"{DM}    none — the sleeve holds no real stock positions yet{W}")
     else:
+        HDR = (f"  {DM}{'Ticker':<7} {'Shrs':>4}  {'Entry':>7}  {'Now':>7}  "
+               f"{'Stop':>7}  {'P&L USD':>9}  {'Chg%':>6}  "
+               f"{'Strategy':<12}  {'Exit Trigger':<18}  {'Regime':<12}  {'Day':>3}{W}")
+        SEP = f"  {DM}{'─'*106}{W}"
+        L.append(HDR)
+        L.append(SEP)
         for t in openp:
-            L.append(f"    {t.get('ticker',''):<8} {t.get('shares',0):>6} sh  "
-                     f"entry ${t.get('entry_price',0):.2f}  stop ${t.get('stop_price',0):.2f}"
-                     f"  {DM}{t.get('strategy','')}{W}")
+            ticker  = t.get("ticker", "")
+            shrs    = t.get("shares", 0) or 0
+            entry   = t.get("entry_price", 0) or 0
+            stop    = t.get("stop_price", 0) or 0
+            tsh     = t.get("trailing_stop_high", entry) or entry
+            regime  = (t.get("regime_at_entry") or "—").replace("_", " ")
+            strat   = (t.get("strategy") or "US Blend").replace("US ", "")
+            ed      = t.get("entry_date", "")
+            # momentum day
+            try:
+                from datetime import date as _date
+                ed_date = _date.fromisoformat(str(ed)[:10])
+                mom_day = (today - ed_date).days + 1
+            except Exception:
+                mom_day = 0
+            # live price (fall back to trailing_stop_high reference if unavailable)
+            now_px = live_px.get(ticker.upper(), 0)
+            if now_px > 0:
+                pnl_usd = (now_px - entry) * shrs
+                chg_pct = (now_px - entry) / entry * 100 if entry else 0
+            else:
+                pnl_usd = 0.0
+                chg_pct = 0.0
+            # exit trigger
+            if tsh > entry * 1.001:
+                exit_trig = f"trail >${tsh:.2f}"
+            else:
+                exit_trig = f"stop ${stop:.2f}"
+            if mom_day >= 14:
+                exit_trig = "time (14d)"
+            pnl_col = GR if pnl_usd >= 0 else RD
+            chg_col = GR if chg_pct >= 0 else RD
+            now_str = f"${now_px:.2f}" if now_px else "  —   "
+            L.append(
+                f"  {BD}{ticker:<7}{W} {shrs:>4}  ${entry:>6.2f}  {now_str:>7}  "
+                f"${stop:>6.2f}  "
+                f"{pnl_col}{pnl_usd:>+9.2f}{W}  "
+                f"{chg_col}{chg_pct:>+5.1f}%{W}  "
+                f"{DM}{strat:<12}{W}  {DM}{exit_trig:<18}{W}  "
+                f"{DM}{regime:<12}{W}  {DM}{mom_day:>3}d{W}"
+            )
+        L.append(SEP)
 
     # ── Last scan: blend target basket (the "signal") ──────────────────────
     st = _status()
