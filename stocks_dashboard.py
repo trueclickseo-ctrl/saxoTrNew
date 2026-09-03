@@ -377,6 +377,11 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
             # Compute % from prices — Saxo SIM returns 0 for this field on stocks
             ppc = ((now - ep) / ep * 100) if now and ep else 0.0
             drow = db.get(base, {})
+            if not drow:
+                # Saxo SIM has this position but ATOS has no record of it.
+                # Exclude from the dashboard; run close_atos_sim_orphans.py to close.
+                seen.add(base)
+                continue
             stop = _effective_stop(drow)
             seen.add(base)
             rows.append({
