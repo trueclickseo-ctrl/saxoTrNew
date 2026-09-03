@@ -181,6 +181,17 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
 
     live, price_src = price_service.fetch_prices(instruments, token=token, env="live")
 
+    # Determine why prices may be unavailable — shown in the header and
+    # as a prominent warning row when positions exist.
+    if price_src == "saxo":
+        px_err = None
+    elif token is None:
+        px_err = "SAXO LIVE TOKEN EXPIRED — refresh now (saxo_token_live.json)"
+    elif positions:
+        px_err = "SAXO LIVE API unreachable — all price requests failed"
+    else:
+        px_err = None   # no positions → no prices needed, not an error
+
     # Live equity/balance -- read-only, no orders. Falls back gracefully
     # (shows "—") if the token/connection isn't available this cycle.
     equity_sek = None
@@ -195,12 +206,14 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     HR = f"  {fd.DM}{'─' * W_TOTAL}{fd.W}"
     L = []
 
-    src_tag = "SAXO LIVE" if price_src == "saxo" else "n/a (token expired)"
+    src_tag = "SAXO LIVE" if price_src == "saxo" else f"⚠ UNAVAILABLE"
     L.append(f"  {fd.BD}{fd.GR}╔{'═'*W_TOTAL}╗{fd.W}")
     L.append(f"  {fd.BD}{fd.GR}║{'  FOREX LIVE ACCOUNT — REAL MONEY':^{W_TOTAL}}║{fd.W}")
     equity_s = f"{equity_sek:,.0f} SEK" if equity_sek is not None else "—"
     L.append(f"  {fd.BD}{fd.GR}║{f'  3 Strategies  |  34 Core Pairs  |  Equity: {equity_s}  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{fd.W}")
     L.append(f"  {fd.BD}{fd.GR}╚{'═'*W_TOTAL}╝{fd.W}")
+    if px_err:
+        L.append(f"  {fd.RD}{fd.BD}⚠ LIVE PRICES UNAVAILABLE: {px_err}{fd.W}")
     L.append("")
     L.append(f"  {fd.BD}STRATEGIES{fd.W}   "
              f"{fd.GR}{fd.BD}■ Donchian(30){fd.W}  breakout   "

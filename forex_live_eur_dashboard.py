@@ -89,6 +89,15 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
 
     live, price_src = price_service.fetch_prices(instruments, token=token, env="live")
 
+    if price_src == "saxo":
+        px_err = None
+    elif token is None:
+        px_err = "SAXO LIVE TOKEN EXPIRED — refresh now (saxo_token_live.json)"
+    elif positions:
+        px_err = "SAXO LIVE API unreachable — all price requests failed"
+    else:
+        px_err = None
+
     # NOTE: Saxo's /balances/me is pooled across all 3 sub-accounts under
     # this Client (confirmed 2026-08-26 -- an explicit AccountKey filter
     # makes no difference), so this always comes back as the GROUP total
@@ -116,13 +125,15 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     if price_src == "saxo":
         src_tag = "SAXO LIVE"
     elif not positions:
-        src_tag = "n/a (no open positions to price)"
+        src_tag = "n/a (no open positions)"
     else:
-        src_tag = "n/a (token expired)"
+        src_tag = "⚠ UNAVAILABLE"
     L.append(f"  {fd.BD}{fd.CY}╔{'═'*W_TOTAL}╗{fd.W}")
     L.append(f"  {fd.BD}{fd.CY}║{'  FOREX LIVE-EUR ACCOUNT — REAL MONEY':^{W_TOTAL}}║{fd.W}")
     L.append(f"  {fd.BD}{fd.CY}║{f'  RSI only  |  17 HIGH_VOLUME Pairs  |  Sizing Cap: {cap_eur:,.0f} EUR  |  Prices: {src_tag}  |  {now_ts}':^{W_TOTAL}}║{fd.W}")
     L.append(f"  {fd.BD}{fd.CY}╚{'═'*W_TOTAL}╝{fd.W}")
+    if px_err:
+        L.append(f"  {fd.RD}{fd.BD}⚠ LIVE PRICES UNAVAILABLE: {px_err}{fd.W}")
     L.append("")
     pooled_s = f"{pooled_total:,.0f} {pooled_ccy}" if pooled_total else "—"
     L.append(f"  {fd.DM}This is the REAL-MONEY EUR sub-account -- separate state/orders/P&L "

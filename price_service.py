@@ -79,26 +79,39 @@ def load_token(env: str = "sim") -> str | None:
 # ── Saxo single-instrument price ───────────────────────────────────
 
 def _saxo_mid(token: str, uic: int, asset_type: str, env: str = "sim") -> float | None:
-    """Fetch mid price from Saxo /trade/v1/infoprices. Returns None on failure."""
+    """Fetch mid price from Saxo /trade/v1/infoprices. Returns None on failure.
+
+    Retries once on 429 (rate-limit) with a short back-off. Uses a 15s
+    timeout — the LIVE API can be slower than SIM under concurrent load.
+    """
+    import sys as _sys
     base = SIM_BASE if env == "sim" else LIVE_BASE
-    try:
-        r = requests.get(
-            base + "trade/v1/infoprices",
-            headers={"Authorization": f"Bearer {token}"},
-            params={"Uic": uic, "AssetType": asset_type, "FieldGroups": "Quote"},
-            timeout=5,
-        )
-        if r.status_code != 200:
+    for attempt in range(2):
+        try:
+            r = requests.get(
+                base + "trade/v1/infoprices",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"Uic": uic, "AssetType": asset_type, "FieldGroups": "Quote"},
+                timeout=15,
+            )
+            if r.status_code == 429:
+                wait = 3 * (attempt + 1)
+                print(f"  [price_service] 429 UIC={uic} env={env} — retry in {wait}s",
+                      file=_sys.stderr, flush=True)
+                time.sleep(wait)
+                continue
+            if r.status_code != 200:
+                return None
+            q = r.json().get("Quote", {})
+            mid = q.get("Mid")
+            if mid is None and q.get("Ask") and q.get("Bid"):
+                mid = (float(q["Ask"]) + float(q["Bid"])) / 2
+            if mid is None:
+                mid = q.get("LastTraded")
+            return float(mid) if mid is not None else None
+        except Exception:
             return None
-        q = r.json().get("Quote", {})
-        mid = q.get("Mid")
-        if mid is None and q.get("Ask") and q.get("Bid"):
-            mid = (float(q["Ask"]) + float(q["Bid"])) / 2
-        if mid is None:
-            mid = q.get("LastTraded")
-        return float(mid) if mid is not None else None
-    except Exception:
-        return None
+    return None
 
 
 # ── Main entry point ───────────────────────────────────────────────
