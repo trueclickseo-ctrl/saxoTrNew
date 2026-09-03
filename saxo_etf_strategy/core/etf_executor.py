@@ -291,6 +291,35 @@ class ETFExecutor:
         return removed
 
     # ------------------------------------------------------------------
+    # Ranking trim — sell any position not in the current top-N
+    # ------------------------------------------------------------------
+
+    def trim_out_of_ranking(self, signals) -> int:
+        """Sell every open position whose symbol is NOT in the current
+        top-N (max_candidates_per_run) signal list.  Called after
+        generate_signals() so the list reflects today's ranking.
+        Returns the number of positions sold."""
+        top_symbols = {s.symbol for s in signals}
+        positions   = self.state.all_positions()
+        sold        = 0
+        for uic_str, pos in list(positions.items()):
+            uic    = int(uic_str)
+            symbol = pos.get("symbol", uic_str)
+            if symbol in top_symbols:
+                continue  # still in top-N — keep
+            live_price = self._live_price(uic, pos)
+            if live_price is None:
+                logger.warning(f"[trim] {symbol}: can't fetch live price — skipping trim")
+                continue
+            self._exit_position(uic, pos, live_price,
+                                f"RANK_TRIM (dropped out of top {self.cfg.strategy.max_candidates_per_run})")
+            sold += 1
+        if sold:
+            logger.info(f"[trim] Sold {sold} position(s) that dropped out of the top-"
+                        f"{self.cfg.strategy.max_candidates_per_run} ranking")
+        return sold
+
+    # ------------------------------------------------------------------
     # Exits — stop-loss / take-profit (soft check after GTC sync)
     # ------------------------------------------------------------------
 

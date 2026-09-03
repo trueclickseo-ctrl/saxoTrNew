@@ -95,6 +95,9 @@ class ETFBot:
         signals = self.strategy.generate_signals(universe)
         log.info(f"Signals: {len(signals)} BUY candidate(s) this run")
 
+        # Sell any open position that dropped out of the top-N ranking
+        self.executor.trim_out_of_ranking(signals)
+
         self.executor.process_signals(signals)
 
         try:

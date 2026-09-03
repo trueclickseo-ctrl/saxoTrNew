@@ -46,21 +46,12 @@ class ETFStrategyConfig:
     lookback_days_fast: int = 20
     lookback_days_slow: int = 100
     min_avg_daily_turnover_usd: float = 1_000_000  # dual_ma liquidity filter
-    max_candidates_per_run: int = 20               # top-N for rotation strategies — widened
-                                                    # 2026-08-24 (3->10), 2026-08-28 (10->11
-                                                    # under sector_rotation, then 11->100 after
-                                                    # switching to dual_ma's ~101-symbol
-                                                    # universe), then narrowed back 2026-08-28
-                                                    # (later same day) 100->20 -- explicit user
-                                                    # request ("limit ETF till TOP 20 which are
-                                                    # in high volume and most traded"). Now
-                                                    # matches DualMAStrategy.UNIVERSE's own
-                                                    # 20-symbol size (see that list's comment
-                                                    # for the real-data ranking this replaced
-                                                    # the 101-symbol AUM-curated list with) --
-                                                    # etf_executor.process_signals() still
-                                                    # weights capital by rank so #1 gets more
-                                                    # than #20, not an equal split.
+    max_candidates_per_run: int = 10               # top-N for rotation strategies.
+                                                    # History: 3->10->11->100->20->10.
+                                                    # 2026-09-03: narrowed 20->10 per user
+                                                    # request ("limit to top 10, rest all sell").
+                                                    # trim_out_of_ranking() in ETFExecutor sells
+                                                    # any open position not in this top-N each run.
     rebalance_frequency_hours: int = 24
 
 
@@ -79,7 +70,7 @@ class ETFRiskConfig:
     # 100-name-split era while still giving the top-ranked pick more
     # capital than the bottom-ranked one.
     total_allocation_pct_of_account: float = 0.15
-    max_positions: int = 20
+    max_positions: int = 10  # 20->10 on 2026-09-03 (match top-N cap)
     max_position_pct: float = 0.03   # ceiling per name; rank-1's weighted share
                                       # (a larger fraction of the 15% budget now
                                       # that it's split across only 20 names,

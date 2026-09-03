@@ -66,6 +66,7 @@ import forex.strategy_rsi_atr     as strat_rsi_atr
 import forex.strategy_advanced_rsi_master as strat_advanced_rsi_master
 import forex.strategy_donchian    as strat_donchian
 import forex.strategy_donchian_quality as strat_donchian_quality
+import forex.strategy_donchian_ai as strat_donchian_ai  # 2026-09-03: SIM A/B + AI gates
 import forex.strategy_bb          as strat_bb
 import forex.strategy_advanced_bb_master as strat_advanced_bb_master
 import forex.strategy_bb_quality  as strat_bb_quality
@@ -192,6 +193,8 @@ STRATEGIES = {
     # on SIM only, never in either LIVE allowlist.
     "advanced_rsi_master": strat_advanced_rsi_master,
     "donchian":    strat_donchian,
+    # 2026-09-03: SIM-only Donchian + AI gates (DI-spread + regime + ATR-pctile)
+    "donchian_ai": strat_donchian_ai,
     # 2026-08-29: SIM-only parallel A/B test against "donchian" -- adds
     # the breakout-quality filters (min/max breakout strength, ADX-rising,
     # max EMA200 distance) from the user's own design doc, plus a REALLY
@@ -303,6 +306,7 @@ RETIRED_STRATEGIES: set[str] = {
 # LIVE_ALLOWED_STRATEGIES, never this.
 SIM_ACTIVE_STRATEGIES: list[str] = [
     "rsi", "rsi_trend", "rsi_atr", "ema_trend", "bb_quality", "zscore_quality",
+    "donchian_ai",  # 2026-09-03: SIM-only A/B; donchian raw retired, AI-gated twin enters forward study
 ]
 _ACTIVE_STRATEGIES = [k for k in SIM_ACTIVE_STRATEGIES if k in STRATEGIES]
 
@@ -338,7 +342,8 @@ SLOTS_PER_STRATEGY = {
     "ema_trend": _SWING_SLOTS,   # 2026-09-02: mirrors "ema" -- full universe, clean A/B
     "bb_quality": _SWING_SLOTS,  # 2026-09-02: mirrors "bb"  -- full universe, clean A/B
     "rsi": _SWING_SLOTS, "rsi_trend": _SWING_SLOTS, "rsi_atr": _SWING_SLOTS,  # 2026-09-03: rsi_atr SIM twin
-    "donchian": _SWING_SLOTS, "bb": _SWING_SLOTS,
+    "donchian": _SWING_SLOTS, "donchian_ai": strat_donchian_ai.MAX_POSITIONS,  # 2026-09-03: AI-gated cap matches module
+    "bb": _SWING_SLOTS,
     "pullback": _SWING_SLOTS, "gap": _SWING_SLOTS, "gap_weekend": _SWING_SLOTS,
     # 2026-08-30: the 4 user-supplied "advanced_*_master" A/B strategies --
     # each uncapped, mirroring its original (rsi / bb / pullback / cnn_lstm)
