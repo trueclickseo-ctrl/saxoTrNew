@@ -262,6 +262,14 @@ WINDOWS_TASKS = {
     # ~7 days out). Harmless while config/ai.json research_analyst.enabled
     # is false: the run prints "OFF" and exits 0.
     "AI Research Analyst": ("ATOS AI Research Analyst", "ai_research_analyst.log", 240, 174),
+    # Trade Outcome Predictor (roadmap #20, 2026-09-03) -- DAILY at 22:00 PKT.
+    # Trains the GBM model on closed observation cards from active strategies
+    # (rsi/rsi_trend/rsi_atr/ema_trend/bb_quality/zscore_quality). Gate is
+    # built-in: < 100 cards -> prints "not enough data" and exits 0, so daily
+    # runs are harmless until the gate clears. SIM-named -> AUTO_FIX_ELIGIBLE.
+    # grace 30 min (fast run, < 1 min once sklearn is loaded); max_first_run_wait
+    # 26h (daily task -- allow for one missed midnight before alerting).
+    "AI Outcome Predictor": ("ATOS AI Outcome Predictor", "ai_outcome_predictor.log", 30, 26),
 }
 
 # ── Registry: Claude-native scheduled tasks (no Windows entry) ──────────────
