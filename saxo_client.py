@@ -110,8 +110,17 @@ def get_account_info(env: str = "sim") -> dict:
 
 
 def get_positions(env: str = "sim") -> dict:
-    """Returns currently open positions on the given account."""
-    resp = _request_with_retry("GET", f"{_base_url(env)}/port/v1/positions/me", headers=_headers(env))
+    """Returns currently open positions on the given account.
+
+    Requests PositionView so that ProfitLossOnTrade and ProfitLossOnTradeBase
+    (the net P&L figures Saxo's own UI displays) are included in the response.
+    """
+    resp = _request_with_retry(
+        "GET",
+        f"{_base_url(env)}/port/v1/positions/me",
+        headers=_headers(env),
+        params={"FieldGroups": "PositionBase,PositionView,DisplayAndFormat"},
+    )
     resp.raise_for_status()
     return resp.json()
 

@@ -110,23 +110,25 @@ def _load_uic_map() -> dict:
         return {}
 
 
-def _live_prices_from_saxo() -> tuple[dict, dict, str | None]:
-    """Return ({ticker: price_usd}, {ticker: saxo_pnl_usd}, error | None).
+def _live_prices_from_saxo() -> tuple[dict, dict, dict, str | None]:
+    """Return ({ticker: price_usd}, {ticker: pnl_usd}, {ticker: pnl_sek}, error|None).
 
-    saxo_pnl_usd is ProfitLossOnTrade from Saxo's positions endpoint — the
-    same net-of-commission figure shown in Saxo's own positions view. When
-    available it should be used instead of (now-entry)*shares so the dashboard
-    P&L matches what Saxo displays.
+    pnl_usd  = ProfitLossOnTrade  (trade currency, USD for US stocks)
+    pnl_sek  = ProfitLossOnTradeBase (account base currency, SEK)
+    Both fields come from Saxo's PositionView — the same figures Saxo's own
+    positions view displays (net of already-paid entry commission).
+    Requires saxo_client.get_positions() to request FieldGroups=PositionView.
 
     Strategy 1 — positions endpoint (fast, single call):
-        Saxo symbols look like 'DELL:xnys' — strip after ':'.
+        Saxo symbols look like 'DELL:xnys' — strip exchange suffix after ':'.
     Strategy 2 — per-ticker /infoprices via instrument_map_live.csv UICs
         (fills gaps when the positions endpoint misses a ticker, prices only,
         no P&L — those rows keep the gross (now-entry)*shares fallback).
     """
     import saxo_client
-    out: dict     = {}
-    pnl_out: dict = {}
+    out: dict      = {}
+    pnl_out: dict  = {}
+    pnl_sek_out: dict = {}
     s1_err: str | None = None
 
     # Strategy 1: positions endpoint
@@ -142,12 +144,16 @@ def _live_prices_from_saxo() -> tuple[dict, dict, str | None]:
             price = view.get("CurrentPrice") or base.get("CurrentPrice") or 0
             if sym and price:
                 out[sym] = float(price)
-            # ProfitLossOnTrade is in the instrument's trade currency (USD for
-            # US stocks). It matches Saxo's own UI figure (includes commission
-            # provision) so we prefer it over (now-entry)*shares.
-            pnl = view.get("ProfitLossOnTrade")
-            if sym and pnl is not None:
-                pnl_out[sym] = float(pnl)
+            # ProfitLossOnTrade = net P&L in trade currency (USD for US stocks).
+            # ProfitLossOnTradeBase = same in account base currency (SEK).
+            # Both match what Saxo's own UI shows (entry commission already deducted).
+            # Requires FieldGroups=PositionView in the /positions/me request.
+            pnl_usd = view.get("ProfitLossOnTrade")
+            if sym and pnl_usd is not None:
+                pnl_out[sym] = float(pnl_usd)
+            pnl_sek = view.get("ProfitLossOnTradeBase")
+            if sym and pnl_sek is not None:
+                pnl_sek_out[sym] = float(pnl_sek)
     except Exception as _e:
         s1_err = str(_e)[:120]
 
@@ -182,7 +188,7 @@ def _live_prices_from_saxo() -> tuple[dict, dict, str | None]:
             error = f"SAXO unreachable: {raw_err[:80]}"
         else:
             error = "SAXO live prices unavailable"
-    return out, pnl_out, error
+    return out, pnl_out, pnl_sek_out, error
 
 
 _PNL_RESET_PATH = os.path.join(BASE_DIR, "data", "pnl_reset.json")
@@ -284,10 +290,11 @@ def render() -> str:
         L.append(f"  Pooled margin utilization : {col}{util:.1f}%{W}  {DM}(50% entry gate){W}")
 
     # ── Open positions — top of dashboard ────────────────────────────────────
-    openp                    = _rows("select * from trades where exit_price is null order by entry_date")
-    live_px, live_pnl, lp_err = _live_prices_from_saxo()
+    openp                             = _rows("select * from trades where exit_price is null order by entry_date")
+    live_px, live_pnl, live_pnl_sek, lp_err = _live_prices_from_saxo()
     today          = datetime.now().date()
     L.append("")
+    pnl_src_label = "Saxo API" if live_pnl else ("gross fallback" if live_px else "")
     px_status = (f"  {RD}⚠ {lp_err}{W}" if lp_err
                  else (f"  {DM}live prices OK ({len(live_px)} tickers){W}" if live_px
                        else f"  {DM}live prices: market closed or no open positions{W}"))
@@ -301,6 +308,10 @@ def render() -> str:
         SEP = f"  {DM}{'─'*106}{W}"
         L.append(HDR)
         L.append(SEP)
+        total_pnl_usd = 0.0
+        total_pnl_sek = 0.0
+        n_from_api    = 0
+        n_from_gross  = 0
         for t in openp:
             ticker  = t.get("ticker", "")
             shrs    = t.get("shares", 0) or 0
@@ -317,18 +328,28 @@ def render() -> str:
                 mom_day = (today - ed_date).days + 1
             except Exception:
                 mom_day = 0
-            # live price + P&L from Saxo's positions endpoint.
-            # ProfitLossOnTrade is Saxo's own net figure (matches their UI,
-            # includes commission provision). Falls back to gross (now-entry)*shrs
-            # when positions endpoint didn't return P&L for this ticker.
-            now_px  = live_px.get(ticker.upper(), 0)
-            saxo_pl = live_pnl.get(ticker.upper())   # None when not from positions endpoint
+            # live price + P&L.
+            # ProfitLossOnTrade is Saxo's net figure (entry commission deducted).
+            # Requires get_positions() to request FieldGroups=PositionView.
+            # Falls back to gross (now-entry)*shrs when API doesn't return it.
+            now_px   = live_px.get(ticker.upper(), 0)
+            saxo_pl  = live_pnl.get(ticker.upper())
+            saxo_sek = live_pnl_sek.get(ticker.upper())
             if now_px > 0:
-                pnl_usd = saxo_pl if saxo_pl is not None else (now_px - entry) * shrs
+                if saxo_pl is not None:
+                    pnl_usd = saxo_pl
+                    n_from_api += 1
+                else:
+                    pnl_usd = (now_px - entry) * shrs
+                    n_from_gross += 1
                 chg_pct = (now_px - entry) / entry * 100 if entry else 0
             else:
-                pnl_usd = 0.0
-                chg_pct = 0.0
+                pnl_usd  = 0.0
+                chg_pct  = 0.0
+            total_pnl_usd += pnl_usd
+            # SEK total: prefer Saxo's own conversion, else skip (no USDSEK UIC cached here)
+            if saxo_sek is not None:
+                total_pnl_sek += saxo_sek
             # exit trigger
             if tsh > entry * 1.001:
                 exit_trig = f"trail >${tsh:.2f}"
@@ -348,6 +369,17 @@ def render() -> str:
                 f"{DM}{regime:<12}{W}  {DM}{mom_day:>3}d{W}"
             )
         L.append(SEP)
+        # ── Total P&L row ─────────────────────────────────────────────────────
+        tc = GR if total_pnl_usd >= 0 else RD
+        src_note = ("Saxo API" if n_from_gross == 0 and n_from_api > 0
+                    else "gross" if n_from_api == 0 and n_from_gross > 0
+                    else f"mixed ({n_from_api} API / {n_from_gross} gross)")
+        sek_part = (f"  {DM}≈{W} {tc}{total_pnl_sek:>+,.0f} SEK{W}" if total_pnl_sek else "")
+        L.append(
+            f"  {BD}{'TOTAL':>7}{W} {'':>4}  {'':>7}  {'':>7}  "
+            f"{'':>7}  {tc}{BD}{total_pnl_usd:>+9.2f} USD{W}"
+            f"{sek_part}  {DM}({src_note}){W}"
+        )
 
     # ── Last scan: blend target basket (the "signal") ──────────────────────
     st = _status()
