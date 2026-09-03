@@ -780,6 +780,10 @@ def run_open_scan(log_fn=None) -> dict:
                         available_cash_sek=blend_budget)
     except Exception as e:
         _log(f"  [US Blend ERROR] {e}")
+    try:
+        trail_us_blend_stops(feat_data)
+    except Exception as e:
+        _log(f"  [trail-stop] skipped: {e}")
 
     # ── US Reversion (mean reversion) ─────────────────────────────
     rev_budget = min(cash_sek * REV_CASH_PCT, _max_deploy * REV_CASH_PCT)
@@ -1203,6 +1207,10 @@ def run_cycle():
                             available_cash_sek=blend_budget)
         except Exception as e:
             print(f"  [US momentum] ERROR: {e}")
+    try:
+        trail_us_blend_stops(feat_data)
+    except Exception as e:
+        print(f"  [trail-stop] skipped: {e}")
 
     # ── 6d. US mean reversion (Option 3 — enable after backtest) ──
     rev_budget = min(cash_sek * REV_CASH_PCT, _max_deploy2 * REV_CASH_PCT)
@@ -2174,6 +2182,109 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
                 pass
 
 
+def trail_us_blend_stops(feat_data: dict) -> None:
+    """Trail stop-loss orders for all open US Blend positions on both SIM and LIVE.
+
+    Each cycle: new_stop = max(trailing_stop_high, current_price) * (1 - 8%).
+    If new_stop exceeds the stored stop_price by at least $1.00, we PATCH the
+    broker-side stop order on Saxo (cancel+replace fallback if PATCH is rejected)
+    and update trailing_stop_high + stop_price in the DB. Paper fills skip the
+    Saxo call and only update the DB. We always update trailing_stop_high when the
+    price makes a new high, keeping the dashboard's trailing value accurate.
+    """
+    from instrument_map import load_instrument_map, MAP_FILE_LIVE
+    import saxo_order as _sxo
+
+    MIN_TRAIL_MOVE_USD = 1.00    # only PATCH Saxo when stop moves by at least $1
+    tag = "[trail-stop]"
+
+    blend_trades = [t for t in db.get_open_trades() if t.get("strategy") == "US Blend"]
+    if not blend_trades:
+        return
+
+    _live_env = _sx() == "live"
+    try:
+        imap = (load_instrument_map(path=MAP_FILE_LIVE, require_usd=True)
+                if _live_env else load_instrument_map())
+    except Exception as e:
+        print(f"  {tag} instrument_map load failed: {e}"); return
+
+    ak       = saxo_client.get_account_key(env=_sx())
+    patch_fn = lambda oid, body: saxo_client.patch_order(oid, body, env=_sx())
+    post_fn  = lambda path, body: saxo_client.post(path, body, env=_sx())
+
+    updated = 0
+    for trade in blend_trades:
+        ticker   = trade["ticker"]
+        trade_id = trade["id"]
+        shares   = int(trade.get("shares", 0) or 0)
+        is_paper = bool(trade.get("paper"))
+        if shares < 1:
+            continue
+
+        uic = imap.get(ticker, {}).get("uic")
+
+        # Prefer a live Saxo quote; fall back to today's daily bar close
+        cur_price: float | None = None
+        if uic and not is_paper:
+            cur_price = saxo_client.get_quote(uic, "Stock", env=_sx())
+        if not cur_price or cur_price <= 0:
+            try:
+                cur_price = float(feat_data[ticker]["Close"].iloc[-1])
+            except Exception:
+                continue
+
+        trail_high = float(trade.get("trailing_stop_high") or trade.get("entry_price") or cur_price)
+        new_trail  = max(trail_high, cur_price)
+        new_stop   = round(new_trail * (1 - US_BLEND_STOP_PCT), 2)
+        cur_stop   = float(trade.get("stop_price") or 0)
+
+        # Skip Saxo if stop hasn't moved enough; still update trail_high in DB on a new high.
+        # Guard is cur_stop > 0 only — a zero stop_price (never stored) always falls through.
+        if cur_stop > 0 and new_stop <= cur_stop + MIN_TRAIL_MOVE_USD:
+            if new_trail > trail_high:
+                db.update_stop_trailing(trade_id, new_trail, cur_stop)
+            continue
+
+        stop_oid = trade.get("stop_order_id")
+        saxo_ok  = is_paper   # paper fills need no Saxo call
+
+        if not is_paper and uic and stop_oid:
+            saxo_ok = _sxo.modify_stop_price(
+                patch_fn=patch_fn, account_key=ak, order_id=stop_oid,
+                uic=uic, asset_type="Stock", amount=shares,
+                new_stop_price=new_stop, symbol=ticker,
+            )
+            if not saxo_ok:
+                # PATCH rejected — cancel the old order and place a fresh one
+                print(f"  {tag} {ticker}: PATCH rejected, trying cancel+replace")
+                if saxo_client.cancel_order(stop_oid, env=_sx()):
+                    new_oid = _sxo.place_protective_stop(
+                        post_fn=post_fn, account_key=ak,
+                        uic=uic, asset_type="Stock", amount=shares,
+                        direction="Buy", stop_price=new_stop,
+                        label=f"trail:{ticker}",
+                    )
+                    if new_oid:
+                        stop_oid = new_oid
+                        saxo_ok  = True
+
+        if saxo_ok:
+            db.update_stop_trailing(trade_id, new_trail, new_stop,
+                                    stop_oid if not is_paper else None)
+            print(f"  {tag} {ticker}: ${cur_stop:.2f} → ${new_stop:.2f} "
+                  f"(high ${new_trail:.2f}){' [PAPER]' if is_paper else ''}")
+            updated += 1
+        else:
+            # Saxo rejected — still update trailing_stop_high so next cycle retries correctly
+            db.update_stop_trailing(trade_id, new_trail, cur_stop)
+            print(f"  {tag} {ticker}: trailing_high ${new_trail:.2f}; "
+                  f"Saxo stop-modify failed — will retry next cycle")
+
+    if updated:
+        print(f"  {tag} trailed {updated} US Blend stop(s)")
+
+
 def run_us_blend_live(*, budget_sek: float, dry_run: bool, exits_only: bool = False) -> dict:
     """Real-money US Blend sleeve entry point (atos_live_stocks.py only).
 
@@ -2217,6 +2328,10 @@ def run_us_blend_live(*, budget_sek: float, dry_run: bool, exits_only: bool = Fa
                         exits_only=exits_only)
     except Exception as e:
         print(f"  [live stocks] run_us_momentum error: {e}")
+    try:
+        trail_us_blend_stops(feat_data)
+    except Exception as e:
+        print(f"  [live stocks][trail-stop] skipped: {e}")
 
     buy_n  = sum(1 for a in todays_actions if a.get("action") == "BUY")
     sell_n = sum(1 for a in todays_actions if a.get("action") in ("SELL", "EXIT"))

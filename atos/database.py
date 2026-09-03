@@ -198,6 +198,22 @@ def set_stop_order_id(trade_id: int, stop_order_id: str) -> None:
                      (stop_order_id, trade_id))
 
 
+def update_stop_trailing(trade_id: int, trailing_stop_high: float, stop_price: float,
+                         stop_order_id: str | None = None) -> None:
+    """Update trailing_stop_high and stop_price after a trailing stop move.
+    stop_order_id is only updated when a new order id is assigned (cancel+replace);
+    pass None to leave the existing stop_order_id unchanged."""
+    with _conn() as conn:
+        if stop_order_id is not None:
+            conn.execute(
+                "UPDATE trades SET trailing_stop_high=?, stop_price=?, stop_order_id=? WHERE id=?",
+                (trailing_stop_high, stop_price, stop_order_id, trade_id))
+        else:
+            conn.execute(
+                "UPDATE trades SET trailing_stop_high=?, stop_price=? WHERE id=?",
+                (trailing_stop_high, stop_price, trade_id))
+
+
 def close_trade(trade_id: int, exit_price: float, exit_reason: str, pnl_sek: float,
                 commission_sek: float):
     """Mark an open trade as closed."""

@@ -430,6 +430,51 @@ def _place_bracket(post_fn, account_key, uic, asset_type,
         return entry_oid, stop_oid, tp_oid
 
 
+def modify_stop_price(
+    patch_fn,
+    account_key: str,
+    order_id: str,
+    uic: int,
+    asset_type: str,
+    amount: int,
+    new_stop_price: float,
+    symbol: str = "",
+    price_decimals: int | None = None,
+) -> bool:
+    """PATCH an existing stop order to a new price (trailing stop update).
+
+    patch_fn is saxo_client.patch_order bound to the right env.
+    Returns True on success, False on any Saxo rejection (logged, never raises).
+    """
+    close = _close_side("Buy", asset_type)   # stocks are long-only → always Sell
+    stype = _stop_type("Buy", asset_type)
+    rstop = _round_price(new_stop_price, asset_type, symbol, price_decimals)
+    slp   = (_stop_limit_price(rstop, close, asset_type, symbol, price_decimals)
+             if stype == "StopLimit" else None)
+
+    body = {
+        "AccountKey":    account_key,
+        "Uic":           uic,
+        "AssetType":     asset_type,
+        "Amount":        amount,
+        "BuySell":       close,
+        "OrderType":     stype,
+        "OrderPrice":    rstop,
+        "OrderDuration": _stop_duration(asset_type),
+        "ManualOrder":   False,
+    }
+    if slp is not None:
+        body["StopLimitPrice"] = slp
+
+    try:
+        patch_fn(order_id, body)
+        logger.info(f"[trail-stop] {symbol or uic}  {stype}@{rstop}  order={order_id}")
+        return True
+    except Exception as exc:
+        logger.warning(f"[trail-stop] {symbol or uic}  modify FAILED: {exc}")
+        return False
+
+
 def place_stop_only(post_fn, account_key, uic, asset_type, amount,
                     entry_side, stop_price, symbol: str = "",
                     price_decimals: int | None = None,

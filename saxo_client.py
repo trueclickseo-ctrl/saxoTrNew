@@ -281,6 +281,21 @@ def get_quote(uic: int, asset_type: str, env: str = "sim") -> float | None:
     return None
 
 
+def patch_order(order_id: str, body: dict, env: str = "sim") -> dict:
+    """PATCH an existing order — used to modify stop price for trailing stops.
+    Same raise-on-error convention as post()."""
+    resp = requests.patch(
+        f"{_base_url(env)}/trade/v2/orders/{order_id}",
+        headers=_headers(env), json=body, timeout=30)
+    try:
+        resp.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        body_text = resp.text.strip()
+        raise requests.exceptions.HTTPError(
+            f"{e} | Saxo response body: {body_text}", response=resp) from e
+    return resp.json()
+
+
 def get_orders(asset_type: str | None = None, env: str = "sim") -> dict:
     """Returns all working orders on the given account (optionally filtered
     to one AssetType). Used by housekeeping.py to reconcile stop/limit
