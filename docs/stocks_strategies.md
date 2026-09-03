@@ -224,6 +224,17 @@ and the ~2-week AI shadow-evidence review (`stocks_live` AI observing started
 the same day). The 8% broker stop + 20% TP bracket, 50% margin gate, 10% cash
 buffer, daily-loss cap and `safeguard_live_stocks` are the live backstops.
 
+**Black-box validated 2026-09-03** (`79563b4`, `test_2026_09_03_live_stocks_blackbox.py`,
+24/24): dry-run gate is a 4-way conjunction; the LIVE snapshot double-filters
+`AccountKey` **and** `AssetType=="Stock"`; `_place_us` hard-refuses anything ≠
+"US Blend" on the LIVE env; the bracket is stop@8% + TP@20%; budget = `min(pooled,
+30k) × 0.9`; `safeguard_live_stocks` never `close_trade`/`place_market_order`;
+`can_apply_decision("live_stocks")` is `False`; state files + lock are isolated
+from the SIM book; `run_cycle`/`daily_run` never call `set_stocks_env`; and a
+full forced-dry-run end-to-end cycle places nothing and writes only the
+would-be-orders + status artifacts. `test_2026_09_02_live_stocks_account.py`
+(27) + `_housekeeping_safeguard` (…) stay green.
+
 Earlier observe mode (still the behaviour without the env vars):
 `run_us_momentum(observe=True)` fires the AI hooks + blend-target notification
 and appends every would-be order to `data/us_blend_live_would_be_orders.jsonl`
@@ -550,7 +561,7 @@ Data source: yfinance (free tier, ~75% accuracy on earnings dates).
 | File | Purpose |
 |------|---------|
 | `atos_runner.py` | SIM daily orchestrator — `run_cycle()` + `run_intraday_cycle()`; `run_us_blend_live()` wrapper for the real-money sleeve |
-| `atos_live_stocks.py` | **Real-money US Blend sleeve** (30k SEK, SEK LIVE account, Phase 1 observe-only) |
+| `atos_live_stocks.py` | **Real-money US Blend sleeve** (30k SEK, SEK LIVE account, LIVE since 2026-09-03) |
 | `housekeeping_live_stocks.py` / `safeguard_live_stocks.py` | LIVE stocks reconcile + auto-fix (AccountKey+AssetType filter; never auto-closes) |
 | `live_stocks_dashboard.py` | Real-money sleeve dashboard — capital/margin, **LAST SCAN** (blend target basket = offense/defense/target — the "signal"), **REBALANCE CLOCKS** (LIVE vs SIM: last rebalance, days since / next due, current holdings — the two books run on independent 14-day cycles), **SCAN SIGNALS** (this scan's would-be orders, SIM-dashboard layout), open positions, would-be-order history, AI basket-ranker shadow. Reads `data/stocks_live_status.json` (the LIVE analogue of `data/atos_status.json`). `--fast` (5s) / `--once`; ANSI auto-strips when piped. |
 | `lookup_instruments_live.py` | Operator: build `data/instrument_map_live.csv` (LIVE Uics, USD-only) |
@@ -656,8 +667,8 @@ python intraday_monitor.py
 # Start dashboard
 python atos_dashboard.py   # → http://localhost:8070
 
-# ── Real-money US Blend sleeve (Phase 1 observe-only) ──
-python atos_live_stocks.py              # observe-only cycle (no real orders)
+# ── Real-money US Blend sleeve (LIVE since 2026-09-03) ──
+python atos_live_stocks.py              # cycle — observe-only unless --live + both env vars
 python atos_live_stocks.py --info       # SIM vs LIVE Uic diff
 python atos_live_stocks.py --dashboard  # live_stocks_dashboard.py
 python lookup_instruments_live.py       # OPERATOR: refresh the LIVE instrument map after a universe change
