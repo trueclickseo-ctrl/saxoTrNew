@@ -935,6 +935,28 @@ def _run_strategy_entries(strat_name: str, strat_mod, positions: dict,
                 f"large for this equity")
             continue
 
+        # Fetch live Saxo price before placing — sig["close"] comes from the
+        # hourly bar which can be up to 1h stale.  Keep the ATR stop DISTANCE
+        # the same but re-anchor both stop and TP to the live mid so the
+        # bracket reflects the actual market level, not the bar close.
+        import saxo_client as _sc
+        _live_q = _sc.get_quote(uic, asset_type)
+        if _live_q:
+            _bar_close = float(sig["close"])
+            _stop_dist = abs(_bar_close - float(sig["stop_price"]))
+            _tp        = sig.get("take_profit_price")
+            _tp_dist   = abs(_tp - _bar_close) if _tp else None
+            if abs(_live_q - _bar_close) / max(abs(_bar_close), 1e-9) > 0.001:
+                logger.info(f"[{strat_name}] {sym}: bar {_bar_close:.4f} → "
+                            f"live {_live_q:.4f} ({(_live_q/_bar_close-1)*100:+.2f}%) "
+                            f"— re-anchoring stop/TP to live price")
+            sig["close"]       = _live_q
+            sig["stop_price"]  = (_live_q - _stop_dist if direction == "Buy"
+                                  else _live_q + _stop_dist)
+            if _tp is not None and _tp_dist is not None:
+                sig["take_profit_price"] = (_live_q + _tp_dist if direction == "Buy"
+                                            else _live_q - _tp_dist)
+
         order = {
             "AccountKey": akey, "Uic": uic, "AssetType": asset_type,
             "Amount": qty, "BuySell": direction,

@@ -152,6 +152,17 @@ class ETFExecutor:
             pass
 
         price    = signal.last_price or signal.fast_ma  # last close is the best proxy
+
+        # Fetch live Saxo quote before computing stop/TP — signal.last_price
+        # is the most recent daily close which can be ~20h stale by the time
+        # the ETF runner fires (e.g. a daily run uses yesterday's close).
+        _live_p = self._get_live_price(signal.uic, signal.symbol)
+        if _live_p and price and abs(_live_p - price) / max(price, 1e-9) > 0.001:
+            logger.info(f"ETF {signal.symbol}: scan {price:.2f} → live "
+                        f"{_live_p:.2f} ({(_live_p/price-1)*100:+.2f}%) "
+                        f"— using live price for stop/TP")
+            price = _live_p
+
         # Capped at 50 shares/name — added 2026-08-22 at user's request. A
         # flat dollar budget alone sized cheap ETFs (XLF, XLE at $50-60) into
         # 400-500+ share positions, tying up disproportionate margin for

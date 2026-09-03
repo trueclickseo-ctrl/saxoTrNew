@@ -236,6 +236,28 @@ def post(path: str, body: dict, env: str = "sim") -> dict:
     return resp.json()
 
 
+def get_quote(uic: int, asset_type: str, env: str = "sim") -> float | None:
+    """Live mid-price for any instrument via /trade/v1/infoprices.
+
+    Returns the mid-price (or (ask+bid)/2) as a float, or None on any
+    failure so callers can fall back to their scan-bar close without crashing.
+    Used by every module to anchor stop/TP to the live price rather than a
+    potentially stale historical bar close.
+    """
+    try:
+        params = {"Uic": uic, "AssetType": asset_type, "FieldGroups": "Quote"}
+        resp = _request_with_retry("GET", f"{_base_url(env)}/trade/v1/infoprices",
+                                   headers=_headers(env), params=params)
+        resp.raise_for_status()
+        q = resp.json().get("Quote", {})
+        mid = q.get("Mid")
+        if mid is None and q.get("Ask") and q.get("Bid"):
+            mid = (float(q["Ask"]) + float(q["Bid"])) / 2.0
+        return float(mid) if mid else None
+    except Exception:
+        return None
+
+
 def get_orders(asset_type: str | None = None, env: str = "sim") -> dict:
     """Returns all working orders on the given account (optionally filtered
     to one AssetType). Used by housekeeping.py to reconcile stop/limit

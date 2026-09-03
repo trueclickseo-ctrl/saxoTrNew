@@ -1595,6 +1595,16 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
             if side == "Sell" and cur_trade is None:
                 return False
         elif side == "Buy":
+            # Fetch the live Saxo mid-price before computing stop/TP so we
+            # anchor the bracket to the actual tradable price, not a bar close
+            # that may be hours stale (e.g. a 19:20 PKT run uses yesterday's
+            # daily close; the stock may have gapped 3-5% by open).
+            _live = saxo_client.get_quote(imap[ticker]["uic"], "Stock", env=_sx())
+            if _live and abs(_live - price) / max(price, 1e-9) > 0.001:
+                print(f"  [US momentum] {ticker}: scan ${price:.2f} → live "
+                      f"${_live:.2f} ({(_live / price - 1) * 100:+.2f}%) "
+                      f"— using live price for stop/TP")
+                price = _live
             # Attach stop-loss/take-profit atomically with the entry — this
             # strategy previously placed a bare market order with no broker-
             # side protection at all (stop_price was hardcoded to 0), relying

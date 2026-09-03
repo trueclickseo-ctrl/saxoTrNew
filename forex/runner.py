@@ -4195,6 +4195,26 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         stop_oid = None; tp_oid = None
         agree_tag = f"  agree={agrees}/{len(STRATEGIES)}{ml_info}"
 
+        # Fetch live Saxo mid-price before computing the bracket — sig["close"]
+        # is the scan-bar close (H1 = up to 1h stale; daily = up to ~20h stale).
+        # Keep the ATR stop DISTANCE unchanged; shift both stop and TP so they
+        # are anchored to the live tradable price rather than the bar close.
+        _live_entry = _live_price(uic, akey)
+        if _live_entry:
+            _bar_c     = float(sig["close"])
+            _stop_dist = abs(_bar_c - float(sig["stop_price"]))
+            _tp_dist   = abs(tp - _bar_c)
+            if abs(_live_entry - _bar_c) / max(abs(_bar_c), 1e-9) > _FILL_LOG_THRESHOLD:
+                logger.info(f"  [{strat_name}] {sym}: bar {_bar_c:.5f} → "
+                            f"live {_live_entry:.5f} "
+                            f"({(_live_entry/_bar_c-1)*100:+.3f}%) "
+                            f"— re-anchoring stop/TP to live price")
+            sig["close"]      = _live_entry
+            sig["stop_price"] = (_live_entry - _stop_dist if direction == "Buy"
+                                 else _live_entry + _stop_dist)
+            tp                = (_live_entry + _tp_dist if direction == "Buy"
+                                 else _live_entry - _tp_dist)
+
         if dry_run:
             logger.info(f"  [DRY] {direction:<4} {qty:,}x {sym}[{tag}] "
                         f"({strat_name})  @ {sig['close']:.5f}  "

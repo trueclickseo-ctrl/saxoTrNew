@@ -91,23 +91,67 @@ def _pooled_balance():
         return None, None
 
 
-def _live_prices_from_saxo() -> dict:
-    """Return {ticker: current_price_usd} from LIVE Saxo positions endpoint."""
+def _load_uic_map() -> dict:
+    """Return {ticker: uic} from data/instrument_map_live.csv (best effort)."""
+    path = os.path.join(BASE_DIR, "data", "instrument_map_live.csv")
+    if not os.path.exists(path):
+        return {}
     try:
-        import saxo_client
-        data = saxo_client.get_positions(env="live")
+        import csv
         out = {}
+        with open(path, encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                ticker = (row.get("yahoo_ticker") or "").strip().upper()
+                uic    = row.get("uic", "").strip()
+                if ticker and uic:
+                    out[ticker] = int(uic)
+        return out
+    except Exception:
+        return {}
+
+
+def _live_prices_from_saxo() -> dict:
+    """Return {ticker: current_price_usd} from LIVE Saxo.
+
+    Strategy 1 — positions endpoint (fast, one call):
+        Saxo symbols look like 'DELL:xnys' — strip after ':'.
+    Strategy 2 — per-ticker infoprices (fallback when market is open but
+        positions endpoint misses a ticker or returns no CurrentPrice):
+        Uses the UIC from data/instrument_map_live.csv.
+    """
+    import saxo_client
+    out = {}
+
+    # Strategy 1: positions endpoint
+    try:
+        data = saxo_client.get_positions(env="live")
         for item in data.get("Data", []):
             base  = item.get("PositionBase", {})
             view  = item.get("PositionView", {})
             disp  = item.get("DisplayAndFormat", {})
-            sym   = (disp.get("Symbol") or base.get("Symbol") or "").split(".")[0].upper()
+            raw   = disp.get("Symbol") or base.get("Symbol") or ""
+            # Saxo format: "DELL:xnys" — strip exchange suffix after ":" or "."
+            sym   = raw.split(":")[0].split(".")[0].upper()
             price = view.get("CurrentPrice") or base.get("CurrentPrice") or 0
             if sym and price:
                 out[sym] = float(price)
-        return out
     except Exception:
-        return {}
+        pass
+
+    # Strategy 2: infoprices per ticker (fills gaps, also works when
+    # positions are not yet settled / market is open but position not yet in API)
+    open_tickers = {(r.get("ticker") or "").upper()
+                    for r in _rows("SELECT ticker FROM trades WHERE exit_price IS NULL")}
+    missing = open_tickers - set(out.keys())
+    if missing:
+        uic_map = _load_uic_map()
+        for ticker in missing:
+            uic = uic_map.get(ticker)
+            if uic:
+                px = saxo_client.get_quote(uic, "Stock", env="live")
+                if px:
+                    out[ticker] = px
+    return out
 
 
 _PNL_RESET_PATH = os.path.join(BASE_DIR, "data", "pnl_reset.json")
