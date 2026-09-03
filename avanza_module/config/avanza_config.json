@@ -1,0 +1,25 @@
+{
+  "_comment": "Avanza Sweden ISK sleeve — US Blend mirror of ATOS live stocks.",
+
+  "capital": {
+    "budget_sek":      36000,
+    "max_positions":   10,
+    "cash_buffer_pct": 0.10,
+    "min_trade_sek":   500,
+    "sek_usd_rate_env": "AVANZA_SEK_USD_RATE"
+  },
+
+  "strategy": {
+    "name":          "US Blend",
+    "signal_files":  [
+      "data/stocks_live_status.json",
+      "data/backtest_us_signals_latest.json"
+    ],
+    "limit_slippage_pct": 0.002
+  },
+
+  "account": {
+    "type": "ISK",
+    "account_id_env": "AVANZA_ACCOUNT_ID"
+  }
+}

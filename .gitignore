@@ -194,3 +194,9 @@ Thumbs.db
 
 # P&L ledger backups (pre-reset snapshots, machine-local)
 data/pnl_ledger.db.bak_*
+
+# Avanza credentials and runtime state
+.env.avanza
+data/avanza_trades.db
+data/avanza_status.json
+data/avanza_instrument_cache.json

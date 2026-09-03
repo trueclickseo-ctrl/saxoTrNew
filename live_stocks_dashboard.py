@@ -190,6 +190,18 @@ def render() -> str:
         col = RD if util >= 50 else GR
         L.append(f"  Pooled margin utilization : {col}{util:.1f}%{W}  {DM}(50% entry gate){W}")
 
+    # ── Open positions — top of dashboard ────────────────────────────────────
+    openp = _rows("select * from trades where exit_price is null order by entry_date")
+    L.append("")
+    L.append(f"{BD}  OPEN POSITIONS ({len(openp)}){W}")
+    if not openp:
+        L.append(f"{DM}    none — the sleeve holds no real stock positions yet{W}")
+    else:
+        for t in openp:
+            L.append(f"    {t.get('ticker',''):<8} {t.get('shares',0):>6} sh  "
+                     f"entry ${t.get('entry_price',0):.2f}  stop ${t.get('stop_price',0):.2f}"
+                     f"  {DM}{t.get('strategy','')}{W}")
+
     # ── Last scan: blend target basket (the "signal") ──────────────────────
     st = _status()
     if st:
@@ -256,17 +268,6 @@ def render() -> str:
                 )
             L.append(HR)
             L.append(f"  {GR}{n_buy} BUY{W}  {CY}{n_exit} EXIT{W}  {DM}{n_blocked} BLOCKED{W}")
-
-    openp = _rows("select * from trades where exit_price is null order by entry_date")
-    L.append("")
-    L.append(f"{BD}  OPEN POSITIONS ({len(openp)}){W}")
-    if not openp:
-        L.append(f"{DM}    none — the sleeve holds no real stock positions yet{W}")
-    else:
-        for t in openp:
-            L.append(f"    {t.get('ticker',''):<8} {t.get('shares',0):>6} sh  "
-                     f"entry ${t.get('entry_price',0):.2f}  stop ${t.get('stop_price',0):.2f}"
-                     f"  {DM}{t.get('strategy','')}{W}")
 
     closed = _rows("select * from trades where exit_price is not null "
                    "order by exit_date desc limit 10")
