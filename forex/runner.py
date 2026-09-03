@@ -62,6 +62,7 @@ import forex.strategy_advanced_ema as strat_advanced_ema
 import forex.strategy_ema_trend   as strat_ema_trend
 import forex.strategy_rsi         as strat_rsi
 import forex.strategy_rsi_trend   as strat_rsi_trend
+import forex.strategy_rsi_atr     as strat_rsi_atr
 import forex.strategy_advanced_rsi_master as strat_advanced_rsi_master
 import forex.strategy_donchian    as strat_donchian
 import forex.strategy_donchian_quality as strat_donchian_quality
@@ -170,6 +171,13 @@ STRATEGIES = {
     # regime-luck. "rsi" is UNTOUCHED. Never in either LIVE allowlist -- SIM
     # forward-test + walk-forward first. See forex/strategy_rsi_trend.py.
     "rsi_trend":   strat_rsi_trend,
+    # 2026-09-03: SIM-only A/B twin gating RSI(2) entries to atr_pctile > 0.66
+    # (top 34% of ATR readings vs trailing 252-bar window). Decomposition gate
+    # (H20260903-74e4df, 7,152 trades / 13y): high-vol bucket avg_r +0.051,
+    # WR 65.7%, PF 1.25, CI [+0.028, +0.074] stable across both halves vs
+    # low-vol avg_r −0.005. "rsi" is UNTOUCHED. Never in either LIVE allowlist.
+    # See forex/strategy_rsi_atr.py.
+    "rsi_atr":     strat_rsi_atr,
     # NB: the confirmation-delay idea (module forex/strategy_rsi_confirm.py)
     # was built + backtested 2026-09-02 and RETIRED before it ever scanned --
     # a 12,700-signal / 12y backtest showed the delay systematically enters
@@ -294,7 +302,7 @@ RETIRED_STRATEGIES: set[str] = {
 # LIVE (SEK rsi / EUR exits-only) is UNAFFECTED -- that path resolves from
 # LIVE_ALLOWED_STRATEGIES, never this.
 SIM_ACTIVE_STRATEGIES: list[str] = [
-    "rsi", "rsi_trend", "ema_trend", "bb_quality", "zscore_quality",
+    "rsi", "rsi_trend", "rsi_atr", "ema_trend", "bb_quality", "zscore_quality",
 ]
 _ACTIVE_STRATEGIES = [k for k in SIM_ACTIVE_STRATEGIES if k in STRATEGIES]
 
@@ -884,7 +892,7 @@ PROFIT_LADDER_ACCOUNTS: set[str] = {"sim", "live", "live_eur"}
 # -- the regime entry gate -- against "rsi". Both arms then share identical
 # exit management (the ladder). "advanced_rsi_master" stays OUT as the
 # ladder-vs-no-ladder control.
-PROFIT_LADDER_STRATEGIES         = {"rsi", "rsi_trend"}
+PROFIT_LADDER_STRATEGIES         = {"rsi", "rsi_trend", "rsi_atr"}
 PROFIT_LADDER_BREAKEVEN_R        = 0.75
 PROFIT_LADDER_COST_BUFFER_R      = 0.10
 PROFIT_LADDER_LOCK_ACTIVATE_R    = 1.00

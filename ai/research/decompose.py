@@ -57,6 +57,7 @@ MODULE_IMPORT = {
     "ema_trend":      "forex.strategy_ema_trend",
     "rsi":            "forex.strategy_rsi",
     "rsi_trend":      "forex.strategy_rsi_trend",
+    "rsi_atr":        "forex.strategy_rsi_atr",
     "bb":             "forex.strategy_bb",
     "bb_quality":     "forex.strategy_bb_quality",
     "zscore":         "forex.strategy_zscore",
