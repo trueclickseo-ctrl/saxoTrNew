@@ -171,6 +171,9 @@ WINDOWS_TASKS = {
     "Futures Midday Run":     ("ATOS Futures Midday Run",     "futures_midday_scheduler.log",  30, 22),
     "ETF Daily Run":          ("ATOS ETF Daily Run",          "etf_scheduler.log",             20, 22),
     "ETF Midday Run":         ("ATOS ETF Midday Run",         "etf_midday_scheduler.log",      20, 22),
+    # Avanza ISK trail-stops (2026-09-04) -- once-daily at 21:00 PKT, protective only
+    # (ratchets stop-loss orders upward). max_log_age=26h covers one daily run + buffer.
+    "Avanza Trail Stops":     ("ATOS Avanza Trail Stops",     "avanza_trail_stops.log",        30, 26),
     "Stocks Daily Run":       ("ATOS Daily Run",              "engine_TODAY.log",      15, 2),  # special-cased below
     # log_file fixed 2026-08-25: this was pointed at data/intraday_monitor.log,
     # a dead file only a crash traceback ever touches -- the script's real
