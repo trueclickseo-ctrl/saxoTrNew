@@ -92,6 +92,12 @@ class ETFBot:
         # Exits first — free slots before looking for entries
         self.executor.review_exits()
 
+        # Trail all open stops to 8% below running high (risk management, always runs)
+        try:
+            self.executor.trail_stops()
+        except Exception:
+            log.exception("[trail-stops] ETF trailing pass failed")
+
         signals = self.strategy.generate_signals(universe)
         log.info(f"Signals: {len(signals)} BUY candidate(s) this run")
 

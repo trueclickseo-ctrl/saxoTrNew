@@ -219,24 +219,18 @@ class ETFExecutor:
                         f"stop={stop_price:.2f}  stop_order={stop_oid}{tp_info}")
 
         self.state.upsert_position(signal.uic, {
-            "symbol":        signal.symbol,
-            "quantity":      quantity,
-            "entry_price":   price,
-            "entry_date":    date.today().isoformat(),   # dashboard "Days" column reads this
-            "stop_price":    stop_price,    # persisted so review_exits() uses entry stop, not current config
-            "tp_price":      tp_price,
-            "entry_score":   signal.score,
-            # 1-indexed position in that day's rotation ranking (1 = strongest
-            # candidate) -- the same "rank" process_signals() used to weight
-            # this position's budget allocation, persisted so the dashboard
-            # can show "Top N" instead of only the raw score. Added
-            # 2026-08-26 alongside the rank-performance log below; positions
-            # entered before this field existed fall back to a score-sort
-            # in the dashboard.
-            "entry_rank":    entry_rank,
-            "order_id":      order_id,
-            "stop_order_id": stop_oid,
-            "tp_order_id":   tp_oid,
+            "symbol":             signal.symbol,
+            "quantity":           quantity,
+            "entry_price":        price,
+            "entry_date":         date.today().isoformat(),
+            "stop_price":         stop_price,
+            "tp_price":           tp_price,
+            "entry_score":        signal.score,
+            "entry_rank":         entry_rank,
+            "order_id":           order_id,
+            "stop_order_id":      stop_oid,
+            "tp_order_id":        tp_oid,
+            "trailing_stop_high": price,   # initialised at entry; trail_stops() raises it
         })
         self.state.log_order({
             "uic": signal.uic, "symbol": signal.symbol,
@@ -431,6 +425,105 @@ class ETFExecutor:
         if not self.cfg.dry_run:
             pnl_tracker.log_close("etf", symbol, live_price, reason, strategy="ETF Rotation",
                                   asset_type="ETF")
+
+    # ------------------------------------------------------------------
+    # Trailing stop — 8% below the running high (Option A)
+    # ------------------------------------------------------------------
+
+    ETF_TRAIL_PCT    = 0.08    # mirrors the static stop_loss_pct at entry
+    MIN_TRAIL_MOVE   = 0.10    # minimum $/unit move before patching Saxo
+
+    def trail_stops(self) -> None:
+        """Ratchet each open ETF position's stop to 8% below its running high.
+
+        Calls the ETF SaxoClient PATCH endpoint to update the real GTC stop
+        order in Saxo; falls back to cancel+replace when PATCH is rejected.
+        Runs every bot cycle (dry_run logs intent but skips Saxo calls).
+        """
+        import saxo_order as _sxo
+
+        tag = "[etf-trail]"
+        positions = self.state.all_positions()
+        if not positions:
+            return
+
+        def _patch_fn(order_id: str, body: dict) -> dict:
+            return self.client.patch(f"/trade/v2/orders/{order_id}", json_body=body)
+
+        def _post_fn(path: str, body: dict) -> dict:
+            return self.client.post(path, json_body=body)
+
+        updated = 0
+        for uic_str, pos in list(positions.items()):
+            uic        = int(uic_str)
+            symbol     = pos.get("symbol", uic_str)
+            cur_stop   = float(pos.get("stop_price") or 0)
+            trail_high = float(pos.get("trailing_stop_high") or pos.get("entry_price") or 0)
+            stop_oid   = pos.get("stop_order_id")
+            qty        = int(pos.get("quantity") or 0)
+            if qty < 1:
+                continue
+
+            cur_price = self._get_live_price(uic, symbol)
+            if not cur_price or cur_price <= 0:
+                continue
+
+            new_trail = max(trail_high, cur_price)
+            new_stop  = round(new_trail * (1 - self.ETF_TRAIL_PCT), 4)
+
+            pos_update: dict = {}
+            if new_trail > trail_high:
+                pos_update["trailing_stop_high"] = new_trail
+
+            # Skip Saxo if stop hasn't moved enough; still persist new trail_high
+            if cur_stop > 0 and new_stop <= cur_stop + self.MIN_TRAIL_MOVE:
+                if pos_update:
+                    self.state.upsert_position(uic, {**pos, **pos_update})
+                continue
+
+            if self.cfg.dry_run:
+                logger.info(f"{tag} [DRY] {symbol}: would trail "
+                            f"${cur_stop:.2f} -> ${new_stop:.2f} (high ${new_trail:.2f})")
+                if pos_update:
+                    self.state.upsert_position(uic, {**pos, **pos_update})
+                continue
+
+            # PATCH Saxo stop order
+            saxo_ok = False
+            if stop_oid:
+                saxo_ok = _sxo.modify_stop_price(
+                    patch_fn=_patch_fn, account_key=self._account_key,
+                    order_id=stop_oid, uic=uic, asset_type="Etf",
+                    amount=qty, new_stop_price=new_stop, symbol=symbol,
+                )
+                if not saxo_ok:
+                    logger.info(f"{tag} {symbol}: PATCH failed — trying cancel+replace")
+                    try:
+                        self.client.delete(f"/trade/v2/orders/{stop_oid}",
+                                           params={"AccountKey": self._account_key})
+                    except Exception as _del_exc:
+                        logger.warning(f"{tag} {symbol}: cancel failed: {_del_exc}")
+                    new_oid = _sxo.place_protective_stop(
+                        post_fn=_post_fn, account_key=self._account_key,
+                        uic=uic, asset_type="Etf", amount=qty,
+                        direction="Buy", stop_price=new_stop, label=f"trail:{symbol}",
+                    )
+                    if new_oid:
+                        pos_update["stop_order_id"] = new_oid
+                        saxo_ok = True
+
+            if saxo_ok:
+                pos_update["stop_price"] = new_stop
+                logger.info(f"{tag} {symbol}: ${cur_stop:.2f} -> ${new_stop:.2f} "
+                            f"(high ${new_trail:.2f})")
+                updated += 1
+            else:
+                logger.warning(f"{tag} {symbol}: Saxo update failed — will retry next cycle")
+
+            self.state.upsert_position(uic, {**pos, **pos_update})
+
+        if updated:
+            logger.info(f"{tag} trailed {updated} ETF stop(s)")
 
     # ------------------------------------------------------------------
     # Rank/performance history

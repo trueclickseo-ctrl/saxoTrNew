@@ -786,6 +786,22 @@ def _run_strategy_exits(strat_name: str, strat_mod, positions: dict,
             else:
                 new_stop = strat_mod.trailing_stop_update(
                     cur_stop, float(df["Close"].iloc[-1]), atr_now, direction_now)
+
+            # 8% profit-lock trailing applied on top of ATR trailing.
+            # Only tightens the stop, never loosens it; handles longs and shorts.
+            _close_now = float(df["Close"].iloc[-1])
+            _entry_px  = float(pos.get("entry_price") or _close_now)
+            if direction_now == "Buy":
+                _trail_hi = max(float(pos.get("trailing_stop_high") or _entry_px), _close_now)
+                pos["trailing_stop_high"] = _trail_hi
+                _pct_stop = round(_trail_hi * (1 - 0.08), 6)
+                new_stop  = max(new_stop, _pct_stop) if new_stop > 0 else _pct_stop
+            elif direction_now == "Sell":
+                _trail_lo = min(float(pos.get("trailing_stop_low") or _entry_px), _close_now)
+                pos["trailing_stop_low"] = _trail_lo
+                _pct_stop = round(_trail_lo * (1 + 0.08), 6)
+                new_stop  = min(new_stop, _pct_stop) if new_stop > 0 else _pct_stop
+
             if round(new_stop, 6) != round(cur_stop, 6) and new_stop > 0:
                 # Cancel the real broker-side stop and place a new one at
                 # the trailed level, not just update this local belief.
@@ -1034,19 +1050,19 @@ def _run_strategy_entries(strat_name: str, strat_mod, positions: dict,
                           sig["close"], sig["stop_price"], str(oid), equity)
 
         positions[f"{strat_name}:{sym}"] = {
-            "uic":          uic,
-            "asset_type":   asset_type,
-            "direction":    direction,
-            "entry_price":  sig["close"],
-            "stop_price":   sig["stop_price"],
-            "quantity":     qty,
-            "entry_date":   today_str,
-            "atr_at_entry": sig["atr"],
-            "strategy":     strat_name,
-            # Tracked from 2026-08-24 so trailing-stop updates (see
-            # _run_strategy_exits) can actually cancel+replace the real
-            # broker-side stop instead of only updating this belief.
-            "stop_order_id": stop_oid,
+            "uic":                uic,
+            "asset_type":         asset_type,
+            "direction":          direction,
+            "entry_price":        sig["close"],
+            "stop_price":         sig["stop_price"],
+            "quantity":           qty,
+            "entry_date":         today_str,
+            "atr_at_entry":       sig["atr"],
+            "strategy":           strat_name,
+            "stop_order_id":      stop_oid,
+            # Running extreme for 8% profit-lock trailing (see _run_strategy_exits)
+            "trailing_stop_high": sig["close"],   # longs: highest close seen
+            "trailing_stop_low":  sig["close"],   # shorts: lowest close seen
         }
         _log_order({"strategy": strat_name, "side": direction, "symbol": sym,
                     "uic": uic, "quantity": qty, "entry_price": sig["close"],
