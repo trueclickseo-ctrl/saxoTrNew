@@ -771,26 +771,39 @@ def _run_strategy_exits(strat_name: str, strat_mod, positions: dict,
         cal_days = (date.today() - date.fromisoformat(ed)).days
 
         # Trail stop before checking exit
-        if df is not None:
-            atr_now  = float(strat_mod._atr(df["High"], df["Low"], df["Close"]).iloc[-1])
-            cur_stop = float(pos.get("stop_price", 0))
-            direction_now = pos.get("direction", "Buy")
-            # trend_ma uses MA50 for its trailing stop — pass it when available
-            import inspect
-            trail_sig = inspect.signature(strat_mod.trailing_stop_update)
-            if "ma50" in trail_sig.parameters:
-                ma50_now = float(strat_mod._sma(df["Close"], 50).iloc[-1])
-                new_stop = strat_mod.trailing_stop_update(
-                    cur_stop, float(df["Close"].iloc[-1]), atr_now,
-                    direction_now, ma50=ma50_now)
-            else:
-                new_stop = strat_mod.trailing_stop_update(
-                    cur_stop, float(df["Close"].iloc[-1]), atr_now, direction_now)
+        cur_stop      = float(pos.get("stop_price", 0))
+        direction_now = pos.get("direction", "Buy")
+        new_stop      = 0.0
+        _close_now    = None   # resolved below from chart data or live quote
 
-            # 8% profit-lock trailing applied on top of ATR trailing.
-            # Only tightens the stop, never loosens it; handles longs and shorts.
+        if df is not None:
             _close_now = float(df["Close"].iloc[-1])
-            _entry_px  = float(pos.get("entry_price") or _close_now)
+            atr_now    = float(strat_mod._atr(df["High"], df["Low"], df["Close"]).iloc[-1])
+
+            if atr_now > 0:
+                # ATR trailing — only when ATR is non-zero; atr=0 (e.g. ContractFutures
+                # with missing bar data) would compute stop = current_price and immediately
+                # close a live winner. Skip ATR trailing; 8% pct-lock below still runs.
+                import inspect
+                trail_sig = inspect.signature(strat_mod.trailing_stop_update)
+                if "ma50" in trail_sig.parameters:
+                    ma50_now = float(strat_mod._sma(df["Close"], 50).iloc[-1])
+                    new_stop = strat_mod.trailing_stop_update(
+                        cur_stop, _close_now, atr_now, direction_now, ma50=ma50_now)
+                else:
+                    new_stop = strat_mod.trailing_stop_update(
+                        cur_stop, _close_now, atr_now, direction_now)
+        else:
+            # No chart data (e.g. ContractFutures SIM data restriction).
+            # Fall back to a live Saxo quote so the 8% pct-lock can still run.
+            _live_q = saxo_client.get_quote(pos["uic"], pos.get("asset_type", "CfdOnIndex"))
+            if _live_q and _live_q > 0:
+                _close_now = _live_q
+
+        # 8% profit-lock trailing — runs whenever we have a price, with or without
+        # chart data. Only ever tightens; direction-aware.
+        if _close_now:
+            _entry_px = float(pos.get("entry_price") or _close_now)
             if direction_now == "Buy":
                 _trail_hi = max(float(pos.get("trailing_stop_high") or _entry_px), _close_now)
                 pos["trailing_stop_high"] = _trail_hi
@@ -802,39 +815,45 @@ def _run_strategy_exits(strat_name: str, strat_mod, positions: dict,
                 _pct_stop = round(_trail_lo * (1 + 0.08), 6)
                 new_stop  = min(new_stop, _pct_stop) if new_stop > 0 else _pct_stop
 
-            if round(new_stop, 6) != round(cur_stop, 6) and new_stop > 0:
-                # Cancel the real broker-side stop and place a new one at
-                # the trailed level, not just update this local belief.
-                # Found live 2026-08-24: this used to only touch pos[...]
-                # -- the real Saxo stop order sat at whatever level it was
-                # set at entry FOREVER, silently diverging from what local
-                # state (and this position's own should_exit() check)
-                # believed. Confirmed on GC: local state trailed the stop
-                # to 4474.13 as price ran up, but the real order was still
-                # sitting at the original 4283.4 six days later. Not a
-                # cosmetic gap -- if price had reversed sharply, the
-                # position would have kept losing all the way to the real
-                # (stale, wider) stop, not the tighter level the system
-                # believed it had.
-                if not dry_run:
-                    old_oid = pos.get("stop_order_id")
-                    if old_oid:
-                        saxo_client.cancel_order(str(old_oid))
-                    dp = saxo_client.get_price_decimals(pos["uic"], pos.get("asset_type", "CfdOnIndex"))
-                    ticksz = saxo_client.get_tick_size(pos["uic"], pos.get("asset_type", "CfdOnIndex"))
-                    new_oid = saxo_order.place_protective_stop(
-                        post_fn=_post, account_key=akey, uic=pos["uic"],
-                        asset_type=pos.get("asset_type", "CfdOnIndex"),
-                        amount=pos.get("quantity", 1), direction=direction_now,
-                        stop_price=new_stop, label=f"{key} trailing stop",
-                        price_decimals=dp, tick_size=ticksz,
-                    )
-                    if new_oid is None:
-                        logger.warning(f"  [{strat_name}] {sym}: trailing stop replace FAILED — "
-                                       f"position may be under-protected, check manually")
-                    else:
-                        pos["stop_order_id"] = new_oid
-                pos["stop_price"] = round(new_stop, 6)
+        if round(new_stop, 6) != round(cur_stop, 6) and new_stop > 0:
+            # Cancel the real broker-side stop and place a new one at
+            # the trailed level, not just update this local belief.
+            # Found live 2026-08-24: this used to only touch pos[...]
+            # -- the real Saxo stop order sat at whatever level it was
+            # set at entry FOREVER, silently diverging from what local
+            # state (and this position's own should_exit() check)
+            # believed. Confirmed on GC: local state trailed the stop
+            # to 4474.13 as price ran up, but the real order was still
+            # sitting at the original 4283.4 six days later. Not a
+            # cosmetic gap -- if price had reversed sharply, the
+            # position would have kept losing all the way to the real
+            # (stale, wider) stop, not the tighter level the system
+            # believed it had.
+            if not dry_run:
+                old_oid    = pos.get("stop_order_id")
+                asset_type = pos.get("asset_type", "CfdOnIndex")
+                if old_oid:
+                    saxo_client.cancel_order(str(old_oid))
+                else:
+                    # stop_order_id is null — an untracked stop may exist at Saxo
+                    # (e.g. a recovery stop placed outside the runner). Cancel any
+                    # sell orders for this UIC before placing the new one.
+                    saxo_client.cancel_sell_orders_for_uic(pos["uic"], asset_type)
+                dp     = saxo_client.get_price_decimals(pos["uic"], asset_type)
+                ticksz = saxo_client.get_tick_size(pos["uic"], asset_type)
+                new_oid = saxo_order.place_protective_stop(
+                    post_fn=_post, account_key=akey, uic=pos["uic"],
+                    asset_type=asset_type,
+                    amount=pos.get("quantity", 1), direction=direction_now,
+                    stop_price=new_stop, label=f"{key} trailing stop",
+                    price_decimals=dp, tick_size=ticksz,
+                )
+                if new_oid is None:
+                    logger.warning(f"  [{strat_name}] {sym}: trailing stop replace FAILED — "
+                                   f"position may be under-protected, check manually")
+                else:
+                    pos["stop_order_id"] = new_oid
+            pos["stop_price"] = round(new_stop, 6)
 
         exit_flag, reason = strat_mod.should_exit(pos, df, cal_days)
         if not exit_flag:
