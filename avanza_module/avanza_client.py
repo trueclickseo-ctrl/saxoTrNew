@@ -184,17 +184,21 @@ def get_positions(client: Avanza, account_id: str | None = None) -> list[dict]:
 # ── Instrument price ──────────────────────────────────────────────────────────
 
 def get_stock_price(client: Avanza, order_book_id: str) -> dict:
-    """Return {price, currency, name} for a stock. price is 0.0 on failure."""
+    """Return {price, currency, name} for a stock. price is 0.0 on failure.
+
+    Avanza quote uses 'last' (plain float) for the last traded price.
+    Currency lives in listing.currency or listing.tickerSymbol context;
+    US stocks default to USD.
+    """
     try:
-        info  = client.get_stock_info(order_book_id)
-        quote = info.get("quote") or info.get("latestTrades") or {}
-        # quote may be a dict with nested {latest: {value}} or a flat lastPrice
-        raw_price = (quote.get("latest") or quote.get("lastPrice")
-                     or info.get("lastPrice") or info.get("currentPrice"))
-        price = _mv(raw_price) if raw_price else 0.0
+        info    = client.get_stock_info(order_book_id)
+        quote   = info.get("quote") or {}
+        listing = info.get("listing") or {}
+        price   = float(quote.get("last") or quote.get("buy") or 0.0)
+        currency = listing.get("currency", info.get("currency", "USD"))
         return {
             "price":    price,
-            "currency": info.get("currency", "USD"),
+            "currency": currency,
             "name":     info.get("name", ""),
         }
     except Exception:
