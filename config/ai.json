@@ -47,5 +47,13 @@
     "enabled": true,
     "journal": true,
     "basket_ranker_blend": true
+  },
+
+  "_research_analyst_comment": "AI Research Analyst (2026-09-03, roadmap #19): ai/features/research_analyst.py. OFFLINE + READ-ONLY. Aggregates the closed-trade record + the AI Trading Journal + a decomposition harness (ai/research/decompose.py, replays each strategy's REAL generate_signals over ~13y of Yahoo daily bars) into a digest, has an LLM propose SPECIFIED, testable entry/exit/sizing filters, auto-runs the cheap decomposition gate on each (positive in both halves + bootstrap CI excludes zero), and keeps a triaged backlog in data/ai_research_hypotheses.jsonl. It NEVER edits a strategy or touches an order -- a human reads a hypothesis, writes the deterministic gate, and forward-tests it as an isolated SIM A/B twin (the same process that produced the current 5-strategy roster). Ships OFF. `python ai_research_analyst.py [--sweep|--report|--digest]`. sweep_years = decomposition replay lookback; max_hypotheses_per_run = LLM cap.",
+  "research_analyst": {
+    "enabled": false,
+    "model": "claude-sonnet-5",
+    "sweep_years": 13,
+    "max_hypotheses_per_run": 8
   }
 }

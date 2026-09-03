@@ -253,6 +253,15 @@ WINDOWS_TASKS = {
     # max_first_run_wait=30h (a fresh registration's first fire can be ~24h out).
     "Stocks LIVE Daily Run":  ("ATOS Stocks LIVE Daily Run",  "stocks_live_scheduler.log", 30, 30),
     "Stocks LIVE Exit Check": ("ATOS Stocks LIVE Exit Check", "stocks_live_scheduler.log", 30, 30),
+    # AI Research Analyst (roadmap #19, 2026-09-03) -- WEEKLY (Sunday 04:00
+    # PKT), OFFLINE + READ-ONLY (replays the SIM roster over ~13y Yahoo bars
+    # + an LLM hypothesis pass; never edits a strategy, never trades). A
+    # SIM-named task -> AUTO_FIX_ELIGIBLE keeps it. grace 240 (the sweep run
+    # itself takes up to ~90 min, and the log lags that); max_first_run_wait
+    # 174h (genuinely weekly -- a fresh registration's first Sunday can be
+    # ~7 days out). Harmless while config/ai.json research_analyst.enabled
+    # is false: the run prints "OFF" and exits 0.
+    "AI Research Analyst": ("ATOS AI Research Analyst", "ai_research_analyst.log", 240, 174),
 }
 
 # ── Registry: Claude-native scheduled tasks (no Windows entry) ──────────────
