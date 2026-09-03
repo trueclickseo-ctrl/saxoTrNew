@@ -91,6 +91,40 @@ def _pooled_balance():
         return None, None
 
 
+def _db_stats() -> dict:
+    """Returns per-strategy stats plus a '_total' rollup."""
+    if not os.path.exists(DB_PATH):
+        return {}
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("""
+            SELECT
+                strategy,
+                COUNT(*) FILTER (WHERE exit_price IS NULL)                       AS open,
+                COUNT(*) FILTER (WHERE exit_price IS NOT NULL)                   AS closed,
+                SUM(pnl_sek) FILTER (WHERE exit_price IS NOT NULL)               AS realized,
+                COUNT(*) FILTER (WHERE exit_price IS NOT NULL AND pnl_sek > 0)   AS wins,
+                COUNT(*) FILTER (WHERE exit_price IS NOT NULL AND pnl_sek <= 0)  AS losses,
+                SUM(pnl_sek) FILTER (WHERE exit_price IS NOT NULL AND pnl_sek > 0)         AS gross_win,
+                ABS(SUM(pnl_sek) FILTER (WHERE exit_price IS NOT NULL AND pnl_sek <= 0))  AS gross_loss
+            FROM trades GROUP BY strategy""").fetchall()
+        conn.close()
+        out = {}
+        totals = {"open": 0, "closed": 0, "wins": 0, "losses": 0,
+                  "realized": 0.0, "gross_win": 0.0, "gross_loss": 0.0}
+        for r in rows:
+            d = dict(r)
+            strat = d.pop("strategy") or "Unknown"
+            for k in totals:
+                totals[k] += d.get(k) or 0
+            out[strat] = d
+        out["_total"] = totals
+        return out
+    except Exception:
+        return {}
+
+
 def _status() -> dict:
     try:
         return json.load(open(STATUS_FILE, encoding="utf-8")) if os.path.exists(STATUS_FILE) else {}
@@ -183,7 +217,7 @@ def render() -> str:
             L.append(HR)
             L.append(f"  {GR}{n_buy} BUY{W}  {CY}{n_exit} EXIT{W}  {DM}{n_blocked} BLOCKED{W}")
 
-    openp = _rows("select * from trades where exit_price is null and strategy='US Blend' order by entry_date")
+    openp = _rows("select * from trades where exit_price is null order by entry_date")
     L.append("")
     L.append(f"{BD}  OPEN POSITIONS ({len(openp)}){W}")
     if not openp:
@@ -191,9 +225,10 @@ def render() -> str:
     else:
         for t in openp:
             L.append(f"    {t.get('ticker',''):<8} {t.get('shares',0):>6} sh  "
-                     f"entry ${t.get('entry_price',0):.2f}  stop ${t.get('stop_price',0):.2f}")
+                     f"entry ${t.get('entry_price',0):.2f}  stop ${t.get('stop_price',0):.2f}"
+                     f"  {DM}{t.get('strategy','')}{W}")
 
-    closed = _rows("select * from trades where exit_price is not null and strategy='US Blend' "
+    closed = _rows("select * from trades where exit_price is not null "
                    "order by exit_date desc limit 10")
     if closed:
         L.append("")
@@ -201,7 +236,37 @@ def render() -> str:
         for t in closed:
             pnl = t.get("pnl_sek") or 0
             col = GR if pnl >= 0 else RD
-            L.append(f"    {t.get('ticker',''):<8} {col}{pnl:+,.0f} SEK{W}  {DM}{t.get('exit_reason','')}{W}")
+            L.append(f"    {t.get('ticker',''):<8} {col}{pnl:+,.0f} SEK{W}  "
+                     f"{DM}{t.get('strategy','')}  {t.get('exit_reason','')}{W}")
+
+    # ── per-strategy breakdown ────────────────────────────────────────────────
+    stats = _db_stats()
+    if stats:
+        HD = f"{DM}  {'-' * 79}{W}"
+        L.append("")
+        L.append(f"{BD}  STRATEGY BREAKDOWN{W}")
+        L.append(f"  {DM}{'STRATEGY':<24}  {'ACT':>3}  {'CLS':>4}  {'W':>4}  {'L':>4}  "
+                 f"{'WR':>7}  {'PF':>7}  {'REALIZED':>14}{W}")
+        L.append(HD)
+        for strat, d in sorted((k, v) for k, v in stats.items() if k != "_total"):
+            wr  = d["wins"] / d["closed"] * 100 if d["closed"] else 0.0
+            pf  = d["gross_win"] / d["gross_loss"] if d["gross_loss"] else float("inf")
+            pfs = f"{pf:.2f}" if pf != float("inf") else "inf"
+            rl  = d["realized"] or 0
+            rcol = GR if rl >= 0 else RD
+            L.append(f"  {strat:<24}  {d['open']:>3}  {d['closed']:>4}  "
+                     f"{d['wins']:>4}  {d['losses']:>4}  {wr:>6.1f}%  "
+                     f"{pfs:>7}  {rcol}{rl:>+14,.0f} SEK{W}")
+        L.append(HD)
+        t = stats["_total"]
+        twr = t["wins"] / t["closed"] * 100 if t["closed"] else 0.0
+        tpf = t["gross_win"] / t["gross_loss"] if t["gross_loss"] else float("inf")
+        tpfs = f"{tpf:.2f}" if tpf != float("inf") else "inf"
+        trl  = t["realized"] or 0
+        trcol = GR if trl >= 0 else RD
+        L.append(f"  {BD}{'TOTAL':<24}  {t['open']:>3}  {t['closed']:>4}  "
+                 f"{t['wins']:>4}  {t['losses']:>4}  {twr:>6.1f}%  "
+                 f"{tpfs:>7}  {trcol}{trl:>+14,.0f} SEK{W}")
 
     wb = _tail_jsonl(WOULD_BE_ORDERS, 15)
     L.append("")
