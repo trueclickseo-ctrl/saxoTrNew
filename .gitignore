@@ -63,6 +63,11 @@ data/rsi_signal_registry.jsonl
 # Stocks AI layer runtime logs (2026-09-02) -- equity observation cards + Blend basket shadow
 data/stock_observation_cards.jsonl
 data/ai_basket_shadow.jsonl
+# AI Research Analyst (roadmap #19) -- digest + hypotheses backlog + decomp cache
+# (rebuilt on every weekly run; not source-controlled)
+data/ai_research_digest.json
+data/ai_research_decomp_cache.json
+data/ai_research_hypotheses.jsonl
 # "ATOS needs a human" escalation channel -- ephemeral, safeguard rewrites it every cycle
 data/attention_state.json
 # last-good Saxo FX rate cache -- ANALYTICS-ONLY fallback for R-multiple / cost
