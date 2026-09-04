@@ -8,13 +8,13 @@ Running log of the AI layer's build. Update this file **whenever an AI change la
 
 ---
 
-## Current state (2026-09-01)
+## Current state (2026-09-04)
 
 | | |
 |---|---|
-| **AI live in production?** | **Shadow study RUNNING** (`327e204`) — `enabled_sim` + `enabled_live_shadow` + `agent_enabled` all true. `claude-sonnet-5` scores every RSI signal on SIM + both LIVE accounts, logs it, **applies nothing** (`shadow_mode` true on SIM; `can_apply_decision` hardcoded False for LIVE). **AI Trading Journal** also live (`journal_enabled:true`) — read-only per-trade retrospective, all forex accounts. |
+| **AI live in production?** | **Shadow study RUNNING** — `enabled_sim` + `enabled_live_shadow` + `agent_enabled` all true. `claude-sonnet-5` scores every SIM RSI/rsi_trend/ema_trend/bb_quality/zscore_quality signal + LIVE shadow, logs it, **applies nothing** (`shadow_mode` true on SIM; `can_apply_decision` hardcoded False for LIVE). **AI Trading Journal** live (forex + stocks, `journal_enabled:true`). All 7 ATOS stock strategies (Saxo SIM + IBKR paper) now log observation cards to the AI pipeline. |
 | **AI touching money (SIM or LIVE)?** | **No.** Sprint 4 code (SIM sizing) is shipped but inert. LIVE acting is impossible without a code change (`_AI_ACTING_ACCOUNTS = {"sim"}`). |
-| **Last thing shipped** | **`b0c504a` (2026-09-03)** — `strategy_donchian_ai` (SIM-only, 7th active strategy: Donchian + DI-spread + regime + ATR-percentile gates); ETF strict top-10 rebalance (`trim_out_of_ranking`); `eaaa899` — 3 bug fixes (rsi_atr SLOTS_PER_STRATEGY, housekeeping StocksAdapter by_ticker, safeguard stop-covered auto-resolve). |
+| **Last thing shipped** | **`101bb19` (2026-09-04)** — Research Analyst Phase 2: digest + decomposition harness + hypothesis pipeline now covers all 4 US Signals stock strategies (us_sma_crossover / us_rsi_reversal / us_momentum / us_ensemble) in addition to the 5 forex strategies. **`6ea0365` (2026-09-04)** — connected all 7 stock strategies (US Blend, US Reversion, US Intraday Rev., US SMA Crossover, US RSI Reversal, US Momentum, US Ensemble) to the AI observation layer on both Saxo SIM and IBKR paper (`ibkr_stock_cards.py`, USD-denominated); `shadow_copilot_signals` gate ships OFF until ~40 signal trades accumulate. |
 | **Operator tasks** | ✅ Reboot · ✅ Anthropic console monthly spend cap **$10** · ✅ "ATOS AI Health Email" task registered (09:00 + 21:00 PKT) |
 | **`anthropic` SDK** | `1.2.0`. `ANTHROPIC_API_KEY` set (User scope), inherited by scheduled tasks — verified with real `agent_meta.ok=true` calls on SIM + `live` + `live_eur` (2026-09-01: 21 real timed decisions, 5–28 s latency). |
 | **Data the AI reads** | Post the 2026-09-01 sweep: entry/exit = **real Saxo fills** (LIVE re-verified vs `closedpositions` every run); net P&L sanity-gated for the unreliable SIM feed; stale SIM chart bars repaired to the live quote; MAE/MFE capped at write time; ledger deduped (incl. 26 stacked SIM re-entry rows, `1c00c12`); state is checkpointed after every entry/exit so a mid-pass kill can't erase closes and cause a re-entry. `python verify_ai_data.py` = repeatable audit (currently 3 pre-fix historical rows, flagged). |
@@ -93,7 +93,9 @@ Nothing here is started. Each is gated on the evidence above and follows the gov
 
 Deferred to the roadmap's later-phase list: full news/sentiment agent, the 6-agent split, adaptive scan cadence.
 
-**Strategy discovery (#19) — SHIPPED 2026-09-03** as the **AI Research Analyst** (PR #27). Weekly offline pipeline: replays each SIM-roster strategy over ~13y Yahoo daily bars → buckets by entry-context feature → bootstrap 95% CI gate → digest → LLM proposes testable hypotheses → `data/ai_research_hypotheses.jsonl` backlog. Ships OFF (`config/ai.json research_analyst.enabled: false`). Enable + add `ANTHROPIC_API_KEY` when ready. Operator: run `setup_scheduler_research_analyst.ps1` to register the weekly Sunday 04:00 task.
+**Strategy discovery (#19) — SHIPPED 2026-09-03 (forex, Phase 1), Phase 2 SHIPPED 2026-09-04 (stocks).** Weekly offline pipeline: replays each SIM-roster strategy over historical Yahoo daily bars → buckets by entry-context feature → bootstrap 95% CI gate → digest → LLM proposes testable hypotheses → `data/ai_research_hypotheses.jsonl` backlog. Ships OFF (`config/ai.json research_analyst.enabled: false`). Enable + add `ANTHROPIC_API_KEY` when ready. Operator: run `setup_scheduler_research_analyst.ps1` to register the weekly Sunday 04:00 task.
+- **Phase 1** (forex, `ai/research/decompose.py`): ROSTER = `[rsi, rsi_trend, ema_trend, bb_quality, zscore_quality]`; 13y replay; cache `data/ai_research_decomp_cache.json`.
+- **Phase 2** (`101bb19`, 2026-09-04): `STOCKS_ROSTER = [us_sma_crossover, us_rsi_reversal, us_momentum, us_ensemble]`; 5y replay; own cache `data/ai_research_stocks_decomp_cache.json`; `confidence` bucket added to the gate; digest includes `stocks_by_strategy`, `stocks_decomposition_cache`; `_SYSTEM` now describes both books; `auto_gate()` routes stock hypotheses to `replay_stock_trades()`; `--sweep` refreshes both caches. Run: `python ai_research_analyst.py --sweep` or `python -m ai.research.decompose --strategy us_momentum --sweep`.
 
 ### Autochartist pattern signals — investigated + parked (2026-09-02)
 
@@ -185,6 +187,45 @@ Not in the v1 sprint plan. Cheap interim version (hardcoded economic-calendar bl
 ---
 
 ## Change log for THIS file
+
+- **2026-09-04 (`101bb19`) — Research Analyst Phase 2: stocks coverage**
+
+  Extends the AI Research Analyst from forex-only (Phase 1, 2026-09-03) to also cover all 4 US Signals stock strategies.
+
+  **`ai/research/decompose.py`:**
+  - `STOCKS_ROSTER = ["us_sma_crossover", "us_rsi_reversal", "us_momentum", "us_ensemble"]`; `STOCKS_MODULE_IMPORT` maps each to its `usa_strategy` class name.
+  - `Trade.confidence` field added (float|None, default None — populated for stocks, None for forex).
+  - `confidence` bucket added to `_DEFAULT_BUCKETS` (low < 0.5 / mid 0.5–0.75 / high ≥ 0.75).
+  - `_replay_one_stock()` — bar-by-bar replay using the real `usa_strategy` generate/SELL signal and a 2×ATR stop. Avoids `date.today()` (uses `held_days` counter instead of the production time-limit check). Computes the same entry-context features as the forex harness (ADX, DI-spread, RSI, ATR-percentile, dist-EMA200/ATR, dow) via `_precompute()` on the stock OHLCV.
+  - `replay_stock_trades()`, `sweep_stocks()`, `refresh_stocks_cache()`, `cached_stock_verdicts()` — full parallel to the forex path. Separate cache `data/ai_research_stocks_decomp_cache.json`.
+  - CLI: `--strategy us_sma_crossover --sweep` now works; `--refresh-cache --stocks` refreshes the stocks cache.
+
+  **`ai/features/research_analyst.py`:**
+  - `_stock_trade_rows()` — reads `data/stock_observation_cards.jsonl` (all namespaces: sim / ai_sim / ibkr_paper / live_stocks).
+  - `_stocks_decomp_summary()` — compact view of the stocks cache, mirrors `_decomp_summary()`.
+  - `build_research_digest()` now includes `stocks_n_closed_trades`, `stocks_by_strategy`, `stocks_by_strategy_account`, `stocks_decomposition_cache`.
+  - `_SYSTEM` prompt updated: describes both the 5 forex strategies and the 4 US Signals strategies; adds `confidence` to the valid `decompose_spec` feature list.
+  - `auto_gate()` now handles stock hypotheses: checks `STOCKS_MODULE_IMPORT`, routes to `replay_stock_trades(years=min(years,5))`.
+  - `run(sweep_first=True)` calls `refresh_stocks_cache()` alongside the forex cache.
+
+  **`ai_research_analyst.py`:** docstring updated to document Phase 2 scope and the two separate caches.
+
+- **2026-09-04 (`6ea0365`) — All 7 stock strategies connected to AI observation layer**
+
+  Connected the 4 US Signals strategies (US SMA Crossover / RSI Reversal / Momentum / Ensemble) to the AI pipeline on both Saxo SIM and IBKR paper. Previously only US Blend (basket ranker) and US Reversion (shadow copilot) had AI hooks; the 4 signal strategies and US Intraday Reversion had none.
+
+  **New `ai/features/ibkr_stock_cards.py`:** USD-denominated observation cards for IBKR paper trades. Writes to the same `data/stock_observation_cards.jsonl`; `account_env="ibkr_paper"`, `native_currency="USD"`, all `*_eur` fields None. Card IDs like `ibkr_paper:us_sma_crossover:AAPL:2026-09-04` are distinct from Saxo SIM `sim:us_sma_crossover:AAPL:2026-09-04`.
+
+  **`ai/config.py`:** `stocks_signals_copilot_enabled()` — gate for the shadow Copilot on US Signals entries (log-only; requires `stocks_enabled("sim")` AND `shadow_copilot_signals` AND `agent_enabled_for("sim")`).
+
+  **`config/ai.json`:** `"shadow_copilot_signals": false` added to the `stocks` block. Ships OFF until ~40 signal trades accumulated; flip to `true` to arm.
+
+  **`atos_runner.py` (`run_us_signals()`):**
+  - Entry observation card on each BUY fill (strategy snake_key, ticker, stop, risk_sek).
+  - Shadow Copilot pass on entry, gated by `stocks_signals_copilot_enabled()` (uses `build_stock_proposal()` + `evaluate_proposal()` + `log_shadow_decision()`).
+  - Exit observation card on each exit (exit price, reason, gross/net P&L, R-multiple).
+
+  **`ibkr_module/ibkr_executor.py`:** entry card on fill + exit card on SELL for all 4 US Signals strategies via `ibkr_stock_cards.log_ibkr_entry_card` / `log_ibkr_exit_card`. Lazy import (`try/except`) so IBKR executor never fails if the AI package is absent.
 
 - **2026-09-04 — Avanza ISK sleeve (US Blend mirror, semi-automatic)**
 
