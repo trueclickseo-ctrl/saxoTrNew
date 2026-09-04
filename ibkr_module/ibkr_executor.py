@@ -743,6 +743,344 @@ def run_us_signals_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
     print("\n  [us signals] exit check complete.")
 
 
+# ── Scorer entries (ATOS US 500 scoring engine) ───────────────────────────────
+
+def run_scorer_entries(
+    ib,
+    account_id: str,
+    cfg: dict,
+    dry_run: bool = True,
+    scorer_results: dict | None = None,
+    auto: bool = False,
+) -> None:
+    """Buy top-scored candidates from the ATOS US 500 scoring engine.
+
+    Runs two sub-books in the same call:
+      scorer_swing     — top Swing/Momentum picks (tighter stop, faster signals)
+      scorer_portfolio — top Hybrid/Portfolio picks (wider stop, quality bias)
+
+    scorer_results: pre-generated dict from ibkr_scorer.run_scan(). Pass from
+    main() so the Yahoo download finishes before the IBKR connection opens.
+    """
+    scorer_cfg   = cfg.get("strategies", {}).get("scorer", {})
+    sw_cfg       = scorer_cfg.get("swing",     {})
+    po_cfg       = scorer_cfg.get("portfolio", {})
+
+    sw_budget    = float(sw_cfg.get("budget_usd",    20_000))
+    sw_max_pos   = int(sw_cfg.get("max_positions",   8))
+    sw_stop_pct  = float(sw_cfg.get("stop_pct",      0.06))
+    sw_min_score = float(sw_cfg.get("min_score",     65.0))
+    sw_min_usd   = float(sw_cfg.get("min_trade_usd", 50))
+
+    po_budget    = float(po_cfg.get("budget_usd",    30_000))
+    po_max_pos   = int(po_cfg.get("max_positions",   10))
+    po_stop_pct  = float(po_cfg.get("stop_pct",      0.08))
+    po_min_score = float(po_cfg.get("min_score",     65.0))
+    po_min_usd   = float(po_cfg.get("min_trade_usd", 50))
+
+    if scorer_results is None:
+        from ibkr_module.ibkr_scorer import run_scan
+        scorer_results = run_scan(
+            n_swing=sw_max_pos,
+            n_portfolio=po_max_pos,
+            min_score=min(sw_min_score, po_min_score),
+        )
+
+    sw_df = scorer_results.get("swing",     pd.DataFrame())
+    po_df = scorer_results.get("portfolio", pd.DataFrame())
+
+    # Already-held tickers per sub-book
+    sw_held_syms = {p["symbol"] for p in st.get_open_positions("scorer_swing")}
+    po_held_syms = {p["symbol"] for p in st.get_open_positions("scorer_portfolio")}
+
+    sw_free = sw_max_pos - len(sw_held_syms)
+    po_free = po_max_pos - len(po_held_syms)
+
+    print(f"\n  [scorer] swing:     {len(sw_held_syms)}/{sw_max_pos} slots used  "
+          f"({sw_free} free)")
+    print(f"  [scorer] portfolio: {len(po_held_syms)}/{po_max_pos} slots used  "
+          f"({po_free} free)")
+
+    # Filter to candidates that pass min_score and aren't already held
+    sw_new = (sw_df[
+        (sw_df["swing_score"] >= sw_min_score) &
+        (~sw_df["ticker"].str.upper().isin(sw_held_syms))
+    ].head(sw_free) if not sw_df.empty else pd.DataFrame())
+
+    po_new = (po_df[
+        (po_df["trade_score"] >= po_min_score) &
+        (~po_df["ticker"].str.upper().isin(po_held_syms))
+    ].head(po_free) if not po_df.empty else pd.DataFrame())
+
+    if sw_new.empty and po_new.empty:
+        print("  [scorer] No new candidates above min_score / slots full.")
+        return
+
+    # Collect all candidate tickers and fetch live IBKR prices once
+    all_new_tickers = list(sw_new["ticker"]) + list(po_new["ticker"])
+    print(f"\n  [scorer] fetching IBKR live prices for "
+          f"{len(all_new_tickers)} candidate(s)...")
+    live_prices = ic.get_prices(ib, all_new_tickers)
+    ibkr_any_ok = any(v and v > 0 for v in live_prices.values())
+
+    if not dry_run and not ic.is_market_open():
+        print("\n  [BLOCKED] US market is closed. Orders can only be placed "
+              "09:30–16:00 ET (14:30–21:00 UTC).")
+        return
+
+    if not dry_run and not ibkr_any_ok:
+        is_paper = cfg.get("paper", True)
+        if is_paper:
+            # Paper account: IBKR often returns no market data without a
+            # data subscription. Fall back to Yahoo delayed prices for sizing
+            # only — the actual market order fills at IBKR's real price.
+            print("  [prices] Paper account — falling back to Yahoo prices for sizing.")
+            all_scored = (scorer_results or {}).get("all_scored", pd.DataFrame())
+            if not all_scored.empty and "ticker" in all_scored.columns:
+                for t in all_new_tickers:
+                    row = all_scored[all_scored["ticker"] == t]
+                    if not row.empty:
+                        px = float(row.iloc[0].get("price", 0))
+                        if px > 0:
+                            live_prices[t] = px
+            ibkr_any_ok = any(v and v > 0 for v in live_prices.values())
+            if ibkr_any_ok:
+                print("  [prices] Yahoo fallback prices loaded for paper sizing.")
+            else:
+                print("\n  [BLOCKED] No prices available (IBKR or Yahoo). Cannot size orders.")
+                return
+        else:
+            print("\n  [BLOCKED] IBKR returned no live prices. "
+                  "Cannot size orders without market data.")
+            return
+
+    is_paper = cfg.get("paper", True)
+    if auto and not is_paper:
+        print("  [scorer] --auto flag is only permitted on paper accounts. Ignored.")
+        auto = False
+
+    def _place_book(
+        candidates: pd.DataFrame,
+        budget: float,
+        max_pos: int,
+        stop_pct: float,
+        min_usd: float,
+        strategy: str,
+        score_col: str,
+    ) -> None:
+        if candidates.empty:
+            return
+        per_slot = budget / max_pos
+        label    = strategy.replace("scorer_", "")
+
+        for _, row in candidates.iterrows():
+            ticker    = str(row["ticker"]).upper()
+            score     = float(row.get(score_col, 0))
+            setup     = str(row.get("setup", ""))
+            ibkr_px   = live_prices.get(ticker, 0.0)
+            yahoo_px  = float(row.get("price", 0.0))
+            ibkr_ok   = bool(ibkr_px and ibkr_px > 0)
+
+            is_paper = cfg.get("paper", True)
+            if dry_run or (not ibkr_ok and is_paper):
+                price     = ibkr_px if ibkr_ok else yahoo_px
+                price_src = "IBKR" if ibkr_ok else "Yahoo delayed (paper sizing)"
+            else:
+                if not ibkr_ok:
+                    print(f"\n  [scorer/{label}] {ticker}: no IBKR price — skip")
+                    continue
+                price     = ibkr_px
+                price_src = "IBKR live"
+
+            if not price or price <= 0:
+                continue
+            qty      = math.floor(per_slot / price)
+            if qty < 1:
+                continue
+            notional = round(price * qty, 2)
+            if notional < min_usd:
+                continue
+            stop_px  = round(price * (1 - stop_pct), 2)
+
+            roc  = float(row.get("roc_20d",  0))
+            adx  = float(row.get("adx_14",   0))
+            atr  = float(row.get("atr_pct",  0))
+            print(f"\n  [scorer/{label}]  BUY {ticker:<6}  "
+                  f"grade={setup}  {score_col}={score:.1f}  "
+                  f"roc20={roc:+.1f}%  adx={adx:.0f}  atr={atr:.1f}%")
+            print(f"    qty={qty}  price~${price:.2f} [{price_src}]  "
+                  f"notional~${notional:,.0f}  stop=${stop_px:.2f} ({stop_pct*100:.0f}%)")
+
+            if dry_run:
+                print("    [DRY RUN] would place market buy + GTC stop")
+                continue
+
+            if auto:
+                print(f"  [AUTO] buying {ticker} ({label})")
+            else:
+                confirm = input(f"  Confirm buy {ticker} ({label})? [y/N]: ").strip().lower()
+                if confirm != "y":
+                    print("  Skipped.")
+                    continue
+
+            trade = ic.place_market_order(ib, account_id, ticker, "BUY", qty)
+            st.record_order(str(trade.order.orderId), ticker, "BUY", qty,
+                            strategy=strategy)
+            print(f"  Order placed (id={trade.order.orderId}). Waiting for fill...")
+            fill = ic.confirm_fill(ib, trade)
+            if fill is None:
+                print(f"  WARNING: fill not confirmed for {ticker}.")
+                st.mark_cancelled(str(trade.order.orderId))
+                continue
+
+            print(f"  Filled @ ${fill:.4f}")
+            st.mark_filled(str(trade.order.orderId), fill, side="BUY")
+            actual_stop = round(fill * (1 - stop_pct), 2)
+            stop_trade  = ic.place_stop_order(ib, account_id, ticker, qty, actual_stop)
+            ib.sleep(1.0)
+            st.update_stop(ticker, actual_stop,
+                           str(stop_trade.order.orderId),
+                           trailing_high=fill,
+                           strategy=strategy)
+            print(f"  Stop placed @ ${actual_stop:.2f} (id={stop_trade.order.orderId})")
+
+    _place_book(sw_new, sw_budget, sw_max_pos, sw_stop_pct, sw_min_usd,
+                "scorer_swing",     "swing_score")
+    _place_book(po_new, po_budget, po_max_pos, po_stop_pct, po_min_usd,
+                "scorer_portfolio", "trade_score")
+
+    print("\n  [scorer] entry scan complete.")
+
+
+def run_scorer_exits(
+    ib,
+    account_id: str,
+    cfg: dict,
+    dry_run: bool = True,
+    scorer_results: dict | None = None,
+) -> None:
+    """Close scorer positions whose score dropped below the minimum threshold.
+
+    On rescan, any held ticker that no longer appears in the top candidates
+    (score fell below min_score) is sold. GTC stops placed at entry handle
+    hard-floor protection independently on the broker side.
+    """
+    scorer_cfg   = cfg.get("strategies", {}).get("scorer", {})
+    sw_min_score = float(scorer_cfg.get("swing",     {}).get("min_score", 65.0))
+    po_min_score = float(scorer_cfg.get("portfolio", {}).get("min_score", 65.0))
+    sw_max_pos   = int(scorer_cfg.get("swing",     {}).get("max_positions", 8))
+    po_max_pos   = int(scorer_cfg.get("portfolio", {}).get("max_positions", 10))
+
+    sw_open = st.get_open_positions("scorer_swing")
+    po_open = st.get_open_positions("scorer_portfolio")
+
+    if not sw_open and not po_open:
+        print("  [scorer] No open scorer positions.")
+        return
+
+    if scorer_results is None:
+        from ibkr_module.ibkr_scorer import run_scan
+        scorer_results = run_scan(
+            n_swing=sw_max_pos,
+            n_portfolio=po_max_pos,
+            min_score=min(sw_min_score, po_min_score),
+        )
+
+    # Build current score lookup from the full scored universe
+    all_scored  = scorer_results.get("all_scored", pd.DataFrame())
+    score_map: dict[str, dict] = {}
+    if not all_scored.empty:
+        for _, r in all_scored.iterrows():
+            score_map[str(r["ticker"]).upper()] = {
+                "swing_score":  float(r.get("swing_score",  0)),
+                "trade_score":  float(r.get("trade_score",  0)),
+                "setup":        str(r.get("setup", "PASS")),
+                "hard_gate":    bool(r.get("hard_gate", False)),
+            }
+
+    def _check_book(
+        open_pos: list[dict],
+        min_score: float,
+        score_col: str,
+        strategy: str,
+    ) -> None:
+        label = strategy.replace("scorer_", "")
+        if not open_pos:
+            return
+
+        all_syms    = [p["symbol"] for p in open_pos]
+        live_prices = {s: ic.abs_price(p)
+                       for s, p in ic.get_prices(ib, all_syms).items()}
+
+        print(f"\n  [scorer/{label} exits]  {len(open_pos)} position(s)")
+
+        for pos in open_pos:
+            sym      = pos["symbol"].upper()
+            entry_px = float(pos.get("fill_price") or 0)
+            stop_oid = pos.get("stop_order_id")
+            qty      = int(pos["qty"])
+
+            cur_px   = live_prices.get(sym, 0.0)
+            sc       = score_map.get(sym, {})
+            cur_score = sc.get(score_col, 0.0)
+            gate_ok   = sc.get("hard_gate", True)
+            setup     = sc.get("setup", "?")
+
+            gain_pct = ((cur_px / entry_px) - 1) * 100 if entry_px > 0 and cur_px > 0 else 0
+
+            # Exit triggers:
+            #   1. Score fell below threshold
+            #   2. Hard gate now fails (delisted / too small / earnings window)
+            should_exit = (cur_score < min_score) or (not gate_ok)
+            reason      = ("score_below_min" if cur_score < min_score
+                           else "gate_failed" if not gate_ok else "")
+
+            print(f"  {sym:<8}  px=${cur_px:.2f}  entry=${entry_px:.2f}  "
+                  f"{gain_pct:+.1f}%  {score_col}={cur_score:.1f}  grade={setup}  "
+                  f"{'→ EXIT: ' + reason if should_exit else 'HOLD'}")
+
+            if not should_exit:
+                continue
+            if dry_run:
+                print(f"    [DRY RUN] would sell {qty} {sym}")
+                continue
+
+            if not cur_px or cur_px <= 0:
+                print(f"    [BLOCKED] no live price for {sym} — cannot execute exit")
+                continue
+
+            confirm = input(f"  Confirm EXIT {sym} ({label})? [y/N]: ").strip().lower()
+            if confirm != "y":
+                print("  Skipped.")
+                continue
+
+            # Cancel the GTC stop first
+            if stop_oid:
+                open_orders = ib.openTrades()
+                old = next((t for t in open_orders
+                            if str(t.order.orderId) == str(stop_oid)), None)
+                if old:
+                    ic.cancel_order(ib, old)
+                    ib.sleep(0.5)
+
+            sell_trade = ic.place_market_order(ib, account_id, sym, "SELL", qty)
+            st.record_order(str(sell_trade.order.orderId), sym, "SELL", qty,
+                            strategy=strategy)
+            fill = ic.confirm_fill(ib, sell_trade)
+            if fill is None:
+                print(f"  WARNING: exit fill not confirmed for {sym}.")
+                st.mark_cancelled(str(sell_trade.order.orderId))
+            else:
+                pnl = (fill - entry_px) * qty
+                print(f"  Sold {qty} {sym} @ ${fill:.4f}  P&L: ${pnl:+,.2f}")
+                st.mark_filled(str(sell_trade.order.orderId), fill, side="SELL")
+
+        print(f"  [scorer/{label}] exit check complete.")
+
+    _check_book(sw_open, sw_min_score, "swing_score", "scorer_swing")
+    _check_book(po_open, po_min_score, "trade_score", "scorer_portfolio")
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _print_plan(buys: list[dict], sells: list[dict], stop_pct: float) -> None:

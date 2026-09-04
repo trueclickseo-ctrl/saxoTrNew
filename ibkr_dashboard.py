@@ -45,22 +45,51 @@ def _load_config() -> dict:
 
 
 # ── Strategy display order ────────────────────────────────────────────────────
-# (db_strategy_key, display_label, config_key, config_slot_field)
+# (db_key, label, config_key, slot_field, description)
+# config_key supports nested paths with "." (e.g. "scorer.swing")
 _STRATEGY_ROWS = [
-    ("blend",            "US Blend",          "blend",     "max_positions"),
-    ("reversion",        "US Reversion",      "reversion", "max_slots"),
-    ("intraday",         "US Intraday Rev.",  "reversion", "max_slots"),
-    ("US SMA Crossover", "US SMA Crossover",  "signals",   "max_per_strategy"),
-    ("US RSI Reversal",  "US RSI Reversal",   "signals",   "max_per_strategy"),
-    ("US Momentum",      "US Momentum",       "signals",   "max_per_strategy"),
-    ("US Ensemble",      "US Ensemble",       "signals",   "max_per_strategy"),
+    ("scorer_swing",     "Scorer Swing",      "scorer.swing",      "max_positions",
+     "High-momentum breakout picks — top ROC/ADX/RS-vs-SPY from 482-stock universe"),
+    ("scorer_portfolio", "Scorer Portfolio",  "scorer.portfolio",  "max_positions",
+     "Quality growth holds — above SMA200, strong trend, steady fundamentals"),
+    ("blend",            "US Blend",          "blend",             "max_positions",
+     "Top-ranked US equities, weekly rebalance, equal-weight"),
+    ("reversion",        "US Reversion",      "reversion",         "max_slots",
+     "Oversold dip-buys — RSI(2) oversold, mean-reversion exit"),
+    ("intraday",         "US Intraday Rev.",  "reversion",         "max_slots",
+     "Intraday oversold bounces — same-day exit before close"),
+    ("US SMA Crossover", "US SMA Crossover",  "signals",           "max_per_strategy",
+     "50/200 SMA golden-cross momentum entries"),
+    ("US RSI Reversal",  "US RSI Reversal",   "signals",           "max_per_strategy",
+     "RSI oversold reversal with volume confirmation"),
+    ("US Momentum",      "US Momentum",       "signals",           "max_per_strategy",
+     "52-week high breakout, relative strength leaders"),
+    ("US Ensemble",      "US Ensemble",       "signals",           "max_per_strategy",
+     "Combined signal — requires SMA + RSI + momentum alignment"),
 ]
 
-_WIDTH = 72  # terminal width for section headers
+_W = 86  # terminal width
+
+_GRN  = "\033[92m"
+_RED  = "\033[91m"
+_YLW  = "\033[93m"
+_DIM  = "\033[2m"
+_BOLD = "\033[1m"
+_RST  = "\033[0m"
+
+_COL_HDR = (
+    f"  {'#':>2}  {'Symbol':<6}  {'Qty':>5}  "
+    f"{'Entry':>9}  {'Last':>9}  {'Gain %':>7}  {'Gain $':>8}  "
+    f"{'Stop':>9}  {'Value':>9}  {'Days':>4}"
+)
+_COL_SEP = "  " + "─" * (_W - 2)
 
 
 def _max_slots(cfg: dict, cfg_key: str, slot_field: str) -> int:
-    return int(cfg.get("strategies", {}).get(cfg_key, {}).get(slot_field, 5))
+    node = cfg.get("strategies", {})
+    for part in cfg_key.split("."):
+        node = node.get(part, {})
+    return int(node.get(slot_field, 5) if isinstance(node, dict) else 5)
 
 
 def _days_held(filled_at: str | None) -> int:
@@ -73,18 +102,34 @@ def _days_held(filled_at: str | None) -> int:
         return 0
 
 
-def _gain_str(entry: float, last: float) -> str:
+def _pct(entry: float, last: float) -> float | None:
     if entry and entry > 0 and last and last > 0:
-        pct = (last / entry - 1) * 100
-        sign = "+" if pct >= 0 else ""
-        return f"{sign}{pct:.1f}%"
-    return "  n/a"
+        return (last / entry - 1) * 100
+    return None
 
 
-def _fmt(val: float, prefix: str = "$", decimals: int = 2) -> str:
+def _color_pct(pct: float | None) -> str:
+    if pct is None:
+        return f"{'n/a':>7}"
+    sign = "+" if pct >= 0 else ""
+    s = f"{sign}{pct:.2f}%"
+    color = _GRN if pct > 0 else (_RED if pct < 0 else "")
+    return f"{color}{s:>7}{_RST}" if color else f"{s:>7}"
+
+
+def _color_dollar(val: float, width: int = 8) -> str:
+    if math.isnan(val):
+        return f"{'n/a':>{width}}"
+    sign = "+" if val > 0 else ""
+    s = f"{sign}${val:,.0f}"
+    color = _GRN if val > 0 else (_RED if val < 0 else "")
+    return f"{color}{s:>{width}}{_RST}" if color else f"{s:>{width}}"
+
+
+def _fmt_price(val: float) -> str:
     if not val or math.isnan(val):
-        return "  n/a"
-    return f"{prefix}{val:,.{decimals}f}"
+        return f"{'—':>9}"
+    return f"${val:>8,.2f}"
 
 
 def render_dashboard(cfg: dict, summary: dict, account_id: str,
@@ -93,74 +138,97 @@ def render_dashboard(cfg: dict, summary: dict, account_id: str,
                      yahoo_fallback: bool) -> None:
     os.system("cls" if os.name == "nt" else "clear")
 
-    mode  = "PAPER" if cfg.get("paper", True) else "LIVE"
-    now   = time.strftime("%Y-%m-%d %H:%M:%S")
-    total = sum(len(v) for v in positions_by_strat.values())
-    price_src = "[Yahoo est. — market closed]" if yahoo_fallback else "[IBKR live prices]"
+    mode      = "PAPER" if cfg.get("paper", True) else "LIVE"
+    now       = time.strftime("%Y-%m-%d %H:%M:%S")
+    total_pos = sum(len(v) for v in positions_by_strat.values())
+    price_lbl = "Yahoo (delayed)" if yahoo_fallback else "IBKR live"
 
-    print(f"\n  IBKR STOCKS DASHBOARD [{mode}]  {now}  {price_src}")
-    print("  " + "═" * _WIDTH)
-
-    # Account summary
+    # ── Header ────────────────────────────────────────────────────────────────
     ccy = summary.get("currency", "USD")
     nl  = summary.get("net_liquidation", 0)
     cb  = summary.get("cash_balance", 0)
     u   = summary.get("unrealized_pnl", 0)
     r   = summary.get("realized_pnl", 0)
-    print(f"\n  Account  : {account_id}   ({ccy})")
-    print(f"  Net Liq  : {ccy} {nl:>13,.2f}    Cash    : {ccy} {cb:>13,.2f}")
-    u_sign = "+" if u >= 0 else ""
-    r_sign = "+" if r >= 0 else ""
-    print(f"  Unreal.  : {u_sign}{ccy} {u:>12,.2f}    Realized: {r_sign}{ccy} {r:>12,.2f}")
-    print(f"  Open positions: {total}")
 
-    # Per-strategy sections
-    for db_key, label, cfg_key, slot_field in _STRATEGY_ROWS:
+    print()
+    print(f"  {_BOLD}IBKR {mode}  ·  {account_id} ({ccy})  ·  {now}  ·  {price_lbl}{_RST}")
+    print("  " + "═" * _W)
+    print(f"  Net Liq : {ccy} {nl:>12,.0f}"
+          f"    Cash : {ccy} {cb:>12,.0f}"
+          f"    Positions : {total_pos}")
+
+    u_col = _GRN if u >= 0 else _RED
+    r_col = _GRN if r >= 0 else _RED
+    u_s   = f"{'+' if u>=0 else ''}{ccy} {u:,.0f}"
+    r_s   = f"{'+' if r>=0 else ''}{ccy} {r:,.0f}"
+    print(f"  Unreal  : {u_col}{u_s:>18}{_RST}"
+          f"    Realized : {r_col}{r_s:>14}{_RST}")
+    print("  " + "─" * _W)
+
+    # ── Active strategy sections ───────────────────────────────────────────────
+    idle_labels: list[str] = []
+
+    for db_key, label, cfg_key, slot_field, desc in _STRATEGY_ROWS:
         positions = positions_by_strat.get(db_key, [])
         max_s     = _max_slots(cfg, cfg_key, slot_field)
         used      = len(positions)
-        pct_full  = used / max_s * 100 if max_s else 0
         slot_bar  = f"{'█' * used}{'░' * (max_s - used)}"
 
-        header_left = f"  ── {label}  [{slot_bar}] {used}/{max_s}"
-        pad         = max(1, _WIDTH - len(header_left) + 2)
-        print(f"\n{header_left} {'─' * pad}")
-
         if not positions:
-            print("      (no open positions)")
+            idle_labels.append(f"{label} 0/{max_s}")
             continue
 
-        # Column header
-        print(f"    {'Symbol':<8}  {'Qty':>5}  {'Entry':>8}  {'Last':>8}  "
-              f"{'Gain%':>7}  {'Stop':>8}  {'Days':>4}")
-        print("    " + "─" * 60)
+        # Section header + description
+        print(f"\n  {_BOLD}── {label}{_RST}  [{slot_bar}] {used}/{max_s}")
+        print(f"  {_DIM}   {desc}{_RST}")
+        print(_COL_HDR)
+        print(_COL_SEP)
 
-        for pos in sorted(positions, key=lambda p: p.get("filled_at") or ""):
-            sym   = pos["symbol"]
-            qty   = int(pos.get("qty", 0))
-            entry = pos.get("fill_price") or pos.get("limit_price") or 0.0
-            last  = live_prices.get(sym, 0.0)
-            stop  = pos.get("stop_price") or 0.0
-            days  = _days_held(pos.get("filled_at"))
+        sect_invested = 0.0
+        sect_pnl      = 0.0
 
-            gain  = _gain_str(entry, last)
-            # Colour hint via ASCII marker
-            if "+" in gain:
-                gain_disp = f"\033[32m{gain}\033[0m"   # green
-            elif "-" in gain:
-                gain_disp = f"\033[31m{gain}\033[0m"   # red
-            else:
-                gain_disp = gain
+        for idx, pos in enumerate(sorted(positions, key=lambda p: p.get("filled_at") or ""), 1):
+            sym    = pos["symbol"]
+            qty    = int(pos.get("qty", 0))
+            entry  = float(pos.get("fill_price") or pos.get("limit_price") or 0)
+            last   = float(live_prices.get(sym) or 0)
+            stop   = float(pos.get("stop_price") or 0)
+            days   = _days_held(pos.get("filled_at"))
 
-            entry_s = _fmt(entry)
-            last_s  = _fmt(last) if last else "    n/a"
-            stop_s  = _fmt(stop) if stop else "    n/a"
+            pct    = _pct(entry, last)
+            gain_d = (last - entry) * qty if (entry and last) else float("nan")
+            value  = last * qty if last else float("nan")
 
-            print(f"    {sym:<8}  {qty:>5}  {entry_s:>8}  {last_s:>8}  "
-                  f"{gain_disp:>7}  {stop_s:>8}  {days:>4}d")
+            if not math.isnan(gain_d):
+                sect_pnl += gain_d
+            if entry:
+                sect_invested += entry * qty
 
-    print(f"\n  {'─' * _WIDTH}")
-    print(f"  Ctrl+C to quit   |   --once to print and exit   |   --interval N to change refresh\n")
+            pct_s   = _color_pct(pct)
+            gain_s  = _color_dollar(gain_d, 8)
+            entry_s = _fmt_price(entry)
+            last_s  = _fmt_price(last)
+            stop_s  = _fmt_price(stop)
+            val_s   = f"${value:>8,.0f}" if not math.isnan(value) else f"{'—':>9}"
+
+            print(f"  {idx:>2}  {sym:<6}  {qty:>5}  "
+                  f"{entry_s}  {last_s}  {pct_s}  {gain_s}  "
+                  f"{stop_s}  {val_s}  {days:>3}d")
+
+        # Section totals
+        print(_COL_SEP)
+        inv_s  = f"${sect_invested:>10,.0f}" if sect_invested else "—"
+        pnl_c  = _GRN if sect_pnl >= 0 else _RED
+        pnl_s  = f"{'+' if sect_pnl >= 0 else ''}${sect_pnl:,.0f}"
+        print(f"  {'Invested':>30} : {inv_s}    P&L : {pnl_c}{pnl_s}{_RST}")
+
+    # ── Idle strategies (no positions) — one compact line ─────────────────────
+    if idle_labels:
+        print(f"\n  {_DIM}Idle: {' · '.join(idle_labels)}{_RST}")
+
+    print()
+    print("  " + "─" * _W)
+    print(f"  {_DIM}Ctrl+C to quit  ·  --once to print once  ·  --interval N secs{_RST}\n")
 
 
 def main() -> None:
@@ -171,6 +239,14 @@ def main() -> None:
     parser.add_argument("--once",     action="store_true", help="Print once and exit")
     parser.add_argument("--interval", type=int, default=10, help="Refresh interval in seconds")
     args = parser.parse_args()
+
+    # Silence all ib_insync loggers before any connection so noisy paper-account
+    # warnings (10089/10168 no subscription, 300 cancel race, completed orders
+    # timeout) don't appear. Yahoo fallback handles missing prices.
+    import logging
+    for _log in ("ib_insync", "ib_insync.ib", "ib_insync.wrapper",
+                 "ib_insync.client", "ib_insync.ticker"):
+        logging.getLogger(_log).setLevel(logging.CRITICAL)
 
     from ibkr_module import ibkr_client as ic
     from ibkr_module import ibkr_state  as st
@@ -200,12 +276,17 @@ def main() -> None:
             # Live prices for all held symbols
             symbols      = list({p["symbol"] for p in all_open})
             live_prices  = ic.get_prices(ib, symbols) if symbols else {}
+
+            # Full Yahoo fallback when IBKR returns nothing at all.
             yahoo_fallback = bool(symbols) and not any(
                 v and v > 0 for v in live_prices.values()
             )
-            if yahoo_fallback and symbols:
+            # Per-symbol Yahoo fill for any individual zeros (partial IBKR failure).
+            missing_price = [s for s in symbols if not live_prices.get(s)]
+            if yahoo_fallback or missing_price:
                 from ibkr_module.ibkr_signals import yahoo_prices
-                yp = yahoo_prices(symbols)
+                fill_syms = symbols if yahoo_fallback else missing_price
+                yp = yahoo_prices(fill_syms)
                 live_prices.update({s: p for s, p in yp.items() if p and p > 0})
 
             ic.disconnect(ib)

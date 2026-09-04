@@ -484,3 +484,135 @@ def notify_weekly_report(
 
     subject = f"ATOS Weekly Report — Balance: {total_equity_sek:,.0f} SEK  |  Week: {pnl_sign}{week_pnl_sek:,.0f} SEK  [{today}]"
     _send(subject, _wrap("Weekly Performance Report", body))
+
+
+# ── Scorer signals ─────────────────────────────────────────────────────────────
+
+# Dedup: track which (date, frozenset(tickers)) combos we've already emailed
+_sent_scorer_keys: set = set()
+
+
+def notify_scorer_signals(
+    swing_df,        # pd.DataFrame — top swing candidates (may be empty)
+    portfolio_df,    # pd.DataFrame — top portfolio candidates (may be empty)
+    min_score: float = 65.0,
+) -> bool:
+    """Email when the scorer finds new buy candidates.
+
+    Returns True if an email was sent, False otherwise (empty results or dupe).
+    Requires: columns ticker, grade, trade_score, swing_score, atr_pct, roc_20d, price.
+    """
+    import pandas as pd
+
+    today = date.today().isoformat()
+
+    swing_rows     = swing_df.to_dict("records")     if (swing_df     is not None and len(swing_df)     > 0) else []
+    portfolio_rows = portfolio_df.to_dict("records") if (portfolio_df is not None and len(portfolio_df) > 0) else []
+
+    if not swing_rows and not portfolio_rows:
+        return False
+
+    # Deduplicate within same calendar day + same ticker set
+    all_tickers = frozenset(
+        [r["ticker"] for r in swing_rows] + [r["ticker"] for r in portfolio_rows]
+    )
+    dedup_key = (today, all_tickers)
+    if dedup_key in _sent_scorer_keys:
+        return False
+    _sent_scorer_keys.add(dedup_key)
+
+    def _grade_color(g: str) -> str:
+        return {"A+": "#4ade80", "A": "#86efac", "B": "#60a5fa", "C": "#94a3b8"}.get(g, "#94a3b8")
+
+    def _score_color(s: float) -> str:
+        if s >= 80:  return "#4ade80"
+        if s >= 70:  return "#60a5fa"
+        if s >= 60:  return "#fb923c"
+        return "#94a3b8"
+
+    def _table(rows: list, score_col: str) -> str:
+        if not rows:
+            return "<p style='color:#64748b'>No candidates.</p>"
+        header = f"""<table>
+          <thead><tr>
+            <th>Ticker</th><th>Grade</th><th>Score</th>
+            <th>Price</th><th>ATR%</th><th>ROC 20d</th>
+          </tr></thead><tbody>"""
+        body_rows = ""
+        for r in rows:
+            g     = r.get("grade", "—")
+            s     = r.get(score_col, r.get("trade_score", 0))
+            p     = r.get("price", 0)
+            atr   = r.get("atr_pct", 0)
+            roc   = r.get("roc_20d", 0)
+            gc    = _grade_color(g)
+            sc    = _score_color(float(s))
+            roc_c = "#4ade80" if float(roc) >= 0 else "#f87171"
+            roc_s = "+" if float(roc) >= 0 else ""
+            body_rows += (
+                f"<tr>"
+                f"<td class='ticker'>{r.get('ticker','')}</td>"
+                f"<td><span class='badge' style='background:{gc}22;color:{gc};border:1px solid {gc}'>{g}</span></td>"
+                f"<td style='color:{sc};font-weight:700'>{float(s):.1f}</td>"
+                f"<td>${float(p):.2f}</td>"
+                f"<td style='color:#fb923c'>{float(atr):.2f}%</td>"
+                f"<td style='color:{roc_c}'>{roc_s}{float(roc):.1f}%</td>"
+                f"</tr>"
+            )
+        return header + body_rows + "</tbody></table>"
+
+    n_swing = len(swing_rows)
+    n_port  = len(portfolio_rows)
+
+    swing_html = f"""
+    <h3 style="color:#60a5fa;font-size:15px;margin:20px 0 8px">
+      Swing / Momentum &nbsp;
+      <span style="font-size:12px;color:#94a3b8">ranked by swing score</span>
+    </h3>
+    {_table(swing_rows, "swing_score")}
+    """
+
+    port_html = f"""
+    <h3 style="color:#a78bfa;font-size:15px;margin:20px 0 8px">
+      Hybrid / Portfolio &nbsp;
+      <span style="font-size:12px;color:#94a3b8">ranked by trade score</span>
+    </h3>
+    {_table(portfolio_rows, "trade_score")}
+    """
+
+    body = f"""
+    <span class="badge buy">NEW SIGNALS</span>
+    <div class="metric-row" style="margin-top:16px">
+      <div class="metric">
+        <div class="label">Swing Picks</div>
+        <div class="value" style="color:#60a5fa">{n_swing}</div>
+      </div>
+      <div class="metric">
+        <div class="label">Portfolio Picks</div>
+        <div class="value" style="color:#a78bfa">{n_port}</div>
+      </div>
+      <div class="metric">
+        <div class="label">Min Score</div>
+        <div class="value" style="color:#94a3b8">{min_score:.0f}</div>
+      </div>
+      <div class="metric">
+        <div class="label">Date</div>
+        <div class="value" style="font-size:14px">{today}</div>
+      </div>
+    </div>
+    {swing_html}
+    {port_html}
+    <p class="muted" style="margin-top:16px">
+      To execute: <code>python run_ibkr_stocks.py --strategy scorer --execute</code>
+      &nbsp;·&nbsp; IBKR live prices required &nbsp;·&nbsp; Interactive confirmation required
+    </p>
+    """
+
+    tickers_preview = ", ".join(
+        [r["ticker"] for r in (swing_rows + portfolio_rows)[:4]]
+    )
+    subject = (
+        f"ATOS Scorer — {n_swing} swing + {n_port} portfolio signals: "
+        f"{tickers_preview} [{today}]"
+    )
+    return _send(subject, _wrap("US 500 Scoring Engine — Buy Signals", body))

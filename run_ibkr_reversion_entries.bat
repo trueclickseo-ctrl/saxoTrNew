@@ -7,4 +7,4 @@ REM
 REM Watchdog key: "IBKR Reversion Entries" -> max_log_age_hours=26
 
 cd /d E:\SaxoTrNew\SaxoTrNew
-python run_ibkr_stocks.py --strategy reversion
+python run_ibkr_stocks.py --strategy reversion --execute --auto

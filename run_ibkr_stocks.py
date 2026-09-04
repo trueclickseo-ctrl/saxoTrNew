@@ -9,6 +9,10 @@ Strategies (signal generation from Yahoo Finance — no Saxo):
   intraday   Intraday reversion variant (US market hours only)
   signals    4 US Signals strategies: SMA Crossover, RSI Reversal, Momentum,
              Ensemble — $2k/slot, max 7 slots each (28 slots across 4 strategies)
+  scorer     ATOS US 500 Scoring Engine — scores 491 stocks, buys top-ranked
+             candidates split by type: swing ($20k, 8 slots, 6% stop) and
+             portfolio ($30k, 10 slots, 8% stop).  --exits closes positions
+             whose score dropped below the minimum on rescan.
 
 NO automatic / unattended execution. Every trade requires an interactive 'y'.
 Claude never runs --execute or places IBKR trades.
@@ -25,6 +29,9 @@ Usage:
     python run_ibkr_stocks.py --strategy intraday           # intraday scan dry-run
     python run_ibkr_stocks.py --strategy signals            # 4 signals strategies dry-run
     python run_ibkr_stocks.py --strategy signals --exits    # signals exit check
+    python run_ibkr_stocks.py --strategy scorer             # scorer entries dry-run
+    python run_ibkr_stocks.py --strategy scorer --exits     # scorer exit check (rescan)
+    python run_ibkr_stocks.py --strategy all --execute --auto  # run ALL strategies, no prompts
     python run_ibkr_stocks.py --execute                     # place orders (confirm each)
     python run_ibkr_stocks.py --positions                   # show IBKR positions
     python run_ibkr_stocks.py --info                        # account summary
@@ -141,13 +148,16 @@ def main() -> None:
     cfg = _load_config()
 
     parser = argparse.ArgumentParser(description="IBKR stocks sleeve — all ATOS strategies")
-    parser.add_argument("--strategy",    choices=["blend", "reversion", "intraday", "signals"],
+    parser.add_argument("--strategy",
+                        choices=["blend", "reversion", "intraday", "signals", "scorer", "all"],
                         default="blend",
-                        help="Which strategy to run (default: blend)")
+                        help="Which strategy to run (default: blend); 'all' runs every strategy")
     parser.add_argument("--exits",       action="store_true",
                         help="Check exits for the reversion strategy (ignored for blend)")
     parser.add_argument("--execute",     action="store_true",
                         help="Place orders interactively (default: dry-run)")
+    parser.add_argument("--auto",        action="store_true",
+                        help="Skip y/N prompts for scorer on paper accounts only")
     parser.add_argument("--paper",       action="store_true",
                         help="Force paper port 4002 (default if config paper=true)")
     parser.add_argument("--live",        action="store_true",
@@ -203,17 +213,18 @@ def main() -> None:
     pre_candidates = None   # reversion / intraday
     pre_indicators = None   # reversion exits
     pre_feat_data  = None   # signals (all 4 strategies)
+    pre_scorer     = None   # scorer entries + exits
 
     needs_signal = (
         not args.positions and not args.info and
         not args.dashboard and not args.trail_stops
     )
     if needs_signal:
-        if args.strategy == "blend":
+        if args.strategy in ("blend", "all"):
             print("\n  Pre-generating US Blend signal (Yahoo Finance)...")
             pre_signal = sig.blend_targets()
 
-        elif args.strategy == "reversion":
+        if args.strategy in ("reversion", "all"):
             if args.exits:
                 from ibkr_module import ibkr_state as _st
                 open_syms = [p["symbol"] for p in _st.get_open_positions("reversion")]
@@ -222,16 +233,16 @@ def main() -> None:
                           f"{len(open_syms)} open position(s)...")
                     pre_indicators = sig.reversion_exit_indicators(open_syms)
                 else:
-                    print("\n  No open reversion positions — skipping signal fetch.")
+                    print("\n  No open reversion positions — skipping exit fetch.")
             else:
                 print("\n  Pre-generating US Reversion candidates (Yahoo Finance)...")
                 pre_candidates = sig.reversion_candidates()
 
-        elif args.strategy == "intraday":
+        if args.strategy in ("intraday", "all"):
             print("\n  Pre-generating intraday reversion candidates (Yahoo Finance)...")
             pre_candidates = sig.intraday_candidates()
 
-        elif args.strategy == "signals":
+        if args.strategy in ("signals", "all"):
             if args.exits:
                 from ibkr_module import ibkr_state as _st
                 from atos.us_signals import ALL_SIGNAL_STRATEGY_NAMES
@@ -242,10 +253,49 @@ def main() -> None:
                           f"{len(open_syms)} position(s)...")
                     pre_feat_data = sig.us_signals_exit_data(open_syms)
                 else:
-                    print("\n  No open us_signals positions — skipping signal fetch.")
+                    print("\n  No open us_signals positions — skipping exit fetch.")
             else:
                 print("\n  Pre-generating US Signals data (Yahoo Finance)...")
                 pre_feat_data = sig.us_signals_data()
+
+        elif args.strategy in ("scorer", "all"):
+            scorer_cfg   = cfg.get("strategies", {}).get("scorer", {})
+            sw_max       = int(scorer_cfg.get("swing",     {}).get("max_positions", 8))
+            po_max       = int(scorer_cfg.get("portfolio", {}).get("max_positions", 10))
+            sw_min_score = float(scorer_cfg.get("swing",     {}).get("min_score", 65.0))
+            po_min_score = float(scorer_cfg.get("portfolio", {}).get("min_score", 65.0))
+            from ibkr_module.ibkr_scorer import run_scan
+            label = "exit rescan" if args.exits else "entry scan"
+            print(f"\n  Pre-generating scorer results ({label}, Yahoo Finance)...")
+            pre_scorer = run_scan(
+                n_swing=sw_max,
+                n_portfolio=po_max,
+                min_score=min(sw_min_score, po_min_score),
+                verbose=True,
+            )
+            # Email new signals as soon as the scan is done (before IBKR connect)
+            if not args.exits and pre_scorer:
+                _sw = pre_scorer.get("swing")
+                _po = pre_scorer.get("portfolio")
+                if (_sw is not None and len(_sw) > 0) or (_po is not None and len(_po) > 0):
+                    try:
+                        from atos.notifier import notify_scorer_signals
+
+                        def _prep_email(df):
+                            if df is None or df.empty:
+                                return df
+                            out = df.copy()
+                            if "setup" in out.columns and "grade" not in out.columns:
+                                out = out.rename(columns={"setup": "grade"})
+                            return out
+
+                        notify_scorer_signals(
+                            swing_df=_prep_email(_sw),
+                            portfolio_df=_prep_email(_po),
+                            min_score=min(sw_min_score, po_min_score),
+                        )
+                    except Exception as _e:
+                        print(f"  [notifier] scorer email error: {_e}")
 
     # ── Connect to IB Gateway (short window now) ──────────────────────────────
     mode_label = "PAPER" if is_paper else "LIVE"
@@ -323,6 +373,58 @@ def main() -> None:
             else:
                 ex.run_us_signals_entries(ib, account_id, cfg, dry_run=dry_run,
                                            feat_data=pre_feat_data)
+
+        elif args.strategy == "scorer":
+            dry_run = not args.execute
+            if dry_run:
+                print("  [DRY RUN] pass --execute to place orders.\n")
+            if args.exits:
+                ex.run_scorer_exits(ib, account_id, cfg, dry_run=dry_run,
+                                    scorer_results=pre_scorer)
+            else:
+                ex.run_scorer_entries(ib, account_id, cfg, dry_run=dry_run,
+                                      scorer_results=pre_scorer,
+                                      auto=args.auto)
+
+        elif args.strategy == "all":
+            dry_run = not args.execute
+            if dry_run:
+                print("  [DRY RUN] pass --execute to place orders.\n")
+            print("\n" + "="*60)
+            print("  RUNNING ALL STRATEGIES")
+            print("="*60)
+
+            print("\n── Scorer ──────────────────────────────────────────────────")
+            if args.exits:
+                ex.run_scorer_exits(ib, account_id, cfg, dry_run=dry_run,
+                                    scorer_results=pre_scorer)
+            else:
+                ex.run_scorer_entries(ib, account_id, cfg, dry_run=dry_run,
+                                      scorer_results=pre_scorer,
+                                      auto=args.auto)
+
+            print("\n── US Blend ────────────────────────────────────────────────")
+            ex.run_rebalance(ib, account_id, cfg, dry_run=dry_run, signal=pre_signal)
+
+            print("\n── US Reversion ────────────────────────────────────────────")
+            if args.exits:
+                ex.run_reversion_exits(ib, account_id, cfg, dry_run=dry_run,
+                                       indicators=pre_indicators)
+            else:
+                ex.run_reversion_entries(ib, account_id, cfg, dry_run=dry_run,
+                                         intraday=False, candidates=pre_candidates)
+
+            print("\n── US Signals ──────────────────────────────────────────────")
+            if args.exits:
+                ex.run_us_signals_exits(ib, account_id, cfg, dry_run=dry_run,
+                                        feat_data=pre_feat_data)
+            else:
+                ex.run_us_signals_entries(ib, account_id, cfg, dry_run=dry_run,
+                                          feat_data=pre_feat_data)
+
+            print("\n" + "="*60)
+            print("  ALL STRATEGIES COMPLETE")
+            print("="*60)
 
     finally:
         ic.disconnect(ib)

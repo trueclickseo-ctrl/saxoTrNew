@@ -31,6 +31,12 @@ except ImportError:
 
 def connect(host: str, port: int, client_id: int = 10) -> IB:
     """Connect to IB Gateway / TWS. Returns connected IB instance."""
+    import logging
+    # Suppress noisy ib_insync warnings before connecting (completed orders timeout,
+    # market-data errors 10089/10168/300, etc.) — expected on paper accounts.
+    for _log in ("ib_insync", "ib_insync.ib", "ib_insync.wrapper",
+                 "ib_insync.client", "ib_insync.ticker"):
+        logging.getLogger(_log).setLevel(logging.CRITICAL)
     ib = IB()
     ib.connect(host, port, clientId=client_id, readonly=False)
     return ib
@@ -177,47 +183,70 @@ def get_prices(ib: IB, symbols: list[str]) -> dict[str, float]:
     If all IBKR attempts return 0/nan (common on paper accounts without live
     market-data subscriptions), falls back to Yahoo Finance daily close prices
     via ibkr_signals.yahoo_prices() — uses the 8-hour disk cache when available.
+
+    Error 10168 (no subscription) and Error 300 (cancel-before-subscribe race)
+    are suppressed silently — they are expected on paper accounts and the Yahoo
+    fallback handles the missing prices.
     """
     import math
 
     if not symbols:
         return {}
 
-    contracts = [Stock(s, "SMART", "USD") for s in symbols]
+    # Suppress noisy but harmless paper-account market-data errors.
+    _SUPPRESS = {10089, 10168, 10182, 300, 354}
+
+    def _err_suppress(reqId, errorCode, errorString, contract):
+        if errorCode not in _SUPPRESS:
+            print(f"Error {errorCode}, reqId {reqId}: {errorString}")
+
+    ib.errorEvent += _err_suppress
+
     try:
-        ib.qualifyContracts(*contracts)
-    except Exception:
-        pass
+        contracts = [Stock(s, "SMART", "USD") for s in symbols]
+        try:
+            ib.qualifyContracts(*contracts)
+        except Exception:
+            pass
 
-    _BATCH = 50  # IBKR paper accounts cap concurrent ticker subscriptions
+        _BATCH = 50  # IBKR paper accounts cap concurrent ticker subscriptions
 
-    def _fetch(market_data_type: int) -> dict[str, float]:
-        ib.reqMarketDataType(market_data_type)
-        out = {}
-        pairs = list(zip(symbols, contracts))
-        for i in range(0, len(pairs), _BATCH):
-            chunk = pairs[i:i + _BATCH]
-            chunk_tickers = [ib.reqMktData(c, "", False, False) for _, c in chunk]
-            ib.sleep(3.0)
-            for (sym, contract), ticker in zip(chunk, chunk_tickers):
-                raw = ticker.last or ticker.close
-                if raw and not math.isnan(float(raw)) and float(raw) > 0:
-                    out[sym] = float(raw)
-                else:
-                    out[sym] = 0.0
-                ib.cancelMktData(contract)
-        return out
+        def _fetch(market_data_type: int) -> dict[str, float]:
+            ib.reqMarketDataType(market_data_type)
+            out = {}
+            pairs = list(zip(symbols, contracts))
+            for i in range(0, len(pairs), _BATCH):
+                chunk = pairs[i:i + _BATCH]
+                chunk_tickers = [ib.reqMktData(c, "", False, False) for _, c in chunk]
+                ib.sleep(3.0)
+                for (sym, contract), ticker in zip(chunk, chunk_tickers):
+                    raw = ticker.last or ticker.close
+                    if raw and not math.isnan(float(raw)) and float(raw) > 0:
+                        out[sym] = float(raw)
+                    else:
+                        out[sym] = 0.0
+                    try:
+                        ib.cancelMktData(contract)
+                    except Exception:
+                        pass
+            return out
 
-    result = _fetch(1)  # real-time
-    if _prices_are_empty(result):
-        result = _fetch(3)  # delayed 15-min
-    if _prices_are_empty(result):
-        result = _fetch(4)  # delayed frozen
+        result = _fetch(1)  # real-time
+        if _prices_are_empty(result):
+            result = _fetch(3)  # delayed 15-min
+        if _prices_are_empty(result):
+            result = _fetch(4)  # delayed frozen
 
-    if _prices_are_empty(result):
-        print("  [prices] IBKR returned no market data (outside hours / no subscription).")
+        if _prices_are_empty(result):
+            print("  [prices] IBKR returned no market data — using Yahoo fallback.")
 
-    return result
+        return result
+
+    finally:
+        try:
+            ib.errorEvent -= _err_suppress
+        except Exception:
+            pass
 
 
 def abs_price(price: float) -> float:
@@ -254,7 +283,7 @@ def place_market_order(ib: IB, account_id: str, symbol: str,
     """Place a market order. Returns the Trade object."""
     contract = _stock_contract(symbol)
     ib.qualifyContracts(contract)
-    order = MarketOrder(action, qty, account=account_id)
+    order = MarketOrder(action, qty, tif="DAY", account=account_id)
     trade = ib.placeOrder(contract, order)
     return trade
 

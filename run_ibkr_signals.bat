@@ -12,4 +12,4 @@ REM   "ATOS IBKR Signals Entries" -- daily 16:00 PKT (07:00 ET, pre-open)
 REM   "ATOS IBKR Signals Exits"   -- daily 09:00 PKT (00:00 ET, post-close)
 
 cd /d E:\SaxoTrNew\SaxoTrNew
-python run_ibkr_stocks.py --strategy signals %*
+python run_ibkr_stocks.py --strategy signals --execute --auto %*

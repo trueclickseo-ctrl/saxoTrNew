@@ -12,7 +12,8 @@
     "info":      14,
     "positions": 14,
     "dashboard": 15,
-    "signals":   16
+    "signals":   16,
+    "scorer":    17
   },
   "capital": {
     "budget_usd": 10000,
@@ -46,6 +47,22 @@
       "slot_usd": 2000,
       "max_per_strategy": 7,
       "min_trade_usd": 50
+    },
+    "scorer": {
+      "swing": {
+        "budget_usd": 20000,
+        "max_positions": 8,
+        "stop_pct": 0.06,
+        "min_score": 65.0,
+        "min_trade_usd": 50
+      },
+      "portfolio": {
+        "budget_usd": 30000,
+        "max_positions": 10,
+        "stop_pct": 0.08,
+        "min_score": 65.0,
+        "min_trade_usd": 50
+      }
     }
   }
 }
