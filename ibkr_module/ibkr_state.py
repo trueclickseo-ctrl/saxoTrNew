@@ -32,9 +32,18 @@ CREATE TABLE IF NOT EXISTS trades (
     trailing_high REAL,
     status        TEXT    NOT NULL DEFAULT 'PENDING',
     created_at    TEXT    NOT NULL,
-    filled_at     TEXT
+    filled_at     TEXT,
+    strategy      TEXT    NOT NULL DEFAULT 'blend'
 );
 """
+
+
+def _migrate(con: sqlite3.Connection) -> None:
+    """Add columns introduced after the initial schema — safe to re-run."""
+    try:
+        con.execute("ALTER TABLE trades ADD COLUMN strategy TEXT DEFAULT 'blend'")
+    except sqlite3.OperationalError:
+        pass  # column already exists
 
 
 @contextmanager
@@ -43,6 +52,7 @@ def _conn():
     con.row_factory = sqlite3.Row
     try:
         con.execute(_SCHEMA)
+        _migrate(con)
         con.commit()
         yield con
         con.commit()
@@ -57,12 +67,14 @@ def _now() -> str:
 # ── Write ─────────────────────────────────────────────────────────────────────
 
 def record_order(order_id: str, symbol: str, side: str,
-                 qty: int, limit_price: float | None = None) -> None:
+                 qty: int, limit_price: float | None = None,
+                 strategy: str = "blend") -> None:
     with _conn() as con:
         con.execute(
-            "INSERT INTO trades (order_id, symbol, side, qty, limit_price, status, created_at) "
-            "VALUES (?, ?, ?, ?, ?, 'PENDING', ?)",
-            (str(order_id), symbol.upper(), side.upper(), qty, limit_price, _now()),
+            "INSERT INTO trades "
+            "(order_id, symbol, side, qty, limit_price, status, created_at, strategy) "
+            "VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?)",
+            (str(order_id), symbol.upper(), side.upper(), qty, limit_price, _now(), strategy),
         )
 
 
@@ -100,13 +112,25 @@ def update_stop(symbol: str, stop_price: float,
 
 # ── Read ──────────────────────────────────────────────────────────────────────
 
-def get_open_positions() -> list[dict]:
-    """Return rows where side=BUY and status=FILLED (i.e. currently held)."""
+def get_open_positions(strategy: str | None = None) -> list[dict]:
+    """Return rows where side=BUY and status=FILLED. Optionally filter by strategy."""
     with _conn() as con:
-        rows = con.execute(
-            "SELECT * FROM trades WHERE side='BUY' AND status='FILLED' ORDER BY filled_at"
-        ).fetchall()
+        if strategy:
+            rows = con.execute(
+                "SELECT * FROM trades WHERE side='BUY' AND status='FILLED' AND strategy=? "
+                "ORDER BY filled_at",
+                (strategy,),
+            ).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT * FROM trades WHERE side='BUY' AND status='FILLED' ORDER BY filled_at"
+            ).fetchall()
     return [dict(r) for r in rows]
+
+
+def count_open(strategy: str | None = None) -> int:
+    """Count currently held positions (optionally filtered by strategy)."""
+    return len(get_open_positions(strategy))
 
 
 def get_all_trades(limit: int = 200) -> list[dict]:

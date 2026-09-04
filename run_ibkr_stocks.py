@@ -1,33 +1,31 @@
 """
 run_ibkr_stocks.py
 ------------------
-IBKR stocks sleeve — semi-automatic US Blend mirror via IB Gateway / TWS.
+IBKR stocks sleeve — all ATOS strategies via IB Gateway.
 
-Reads the US Blend signal from data/stocks_live_status.json,
-connects to IB Gateway on localhost, and manages positions.
+Strategies (all run signal generation from Yahoo Finance — no Saxo):
+  blend      US cross-sectional momentum, fortnightly rebalance (6 k budget)
+  reversion  US mean reversion, entries + exits (4 k budget, 4 max slots)
+  intraday   Intraday reversion variant (US market hours only)
 
 NO automatic / unattended execution. Every trade requires an interactive 'y'.
 Claude never runs --execute or places IBKR trades.
 
 Prerequisites:
-    pip install ib_insync
-    IB Gateway or TWS running on this machine
-    API enabled: TWS → Edit → Global Configuration → API → Settings
-      ✓ Enable ActiveX and Socket Clients  |  Socket port 7497 (paper) / 7496 (live)
-
-Credentials: IBKR_ACCOUNT_ID in .env.ibkr  (no username/password needed here —
-    TWS/IB Gateway handles auth when you log in to the desktop app)
+    pip install ib_insync yfinance
+    IB Gateway running on this machine (port 4002 paper / 4001 live)
+    API access enabled in Gateway: uncheck Read-Only API
 
 Usage:
-    python run_ibkr_stocks.py                    # dry-run: show plan, place nothing
-    python run_ibkr_stocks.py --execute          # semi-auto: confirm each trade
-    python run_ibkr_stocks.py --positions        # show current IBKR positions
-    python run_ibkr_stocks.py --info             # account summary
-    python run_ibkr_stocks.py --trail-stops      # dry-run trail-stop check
-    python run_ibkr_stocks.py --trail-stops --execute  # ratchet stops
-    python run_ibkr_stocks.py --dashboard        # live refreshing dashboard
-    python run_ibkr_stocks.py --paper            # force paper port 7497 (default from config)
-    python run_ibkr_stocks.py --live             # force live port 7496
+    python run_ibkr_stocks.py                               # blend dry-run
+    python run_ibkr_stocks.py --strategy reversion          # reversion entries dry-run
+    python run_ibkr_stocks.py --strategy reversion --exits  # check exits
+    python run_ibkr_stocks.py --strategy intraday           # intraday scan dry-run
+    python run_ibkr_stocks.py --execute                     # place orders (confirm each)
+    python run_ibkr_stocks.py --positions                   # show IBKR positions
+    python run_ibkr_stocks.py --info                        # account summary
+    python run_ibkr_stocks.py --trail-stops [--execute]     # ratchet stop-losses
+    python run_ibkr_stocks.py --dashboard                   # live dashboard
 """
 from __future__ import annotations
 
@@ -136,13 +134,18 @@ def main() -> None:
     _load_env()
     cfg = _load_config()
 
-    parser = argparse.ArgumentParser(description="IBKR stocks sleeve — US Blend mirror")
+    parser = argparse.ArgumentParser(description="IBKR stocks sleeve — all ATOS strategies")
+    parser.add_argument("--strategy",    choices=["blend", "reversion", "intraday"],
+                        default="blend",
+                        help="Which strategy to run (default: blend)")
+    parser.add_argument("--exits",       action="store_true",
+                        help="Check exits for the reversion strategy (ignored for blend)")
     parser.add_argument("--execute",     action="store_true",
                         help="Place orders interactively (default: dry-run)")
     parser.add_argument("--paper",       action="store_true",
-                        help="Force paper port 7497 (default if config paper=true)")
+                        help="Force paper port 4002 (default if config paper=true)")
     parser.add_argument("--live",        action="store_true",
-                        help="Force live port 7496")
+                        help="Force live port 4001")
     parser.add_argument("--positions",   action="store_true")
     parser.add_argument("--info",        action="store_true")
     parser.add_argument("--trail-stops", action="store_true")
@@ -207,11 +210,26 @@ def main() -> None:
         elif args.trail_stops:
             ex.trail_stops(ib, account_id, cfg, dry_run=not args.execute)
 
-        else:
+        elif args.strategy == "blend":
             dry_run = not args.execute
             if dry_run:
-                print("  [DRY RUN] Showing plan only — pass --execute to place orders.\n")
+                print("  [DRY RUN] Showing blend plan — pass --execute to place orders.\n")
             ex.run_rebalance(ib, account_id, cfg, dry_run=dry_run)
+
+        elif args.strategy == "reversion":
+            dry_run = not args.execute
+            if dry_run:
+                print("  [DRY RUN] pass --execute to place orders.\n")
+            if args.exits:
+                ex.run_reversion_exits(ib, account_id, cfg, dry_run=dry_run)
+            else:
+                ex.run_reversion_entries(ib, account_id, cfg, dry_run=dry_run, intraday=False)
+
+        elif args.strategy == "intraday":
+            dry_run = not args.execute
+            if dry_run:
+                print("  [DRY RUN] pass --execute to place orders.\n")
+            ex.run_reversion_entries(ib, account_id, cfg, dry_run=dry_run, intraday=True)
 
     finally:
         ic.disconnect(ib)
