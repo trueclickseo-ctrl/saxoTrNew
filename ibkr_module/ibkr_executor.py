@@ -121,7 +121,9 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
         print("  [RISK OFF] Signal is in defensive mode.")
 
     # TRADING RULE: execution uses IBKR live prices only — never Yahoo Finance.
-    held    = ic.get_positions(ib, account_id)
+    # Held positions come from the local DB (blend-only) so the rebalancer never
+    # sells positions that belong to another strategy (scorer, reversion, etc.).
+    held    = st.get_open_positions(strategy="blend")
     symbols = list({*targets, *[p["symbol"] for p in held]})
     prices  = ic.get_prices(ib, symbols)   # returns 0 if IBKR has no data
     ibkr_ok = not all(v == 0.0 for v in prices.values())
