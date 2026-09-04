@@ -132,6 +132,48 @@ def _fmt_price(val: float) -> str:
     return f"${val:>8,.2f}"
 
 
+def _strategy_perf() -> dict[str, dict]:
+    """Return per-strategy closed-trade stats from ibkr_stocks.db."""
+    import sqlite3
+    db_path = os.path.join(_ROOT, "data", "ibkr_stocks.db")
+    out: dict[str, dict] = {}
+    if not os.path.exists(db_path):
+        return out
+    try:
+        con = sqlite3.connect(db_path)
+        con.row_factory = sqlite3.Row
+        rows = con.execute("""
+            SELECT s.strategy,
+                   COUNT(*) AS n,
+                   SUM(CASE WHEN (s.fill_price - b.fill_price) > 0 THEN 1 ELSE 0 END) AS wins,
+                   SUM(CASE WHEN (s.fill_price - b.fill_price) > 0
+                       THEN (s.fill_price - b.fill_price) * s.qty ELSE 0 END) AS gross_profit,
+                   SUM(CASE WHEN (s.fill_price - b.fill_price) <= 0
+                       THEN ABS((s.fill_price - b.fill_price) * s.qty) ELSE 0 END) AS gross_loss,
+                   SUM((s.fill_price - b.fill_price) * s.qty) AS net_pnl
+            FROM trades s
+            JOIN trades b ON s.symbol   = b.symbol
+                          AND b.side    = 'BUY'
+                          AND b.status  = 'FILLED'
+                          AND b.strategy = s.strategy
+            WHERE s.side='SELL' AND s.status='FILLED'
+            GROUP BY s.strategy
+        """).fetchall()
+        con.close()
+        for r in rows:
+            gp = float(r["gross_profit"] or 0)
+            gl = float(r["gross_loss"] or 0)
+            out[str(r["strategy"])] = {
+                "closed": int(r["n"]),
+                "wins":   int(r["wins"]),
+                "pnl":    float(r["net_pnl"] or 0),
+                "pf":     round(gp / gl, 2) if gl else None,
+            }
+    except Exception:
+        pass
+    return out
+
+
 def render_dashboard(cfg: dict, summary: dict, account_id: str,
                      positions_by_strat: dict[str, list[dict]],
                      live_prices: dict[str, float],
@@ -225,6 +267,29 @@ def render_dashboard(cfg: dict, summary: dict, account_id: str,
     # ── Idle strategies (no positions) — one compact line ─────────────────────
     if idle_labels:
         print(f"\n  {_DIM}Idle: {' · '.join(idle_labels)}{_RST}")
+
+    # ── Strategy Performance (historical closed-trade stats) ──────────────────
+    perf = _strategy_perf()
+    any_closed = any(v.get("closed", 0) > 0 for v in perf.values())
+
+    print(f"\n  {_BOLD}── Strategy Performance{_RST}  {_DIM}(closed trades · USD){_RST}")
+    print(f"  {'Strategy':<22}  {'Open':>5}  {'Closed':>7}  {'WR%':>6}  {'PF':>5}  {'Net P&L':>11}")
+    print("  " + "─" * (_W - 2))
+    for db_key, label, _, _, _ in _STRATEGY_ROWS:
+        open_n  = len(positions_by_strat.get(db_key, []))
+        p       = perf.get(db_key, {})
+        closed  = p.get("closed", 0)
+        if closed:
+            wr_s  = f"{p['wins'] / closed * 100:.0f}%"
+            pf_s  = f"{p['pf']:.2f}" if p.get("pf") else "∞"
+            pnl_s = _color_dollar(p.get("pnl", 0.0), 11)
+        else:
+            wr_s = pf_s = "—"
+            pnl_s = f"{'—':>11}"
+        print(f"  {label:<22}  {open_n:>5}  {closed:>7}  {wr_s:>6}  {pf_s:>5}  {pnl_s}")
+
+    if not any_closed:
+        print(f"\n  {_DIM}No closed trades yet — WR/PF will populate once stops or exits trigger.{_RST}")
 
     print()
     print("  " + "─" * _W)

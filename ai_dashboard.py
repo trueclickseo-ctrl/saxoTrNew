@@ -38,11 +38,13 @@ W = "\033[0m"; BD = "\033[1m"; DM = "\033[2m"
 
 import pnl_tracker as PT
 
-AI_STOCKS_DB   = os.path.join(BASE, "data", "atos_ai.db")
-DET_STOCKS_DB  = os.path.join(BASE, "data", "atos_live.db")
-SHADOW_DEC     = os.path.join(BASE, "data", "ai_shadow_decisions.jsonl")
-BASKET_SHADOW  = os.path.join(BASE, "data", "ai_basket_shadow.jsonl")
+AI_STOCKS_DB     = os.path.join(BASE, "data", "atos_ai.db")
+DET_STOCKS_DB    = os.path.join(BASE, "data", "atos_live.db")
+IBKR_DB          = os.path.join(BASE, "data", "ibkr_stocks.db")
+SHADOW_DEC       = os.path.join(BASE, "data", "ai_shadow_decisions.jsonl")
+BASKET_SHADOW    = os.path.join(BASE, "data", "ai_basket_shadow.jsonl")
 AI_STOCKS_STATUS = os.path.join(BASE, "data", "atos_ai_stocks_status.json")
+STOCK_CARDS_LOG  = os.path.join(BASE, "data", "stock_observation_cards.jsonl")
 
 
 def _tail_jsonl(path, n=400):
@@ -97,6 +99,41 @@ def _stock_line(dbp: str) -> dict:
 
 def _pf(x) -> str:
     return f"{x:.2f}" if x else "—"
+
+
+def _ibkr_line() -> dict:
+    """Closed-trade + open-position stats from ibkr_stocks.db (USD)."""
+    if not os.path.exists(IBKR_DB):
+        return {"open": 0, "closed": 0, "pnl": 0.0, "wr": 0.0, "pf": None, "by_strategy": {}}
+    try:
+        c = sqlite3.connect(IBKR_DB); c.row_factory = sqlite3.Row
+        open_by = {str(r["strategy"]): int(r["n"]) for r in c.execute(
+            "SELECT strategy, COUNT(*) n FROM trades "
+            "WHERE side='BUY' AND status='FILLED' GROUP BY strategy"
+        ).fetchall()}
+        cl = [float(r["pnl"]) for r in c.execute("""
+            SELECT (s.fill_price - b.fill_price) * s.qty AS pnl
+            FROM trades s
+            JOIN trades b ON s.symbol    = b.symbol
+                          AND b.side     = 'BUY'
+                          AND b.status   = 'FILLED'
+                          AND b.strategy = s.strategy
+            WHERE s.side='SELL' AND s.status='FILLED'
+        """).fetchall()]
+        c.close()
+        wins = sum(1 for p in cl if p > 0)
+        gp   = sum(p for p in cl if p > 0)
+        gl   = -sum(p for p in cl if p < 0)
+        return {
+            "open":        sum(open_by.values()),
+            "closed":      len(cl),
+            "pnl":         sum(cl),
+            "wr":          wins / len(cl) * 100 if cl else 0.0,
+            "pf":          round(gp / gl, 2) if gl else None,
+            "by_strategy": open_by,
+        }
+    except Exception:
+        return {"open": 0, "closed": 0, "pnl": 0.0, "wr": 0.0, "pf": None, "by_strategy": {}}
 
 
 def _verdict(ai_pnl, det_pnl, ai_closed, det_closed) -> str:
@@ -161,6 +198,29 @@ def render() -> str:
             ch = f"{YL}re-ranked{W}" if r.get("changed") else f"{DM}kept{W}"
             L.append(f"    {DM}{str(r.get('as_of_date',''))}{W}  {r.get('det_offense')} → "
                      f"{r.get('ai_offense')}  {ch}  {DM}{(r.get('reasoning') or '')[:70]}{W}")
+
+    # ── IBKR PAPER ──────────────────────────────────────────────────────────
+    ibkr = _ibkr_line()
+    L.append("")
+    L.append(f"{BD}  IBKR PAPER{W}   {DM}(ibkr_stocks.db — paper DUR952126, USD){W}")
+    L.append(f"  {DM}{'':12}  {'Open':>5}  {'Closed':>7}  {'WR%':>6}  {'PF':>6}  {'P&L (USD)':>12}{W}")
+    L.append(f"  {'paper account':12}  {ibkr['open']:>5}  {ibkr['closed']:>7}  "
+             f"{ibkr['wr']:>6.1f}  {_pf(ibkr['pf']):>6}  {ibkr['pnl']:>12,.0f}")
+    if ibkr["by_strategy"]:
+        # Show open-position count per strategy (brief)
+        strat_parts = [f"{k}:{v}" for k, v in sorted(ibkr["by_strategy"].items()) if v > 0]
+        L.append(f"  {DM}open positions: {', '.join(strat_parts)}{W}")
+    # Count IBKR AI observation cards
+    try:
+        cards = _tail_jsonl(STOCK_CARDS_LOG, n=2000)
+        ibkr_entry = sum(1 for c in cards
+                         if c.get("account_env") == "ibkr_paper" and c.get("event") == "entry")
+        ibkr_exit  = sum(1 for c in cards
+                         if c.get("account_env") == "ibkr_paper" and c.get("event") == "exit")
+        L.append(f"  {DM}AI journal: {ibkr_entry} entry card(s)  ·  {ibkr_exit} exit card(s) "
+                 f"logged → stock_observation_cards.jsonl (feeds outcome predictor){W}")
+    except Exception:
+        pass
 
     L.append("")
     L.append(f"{DM}  Both twins are SIM paper. If the AI book is clearly ahead through a rough{W}")
