@@ -1,0 +1,247 @@
+"""
+ibkr_executor.py
+----------------
+Rebalance logic and trail-stop ratchet for the IBKR stocks sleeve.
+
+Signal source: data/stocks_live_status.json (written by atos_live_stocks.py).
+This module is READ-ONLY on that file — it never writes it.
+
+No Saxo imports. No Avanza imports.
+"""
+from __future__ import annotations
+
+import json
+import math
+import os
+from pathlib import Path
+
+from ibkr_module import ibkr_client as ic
+from ibkr_module import ibkr_state as st
+
+_ROOT = Path(__file__).parent.parent
+
+
+def _load_signal(signal_file: str) -> dict:
+    path = _ROOT / signal_file
+    if not path.exists():
+        raise FileNotFoundError(f"Signal file not found: {path}")
+    data = json.loads(path.read_text())
+    return data.get("signal", {})
+
+
+def _compute_plan(
+    targets: list[str],
+    held: list[dict],
+    prices: dict[str, float],
+    budget_usd: float,
+    max_positions: int,
+    min_trade_usd: float,
+    cash_buffer_pct: float,
+) -> tuple[list[dict], list[dict]]:
+    """Return (buys, sells) action lists."""
+    held_symbols = {p["symbol"] for p in held}
+    target_set   = set(targets[:max_positions])
+
+    # Available cash after buffer
+    usable = budget_usd * (1 - cash_buffer_pct)
+    per_slot = usable / max_positions
+
+    sells = []
+    for p in held:
+        if p["symbol"] not in target_set:
+            price = prices.get(p["symbol"], 0.0)
+            sells.append({
+                "symbol": p["symbol"],
+                "qty":    p["qty"],
+                "price":  price,
+                "value":  round(price * p["qty"], 2),
+            })
+
+    buys = []
+    for sym in targets[:max_positions]:
+        if sym in held_symbols:
+            continue
+        price = prices.get(sym, 0.0)
+        if price <= 0:
+            continue
+        qty = math.floor(per_slot / price)
+        if qty < 1:
+            continue
+        notional = round(price * qty, 2)
+        if notional < min_trade_usd:
+            continue
+        buys.append({
+            "symbol":   sym,
+            "qty":      qty,
+            "price":    price,
+            "notional": notional,
+        })
+
+    return buys, sells
+
+
+# ── Rebalance ─────────────────────────────────────────────────────────────────
+
+def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True) -> None:
+    signal = _load_signal(cfg["signal_file"])
+    targets = signal.get("targets", [])
+    if not targets:
+        print("  No targets in signal. Nothing to do.")
+        return
+
+    print(f"  Signal targets ({len(targets)}): {', '.join(targets)}")
+    if signal.get("risk_off"):
+        print("  [RISK OFF] Signal is in defensive mode.")
+
+    # Fetch live state
+    held    = ic.get_positions(ib, account_id)
+    symbols = list({*targets, *[p["symbol"] for p in held]})
+    prices  = ic.get_prices(ib, symbols)
+    cash    = ic.get_cash_balance(ib, account_id)
+    print(f"  Cash available: ${cash:,.2f}")
+
+    buys, sells = _compute_plan(
+        targets       = targets,
+        held          = held,
+        prices        = prices,
+        budget_usd    = cfg["capital"]["budget_usd"],
+        max_positions = cfg["capital"]["max_positions"],
+        min_trade_usd = cfg["capital"]["min_trade_usd"],
+        cash_buffer_pct = cfg["capital"]["cash_buffer_pct"],
+    )
+    stop_pct = cfg["risk"]["stop_pct"]
+
+    print(f"\n  HOLD  ({len(held) - len(sells)}): "
+          f"{', '.join(p['symbol'] for p in held if p['symbol'] not in {s['symbol'] for s in sells})}")
+    print(f"  SELL  ({len(sells)}): {', '.join(s['symbol'] for s in sells)}")
+    print(f"  BUY   ({len(buys)}):  {', '.join(b['symbol'] for b in buys)}")
+
+    if dry_run:
+        print("\n  [DRY RUN] No orders placed. Pass --execute to trade.\n")
+        _print_plan(buys, sells, stop_pct)
+        return
+
+    # ── Execute SELLs ─────────────────────────────────────────────────────────
+    for s in sells:
+        print(f"\n  SELL {s['qty']} {s['symbol']} @ ~${s['price']:.2f}  "
+              f"(value ~${s['value']:,.0f})")
+        confirm = input("  Confirm? [y/N]: ").strip().lower()
+        if confirm != "y":
+            print("  Skipped.")
+            continue
+
+        trade = ic.place_market_order(ib, account_id, s["symbol"], "SELL", s["qty"])
+        st.record_order(str(trade.order.orderId), s["symbol"], "SELL", s["qty"])
+        print(f"  Order placed (id={trade.order.orderId}). Waiting for fill...")
+        fill = ic.confirm_fill(ib, trade)
+        if fill is None:
+            print(f"  WARNING: fill not confirmed within timeout for {s['symbol']}.")
+            st.mark_cancelled(str(trade.order.orderId))
+        else:
+            print(f"  Filled @ ${fill:.4f}")
+            st.mark_filled(str(trade.order.orderId), fill, side="SELL")
+
+    # ── Execute BUYs ──────────────────────────────────────────────────────────
+    for b in buys:
+        stop_price = round(b["price"] * (1 - stop_pct), 2)
+        print(f"\n  BUY  {b['qty']} {b['symbol']} @ ~${b['price']:.2f}  "
+              f"notional ~${b['notional']:,.0f}  stop=${stop_price:.2f}")
+        confirm = input("  Confirm? [y/N]: ").strip().lower()
+        if confirm != "y":
+            print("  Skipped.")
+            continue
+
+        trade = ic.place_market_order(ib, account_id, b["symbol"], "BUY", b["qty"])
+        st.record_order(str(trade.order.orderId), b["symbol"], "BUY", b["qty"])
+        print(f"  Order placed (id={trade.order.orderId}). Waiting for fill...")
+        fill = ic.confirm_fill(ib, trade)
+        if fill is None:
+            print(f"  WARNING: fill not confirmed for {b['symbol']}. Skipping stop.")
+            st.mark_cancelled(str(trade.order.orderId))
+            continue
+
+        print(f"  Filled @ ${fill:.4f}")
+        st.mark_filled(str(trade.order.orderId), fill, side="BUY")
+
+        actual_stop = round(fill * (1 - stop_pct), 2)
+        stop_trade  = ic.place_stop_order(ib, account_id, b["symbol"], b["qty"], actual_stop)
+        ib.sleep(1.0)
+        st.update_stop(b["symbol"], actual_stop,
+                       str(stop_trade.order.orderId), trailing_high=fill)
+        print(f"  Stop placed @ ${actual_stop:.2f} (id={stop_trade.order.orderId})")
+
+    print("\n  Rebalance complete.")
+
+
+# ── Trail stops ───────────────────────────────────────────────────────────────
+
+def trail_stops(ib, account_id: str, cfg: dict, dry_run: bool = True) -> None:
+    stop_pct = cfg["risk"]["stop_pct"]
+    positions = st.get_open_positions()
+    if not positions:
+        print("  No open positions in ledger.")
+        return
+
+    symbols = [p["symbol"] for p in positions]
+    prices  = ic.get_prices(ib, symbols)
+    print(f"  Trail-stop check for {len(positions)} position(s) | stop_pct={stop_pct*100:.0f}%\n")
+
+    for pos in positions:
+        sym          = pos["symbol"]
+        cur_price    = prices.get(sym, 0.0)
+        cur_stop     = pos.get("stop_price") or 0.0
+        trail_high   = pos.get("trailing_high") or pos.get("fill_price") or 0.0
+        stop_order_id = pos.get("stop_order_id")
+        qty          = int(pos["qty"])
+
+        if cur_price <= 0:
+            print(f"  {sym:<8}  no price — skipped")
+            continue
+
+        new_high = max(trail_high, cur_price)
+        new_stop = round(new_high * (1 - stop_pct), 2)
+
+        if new_stop <= cur_stop:
+            print(f"  {sym:<8}  price=${cur_price:.2f}  stop=${cur_stop:.2f}  "
+                  f"high=${new_high:.2f}  → no change")
+            continue
+
+        print(f"  {sym:<8}  price=${cur_price:.2f}  stop ${cur_stop:.2f} → ${new_stop:.2f}  "
+              f"high=${new_high:.2f}")
+
+        if dry_run:
+            print(f"           [DRY RUN] would ratchet stop to ${new_stop:.2f}")
+            continue
+
+        # Cancel old stop, place new one
+        if stop_order_id:
+            open_orders = ib.openTrades()
+            old_trade   = next((t for t in open_orders
+                                if str(t.order.orderId) == str(stop_order_id)), None)
+            if old_trade:
+                ic.cancel_order(ib, old_trade)
+                ib.sleep(0.5)
+
+        new_stop_trade = ic.place_stop_order(ib, account_id, sym, qty, new_stop)
+        ib.sleep(0.5)
+        st.update_stop(sym, new_stop, str(new_stop_trade.order.orderId), new_high)
+        print(f"           → stop updated (new id={new_stop_trade.order.orderId})")
+
+    print("\n  Trail-stop pass complete.")
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _print_plan(buys: list[dict], sells: list[dict], stop_pct: float) -> None:
+    if sells:
+        print("\n  SELL plan:")
+        for s in sells:
+            print(f"    {s['symbol']:<8} qty={s['qty']}  price~${s['price']:.2f}  "
+                  f"value~${s['value']:,.0f}")
+    if buys:
+        print("\n  BUY plan:")
+        for b in buys:
+            stop = round(b["price"] * (1 - stop_pct), 2)
+            print(f"    {b['symbol']:<8} qty={b['qty']}  price~${b['price']:.2f}  "
+                  f"notional~${b['notional']:,.0f}  stop=${stop:.2f}")
+    print()

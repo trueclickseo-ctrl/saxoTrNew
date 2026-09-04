@@ -174,6 +174,8 @@ WINDOWS_TASKS = {
     # Avanza ISK trail-stops (2026-09-04) -- once-daily at 21:00 PKT, protective only
     # (ratchets stop-loss orders upward). max_log_age=26h covers one daily run + buffer.
     "Avanza Trail Stops":     ("ATOS Avanza Trail Stops",     "avanza_trail_stops.log",        30, 26),
+    # IBKR stocks trail-stops (2026-09-04) -- once-daily at 21:00 PKT, protective only.
+    "IBKR Trail Stops":       ("ATOS IBKR Trail Stops",       "ibkr_trail_stops.log",          30, 26),
     "Stocks Daily Run":       ("ATOS Daily Run",              "engine_TODAY.log",      15, 2),  # special-cased below
     # log_file fixed 2026-08-25: this was pointed at data/intraday_monitor.log,
     # a dead file only a crash traceback ever touches -- the script's real

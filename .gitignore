@@ -199,4 +199,8 @@ data/pnl_ledger.db.bak_*
 .env.avanza
 data/avanza_trades.db
 data/avanza_status.json
+
+# IBKR credentials and runtime state
+.env.ibkr
+data/ibkr_stocks.db
 data/avanza_instrument_cache.json

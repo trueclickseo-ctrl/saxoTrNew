@@ -75,11 +75,28 @@ def _load_avanza_env():
                 os.environ.setdefault(k.strip(), v.strip())
 
 
+def _exact_etf_match(hits: list[dict], ticker: str) -> dict | None:
+    """Return the hit whose title contains exactly (TICKER), flagCode=US, currency=USD.
+    Falls back to any USD/NYSE/NASDAQ hit if no perfect match."""
+    exact = [h for h in hits
+             if f"({ticker})" in h.get("title", "")
+             and h.get("flagCode", "") == "US"
+             and (h.get("price") or {}).get("currency", "") == "USD"]
+    if exact:
+        return exact[0]
+    # Fallback: USD + major US exchange
+    us_usd = [h for h in hits
+              if (h.get("price") or {}).get("currency", "") == "USD"
+              and h.get("flagCode", "") == "US"]
+    return us_usd[0] if us_usd else None
+
+
 def discover(tickers: list[str] | None = None) -> dict:
-    """Auth to Avanza, search each ticker, cache results."""
+    """Auth to Avanza, search each ticker as EXCHANGE_TRADED_FUND, cache results."""
     _load_avanza_env()
 
-    from avanza_module.avanza_client import get_client, search_stocks
+    from avanza_module.avanza_client import get_client
+    from avanza.constants import InstrumentType
 
     print("Authenticating to Avanza...")
     client = get_client()
@@ -89,34 +106,35 @@ def discover(tickers: list[str] | None = None) -> dict:
     to_check = tickers or ALL_TICKERS
 
     for ticker in to_check:
-        hits = search_stocks(client, ticker, limit=5)
-        # Find best match: exact ticker hit + USD currency
-        match = None
-        for h in hits:
-            if h.get("ticker", "").upper() == ticker:
-                if h.get("currency", "").upper() in ("USD", "SEK"):
-                    match = h
-                    break
-        if match is None and hits:
-            match = hits[0]  # take first result if no exact match
+        try:
+            hits = client.search_for_instrument(
+                InstrumentType.EXCHANGE_TRADED_FUND, ticker, limit=8
+            )
+        except Exception:
+            hits = []
+
+        match = _exact_etf_match(hits, ticker)
 
         if match:
+            ob_id = match.get("orderBookId", "")
+            name  = match.get("title", "").rsplit("(", 1)[0].strip()
+            mkt   = match.get("marketPlaceName", "")
+            ccy   = (match.get("price") or {}).get("currency", "")
             universe[ticker] = {
-                "ticker":       ticker,
-                "avanza_id":    match.get("id", ""),
-                "name":         match.get("name", ""),
-                "currency":     match.get("currency", ""),
-                "market":       match.get("market", ""),
-                "avanza_ticker": match.get("ticker", ""),
-                "available":    True,
+                "ticker":    ticker,
+                "avanza_id": ob_id,
+                "name":      name,
+                "currency":  ccy,
+                "market":    mkt,
+                "available": True,
             }
-            status = f"FOUND  id={match.get('id')}  {match.get('name','')[:40]}"
+            status = f"FOUND  id={ob_id:<10} {name[:38]}  [{mkt} {ccy}]"
         else:
             universe[ticker] = {"ticker": ticker, "available": False}
             status = "NOT FOUND"
 
         print(f"  {ticker:<8} {status}")
-        time.sleep(0.3)  # polite rate limiting
+        time.sleep(0.3)
 
     UNIVERSE_PATH.write_text(json.dumps(universe, indent=2))
     found = sum(1 for v in universe.values() if v.get("available"))

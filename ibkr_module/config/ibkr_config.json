@@ -1,0 +1,17 @@
+{
+  "paper": true,
+  "host": "127.0.0.1",
+  "port_paper": 7497,
+  "port_live": 7496,
+  "client_id": 10,
+  "capital": {
+    "budget_usd": 10000,
+    "max_positions": 8,
+    "cash_buffer_pct": 0.05,
+    "min_trade_usd": 50
+  },
+  "risk": {
+    "stop_pct": 0.08
+  },
+  "signal_file": "data/stocks_live_status.json"
+}
