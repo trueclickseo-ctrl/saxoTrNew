@@ -151,6 +151,8 @@ def main() -> None:
     parser.add_argument("--trail-stops", action="store_true")
     parser.add_argument("--dashboard",   action="store_true")
     parser.add_argument("--interval",    type=int, default=30)
+    parser.add_argument("--client-id",   type=int, default=None,
+                        help="IB Gateway client ID override (default: per-strategy from config)")
     args = parser.parse_args()
 
     if args.live and args.paper:
@@ -165,8 +167,22 @@ def main() -> None:
         port      = cfg["port_paper"]
         is_paper  = True
 
-    host      = cfg["host"]
-    client_id = cfg["client_id"]
+    host = cfg["host"]
+
+    # Per-strategy client IDs prevent "client id already in use" when strategies
+    # run simultaneously or back-to-back (IB Gateway holds a slot briefly after disconnect).
+    client_ids = cfg.get("client_ids", {})
+    if args.client_id is not None:
+        client_id = args.client_id
+    elif args.trail_stops:
+        client_id = client_ids.get("trail", cfg["client_id"])
+    elif args.info or args.positions:
+        client_id = client_ids.get("info", cfg["client_id"])
+    elif args.dashboard:
+        client_id = client_ids.get("dashboard", cfg["client_id"])
+    else:
+        client_id = client_ids.get(args.strategy, cfg["client_id"])
+
     account_id = os.environ.get("IBKR_ACCOUNT_ID", "")
 
     mode_label = "PAPER" if is_paper else "LIVE"

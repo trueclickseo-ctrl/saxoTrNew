@@ -4,6 +4,15 @@
   "port_paper": 4002,
   "port_live": 4001,
   "client_id": 10,
+  "client_ids": {
+    "blend":     10,
+    "reversion": 11,
+    "intraday":  12,
+    "trail":     13,
+    "info":      14,
+    "positions": 14,
+    "dashboard": 15
+  },
   "capital": {
     "budget_usd": 10000,
     "max_positions": 8,
