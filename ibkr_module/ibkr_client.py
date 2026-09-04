@@ -45,22 +45,78 @@ def disconnect(ib: IB) -> None:
 
 # ── Account ───────────────────────────────────────────────────────────────────
 
+def _account_tag_map(ib: IB, account_id: str) -> tuple[dict[str, str], str]:
+    """Return (tag_map, base_currency).
+
+    IBKR returns balances under two different tag schemes:
+      - Standard tags: 'TotalCashValue', 'NetLiquidation', etc.
+      - Ledger tags:   '$LEDGER-CashBalance', '$LEDGER-NetLiquidation', etc.
+        where currency=='BASE' means "in the account's base currency".
+    The base currency code (e.g. 'SEK') is found via the ledger exchange-rate
+    row: the non-BASE entry whose rate == 1.0 is the base currency itself.
+    """
+    values = ib.accountValues(account_id)
+
+    # Find real 3-letter base currency: $LEDGER-ExchangeRate where rate==1.0
+    # and currency != "BASE" identifies the base currency itself.
+    base = "USD"
+    for v in values:
+        if v.tag == "$LEDGER-ExchangeRate" and v.currency not in ("BASE", ""):
+            try:
+                if abs(float(v.value) - 1.0) < 1e-9:
+                    base = v.currency
+                    break
+            except (ValueError, TypeError):
+                pass
+    # Fallback: explicit BaseCurrency tag
+    if base == "USD":
+        for v in values:
+            if v.tag == "BaseCurrency" and v.value:
+                base = v.value
+                break
+
+    tag_map: dict[str, str] = {}
+
+    # Collect standard tags denominated in base currency or currency-agnostic
+    for v in values:
+        if v.currency in (base, ""):
+            tag_map[v.tag] = v.value
+
+    # Collect $LEDGER-* rows (currency=="BASE") and alias to standard names.
+    # Only fill in if the standard tag is absent or zero.
+    ledger_alias = {
+        "$LEDGER-CashBalance":    "TotalCashValue",
+        "$LEDGER-NetLiquidation": "NetLiquidation",
+        "$LEDGER-BuyingPower":    "BuyingPower",
+        "$LEDGER-UnrealizedPnL":  "UnrealizedPnL",
+        "$LEDGER-RealizedPnL":    "RealizedPnL",
+        "$LEDGER-ExcessLiquidity": "ExcessLiquidity",
+    }
+    for v in values:
+        if v.currency == "BASE" and v.tag in ledger_alias:
+            alias = ledger_alias[v.tag]
+            if not float(tag_map.get(alias) or 0):
+                tag_map[alias] = v.value
+
+    return tag_map, base
+
+
 def get_cash_balance(ib: IB, account_id: str) -> float:
-    """Return available USD cash (TotalCashValue tag)."""
-    for v in ib.accountValues(account_id):
-        if v.tag == "TotalCashValue" and v.currency == "USD":
-            return float(v.value)
-    return 0.0
+    """Return available cash in the account's base currency."""
+    tag_map, _ = _account_tag_map(ib, account_id)
+    return float(tag_map.get("TotalCashValue") or 0)
 
 
 def get_account_summary(ib: IB, account_id: str) -> dict:
-    tags = {v.tag: v.value for v in ib.accountValues(account_id) if v.currency in ("USD", "")}
+    tag_map, base = _account_tag_map(ib, account_id)
     return {
-        "net_liquidation": float(tags.get("NetLiquidation", 0)),
-        "cash_balance":    float(tags.get("TotalCashValue", 0)),
-        "buying_power":    float(tags.get("BuyingPower", 0)),
-        "unrealized_pnl":  float(tags.get("UnrealizedPnL", 0)),
-        "realized_pnl":    float(tags.get("RealizedPnL", 0)),
+        "net_liquidation": float(tag_map.get("NetLiquidation") or 0),
+        "cash_balance":    float(tag_map.get("TotalCashValue") or 0),
+        "buying_power":    float(tag_map.get("BuyingPower") or 0),
+        "unrealized_pnl":   float(tag_map.get("UnrealizedPnL") or 0),
+        "realized_pnl":     float(tag_map.get("RealizedPnL") or 0),
+        "excess_liquidity": float(tag_map.get("ExcessLiquidity") or 0),
+        "currency":         base,
     }
 
 
@@ -108,22 +164,61 @@ def get_price(ib: IB, symbol: str, timeout_s: float = 5.0) -> float:
     return float(delayed) if delayed and delayed > 0 else 0.0
 
 
+def _prices_are_empty(prices: dict[str, float]) -> bool:
+    """True if every price is 0, nan, or missing."""
+    import math
+    return all(not v or math.isnan(v) for v in prices.values())
+
+
 def get_prices(ib: IB, symbols: list[str]) -> dict[str, float]:
-    """Batch price fetch for a list of symbols."""
+    """Batch price fetch for a list of symbols.
+
+    Tries IBKR real-time → delayed (type 3) → delayed frozen (type 4) in order.
+    If all IBKR attempts return 0/nan (common on paper accounts without live
+    market-data subscriptions), falls back to Yahoo Finance daily close prices
+    via ibkr_signals.yahoo_prices() — uses the 8-hour disk cache when available.
+    """
+    import math
+
+    if not symbols:
+        return {}
+
     contracts = [Stock(s, "SMART", "USD") for s in symbols]
     try:
         ib.qualifyContracts(*contracts)
     except Exception:
         pass
 
-    tickers = [ib.reqMktData(c, "", False, False) for c in contracts]
-    ib.sleep(3.0)
+    def _fetch(market_data_type: int) -> dict[str, float]:
+        ib.reqMarketDataType(market_data_type)
+        tickers = [ib.reqMktData(c, "", False, False) for c in contracts]
+        ib.sleep(3.0)
+        out = {}
+        for sym, contract, ticker in zip(symbols, contracts, tickers):
+            raw = ticker.last or ticker.close
+            if raw and not math.isnan(float(raw)) and float(raw) > 0:
+                out[sym] = float(raw)
+            else:
+                out[sym] = 0.0
+            ib.cancelMktData(contract)
+        return out
 
-    result = {}
-    for sym, contract, ticker in zip(symbols, contracts, tickers):
-        price = ticker.last or ticker.close or 0.0
-        result[sym] = float(price) if price else 0.0
-        ib.cancelMktData(contract)
+    result = _fetch(1)  # real-time
+    if _prices_are_empty(result):
+        result = _fetch(3)  # delayed 15-min
+    if _prices_are_empty(result):
+        result = _fetch(4)  # delayed frozen
+
+    # Final fallback: Yahoo Finance daily close (paper account / no subscription)
+    if _prices_are_empty(result):
+        try:
+            from ibkr_module import ibkr_signals as _sig
+            yp = _sig.yahoo_prices(symbols)
+            if not _prices_are_empty(yp):
+                print("  [prices] IBKR market data unavailable — using Yahoo Finance close prices")
+                result = {s: yp.get(s, 0.0) for s in symbols}
+        except Exception:
+            pass
 
     return result
 

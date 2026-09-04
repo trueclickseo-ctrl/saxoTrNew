@@ -81,14 +81,16 @@ def cmd_positions(ib, account_id: str) -> None:
 def cmd_info(ib, account_id: str) -> None:
     from ibkr_module import ibkr_client as ic
     s = ic.get_account_summary(ib, account_id)
-    print(f"\n  IBKR Account: {account_id}")
-    print(f"  Net Liquidation : ${s['net_liquidation']:>12,.2f}")
-    print(f"  Cash Balance    : ${s['cash_balance']:>12,.2f}")
-    print(f"  Buying Power    : ${s['buying_power']:>12,.2f}")
+    ccy = s.get("currency", "USD")
+    print(f"\n  IBKR Account: {account_id}  ({ccy})")
+    print(f"  Net Liquidation  : {ccy} {s['net_liquidation']:>14,.2f}")
+    print(f"  Cash Balance     : {ccy} {s['cash_balance']:>14,.2f}")
+    print(f"  Buying Power     : {ccy} {s['buying_power']:>14,.2f}")
+    print(f"  Excess Liquidity : {ccy} {s.get('excess_liquidity', 0):>14,.2f}")
     u = s['unrealized_pnl']
     r = s['realized_pnl']
-    print(f"  Unrealized P&L  : {'+'if u>=0 else''}${u:>11,.2f}")
-    print(f"  Realized P&L    : {'+'if r>=0 else''}${r:>11,.2f}")
+    print(f"  Unrealized P&L   : {'+'if u>=0 else''}{ccy} {u:>13,.2f}")
+    print(f"  Realized P&L     : {'+'if r>=0 else''}{ccy} {r:>13,.2f}")
 
 
 def cmd_dashboard(ib, account_id: str, interval: int = 30) -> None:

@@ -149,6 +149,33 @@ def intraday_candidates(lookback_days: int = 260) -> list[dict]:
     return candidates
 
 
+def yahoo_prices(symbols: list[str]) -> dict[str, float]:
+    """Return the most-recent daily close for each symbol from Yahoo Finance.
+
+    Uses the 8-hour cache when available (covers the full 424-ticker universe).
+    Falls back to a small targeted download for symbols not in the cache.
+    Used as a fallback when IBKR market data is unavailable (paper account,
+    no live subscription, outside market hours).
+    """
+    result: dict[str, float] = {}
+    cached = _load_cache(lookback_days=260)
+    missing = []
+    for sym in symbols:
+        if cached and sym in cached:
+            close = cached[sym]["Close"].dropna()
+            if len(close):
+                result[sym] = float(close.iloc[-1])
+        else:
+            missing.append(sym)
+    if missing:
+        extra = _download(missing, lookback_days=10)
+        for sym, df in extra.items():
+            close = df["Close"].dropna()
+            if len(close):
+                result[sym] = float(close.iloc[-1])
+    return result
+
+
 def reversion_exit_indicators(symbols: list[str], lookback_days: int = 40) -> dict[str, dict]:
     """Compute RSI(14) and SMA20 for a list of open reversion positions.
     Returns {symbol: {price: float, rsi: float, sma20: float}}.
