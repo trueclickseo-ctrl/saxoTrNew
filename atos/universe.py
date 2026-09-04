@@ -33,7 +33,6 @@ SP500_TICKERS = [
     "AVGO",  # Broadcom — networking/custom AI chips
     "ORCL",  # Oracle — cloud database, compounder
     "CSCO",  # Cisco — networking, dividend, defensive
-    "INTC",  # Intel — x86 CPUs, restructuring story
     "ADBE",  # Adobe — creative software, recurring revenue
     "CRM",   # Salesforce — enterprise CRM
     "NOW",   # ServiceNow — workflow automation
