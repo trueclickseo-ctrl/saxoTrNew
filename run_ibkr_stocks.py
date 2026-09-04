@@ -3,10 +3,12 @@ run_ibkr_stocks.py
 ------------------
 IBKR stocks sleeve — all ATOS strategies via IB Gateway.
 
-Strategies (all run signal generation from Yahoo Finance — no Saxo):
-  blend      US cross-sectional momentum, fortnightly rebalance ($6k budget, 8 slots)
-  reversion  US mean reversion, entries + exits ($50k budget, 15 slots)
+Strategies (signal generation from Yahoo Finance — no Saxo):
+  blend      US cross-sectional momentum, fortnightly rebalance ($50k, 10 slots)
+  reversion  US mean reversion, entries + exits ($50k, 15 slots)
   intraday   Intraday reversion variant (US market hours only)
+  signals    4 US Signals strategies: SMA Crossover, RSI Reversal, Momentum,
+             Ensemble — $2k/slot, max 5 slots each (20 slots across 4 strategies)
 
 NO automatic / unattended execution. Every trade requires an interactive 'y'.
 Claude never runs --execute or places IBKR trades.
@@ -21,6 +23,8 @@ Usage:
     python run_ibkr_stocks.py --strategy reversion          # reversion entries dry-run
     python run_ibkr_stocks.py --strategy reversion --exits  # check exits
     python run_ibkr_stocks.py --strategy intraday           # intraday scan dry-run
+    python run_ibkr_stocks.py --strategy signals            # 4 signals strategies dry-run
+    python run_ibkr_stocks.py --strategy signals --exits    # signals exit check
     python run_ibkr_stocks.py --execute                     # place orders (confirm each)
     python run_ibkr_stocks.py --positions                   # show IBKR positions
     python run_ibkr_stocks.py --info                        # account summary
@@ -137,7 +141,7 @@ def main() -> None:
     cfg = _load_config()
 
     parser = argparse.ArgumentParser(description="IBKR stocks sleeve — all ATOS strategies")
-    parser.add_argument("--strategy",    choices=["blend", "reversion", "intraday"],
+    parser.add_argument("--strategy",    choices=["blend", "reversion", "intraday", "signals"],
                         default="blend",
                         help="Which strategy to run (default: blend)")
     parser.add_argument("--exits",       action="store_true",
@@ -177,7 +181,7 @@ def main() -> None:
     if args.client_id is not None:
         client_id = args.client_id
     elif args.trail_stops:
-        client_id = client_ids.get("trail", cfg["client_id"])
+        client_id = client_ids.get("trail",    cfg["client_id"])
     elif args.info or args.positions:
         client_id = client_ids.get("info", cfg["client_id"])
     elif args.dashboard:
@@ -198,6 +202,7 @@ def main() -> None:
     pre_signal     = None   # blend
     pre_candidates = None   # reversion / intraday
     pre_indicators = None   # reversion exits
+    pre_feat_data  = None   # signals (all 4 strategies)
 
     needs_signal = (
         not args.positions and not args.info and
@@ -225,6 +230,22 @@ def main() -> None:
         elif args.strategy == "intraday":
             print("\n  Pre-generating intraday reversion candidates (Yahoo Finance)...")
             pre_candidates = sig.intraday_candidates()
+
+        elif args.strategy == "signals":
+            if args.exits:
+                from ibkr_module import ibkr_state as _st
+                from atos.us_signals import ALL_SIGNAL_STRATEGY_NAMES
+                open_syms = [p["symbol"] for p in _st.get_open_positions()
+                             if p.get("strategy") in ALL_SIGNAL_STRATEGY_NAMES]
+                if open_syms:
+                    print(f"\n  Pre-generating US Signals exit data for "
+                          f"{len(open_syms)} position(s)...")
+                    pre_feat_data = sig.us_signals_exit_data(open_syms)
+                else:
+                    print("\n  No open us_signals positions — skipping signal fetch.")
+            else:
+                print("\n  Pre-generating US Signals data (Yahoo Finance)...")
+                pre_feat_data = sig.us_signals_data()
 
     # ── Connect to IB Gateway (short window now) ──────────────────────────────
     mode_label = "PAPER" if is_paper else "LIVE"
@@ -291,6 +312,17 @@ def main() -> None:
                 print("  [DRY RUN] pass --execute to place orders.\n")
             ex.run_reversion_entries(ib, account_id, cfg, dry_run=dry_run,
                                      intraday=True, candidates=pre_candidates)
+
+        elif args.strategy == "signals":
+            dry_run = not args.execute
+            if dry_run:
+                print("  [DRY RUN] pass --execute to place orders.\n")
+            if args.exits:
+                ex.run_us_signals_exits(ib, account_id, cfg, dry_run=dry_run,
+                                         feat_data=pre_feat_data)
+            else:
+                ex.run_us_signals_entries(ib, account_id, cfg, dry_run=dry_run,
+                                           feat_data=pre_feat_data)
 
     finally:
         ic.disconnect(ib)

@@ -187,6 +187,12 @@ WINDOWS_TASKS = {
     # IBKR blend rebalance (2026-09-04) -- fortnightly dry-run scan (logs signal, no orders).
     # Execution is manual (--execute). grace=30, max_first_run_wait=26h.
     "IBKR Blend Rebalance":    ("ATOS IBKR Blend Rebalance",    "ibkr_blend_rebalance.log",   30, 26),
+    # IBKR US Signals (2026-09-04) -- 4 strategies (SMA Crossover, RSI Reversal,
+    # US Momentum, US Ensemble). Entries: 16:00 PKT (07:00 ET, pre-open).
+    # Exits: 09:00 PKT (00:00 ET, post-close). Both dry-run only; execution manual.
+    # grace=30, max_first_run_wait=26h (daily).
+    "IBKR Signals Entries":    ("ATOS IBKR Signals Entries",    "ibkr_signals_entries.log",   30, 26),
+    "IBKR Signals Exits":      ("ATOS IBKR Signals Exits",      "ibkr_signals_exits.log",     30, 26),
     "Stocks Daily Run":       ("ATOS Daily Run",              "engine_TODAY.log",      15, 2),  # special-cased below
     # log_file fixed 2026-08-25: this was pointed at data/intraday_monitor.log,
     # a dead file only a crash traceback ever touches -- the script's real

@@ -6,6 +6,7 @@ Strategy executors for the IBKR stocks sleeve.
 Strategies:
   blend     — US cross-sectional momentum (fortnightly rebalance)
   reversion — US mean reversion (entry + exit checks, intraday variant)
+  signals   — 4 US Signals strategies (SMA Crossover, RSI Reversal, Momentum, Ensemble)
 
 Signal generation: ibkr_signals.py (Yahoo Finance only).
 No Saxo imports. No Avanza imports.
@@ -251,7 +252,8 @@ def trail_stops(ib, account_id: str, cfg: dict, dry_run: bool = True) -> None:
 
         new_stop_trade = ic.place_stop_order(ib, account_id, sym, qty, new_stop)
         ib.sleep(0.5)
-        st.update_stop(sym, new_stop, str(new_stop_trade.order.orderId), new_high)
+        st.update_stop(sym, new_stop, str(new_stop_trade.order.orderId), new_high,
+                       strategy=pos.get("strategy"))
         print(f"           → stop updated (new id={new_stop_trade.order.orderId})")
 
     print("\n  Trail-stop pass complete.")
@@ -458,6 +460,233 @@ def run_reversion_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
             st.mark_filled(str(sell_trade.order.orderId), fill, side="SELL")
 
     print("\n  Reversion exit check complete.")
+
+
+# ── US Signals entries (SMA Crossover / RSI Reversal / Momentum / Ensemble) ──
+
+def run_us_signals_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
+                            feat_data: dict | None = None) -> None:
+    """Scan all 4 US Signals strategies for BUY signals and place entries.
+
+    feat_data: pre-generated from ibkr_signals.us_signals_data(). Pass from main()
+    so the Yahoo download happens before the IBKR connection is open.
+    """
+    from atos.us_signals import (
+        get_entry_signals, compute_stop,
+        ALL_SIGNAL_STRATEGY_NAMES, MAX_POSITIONS_PER_STRATEGY,
+    )
+
+    sig_cfg      = cfg.get("strategies", {}).get("signals", {})
+    slot_usd     = float(sig_cfg.get("slot_usd",          2000))
+    max_per_str  = int(sig_cfg.get("max_per_strategy",    MAX_POSITIONS_PER_STRATEGY))
+    min_usd      = float(sig_cfg.get("min_trade_usd",     50))
+
+    if feat_data is None:
+        feat_data = sig.us_signals_data()
+
+    # Count currently open positions per (ticker, strategy) — a ticker may be
+    # held by multiple strategies simultaneously.
+    open_by_strategy: dict[str, set[str]] = {s: set() for s in ALL_SIGNAL_STRATEGY_NAMES}
+    for pos in st.get_open_positions():
+        strat = pos.get("strategy", "")
+        if strat in open_by_strategy:
+            open_by_strategy[strat].add(pos["symbol"])
+
+    print("\n  [us signals] scanning for BUY signals across 4 strategies...")
+
+    signals_found: list[dict] = []
+    for ticker, df in feat_data.items():
+        try:
+            for sig_row in get_entry_signals(ticker, df):
+                strat = sig_row["strategy_name"]
+                already_held = ticker in open_by_strategy.get(strat, set())
+                slots_full   = len(open_by_strategy.get(strat, set())) >= max_per_str
+                if not already_held and not slots_full:
+                    signals_found.append({**sig_row, "ticker": ticker, "_df": df})
+        except Exception:
+            continue
+
+    total_open = sum(len(v) for v in open_by_strategy.values())
+    print(f"  [us signals] open: "
+          + "  ".join(f"{s[:14]}: {len(open_by_strategy[s])}/{max_per_str}"
+                      for s in ALL_SIGNAL_STRATEGY_NAMES))
+    if not signals_found:
+        print("  [us signals] No new entry signals.")
+        return
+
+    print(f"  [us signals] {len(signals_found)} new signal(s) found.")
+
+    if not dry_run and not ic.is_market_open():
+        print("\n  [BLOCKED] US market is closed. Orders can only be placed "
+              "09:30–16:00 ET (14:30–21:00 UTC).")
+        return
+
+    sig_tickers  = list({s["ticker"] for s in signals_found})
+    live_prices  = ic.get_prices(ib, sig_tickers)
+    ibkr_any_ok  = any(v and v > 0 for v in live_prices.values())
+    if not ibkr_any_ok:
+        print("  [WARNING] IBKR returned no live prices. "
+              "Dry-run shows Yahoo estimates; execute is blocked.")
+
+    if not dry_run and not ibkr_any_ok:
+        print("\n  [BLOCKED] No IBKR live prices. Cannot execute without market data.")
+        return
+
+    for row in signals_found:
+        ticker = row["ticker"]
+        strat  = row["strategy_name"]
+        df     = row["_df"]
+
+        ibkr_price  = live_prices.get(ticker, 0.0)
+        ibkr_ok     = bool(ibkr_price and ibkr_price > 0)
+        yahoo_price = float(df["Close"].dropna().iloc[-1]) if "Close" in df.columns else 0.0
+
+        if dry_run:
+            price     = ibkr_price if ibkr_ok else yahoo_price
+            price_src = "IBKR" if ibkr_ok else "Yahoo est. (not for execution)"
+        else:
+            if not ibkr_ok:
+                print(f"  [BLOCKED] {ticker} ({strat}): no IBKR live price — skip")
+                continue
+            price     = ibkr_price
+            price_src = "IBKR live"
+
+        if not price or price <= 0:
+            continue
+        qty      = math.floor(slot_usd / price)
+        if qty < 1:
+            continue
+        notional = round(price * qty, 2)
+        if notional < min_usd:
+            continue
+        stop_price = compute_stop(df, price)
+
+        reason_short = (row.get("reason") or "")[:50]
+        print(f"\n  [{strat}]  BUY {ticker:<8}  conf={row.get('confidence', 0):.2f}  {reason_short}")
+        print(f"    qty={qty}  price~${price:.2f} [{price_src}]  "
+              f"notional~${notional:,.0f}  stop=${stop_price:.2f}")
+
+        if dry_run:
+            print("    [DRY RUN] would place buy + stop")
+            continue
+
+        confirm = input(f"  Confirm buy {ticker} ({strat})? [y/N]: ").strip().lower()
+        if confirm != "y":
+            print("  Skipped.")
+            continue
+
+        trade = ic.place_market_order(ib, account_id, ticker, "BUY", qty)
+        st.record_order(str(trade.order.orderId), ticker, "BUY", qty, strategy=strat)
+        print(f"  Order placed (id={trade.order.orderId}). Waiting for fill...")
+        fill = ic.confirm_fill(ib, trade)
+        if fill is None:
+            print(f"  WARNING: fill not confirmed for {ticker}.")
+            st.mark_cancelled(str(trade.order.orderId))
+            continue
+
+        print(f"  Filled @ ${fill:.4f}")
+        st.mark_filled(str(trade.order.orderId), fill, side="BUY")
+        actual_stop = compute_stop(df, fill)
+        stop_trade  = ic.place_stop_order(ib, account_id, ticker, qty, actual_stop)
+        ib.sleep(1.0)
+        st.update_stop(ticker, actual_stop, str(stop_trade.order.orderId), fill,
+                       strategy=strat)
+        print(f"  Stop placed @ ${actual_stop:.2f} (id={stop_trade.order.orderId})")
+        open_by_strategy[strat].add(ticker)
+
+    print("\n  [us signals] entry scan complete.")
+
+
+# ── US Signals exits ──────────────────────────────────────────────────────────
+
+def run_us_signals_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
+                          feat_data: dict | None = None) -> None:
+    """Check open US Signals positions for exit conditions and close if triggered.
+
+    feat_data: pre-generated from ibkr_signals.us_signals_data() or
+    ibkr_signals.us_signals_exit_data(open_symbols). Pass from main() so the
+    Yahoo download happens before the IBKR connection is open.
+    """
+    from atos.us_signals import should_exit, ALL_SIGNAL_STRATEGY_NAMES
+
+    open_pos = [p for p in st.get_open_positions()
+                if p.get("strategy") in ALL_SIGNAL_STRATEGY_NAMES]
+    if not open_pos:
+        print("  [us signals] No open us_signals positions.")
+        return
+
+    symbols = [p["symbol"] for p in open_pos]
+    if feat_data is None:
+        feat_data = sig.us_signals_exit_data(symbols)
+    else:
+        # Restrict passed full-universe data to just what's open
+        feat_data = {s: feat_data[s] for s in symbols if s in feat_data}
+
+    live_prices = {s: ic.abs_price(p)
+                   for s, p in ic.get_prices(ib, symbols).items()}
+    print(f"\n  [us signals exits] {len(open_pos)} position(s)")
+
+    for pos in open_pos:
+        sym      = pos["symbol"]
+        entry_px = float(pos.get("fill_price") or 0)
+        stop_oid = pos.get("stop_order_id")
+        qty      = int(pos["qty"])
+        strat    = pos.get("strategy", "")
+
+        df = feat_data.get(sym)
+        if df is None or df.empty:
+            print(f"  {sym:<8}  [{strat[:14]:<14}]  no data — skipped")
+            continue
+
+        cur_price = live_prices.get(sym, 0.0)
+        if not cur_price or cur_price <= 0:
+            cur_price = float(df["Close"].dropna().iloc[-1])
+
+        trade_dict = {
+            "strategy":   strat,
+            "ticker":     sym,
+            "stop_price": pos.get("stop_price") or 0,
+            "entry_date": (pos.get("filled_at") or pos.get("created_at", ""))[:10],
+        }
+        exit_flag, reason = should_exit(trade_dict, df, cur_price)
+
+        gain_pct = ((cur_price / entry_px) - 1) * 100 if entry_px > 0 else 0
+        print(f"  {sym:<8}  [{strat[:16]:<16}]  px=${cur_price:.2f}  "
+              f"entry=${entry_px:.2f}  {gain_pct:+.1f}%  "
+              f"{'→ EXIT: ' + reason if exit_flag else 'HOLD'}")
+
+        if not exit_flag:
+            continue
+
+        if dry_run:
+            print(f"    [DRY RUN] would sell {qty} {sym}")
+            continue
+
+        confirm = input(f"  Confirm EXIT {sym} ({strat})? [y/N]: ").strip().lower()
+        if confirm != "y":
+            print("  Skipped.")
+            continue
+
+        if stop_oid:
+            open_orders = ib.openTrades()
+            old = next((t for t in open_orders
+                        if str(t.order.orderId) == str(stop_oid)), None)
+            if old:
+                ic.cancel_order(ib, old)
+                ib.sleep(0.5)
+
+        sell_trade = ic.place_market_order(ib, account_id, sym, "SELL", qty)
+        st.record_order(str(sell_trade.order.orderId), sym, "SELL", qty, strategy=strat)
+        fill = ic.confirm_fill(ib, sell_trade)
+        if fill is None:
+            print(f"  WARNING: exit fill not confirmed for {sym}.")
+            st.mark_cancelled(str(sell_trade.order.orderId))
+        else:
+            pnl = (fill - entry_px) * qty
+            print(f"  Sold {qty} {sym} @ ${fill:.4f}  P&L: ${pnl:+,.2f}")
+            st.mark_filled(str(sell_trade.order.orderId), fill, side="SELL")
+
+    print("\n  [us signals] exit check complete.")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

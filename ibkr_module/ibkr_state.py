@@ -101,13 +101,22 @@ def mark_cancelled(order_id: str) -> None:
 
 
 def update_stop(symbol: str, stop_price: float,
-                stop_order_id: str, trailing_high: float) -> None:
+                stop_order_id: str, trailing_high: float,
+                strategy: str | None = None) -> None:
+    """Update stop for a filled BUY position.
+
+    strategy: when supplied, scopes the update to that strategy only (avoids
+    clobbering a different strategy's stop_order_id if the same ticker is held
+    by multiple strategies simultaneously, e.g. 'US SMA Crossover' + 'US RSI Reversal').
+    """
+    sql = ("UPDATE trades SET stop_price=?, stop_order_id=?, trailing_high=? "
+           "WHERE symbol=? AND status='FILLED' AND side='BUY'")
+    params: list = [stop_price, str(stop_order_id), trailing_high, symbol.upper()]
+    if strategy:
+        sql += " AND strategy=?"
+        params.append(strategy)
     with _conn() as con:
-        con.execute(
-            "UPDATE trades SET stop_price=?, stop_order_id=?, trailing_high=? "
-            "WHERE symbol=? AND status='FILLED' AND side='BUY'",
-            (stop_price, str(stop_order_id), trailing_high, symbol.upper()),
-        )
+        con.execute(sql, params)
 
 
 # ── Read ──────────────────────────────────────────────────────────────────────

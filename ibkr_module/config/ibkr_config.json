@@ -11,7 +11,8 @@
     "trail":     13,
     "info":      14,
     "positions": 14,
-    "dashboard": 15
+    "dashboard": 15,
+    "signals":   16
   },
   "capital": {
     "budget_usd": 10000,
@@ -39,6 +40,11 @@
       "rsi_exit": 60,
       "dip_pct_min": 0.05,
       "vol_mult": 1.5,
+      "min_trade_usd": 50
+    },
+    "signals": {
+      "slot_usd": 2000,
+      "max_per_strategy": 5,
       "min_trade_usd": 50
     }
   }

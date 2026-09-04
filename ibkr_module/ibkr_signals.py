@@ -176,6 +176,74 @@ def yahoo_prices(symbols: list[str]) -> dict[str, float]:
     return result
 
 
+def us_signals_data(lookback_days: int = 260) -> dict[str, pd.DataFrame]:
+    """Download OHLCV for the full US universe and add ATR(14) for stop calculation.
+
+    Used by the 4 US Signals strategies (SMA Crossover, RSI Reversal, Momentum,
+    Ensemble) in ibkr_executor.run_us_signals_entries/exits().
+    Shares the same 8-hour disk cache as blend/reversion downloads.
+    """
+    raw = _download(US_TICKERS, lookback_days=lookback_days)
+    print(f"  [us signals] {len(raw)}/{len(US_TICKERS)} tickers available")
+    result: dict[str, pd.DataFrame] = {}
+    for ticker, df in raw.items():
+        if len(df) < 20:
+            continue
+        df = df.copy()
+        # Compute ATR(14) for compute_stop() in us_signals.py
+        try:
+            prev_close = df["Close"].shift(1)
+            tr = pd.concat([
+                df["High"] - df["Low"],
+                (df["High"] - prev_close).abs(),
+                (df["Low"] - prev_close).abs(),
+            ], axis=1).max(axis=1)
+            df["atr"] = tr.rolling(14).mean()
+        except Exception:
+            pass
+        result[ticker] = df
+    return result
+
+
+def us_signals_exit_data(symbols: list[str], lookback_days: int = 60) -> dict[str, pd.DataFrame]:
+    """Return OHLCV + ATR for a list of open US Signals positions (exit check).
+
+    Pulls from the 8-hour universe cache first; falls back to a small download
+    for any symbol not cached.
+    """
+    if not symbols:
+        return {}
+    cached = _load_cache(lookback_days=260)
+    raw: dict[str, pd.DataFrame] = {}
+    missing = []
+    for sym in symbols:
+        if cached and sym in cached:
+            raw[sym] = cached[sym]
+        else:
+            missing.append(sym)
+    if missing:
+        raw.update(_download(missing, lookback_days=lookback_days))
+
+    result: dict[str, pd.DataFrame] = {}
+    for sym, df in raw.items():
+        if len(df) < 20:
+            continue
+        df = df.copy()
+        try:
+            prev_close = df["Close"].shift(1)
+            tr = pd.concat([
+                df["High"] - df["Low"],
+                (df["High"] - prev_close).abs(),
+                (df["Low"] - prev_close).abs(),
+            ], axis=1).max(axis=1)
+            df["atr"] = tr.rolling(14).mean()
+        except Exception:
+            pass
+        result[sym] = df
+    print(f"  [us signals exits] {len(result)}/{len(symbols)} symbols loaded")
+    return result
+
+
 def reversion_exit_indicators(symbols: list[str], lookback_days: int = 40) -> dict[str, dict]:
     """Compute RSI(14) and SMA20 for a list of open reversion positions.
     Returns {symbol: {price: float, rsi: float, sma20: float}}.
