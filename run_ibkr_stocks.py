@@ -4,8 +4,8 @@ run_ibkr_stocks.py
 IBKR stocks sleeve — all ATOS strategies via IB Gateway.
 
 Strategies (all run signal generation from Yahoo Finance — no Saxo):
-  blend      US cross-sectional momentum, fortnightly rebalance (6 k budget)
-  reversion  US mean reversion, entries + exits (4 k budget, 4 max slots)
+  blend      US cross-sectional momentum, fortnightly rebalance ($6k budget, 8 slots)
+  reversion  US mean reversion, entries + exits ($50k budget, 15 slots)
   intraday   Intraday reversion variant (US market hours only)
 
 NO automatic / unattended execution. Every trade requires an interactive 'y'.
@@ -185,8 +185,48 @@ def main() -> None:
 
     account_id = os.environ.get("IBKR_ACCOUNT_ID", "")
 
+    # ── Pre-generate Yahoo Finance signals BEFORE connecting to IB Gateway ────
+    # IB Gateway holds the clientId slot for ~30s after disconnect. If the
+    # Yahoo download (~30s for 424 tickers) happens inside the executor while
+    # the connection is open, rapid back-to-back runs hit "client id already in
+    # use" (Error 326). Pre-generating here means the connection is held for
+    # only ~3-5s (account lookup + positions + order placement).
+    from ibkr_module import ibkr_signals as sig
+
+    pre_signal     = None   # blend
+    pre_candidates = None   # reversion / intraday
+    pre_indicators = None   # reversion exits
+
+    needs_signal = (
+        not args.positions and not args.info and
+        not args.dashboard and not args.trail_stops
+    )
+    if needs_signal:
+        if args.strategy == "blend":
+            print("\n  Pre-generating US Blend signal (Yahoo Finance)...")
+            pre_signal = sig.blend_targets()
+
+        elif args.strategy == "reversion":
+            if args.exits:
+                from ibkr_module import ibkr_state as _st
+                open_syms = [p["symbol"] for p in _st.get_open_positions("reversion")]
+                if open_syms:
+                    print(f"\n  Pre-generating exit indicators for "
+                          f"{len(open_syms)} open position(s)...")
+                    pre_indicators = sig.reversion_exit_indicators(open_syms)
+                else:
+                    print("\n  No open reversion positions — skipping signal fetch.")
+            else:
+                print("\n  Pre-generating US Reversion candidates (Yahoo Finance)...")
+                pre_candidates = sig.reversion_candidates()
+
+        elif args.strategy == "intraday":
+            print("\n  Pre-generating intraday reversion candidates (Yahoo Finance)...")
+            pre_candidates = sig.intraday_candidates()
+
+    # ── Connect to IB Gateway (short window now) ──────────────────────────────
     mode_label = "PAPER" if is_paper else "LIVE"
-    print(f"  Connecting to IB Gateway [{mode_label}] {host}:{port} clientId={client_id}...")
+    print(f"\n  Connecting to IB Gateway [{mode_label}] {host}:{port} clientId={client_id}...")
 
     from ibkr_module import ibkr_client as ic
     from ibkr_module import ibkr_executor as ex
@@ -230,22 +270,25 @@ def main() -> None:
             dry_run = not args.execute
             if dry_run:
                 print("  [DRY RUN] Showing blend plan — pass --execute to place orders.\n")
-            ex.run_rebalance(ib, account_id, cfg, dry_run=dry_run)
+            ex.run_rebalance(ib, account_id, cfg, dry_run=dry_run, signal=pre_signal)
 
         elif args.strategy == "reversion":
             dry_run = not args.execute
             if dry_run:
                 print("  [DRY RUN] pass --execute to place orders.\n")
             if args.exits:
-                ex.run_reversion_exits(ib, account_id, cfg, dry_run=dry_run)
+                ex.run_reversion_exits(ib, account_id, cfg, dry_run=dry_run,
+                                       indicators=pre_indicators)
             else:
-                ex.run_reversion_entries(ib, account_id, cfg, dry_run=dry_run, intraday=False)
+                ex.run_reversion_entries(ib, account_id, cfg, dry_run=dry_run,
+                                         intraday=False, candidates=pre_candidates)
 
         elif args.strategy == "intraday":
             dry_run = not args.execute
             if dry_run:
                 print("  [DRY RUN] pass --execute to place orders.\n")
-            ex.run_reversion_entries(ib, account_id, cfg, dry_run=dry_run, intraday=True)
+            ex.run_reversion_entries(ib, account_id, cfg, dry_run=dry_run,
+                                     intraday=True, candidates=pre_candidates)
 
     finally:
         ic.disconnect(ib)

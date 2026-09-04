@@ -184,6 +184,9 @@ WINDOWS_TASKS = {
     # IBKR intraday reversion (2026-09-04) -- 5x/day during US session (5-min bars).
     # Dry-run signal scan; added to INTRADAY_REPEATING_TASKS. grace=20, max_log_age=2h.
     "IBKR Intraday Reversion": ("ATOS IBKR Intraday Reversion", "ibkr_intraday.log",          20, 2),
+    # IBKR blend rebalance (2026-09-04) -- fortnightly dry-run scan (logs signal, no orders).
+    # Execution is manual (--execute). grace=30, max_first_run_wait=26h.
+    "IBKR Blend Rebalance":    ("ATOS IBKR Blend Rebalance",    "ibkr_blend_rebalance.log",   30, 26),
     "Stocks Daily Run":       ("ATOS Daily Run",              "engine_TODAY.log",      15, 2),  # special-cased below
     # log_file fixed 2026-08-25: this was pointed at data/intraday_monitor.log,
     # a dead file only a crash traceback ever touches -- the script's real

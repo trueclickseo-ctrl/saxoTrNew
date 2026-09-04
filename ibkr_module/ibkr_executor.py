@@ -80,9 +80,14 @@ def _compute_plan(
 
 # ── US Blend rebalance ────────────────────────────────────────────────────────
 
-def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True) -> None:
+def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
+                  signal: dict | None = None) -> None:
     """US Blend cross-sectional momentum rebalance.
-    Generates its own signal via ibkr_signals.blend_targets() (Yahoo Finance).
+
+    signal: pre-generated result from ibkr_signals.blend_targets().
+    If None, generated here (keeps older call sites working but holds
+    the IBKR connection open during the ~30s Yahoo Finance download).
+    Prefer passing signal from main() so the connection is brief.
     """
     blend_cfg   = cfg.get("strategies", {}).get("blend", cfg["capital"])
     budget_usd  = blend_cfg.get("budget_usd",   cfg["capital"]["budget_usd"])
@@ -91,8 +96,9 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True) -> None:
     buf_pct     = cfg["capital"]["cash_buffer_pct"]
     stop_pct    = blend_cfg.get("stop_pct", cfg["risk"]["stop_pct"])
 
-    print("\n  Generating US Blend signal (Yahoo Finance)...")
-    signal  = sig.blend_targets()
+    if signal is None:
+        print("\n  Generating US Blend signal (Yahoo Finance)...")
+        signal = sig.blend_targets()
     targets = signal.get("targets", [])
     if not targets:
         print(f"  No targets in signal ({signal.get('reason', '')}). Nothing to do.")
@@ -241,10 +247,15 @@ def trail_stops(ib, account_id: str, cfg: dict, dry_run: bool = True) -> None:
 # ── US Reversion entries ───────────────────────────────────────────────────────
 
 def run_reversion_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
-                          intraday: bool = False) -> None:
+                          intraday: bool = False,
+                          candidates: list | None = None) -> None:
     """Scan for US Reversion entry signals and buy new slots.
 
     intraday=True uses 5-min yfinance bars (US market hours only).
+    candidates: pre-generated list from ibkr_signals.reversion_candidates() /
+      ibkr_signals.intraday_candidates(). If None, generated here (holds the
+      IBKR connection open during the Yahoo Finance download). Prefer passing
+      from main() so the connection is held for seconds, not minutes.
     """
     rev_cfg   = cfg["strategies"]["reversion"]
     max_slots = rev_cfg["max_slots"]
@@ -263,7 +274,8 @@ def run_reversion_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
         print("  All reversion slots full.")
         return
 
-    candidates = sig.intraday_candidates() if intraday else sig.reversion_candidates()
+    if candidates is None:
+        candidates = sig.intraday_candidates() if intraday else sig.reversion_candidates()
     new_cands  = [c for c in candidates if c["ticker"] not in open_syms]
 
     if not new_cands:
@@ -320,8 +332,14 @@ def run_reversion_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
 
 # ── US Reversion exits ────────────────────────────────────────────────────────
 
-def run_reversion_exits(ib, account_id: str, cfg: dict, dry_run: bool = True) -> None:
-    """Check open reversion positions for exit conditions and close if triggered."""
+def run_reversion_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
+                        indicators: dict | None = None) -> None:
+    """Check open reversion positions for exit conditions and close if triggered.
+
+    indicators: pre-generated {symbol: {price, rsi, sma20}} from
+      ibkr_signals.reversion_exit_indicators(symbols). If None, generated here.
+      Prefer passing from main() so the connection is held for seconds, not minutes.
+    """
     from atos import us_reversion as _rev
 
     rev_cfg = cfg["strategies"]["reversion"]
@@ -332,8 +350,9 @@ def run_reversion_exits(ib, account_id: str, cfg: dict, dry_run: bool = True) ->
         print("  No open reversion positions.")
         return
 
-    symbols    = [p["symbol"] for p in open_pos]
-    indicators = sig.reversion_exit_indicators(symbols)
+    symbols = [p["symbol"] for p in open_pos]
+    if indicators is None:
+        indicators = sig.reversion_exit_indicators(symbols)
     ibkr_prices = ic.get_prices(ib, symbols)
     today      = datetime.date.today()
 

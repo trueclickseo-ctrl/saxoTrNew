@@ -24,8 +24,8 @@
   },
   "strategies": {
     "blend": {
-      "budget_usd": 6000,
-      "max_positions": 8,
+      "budget_usd": 50000,
+      "max_positions": 10,
       "stop_pct": 0.08,
       "rebal_days": 14,
       "min_trade_usd": 50
