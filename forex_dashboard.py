@@ -36,7 +36,8 @@ _UNIVERSE_BY_SYMBOL = {p["symbol"]: p for p in _UNIVERSE_PAIRS}
 try:
     from forex.runner import SIM_ACTIVE_STRATEGIES as _SIM_ROSTER
 except Exception:
-    _SIM_ROSTER = ["rsi", "rsi_trend", "ema_trend", "bb_quality", "zscore_quality"]
+    _SIM_ROSTER = ["rsi", "rsi_trend", "rsi_atr", "ema_trend",
+                   "bb_quality", "bb_quality_hv", "zscore_quality", "zscore_quality_tb"]
 
 # 2026-09-03: the forex P&L view was reset to the roster era. pnl_tracker's
 # aggregation reads only count trades closed on/after this date (rows are
@@ -180,6 +181,7 @@ STRAT_COL = {
     "supertrend": "\033[38;5;208m",   # orange
     "zscore":     "\033[38;5;147m",   # lavender
     "zscore_quality":             "\033[38;5;141m",   # deeper lavender (~zscore, non-directional-gate A/B, 2026-09-02)
+    "zscore_quality_tb":          "\033[38;5;135m",   # violet         (~zscore_quality, TRENDING_BULLISH gate, 2026-09-04)
     "ml":         "\033[38;5;119m",   # lime
     "london_breakout": "\033[38;5;214m",   # amber — day trading book
     "cnn_lstm":   "\033[38;5;135m",   # purple
@@ -197,6 +199,9 @@ STRAT_COL = {
     "rsi_trend":                  "\033[38;5;207m",   # magenta-pink (~rsi, regime-gated A/B, 2026-09-02)
     "advanced_bb_master":         "\033[38;5;229m",   # pale yellow  (~bb)
     "bb_quality":                 "\033[38;5;222m",   # gold         (~bb, non-directional-gate A/B, 2026-09-02)
+    "bb_quality_hv":              "\033[38;5;214m",   # orange-gold  (~bb_quality, HIGH_VOLATILITY gate, 2026-09-04)
+    "rsi_atr":                    "\033[38;5;204m",   # salmon-pink  (~rsi, ATR-pctile entry gate, 2026-09-03)
+    "donchian_ai":                "\033[38;5;114m",   # pale green   (~donchian, AI quality filters, 2026-09-03)
     "advanced_pullback_master":   "\033[38;5;75m",    # light blue   (~pullback)
     "advanced_ml":                "\033[38;5;156m",   # pale green   (~ml)
     "advanced_cnn_lstm_master":   "\033[38;5;177m",   # light purple (~cnn_lstm)
@@ -326,6 +331,10 @@ STRAT_LABELS_ALL = {
     "rsi_trend":                  "RSI Trend (A/B)",   # 2026-09-02: rsi + regime entry gate. Distinct from "RSI" (core) and "RSI2 (A/B)".
     "advanced_bb_master":         "BB Master (A/B)",
     "bb_quality":                 "BB Qual (A/B)",   # 2026-09-02: bb + non-directional-market gate
+    "bb_quality_hv":              "BB Qual HV (A/B)",  # 2026-09-04: bb_quality + HIGH_VOLATILITY regime gate
+    "rsi_atr":                    "RSI ATR (A/B)",     # 2026-09-03: rsi + atr_pctile>0.66 entry gate
+    "zscore_quality_tb":          "ZS Qual TB (A/B)",  # 2026-09-04: zscore_quality + TRENDING_BULLISH regime gate
+    "donchian_ai":                "Don AI (A/B)",      # 2026-09-03: donchian + AI-learnable DI/regime quality filters
     "advanced_pullback_master":   "Pullback Mstr (A/B)",
     "advanced_ml":                "ML Adv (A/B)",
     "advanced_cnn_lstm_master":   "CNN-LSTM Mstr (A/B)",
@@ -983,13 +992,17 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     OR  = "\033[38;5;208m"
     LV  = "\033[38;5;147m"
     LM  = "\033[38;5;119m"
-    # ── Strategy legend (2026-09-02: the 5-strategy SIM roster only) ──────
+    # ── Strategy legend (8-strategy SIM roster) ─────────────────────────
     _leg = {
-        "rsi":            f"{STRAT_COL.get('rsi', MG)}{BD}■ RSI{W}  RSI(2) pullback, unfiltered (day-1 baseline + LIVE SEK)",
-        "rsi_trend":      f"{STRAT_COL['rsi_trend']}{BD}■ RSI Trend{W}  RSI(2) + regime gate (Buy=TREND_BULL / Sell=TREND_BEAR)",
-        "ema_trend":      f"{STRAT_COL['ema_trend']}{BD}■ EMA Trend{W}  EMA(5/30) + fresh-crossover(≤3b) + |+DI−−DI|≥15",
-        "bb_quality":     f"{STRAT_COL['bb_quality']}{BD}■ BB Qual{W}  BB(20,2) fade + non-directional gate |+DI−−DI|≤14",
-        "zscore_quality": f"{STRAT_COL['zscore_quality']}{BD}■ ZS Qual{W}  z-score ±2σ fade + non-directional gate |+DI−−DI|≤14",
+        "rsi":              f"{STRAT_COL.get('rsi', MG)}{BD}■ RSI{W}  RSI(2) pullback, unfiltered (day-1 baseline + LIVE SEK)",
+        "rsi_trend":        f"{STRAT_COL['rsi_trend']}{BD}■ RSI Trend{W}  RSI(2) + regime gate (TREND_BULL/BEAR)",
+        "rsi_atr":          f"{STRAT_COL['rsi_atr']}{BD}■ RSI ATR{W}  RSI(2) entry only when atr_pctile>0.66",
+        "ema_trend":        f"{STRAT_COL['ema_trend']}{BD}■ EMA Trend{W}  EMA(5/30) crossover + fresh(≤3b) + |DI|≥15",
+        "bb_quality":       f"{STRAT_COL['bb_quality']}{BD}■ BB Qual{W}  BB(20,2) fade + non-directional |DI|≤14",
+        "bb_quality_hv":    f"{STRAT_COL['bb_quality_hv']}{BD}■ BB Qual HV{W}  bb_quality + HIGH_VOLATILITY regime gate",
+        "zscore_quality":   f"{STRAT_COL['zscore_quality']}{BD}■ ZS Qual{W}  z-score ±2σ fade + non-directional |DI|≤14",
+        "zscore_quality_tb":f"{STRAT_COL['zscore_quality_tb']}{BD}■ ZS Qual TB{W}  zscore_quality + TRENDING_BULLISH regime gate",
+        "donchian_ai":      f"{STRAT_COL['donchian_ai']}{BD}■ Don AI{W}  Donchian breakout + AI DI/regime quality filters",
     }
     L.append(f"  {BD}SIM ROSTER{W}   " + "   ".join(_leg[s] for s in _SIM_ROSTER if s in _leg))
     _n_dormant = sum(1 for k in STRAT_LABELS_ALL if k not in _SIM_ROSTER)
