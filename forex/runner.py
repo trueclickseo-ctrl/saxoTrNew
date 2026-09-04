@@ -77,7 +77,8 @@ import forex.strategy_gap         as strat_gap
 import forex.strategy_gap_weekend as strat_gap_weekend
 import forex.strategy_supertrend  as strat_supertrend
 import forex.strategy_zscore      as strat_zscore
-import forex.strategy_zscore_quality as strat_zscore_quality
+import forex.strategy_zscore_quality    as strat_zscore_quality
+import forex.strategy_zscore_quality_tb as strat_zscore_quality_tb
 import forex.strategy_ml                as strat_ml
 import forex.strategy_advanced_ml       as strat_advanced_ml
 # cnn_lstm needs torch (a heavy, optional dep). A missing/broken torch must
@@ -241,7 +242,8 @@ STRATEGIES = {
     # low-DI-spread quartile ran +0.132 R, positive in both halves -- the
     # exact same filter that works for "bb". "zscore" is UNTOUCHED. Never in
     # either LIVE allowlist. See forex/strategy_zscore_quality.py.
-    "zscore_quality": strat_zscore_quality,
+    "zscore_quality":    strat_zscore_quality,
+    "zscore_quality_tb": strat_zscore_quality_tb,  # 2026-09-04: A/B twin + TRENDING_BULLISH regime gate (H20260904-c9e606)
     "ml":              strat_ml,
     # 2026-08-30: SIM-only parallel A/B test against "ml" (user-supplied
     # design, "implement this strategy too along our ML, lets see if catch
@@ -307,7 +309,8 @@ RETIRED_STRATEGIES: set[str] = {
 # LIVE (SEK rsi / EUR exits-only) is UNAFFECTED -- that path resolves from
 # LIVE_ALLOWED_STRATEGIES, never this.
 SIM_ACTIVE_STRATEGIES: list[str] = [
-    "rsi", "rsi_trend", "rsi_atr", "ema_trend", "bb_quality", "bb_quality_hv", "zscore_quality",
+    "rsi", "rsi_trend", "rsi_atr", "ema_trend", "bb_quality", "bb_quality_hv",
+    "zscore_quality", "zscore_quality_tb",
     "donchian_ai",  # 2026-09-03: SIM-only A/B; donchian raw retired, AI-gated twin enters forward study
 ]
 _ACTIVE_STRATEGIES = [k for k in SIM_ACTIVE_STRATEGIES if k in STRATEGIES]
@@ -361,7 +364,8 @@ SLOTS_PER_STRATEGY = {
     # user's design doc flagged ("verify MAX_POSITIONS=4 is actually
     # enforced"). "donchian" itself is left exactly as it was.
     "donchian_quality": strat_donchian_quality.MAX_POSITIONS,
-    "supertrend": _SWING_SLOTS, "zscore": _SWING_SLOTS, "zscore_quality": _SWING_SLOTS,
+    "supertrend": _SWING_SLOTS, "zscore": _SWING_SLOTS,
+    "zscore_quality": _SWING_SLOTS, "zscore_quality_tb": _SWING_SLOTS,  # 2026-09-04: A/B twin
     "ml": _SWING_SLOTS, "cnn_lstm": _SWING_SLOTS,
     # 2026-08-30: mirrors "ml" -- uncapped slots so the A/B comparison isn't
     # distorted by an artificial concurrency limit one side doesn't have.
