@@ -176,6 +176,14 @@ WINDOWS_TASKS = {
     "Avanza Trail Stops":     ("ATOS Avanza Trail Stops",     "avanza_trail_stops.log",        30, 26),
     # IBKR stocks trail-stops (2026-09-04) -- once-daily at 21:00 PKT, protective only.
     "IBKR Trail Stops":       ("ATOS IBKR Trail Stops",       "ibkr_trail_stops.log",          30, 26),
+    # IBKR reversion strategies (2026-09-04) -- daily dry-run scans that log signals.
+    # Entries: 16:00 PKT (07:00 ET, before US open). Exits: 09:00 PKT (00:00 ET, after close).
+    # Both are dry-run only; execution is manual. grace=30, max_first_run_wait=26h (daily).
+    "IBKR Reversion Entries": ("ATOS IBKR Reversion Entries", "ibkr_reversion_entries.log",   30, 26),
+    "IBKR Reversion Exits":   ("ATOS IBKR Reversion Exits",   "ibkr_reversion_exits.log",     30, 26),
+    # IBKR intraday reversion (2026-09-04) -- 5x/day during US session (5-min bars).
+    # Dry-run signal scan; added to INTRADAY_REPEATING_TASKS. grace=20, max_log_age=2h.
+    "IBKR Intraday Reversion": ("ATOS IBKR Intraday Reversion", "ibkr_intraday.log",          20, 2),
     "Stocks Daily Run":       ("ATOS Daily Run",              "engine_TODAY.log",      15, 2),  # special-cased below
     # log_file fixed 2026-08-25: this was pointed at data/intraday_monitor.log,
     # a dead file only a crash traceback ever touches -- the script's real
@@ -461,6 +469,7 @@ INTRADAY_REPEATING_TASKS = {
     # Check tasks are once-daily, so deliberately NOT here.
     "Saxo LIVE Token Keepalive",
     "Stocks Daily Run", "ETF Daily Run", "ETF Midday Run", "Futures Daily Run", "Futures Midday Run", "Intraday Monitor",
+    "IBKR Intraday Reversion",  # 5x/day during US session (2026-09-04)
 }
 
 # Tasks the watchdog is allowed to auto-restart (Start-ScheduledTask) the
