@@ -2,12 +2,22 @@
 atos/universe.py
 -----------------
 US equity universe for ATOS — expanded 2026-08-14 from 108 → ~400 tickers,
-then 2026-09-03 to ~424 (Nasdaq-100 + Dow-30 gap-fill, see NASDAQ100_DOW_TICKERS).
+then 2026-09-03 to ~424 (Nasdaq-100 + Dow-30 gap-fill). 2026-09-04 swing-fitness
+audit: removed ~34 low-beta / thin-volume names (14 utilities, 11 ultra-defensive
+staples, 2 thin insurance, 3 thin China ADRs, CLVT/APPN/APPF/PSKY), added 10
+high-ADV momentum names → net ~400 tickers.
 Spans the Dow Jones Industrial Average (30/30), the Nasdaq-100, and the large/
 mid-cap core of the S&P 500 (the small-cap S&P tail is deliberately not carried).
 
 Sectors: Technology, Financials, Energy, Healthcare, Consumer Discretionary,
          Industrials, Communication Services, Consumer Staples, Materials, Utilities.
+
+Removed for swing-fitness (2026-09-04 audit — low beta / thin volume):
+  Utilities (14): NEE SO DUK D AEP XEL EXC PEG ED ETR FE PPL AES CMS
+  Staples (11):   PG KO CL KMB HRL CLX CPB MKC SJM GIS UL
+  Insurance (2):  LNC CNA
+  China ADRs (3): BILI TME HUYA
+  Niche (4):      CLVT APPN APPF PSKY
 
 Excluded (confirmed delistings/acquisitions as of Aug 2026):
   ATVI  — acquired by Microsoft (Oct 2023)
@@ -72,11 +82,10 @@ SP500_TICKERS = [
     "STX",   # Seagate — HDD storage, dividend
     "WDC",   # Western Digital — HDD/NAND, pairs STX
 
-    # ── Technology — networking & cloud infrastructure (4) ───────────────────
+    # ── Technology — networking & cloud infrastructure ────────────────────────
     "ANET",  # Arista Networks — cloud networking
     "GDDY",  # GoDaddy — web hosting/domains, SMB SaaS
-    "CLVT",  # Clarivate — IP/analytics data
-    "DOCN",  # DigitalOcean — cloud for SMBs
+    "DOCN",  # DigitalOcean — cloud for SMBs (marginal, monitor fills)
 
     # ── Technology — cybersecurity & cloud software (10) ─────────────────────
     "CRWD",  # CrowdStrike — endpoint security
@@ -130,10 +139,8 @@ SP500_TICKERS = [
     "MELI",  # MercadoLibre — LatAm e-commerce (NASDAQ)
     "SE",    # Sea Limited — SE Asia gaming/e-com (NYSE)
 
-    # ── Technology — ad-tech & niche software (4) ────────────────────────────
+    # ── Technology — ad-tech ─────────────────────────────────────────────────
     "PUBM",  # PubMatic — sell-side ad platform
-    "APPN",  # Appian — low-code process automation
-    "APPF",  # AppFolio — property management SaaS
 
     # ── Technology — clean energy tech (4) ───────────────────────────────────
     "FSLR",  # First Solar — US solar panels, IRA beneficiary
@@ -158,18 +165,14 @@ SP500_TICKERS = [
     "TMUS",  # T-Mobile — fastest-growing US carrier
     "CHTR",  # Charter Communications — cable
     "FOXA",  # Fox Corporation — news/sports media
-    "PSKY",  # Skydance Media (formerly Paramount/PARA — merged Sept 2024)
 
-    # ── Communication Services — streaming & social (10) ─────────────────────
+    # ── Communication Services — streaming & social ───────────────────────────
     "SNAP",  # Snap — social/camera, high-beta
     "PINS",  # Pinterest — visual discovery
     "SPOT",  # Spotify — audio streaming
     "ROKU",  # Roku — streaming OS/ad platform
     "WBD",   # Warner Bros. Discovery — streaming + HBO
     "U",     # Unity Software — 3D engine for gaming/AR
-    "BILI",  # Bilibili — Chinese gaming/video (NASDAQ ADR)
-    "TME",   # Tencent Music Entertainment (NYSE ADR)
-    "HUYA",  # Huya — Chinese game streaming (NYSE ADR)
 
     # ── Consumer Discretionary — existing (15) ───────────────────────────────
     "AMZN",  # Amazon — e-commerce + AWS
@@ -234,38 +237,27 @@ SP500_TICKERS = [
     "HAS",   # Hasbro — toys/entertainment (Transformers/GI Joe)
     "MAT",   # Mattel — Barbie/Hot Wheels, turnaround
 
-    # ── Consumer Staples — existing (9) ──────────────────────────────────────
-    "WMT",   # Walmart — largest retailer
-    "PG",    # Procter & Gamble — household brands, ultra-low-vol
-    "KO",    # Coca-Cola — beverages, true defensive
-    "PEP",   # PepsiCo — beverages + snacks
-    "CL",    # Colgate-Palmolive — oral/personal care
+    # ── Consumer Staples — existing (kept: liquid/vol adequate) ─────────────────
+    "WMT",   # Walmart — largest retailer, high volume + momentum
+    "PEP",   # PepsiCo — beverages + snacks, higher beta than KO
     "MDLZ",  # Mondelez — snacks (Oreo/Cadbury)
-    "GIS",   # General Mills — cereal/yogurt
-    "KMB",   # Kimberly-Clark — tissue/personal care
     "SYY",   # Sysco — food distribution
 
-    # ── Consumer Staples — packaged food & beverage (11 new) ─────────────────
+    # ── Consumer Staples — packaged food & beverage (kept: volume/vol adequate) ─
     "KHC",   # Kraft Heinz — packaged foods, high yield
-    "HRL",   # Hormel Foods — spam/Skippy, ultra-defensive
-    "CLX",   # Clorox — cleaning products
     "CHD",   # Church & Dwight — household brands
-    "ADM",   # Archer Daniels Midland — agri-processing
-    "KR",    # Kroger — grocery retail
+    "ADM",   # Archer Daniels Midland — agri-processing, commodity catalysts
+    "KR",    # Kroger — grocery retail, M&A catalyst history
     "ACI",   # Albertsons — grocery retail
-    "CPB",   # Campbell Soup — soup/snacks
     "CAG",   # Conagra Brands — packaged foods
     "HSY",   # Hershey — confectionery, pricing power
-    "MKC",   # McCormick — spices, pricing power
 
-    # ── Consumer Staples — beverages & tobacco (9 new) ───────────────────────
-    "SJM",   # J.M. Smucker — Folgers/Jif/pet food
-    "TAP",   # Molson Coors — beer, dividend
+    # ── Consumer Staples — beverages & tobacco (kept) ────────────────────────
+    "TAP",   # Molson Coors — beer, some volume + catalyst (earnings)
     "STZ",   # Constellation Brands — beer (Modelo/Corona in US)
-    "MO",    # Altria — cigarettes/tobacco, ultra-high yield
+    "MO",    # Altria — cigarettes/tobacco, high yield + RSI-reversal candidate
     "PM",    # Philip Morris International — cigarettes/IQOS
-    "UL",    # Unilever — consumer goods (NYSE ADR)
-    "TSN",   # Tyson Foods — protein/chicken
+    "TSN",   # Tyson Foods — protein/chicken, commodity-driven momentum
     "COKE",  # Coca-Cola Consolidated — regional bottler
     "BF-B",  # Brown-Forman B — Jack Daniel's/spirits
 
@@ -303,18 +295,16 @@ SP500_TICKERS = [
     "CFG",   # Citizens Financial — regional bank
     "ZION",  # Zions Bancorporation — Western US regional
 
-    # ── Financials — insurance (8 new) ───────────────────────────────────────
+    # ── Financials — insurance (kept: volume/vol adequate) ───────────────────
     "MET",   # MetLife — life/annuities
     "PRU",   # Prudential Financial — life insurance/asset mgmt
     "AIG",   # AIG — P&C insurance, restructured
     "TRV",   # Travelers — P&C insurance, Dow component
     "ALL",   # Allstate — auto/home insurance
     "PGR",   # Progressive — auto insurance, fastest-growing
-    "LNC",   # Lincoln Financial — life/retirement
     "AFL",   # Aflac — supplemental insurance, Japan exposure
-    "UNM",   # Unum Group — disability/life insurance
+    "UNM",   # Unum Group — disability/life insurance (marginal, monitor fills)
     "HIG",   # Hartford Financial — P&C + group benefits
-    "CNA",   # CNA Financial — commercial P&C insurance
 
     # ── Financials — financial services & fintech (9 new) ────────────────────
     "SYF",   # Synchrony Financial — private label credit cards
@@ -493,25 +483,9 @@ SP500_TICKERS = [
     "CNQ",   # Canadian Natural Resources (NYSE listed)
     "SU",    # Suncor Energy — Canadian oil sands (NYSE listed)
 
-    # ── Utilities — existing (3) ─────────────────────────────────────────────
-    "NEE",   # NextEra Energy — largest utility + wind/solar
-    "SO",    # Southern Company — regulated utility
-    "DUK",   # Duke Energy — regulated utility
-
-    # ── Utilities — expanded (11 new) ─────────────────────────────────────────
-    "D",     # Dominion Energy — regulated, Virginia
-    "AEP",   # American Electric Power — transmission
-    "XEL",   # Xcel Energy — wind-heavy utility
-    "EXC",   # Exelon — nuclear/transmission
-    "PEG",   # PSEG — NJ utility, nuclear
-    "ED",    # Consolidated Edison — NYC utility
-    "ETR",   # Entergy — Southeast utility, nuclear
-    "FE",    # FirstEnergy — Ohio/Mid-Atlantic
-    "PPL",   # PPL Corporation — PA/KY utility
-    "AES",   # AES Corporation — global power/renewables
-    "PCG",   # PG&E — California utility (post-bankruptcy)
-    "SRE",   # Sempra — California/Texas utility + LNG
-    "CMS",   # CMS Energy — Michigan utility
+    # ── Utilities — marginal (keep; high headline risk + vol vs pure defensives) ──
+    "PCG",   # PG&E — California utility (post-bankruptcy, fire-liability headlines)
+    "SRE",   # Sempra — California/Texas utility + LNG export, higher ATR than peers
 
     # ── Materials — existing (4) ─────────────────────────────────────────────
     "LIN",   # Linde — industrial gases, global duopoly
@@ -587,6 +561,21 @@ HIGH_GROWTH_TICKERS = [
 
     # ── Biotech high-growth ───────────────────────────────────────────────────
     "ALNY",  # Alnylam Pharmaceuticals — RNAi therapeutics
+
+    # ── Swing-fitness additions (2026-09-04) ─────────────────────────────────
+    # Universe audit: removed ~34 low-beta / thin-volume names (utilities,
+    # ultra-defensive staples, thin China ADRs, low-liquidity niche). Added
+    # high-ADV momentum names with clear trend structure and catalyst calendars.
+    "VRT",   # Vertiv Holdings — data-center cooling/power; AI-capex demand, β≈1.8
+    "CAVA",  # CAVA Group — high-momentum fast-casual; IPO 2023, strong ROC signals
+    "HIMS",  # Hims & Hers Health — telehealth/GLP-1 adjacent; β≈1.8, large ADV
+    "TOST",  # Toast Inc. — restaurant POS/fintech; high-growth, momentum swings
+    "ALAB",  # Astera Labs — AI connectivity chips (PCIe/CXL); rides NVDA cycle
+    "CRDO",  # Credo Technology — AI networking semiconductor; hyperscaler capex play
+    "DUOL",  # Duolingo — EdTech; β≈1.5, daily range >2%, clear earnings momentum
+    "NCLH",  # Norwegian Cruise Line — high-beta travel; RSI-reversal + momentum
+    "CART",  # Instacart (Maplebear) — grocery delivery; β>1.5, 2023 IPO
+    "NBIS",  # Nebius Group — European AI cloud; extreme momentum, high ADV
 ]
 
 # ── Nasdaq-100 + Dow Jones gap-fill (2026-09-03) ──────────────────────────────
