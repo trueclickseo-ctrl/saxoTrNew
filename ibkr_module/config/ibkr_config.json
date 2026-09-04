@@ -33,7 +33,7 @@
     },
     "reversion": {
       "budget_usd": 50000,
-      "max_slots": 15,
+      "max_slots": 10,
       "stop_pct": 0.04,
       "max_hold_days": 10,
       "rsi_entry": 38,
@@ -44,7 +44,7 @@
     },
     "signals": {
       "slot_usd": 2000,
-      "max_per_strategy": 5,
+      "max_per_strategy": 7,
       "min_trade_usd": 50
     }
   }

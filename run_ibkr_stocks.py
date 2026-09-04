@@ -5,10 +5,10 @@ IBKR stocks sleeve — all ATOS strategies via IB Gateway.
 
 Strategies (signal generation from Yahoo Finance — no Saxo):
   blend      US cross-sectional momentum, fortnightly rebalance ($50k, 10 slots)
-  reversion  US mean reversion, entries + exits ($50k, 15 slots)
+  reversion  US mean reversion, entries + exits ($50k, 10 slots)
   intraday   Intraday reversion variant (US market hours only)
   signals    4 US Signals strategies: SMA Crossover, RSI Reversal, Momentum,
-             Ensemble — $2k/slot, max 5 slots each (20 slots across 4 strategies)
+             Ensemble — $2k/slot, max 7 slots each (28 slots across 4 strategies)
 
 NO automatic / unattended execution. Every trade requires an interactive 'y'.
 Claude never runs --execute or places IBKR trades.
