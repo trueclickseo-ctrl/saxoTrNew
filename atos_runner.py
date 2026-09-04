@@ -79,7 +79,7 @@ sys.path.insert(0, BASE_DIR)
 
 # ── ATOS modules ──────────────────────────────────────────────────
 from atos import database as db
-from atos.universe import ATOS_UNIVERSE, US_TICKERS, market_of, MARKET_GROUPS
+from atos.universe import ATOS_UNIVERSE, US_TICKERS, LIVE_TICKERS, market_of, MARKET_GROUPS
 from atos.features import add_all
 from atos.decision_engine import scan_universe, BUY_THRESHOLD, consensus_evaluate
 from atos.strategies import S3_MeanReversion, S4_BreakoutVol, S5_MomentumAccel
@@ -1859,7 +1859,8 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
         except Exception as e:
             print(f"  {tag} RECONCILE skipped — could not fetch Saxo positions: {e}")
 
-    tgt = USM.compute_targets(feat_data, US_TICKERS)   # US names only — not the whole universe
+    tickers_for_scan = LIVE_TICKERS if _sx() == "live" else list(US_TICKERS)
+    tgt = USM.compute_targets(feat_data, tickers_for_scan)  # US names only — not the whole universe
     print(f"  {tag} risk_off={tgt['risk_off']} | {tgt.get('reason')} | targets={tgt['targets']}")
     fx_usd = _rate_to_sek("USD")
 

@@ -615,6 +615,53 @@ NASDAQ100_DOW_TICKERS = [
 # Deduplicated, sector order preserved
 US_TICKERS = list(dict.fromkeys(SP500_TICKERS + HIGH_GROWTH_TICKERS + NASDAQ100_DOW_TICKERS))
 
+# ── LIVE vs SIM split (2026-09-04) ───────────────────────────────────────────
+# LIVE (atos_live_stocks.py / Saxo real-money):  LIVE_TICKERS only  (~337 names)
+# SIM  (atos_runner.py / run_ibkr_stocks.py):    US_TICKERS in full (~398 names)
+#
+# SIM_ONLY_TICKERS = names excluded from LIVE entry scanning:
+#   - Regional banks: rate-driven moves, thin LIVE sizing
+#   - China ADRs: regulatory gap risk + IBKR LIVE data quality
+#   - Speculative early-stage biotech: extreme overnight gap risk
+#   - Low-ADV small-cap: thin enough that LIVE fills are unreliable
+#   - Near-distressed names: wide spreads, execution risk on LIVE
+#   - New speculative additions: need SIM track record before LIVE
+SIM_ONLY_TICKERS: frozenset = frozenset({
+    # Regional banks — rate-driven not earnings-driven, thin swing widths
+    "FITB", "RF", "KEY", "HBAN", "MTB", "CFG", "ZION", "USB", "TFC", "PNC",
+    # Marginal utilities (kept in SIM for RSI-reversal signals)
+    "PCG", "SRE",
+    # Speculative early-stage biotech — extreme gap risk, thin vol
+    "CRSP", "EDIT", "NTLA", "NVCR", "RGEN",
+    # China ADRs — regulatory gap risk, IBKR LIVE market-data reliability
+    "BIDU", "NTES", "JD", "PDD", "SE", "BABA",
+    # Small consumer discretionary — ADV < 2M, thin swings
+    "VFC", "LEVI", "HOG", "HAS", "MAT", "AN",
+    # Small industrials — ADV < 2M
+    "J", "ACM", "TEX", "MAS", "EXP",
+    # Thin medical devices & diagnostics — ADV < 1M each
+    "PEN", "BAX", "ZBH", "LH", "DGX", "IDXX",
+    # Low-price / near-distressed / speculative EV
+    "LCID", "RIVN", "JBLU", "ALK",
+    # Thin niche tech
+    "PUBM", "DOCN",
+    # Quantum / small-satellite launch — speculative, thin fills
+    "IONQ", "RKLB",
+    # New additions: need SIM track record before LIVE promotion
+    "NBIS", "CART",
+    # Low-ADV financials (< 1M shares/day)
+    "MKTX", "NTRS", "WU", "GPN", "BR",
+    # Marginal insurance — lower ADV than sector peers
+    "AFL", "UNM",
+    # Single-name niche exclusions
+    "CHTR",   # Charter: ~700k ADV
+    "NVR",    # NVR: ~$7k/share, ~20k shares/day
+    # Small materials — thin fills
+    "IFF", "CE",
+})
+
+LIVE_TICKERS: list = [t for t in US_TICKERS if t not in SIM_ONLY_TICKERS]
+
 # ── Legacy / inactive ─────────────────────────────────────────────────────────
 OMX30_TICKERS    = []
 CPH25_TICKERS    = []
