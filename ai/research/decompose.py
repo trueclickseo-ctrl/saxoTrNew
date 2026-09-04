@@ -320,6 +320,9 @@ _DEFAULT_BUCKETS = {
     "dist_ema200_atr": [("near<=1", lambda v: v is not None and abs(v) <= 1),
                         ("mid", lambda v: v is not None and 1 < abs(v) <= 3),
                         ("far>3", lambda v: v is not None and abs(v) > 3)],
+    "rsi": [("oversold<30",     lambda v: v is not None and v < 30),
+            ("neutral30-70",   lambda v: v is not None and 30 <= v < 70),
+            ("overbought>=70", lambda v: v is not None and v >= 70)],
     # stocks-only
     "confidence": [("low<0.5",    lambda v: v is not None and v < 0.5),
                    ("mid0.5-0.75", lambda v: v is not None and 0.5 <= v < 0.75),
