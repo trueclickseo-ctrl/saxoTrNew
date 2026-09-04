@@ -25,6 +25,17 @@ from ibkr_module import ibkr_signals as sig
 
 _ROOT = Path(__file__).parent.parent
 
+# ── AI observation layer (2026-09-04) -- OBSERVE/LOG ONLY, ships OFF ──
+# Same guard pattern as atos_runner.py: if the ai package is missing, every
+# hook sees _ai_cards = None and silently no-ops. NO apply path -- these hooks
+# only log observation cards; no order, position, or stop is ever touched here.
+try:
+    import ai.config as _ai_cfg
+    from ai.features import ibkr_stock_cards as _ai_cards
+except Exception:  # pragma: no cover
+    _ai_cfg = None  # type: ignore[assignment]
+    _ai_cards = None  # type: ignore[assignment]
+
 
 def _compute_plan(
     targets: list[str],
@@ -604,6 +615,20 @@ def run_us_signals_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
         st.update_stop(ticker, actual_stop, str(stop_trade.order.orderId), fill,
                        strategy=strat)
         print(f"  Stop placed @ ${actual_stop:.2f} (id={stop_trade.order.orderId})")
+        # AI entry card (OBSERVE/LOG only — no apply path)
+        if _ai_cfg is not None and _ai_cfg.stocks_enabled() and _ai_cards is not None:
+            try:
+                _strat_key = strat.lower().replace(" ", "_")
+                _entry_date = datetime.date.today().isoformat()
+                _ai_cards.log_ibkr_entry_card(
+                    strategy=_strat_key, ticker=ticker, direction="BUY",
+                    entry_price=fill, shares=qty, stop_price=actual_stop,
+                    entry_date=_entry_date,
+                    risk_usd=abs(fill - actual_stop) * qty,
+                    confidence=row.get("confidence"),
+                )
+            except Exception as _exc:
+                print(f"  [ai] ibkr signals entry-card failed for {ticker}: {_exc}")
         open_by_strategy[strat].add(ticker)
 
     print("\n  [us signals] entry scan complete.")
@@ -697,6 +722,23 @@ def run_us_signals_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
             pnl = (fill - entry_px) * qty
             print(f"  Sold {qty} {sym} @ ${fill:.4f}  P&L: ${pnl:+,.2f}")
             st.mark_filled(str(sell_trade.order.orderId), fill, side="SELL")
+            # AI exit card (OBSERVE/LOG only — no apply path)
+            if _ai_cfg is not None and _ai_cfg.stocks_enabled() and _ai_cards is not None:
+                try:
+                    _strat_key = strat.lower().replace(" ", "_")
+                    _entry_date = (pos.get("filled_at") or datetime.date.today().isoformat())[:10]
+                    _risk_usd = abs(entry_px - (pos.get("stop_price") or entry_px)) * qty or None
+                    _ai_cards.log_ibkr_exit_card(
+                        card_id=_ai_cards.card_id_for(_strat_key, sym, _entry_date, "ibkr_paper"),
+                        exit_price=fill, exit_reason=reason,
+                        gross_pnl_usd=pnl,
+                        net_pnl_usd=pnl,   # IBKR commissions tracked separately
+                        commission_usd=None,
+                        entry_price=entry_px,
+                        risk_usd=_risk_usd,
+                    )
+                except Exception as _exc:
+                    print(f"  [ai] ibkr signals exit-card failed for {sym}: {_exc}")
 
     print("\n  [us signals] exit check complete.")
 

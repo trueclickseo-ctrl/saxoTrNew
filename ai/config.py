@@ -309,6 +309,14 @@ def stocks_reversion_copilot_enabled() -> bool:
             and agent_enabled_for("sim"))
 
 
+def stocks_signals_copilot_enabled() -> bool:
+    """Score every US Signals entry (SMA Crossover / RSI Reversal / Momentum /
+    Ensemble) with the shadow Trading Copilot (log-only, applies nothing). SIM-only.
+    Requires stocks_enabled() AND `shadow_copilot_signals` AND agent_enabled_for('sim')."""
+    return (stocks_enabled("sim") and bool(_stocks_cfg("sim").get("shadow_copilot_signals", False))
+            and agent_enabled_for("sim"))
+
+
 def stocks_basket_ranker_enabled(account_env: str = "sim") -> bool:
     """Run the US Blend basket-ranker for this account. For `sim` /
     `live_stocks` it is shadow-log only (the deterministic pick is untouched).

@@ -169,7 +169,7 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="IBKR strategy-grouped dashboard")
     parser.add_argument("--once",     action="store_true", help="Print once and exit")
-    parser.add_argument("--interval", type=int, default=30, help="Refresh interval in seconds")
+    parser.add_argument("--interval", type=int, default=10, help="Refresh interval in seconds")
     args = parser.parse_args()
 
     from ibkr_module import ibkr_client as ic

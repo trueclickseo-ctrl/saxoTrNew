@@ -2859,6 +2859,25 @@ def run_us_signals(feat_data: dict, open_trades: list, todays_actions: list) -> 
                 sh * cur_price * fx_usd, pnl_sek, reason,
                 entry_date=trade.get("entry_date", ""), days_held=0,
             )
+            # AI exit card (OBSERVE/LOG only — no apply path)
+            if ai_config is not None and ai_config.stocks_enabled() and ai_stock_cards is not None:
+                try:
+                    _strat_key = strategy.lower().replace(" ", "_")
+                    _entry_d = trade.get("entry_date", today_str)
+                    _ep = trade.get("entry_price", 0)
+                    _sp = trade.get("stop_price")
+                    ai_stock_cards.log_stock_exit_card(
+                        card_id=ai_stock_cards.card_id_for(_strat_key, ticker, _entry_d),
+                        exit_price=cur_price, exit_reason=reason,
+                        gross_pnl_sek=(cur_price - _ep) * sh * fx_usd,
+                        commission_sek=comm_exit,
+                        net_pnl_sek=pnl_sek,
+                        holding_hours=None,
+                        sek_per_eur=_sek_per_eur(),
+                        risk_sek=(abs(_ep - _sp) * sh * fx_usd) if _sp else None,
+                    )
+                except Exception as _exc:
+                    print(f"  [ai] signals exit-card failed: {_exc}")
             todays_actions.append({
                 "action": "SELL", "ticker": ticker, "market_group": "US Equities",
                 "strategy": strategy, "score": 0, "shares": sh,
@@ -2911,6 +2930,30 @@ def run_us_signals(feat_data: dict, open_trades: list, todays_actions: list) -> 
             print(f"  {tag} BUY {ticker} [{strategy}] "
                   f"@ {cur_price:.2f} x{shares} "
                   f"(conf={sig['confidence']:.2f}) stop={stop:.2f}")
+
+            # AI shadow copilot (OBSERVE/LOG only — applies nothing)
+            if (ai_config is not None and ai_config.stocks_signals_copilot_enabled()
+                    and ai_stock_proposal is not None and ai_trading_copilot is not None):
+                try:
+                    _spe = _sek_per_eur()
+                    _risk_eur = (abs(cur_price - stop) * shares * fx_usd / _spe) if _spe else None
+                    _prop = ai_stock_proposal.build_stock_proposal(
+                        strategy=strategy.lower().replace(" ", "_"),
+                        ticker=ticker, entry_price=cur_price,
+                        stop_price=stop, target_price=None,
+                        rsi14=None, shares=shares,
+                        daily_vol_pct=None, risk_eur=_risk_eur,
+                        account_equity_eur=None,
+                        regime_bars=feat_data.get(ticker),
+                    )
+                    if _prop:
+                        ai_stock_proposal.log_proposal(_prop)
+                        if not (ai_config.agent_dedup_enabled()
+                                and ai_stock_proposal.already_evaluated(_prop)):
+                            _dec = ai_trading_copilot.evaluate_proposal(_prop)
+                            ai_stock_proposal.log_shadow_decision(_prop, _dec, entered=True)
+                except Exception as _exc:
+                    print(f"  [ai] signals copilot hook failed for {ticker}: {_exc}")
 
             entry_oid = None
             is_paper  = False
@@ -2979,6 +3022,18 @@ def run_us_signals(feat_data: dict, open_trades: list, todays_actions: list) -> 
             })
             print(f"  {tag} recorded trade id={trade_id} "
                   f"{'[PAPER]' if is_paper else ''}")
+            # AI entry card (OBSERVE/LOG only — no apply path)
+            if ai_config is not None and ai_config.stocks_enabled() and ai_stock_cards is not None:
+                try:
+                    _strat_key = strategy.lower().replace(" ", "_")
+                    ai_stock_cards.log_stock_entry_card(
+                        strategy=_strat_key, ticker=ticker, direction="Buy",
+                        entry_price=filled_price, shares=shares, stop_price=stop,
+                        sek_per_eur=_sek_per_eur(), entry_date=today_str,
+                        risk_sek=abs(filled_price - stop) * shares * fx_usd,
+                    )
+                except Exception as _exc:
+                    print(f"  [ai] signals entry-card failed for {ticker}: {_exc}")
             _append_trade_log(
                 strategy, "BUY", ticker, shares, filled_price,
                 shares * filled_price * fx_usd, None, sig["reason"][:80],

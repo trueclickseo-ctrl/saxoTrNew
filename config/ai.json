@@ -27,11 +27,12 @@
   "journal_model": "claude-sonnet-5",
   "journal_max_trades_per_run": 40,
 
-  "_stocks_comment": "Stocks AI layer (2026-09-02): the forex AI layer extended to the SIM stocks module (atos_runner.py). ARMED 2026-09-02 (enabled:true) -- still OBSERVE/LOG only (no apply path in the code). Sub-flags: journal = feed stocks closed trades to the AI Journal (cheap); shadow_copilot_reversion = score every US Reversion entry (log-only, uses agent_enabled + ANTHROPIC_API_KEY, ~cents/week); basket_ranker_blend = shadow-rank the US Blend fortnightly offense basket (one LLM call per rebalance, log-only, deterministic targets never touched). Reports: ai_trade_journal.py --report, report_ai_basket.py. Set enabled:false to disarm the whole subtree next cycle. See docs/atos_ai_tracker.md.",
+  "_stocks_comment": "Stocks AI layer (2026-09-02): the forex AI layer extended to the SIM stocks module (atos_runner.py). ARMED 2026-09-02 (enabled:true) -- still OBSERVE/LOG only (no apply path in the code). Sub-flags: journal = feed stocks closed trades to the AI Journal (cheap); shadow_copilot_reversion = score every US Reversion entry (log-only); shadow_copilot_signals = score every US Signals entry (SMA Crossover / RSI Reversal / Momentum / Ensemble) with the shadow Copilot (log-only, false until ~40 signal trades accumulated); basket_ranker_blend = shadow-rank the US Blend fortnightly offense basket (one LLM call per rebalance, log-only). Reports: ai_trade_journal.py --report, report_ai_basket.py. IBKR strategies (ibkr_executor.py) also log observation cards to stock_observation_cards.jsonl (account_env=ibkr_paper, native_currency=USD) under the same enabled gate. Set enabled:false to disarm the whole subtree next cycle. See docs/atos_ai_tracker.md.",
   "stocks": {
     "enabled": true,
     "journal": true,
     "shadow_copilot_reversion": true,
+    "shadow_copilot_signals": false,
     "basket_ranker_blend": true
   },
 
