@@ -31,7 +31,7 @@
       "min_trade_usd": 50
     },
     "reversion": {
-      "budget_usd": 4000,
+      "budget_usd": 50000,
       "max_slots": 15,
       "stop_pct": 0.04,
       "max_hold_days": 10,
