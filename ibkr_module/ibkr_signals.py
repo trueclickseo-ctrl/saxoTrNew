@@ -30,11 +30,52 @@ from atos.universe import US_TICKERS
 from atos import us_momentum as _mom
 from atos import us_reversion as _rev
 
+_CACHE_FILE = _ROOT / "data" / "ibkr_price_cache.pkl"
+_CACHE_MAX_AGE_HOURS = 8   # re-download if cache is older than this
+
+
+def _load_cache(lookback_days: int) -> dict[str, pd.DataFrame] | None:
+    """Return cached price data if it exists and is fresh enough, else None."""
+    import pickle
+    if not _CACHE_FILE.exists():
+        return None
+    age_h = (datetime.datetime.now().timestamp() - _CACHE_FILE.stat().st_mtime) / 3600
+    if age_h > _CACHE_MAX_AGE_HOURS:
+        return None
+    try:
+        with open(_CACHE_FILE, "rb") as f:
+            meta, data = pickle.load(f)
+        if meta.get("lookback_days", 0) >= lookback_days:
+            return data
+    except Exception:
+        pass
+    return None
+
+
+def _save_cache(data: dict[str, pd.DataFrame], lookback_days: int) -> None:
+    import pickle
+    _CACHE_FILE.parent.mkdir(exist_ok=True)
+    try:
+        with open(_CACHE_FILE, "wb") as f:
+            pickle.dump(({"lookback_days": lookback_days}, data), f)
+    except Exception:
+        pass
+
 
 def _download(tickers: list[str], lookback_days: int = 260) -> dict[str, pd.DataFrame]:
-    """Batch-download daily OHLCV from Yahoo Finance.
-    Returns {ticker: DataFrame}. Tickers with < 20 rows are dropped.
+    """Batch-download daily OHLCV from Yahoo Finance with an 8-hour disk cache.
+
+    First call of the day downloads ~424 tickers (~30s).
+    Subsequent calls within 8 hours return the cached data instantly.
     """
+    # Try cache first (covers all-universe requests; skip for small targeted requests)
+    if len(tickers) >= 100:
+        cached = _load_cache(lookback_days)
+        if cached is not None:
+            subset = {t: cached[t] for t in tickers if t in cached}
+            print(f"  [signals] cache hit — {len(subset)} tickers (age < {_CACHE_MAX_AGE_HOURS}h)")
+            return subset
+
     import yfinance as yf
 
     end   = datetime.date.today()
@@ -62,6 +103,11 @@ def _download(tickers: list[str], lookback_days: int = 260) -> dict[str, pd.Data
                     result[t] = df
             except KeyError:
                 pass
+
+    if len(tickers) >= 100:
+        _save_cache(result, lookback_days)
+        print(f"  [signals] cache saved ({len(result)} tickers)")
+
     return result
 
 

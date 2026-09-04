@@ -203,4 +203,5 @@ data/avanza_status.json
 # IBKR credentials and runtime state
 .env.ibkr
 data/ibkr_stocks.db
+data/ibkr_price_cache.pkl
 data/avanza_instrument_cache.json
