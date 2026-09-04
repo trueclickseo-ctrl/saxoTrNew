@@ -1,0 +1,54 @@
+{
+  "trained": true,
+  "trained_at": "2026-09-03T17:00:07.133034+00:00",
+  "n_total": 111,
+  "n_train": 77,
+  "n_test": 34,
+  "test_accuracy": 0.6765,
+  "test_win_prec": 0.0,
+  "test_loss_prec": 0.6765,
+  "base_win_rate": 0.3235,
+  "lift": -0.3235,
+  "top_features": [
+    [
+      "recovery_to_cost_ratio",
+      0.313
+    ],
+    [
+      "adx",
+      0.1686
+    ],
+    [
+      "atr_pct",
+      0.1574
+    ],
+    [
+      "n_open_positions",
+      0.1333
+    ],
+    [
+      "rsi2",
+      0.1154
+    ],
+    [
+      "pair_n_closed",
+      0.0629
+    ],
+    [
+      "day_of_week",
+      0.0305
+    ],
+    [
+      "signal_strength",
+      0.0145
+    ],
+    [
+      "regime_TRENDING_BULLISH",
+      0.0013
+    ],
+    [
+      "regime_UNKNOWN",
+      0.001
+    ]
+  ]
+}

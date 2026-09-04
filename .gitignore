@@ -67,6 +67,7 @@ data/ai_basket_shadow.jsonl
 # (rebuilt on every weekly run; not source-controlled)
 data/ai_research_digest.json
 data/ai_research_decomp_cache.json
+data/ai_research_stocks_decomp_cache.json
 data/ai_research_hypotheses.jsonl
 # "ATOS needs a human" escalation channel -- ephemeral, safeguard rewrites it every cycle
 data/attention_state.json
@@ -171,6 +172,7 @@ data/forex_live_strategy_weights.json
 data/forex_orders.json
 data/forex_peak_equity.json
 data/forex_strategy_weights.json
+data/forex_ai_strategy_weights.json
 data/futures_orders.json
 data/futures_strategy_weights.json
 data/futures_all_results.json
@@ -204,4 +206,5 @@ data/avanza_status.json
 .env.ibkr
 data/ibkr_stocks.db
 data/ibkr_price_cache.pkl
+data/trade_outcome_model/*.pkl
 data/avanza_instrument_cache.json

@@ -1,0 +1,206 @@
+{
+  "DIA": {
+    "ticker": "DIA",
+    "avanza_id": "299681",
+    "name": "State Street SPDR Dow Jones Industrial Average ETF Trust",
+    "currency": "USD",
+    "market": "NYSE",
+    "available": true
+  },
+  "EEM": {
+    "ticker": "EEM",
+    "avanza_id": "169651",
+    "name": "iShares MSCI Emerging Markets ETF",
+    "currency": "USD",
+    "market": "NYSE",
+    "available": true
+  },
+  "EFA": {
+    "ticker": "EFA",
+    "avanza_id": "104956",
+    "name": "iShares MSCI EAFE ETF",
+    "currency": "USD",
+    "market": "NYSE",
+    "available": true
+  },
+  "EWY": {
+    "ticker": "EWY",
+    "avanza_id": "176995",
+    "name": "iShares MSCI South Korea ETF",
+    "currency": "USD",
+    "market": "NYSE",
+    "available": true
+  },
+  "GDX": {
+    "ticker": "GDX",
+    "avanza_id": "155748",
+    "name": "VanEck Gold Miners ETF",
+    "currency": "USD",
+    "market": "NYSE",
+    "available": true
+  },
+  "GLD": {
+    "ticker": "GLD",
+    "avanza_id": "34427",
+    "name": "SPDR Gold Shares",
+    "currency": "USD",
+    "market": "NYSE",
+    "available": true
+  },
+  "HYG": {
+    "ticker": "HYG",
+    "avanza_id": "170252",
+    "name": "iShares iBoxx USD High Yield Corporate Bond ETF",
+    "currency": "USD",
+    "market": "NYSE",
+    "available": true
+  },
+  "IWM": {
+    "ticker": "IWM",
+    "avanza_id": "76664",
+    "name": "iShares Russell 2000 Index Fund",
+    "currency": "USD",
+    "market": "NYSE",
+    "available": true
+  },
+  "LQD": {
+    "ticker": "LQD",
+    "avanza_id": "232103",
+    "name": "iShares iBoxx USD Investment Grade Corporate Bond ETF",
+    "currency": "USD",
+    "market": "NYSE",
+    "available": true
+  },
+  "QQQ": {
+    "ticker": "QQQ",
+    "avanza_id": "5066",
+    "name": "PowerShares QQQ Trust Series 1",
+    "currency": "USD",
+    "market": "NASDAQ",
+    "available": true
+  },
+  "RSP": {
+    "ticker": "RSP",
+    "avanza_id": "232108",
+    "name": "Invesco S&P 500 Equal Weight ETF",
+    "currency": "USD",
+    "market": "NYSE",
+    "available": true
+  },
+  "SMH": {
+    "ticker": "SMH",
+    "avanza_id": "169319",
+    "name": "VanEck Semiconductor ETF",
+    "currency": "USD",
+    "market": "NASDAQ",
+    "available": true
+  },
+  "SOXX": {
+    "ticker": "SOXX",
+    "avanza_id": "273859",
+    "name": "iShares PHLX SOX Semiconductor Sector Index Fund",
+    "currency": "USD",
+    "market": "NASDAQ",
+    "available": true
+  },
+  "SPY": {
+    "ticker": "SPY",
+    "avanza_id": "159932",
+    "name": "State Street SPDR S&P 500 ETF Trust",
+    "currency": "USD",
+    "market": "NYSE",
+    "available": true
+  },
+  "TLT": {
+    "ticker": "TLT",
+    "avanza_id": "630577",
+    "name": "iShares 20+ Year Treasury Bond ETF",
+    "currency": "USD",
+    "market": "NASDAQ",
+    "available": true
+  },
+  "VTI": {
+    "ticker": "VTI",
+    "avanza_id": "232136",
+    "name": "Vanguard Total Stock Market Index Fund ETF",
+    "currency": "USD",
+    "market": "NYSE",
+    "available": true
+  },
+  "XBI": {
+    "ticker": "XBI",
+    "avanza_id": "299427",
+    "name": "State Street SPDR S&P Biotech ETF",
+    "currency": "USD",
+    "market": "NYSE",
+    "available": true
+  },
+  "XLB": {
+    "ticker": "XLB",
+    "avanza_id": "232141",
+    "name": "State Street Materials Select Sector SPDR ETF",
+    "currency": "USD",
+    "market": "NYSE",
+    "available": true
+  },
+  "XLC": {
+    "ticker": "XLC",
+    "available": false
+  },
+  "XLE": {
+    "ticker": "XLE",
+    "avanza_id": "165828",
+    "name": "The Energy Select Sector SPDR Fund",
+    "currency": "USD",
+    "market": "NYSE",
+    "available": true
+  },
+  "XLF": {
+    "ticker": "XLF",
+    "avanza_id": "161204",
+    "name": "Financial Select Sector SPDR",
+    "currency": "USD",
+    "market": "NYSE",
+    "available": true
+  },
+  "XLI": {
+    "ticker": "XLI",
+    "available": false
+  },
+  "XLK": {
+    "ticker": "XLK",
+    "avanza_id": "170353",
+    "name": "Technology Select Sector SPDR ETF",
+    "currency": "USD",
+    "market": "NYSE",
+    "available": true
+  },
+  "XLP": {
+    "ticker": "XLP",
+    "available": false
+  },
+  "XLRE": {
+    "ticker": "XLRE",
+    "available": false
+  },
+  "XLU": {
+    "ticker": "XLU",
+    "avanza_id": "232143",
+    "name": "State Street Utilities Select Sector SPDR ETF",
+    "currency": "USD",
+    "market": "NYSE",
+    "available": true
+  },
+  "XLV": {
+    "ticker": "XLV",
+    "avanza_id": "232144",
+    "name": "State Street Health Care Select Sector SPDR ETF",
+    "currency": "USD",
+    "market": "NYSE",
+    "available": true
+  },
+  "XLY": {
+    "ticker": "XLY",
+    "available": false
+  }
+}
