@@ -49,7 +49,9 @@ def _compute_plan(
     sells = []
     for p in held:
         if p["symbol"] not in target_set:
-            price = prices.get(p["symbol"], 0.0)
+            price = prices.get(p["symbol"], 0.0) or 0.0
+            if math.isnan(price):
+                price = 0.0
             sells.append({
                 "symbol": p["symbol"],
                 "qty":    p["qty"],
@@ -62,7 +64,7 @@ def _compute_plan(
         if sym in held_symbols:
             continue
         price = prices.get(sym, 0.0)
-        if price <= 0:
+        if not price or math.isnan(price) or price <= 0:
             continue
         qty = math.floor(per_slot / price)
         if qty < 1:
