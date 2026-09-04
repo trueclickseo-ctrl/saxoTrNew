@@ -571,7 +571,10 @@ def replay_stock_trades(strategy_key: str, tickers: list[str] | None = None,
         end   = pd.Timestamp.now()
         start = end - pd.Timedelta(days=int(years * 365.25) + 30)
         price_data = {}
-        for tk in tickers:
+        n = len(tickers)
+        for i, tk in enumerate(tickers):
+            if i % 10 == 0 and i > 0:
+                print(f"  {i}/{n} tickers downloaded...", flush=True)
             try:
                 df = yf.download(tk, start=start, end=end, progress=False, auto_adjust=True)
                 # yfinance may return MultiIndex columns -- flatten
@@ -581,6 +584,7 @@ def replay_stock_trades(strategy_key: str, tickers: list[str] | None = None,
                     price_data[tk] = df
             except Exception:
                 pass
+        print(f"  {n}/{n} tickers downloaded, {len(price_data)} usable.", flush=True)
 
     trades: list[Trade] = []
     for ticker, df in price_data.items():
@@ -740,7 +744,9 @@ def main(argv=None) -> int:
         return 0
 
     if is_stock:
-        trades = replay_stock_trades(args.strategy, years=years)
+        tickers = _default_stocks_tickers()
+        print(f"downloading {years}y OHLCV for {len(tickers)} tickers (yfinance, may take a few minutes)...", flush=True)
+        trades = replay_stock_trades(args.strategy, years=years, tickers=tickers)
     else:
         trades = replay_trades(args.strategy, years=years, core_only=args.core_only)
     print(f"replayed {len(trades)} {args.strategy} trades "
