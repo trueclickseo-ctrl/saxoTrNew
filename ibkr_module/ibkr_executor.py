@@ -494,19 +494,29 @@ def run_us_signals_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
 
     print("\n  [us signals] scanning for BUY signals across 4 strategies...")
 
-    signals_found: list[dict] = []
+    # Collect all raw signals (no slot cap yet — apply it after sorting by confidence).
+    all_raw: list[dict] = []
     for ticker, df in feat_data.items():
         try:
             for sig_row in get_entry_signals(ticker, df):
                 strat = sig_row["strategy_name"]
-                already_held = ticker in open_by_strategy.get(strat, set())
-                slots_full   = len(open_by_strategy.get(strat, set())) >= max_per_str
-                if not already_held and not slots_full:
-                    signals_found.append({**sig_row, "ticker": ticker, "_df": df})
+                if ticker not in open_by_strategy.get(strat, set()):
+                    all_raw.append({**sig_row, "ticker": ticker, "_df": df})
         except Exception:
             continue
 
-    total_open = sum(len(v) for v in open_by_strategy.values())
+    # Sort by confidence descending so the slot cap selects the strongest signals.
+    all_raw.sort(key=lambda r: r.get("confidence", 0), reverse=True)
+
+    slots_used: dict[str, int] = {s: len(open_by_strategy.get(s, set()))
+                                   for s in ALL_SIGNAL_STRATEGY_NAMES}
+    signals_found: list[dict] = []
+    for row in all_raw:
+        strat = row["strategy_name"]
+        if slots_used.get(strat, 0) < max_per_str:
+            signals_found.append(row)
+            slots_used[strat] = slots_used.get(strat, 0) + 1
+
     print(f"  [us signals] open: "
           + "  ".join(f"{s[:14]}: {len(open_by_strategy[s])}/{max_per_str}"
                       for s in ALL_SIGNAL_STRATEGY_NAMES))
@@ -514,7 +524,9 @@ def run_us_signals_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
         print("  [us signals] No new entry signals.")
         return
 
-    print(f"  [us signals] {len(signals_found)} new signal(s) found.")
+    total_candidates = len(all_raw)
+    print(f"  [us signals] {len(signals_found)} signal(s) selected "
+          f"(top by confidence from {total_candidates} candidates).")
 
     if not dry_run and not ic.is_market_open():
         print("\n  [BLOCKED] US market is closed. Orders can only be placed "
