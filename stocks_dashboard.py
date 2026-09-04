@@ -343,7 +343,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     # ── Strategy summary ──────────────────────────────────────────
     L.append(
         f"  {BD}STRATEGIES{W}   "
-        f"{BL}{BD}■ US Blend{W}  {DM}Monthly momentum rebalance, SPY+QQQ+IWM regime filter{W}   "
+        f"{BD}■ US Blend{W}  {DM}Monthly momentum rebalance, SPY+QQQ+IWM regime filter{W}   "
         f"{CY}{BD}■ US Reversion{W}  {DM}RSI(2)<5 mean-reversion, max 10 trading days{W}"
     )
     L.append(
@@ -465,34 +465,82 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append(HR)
 
     if rows:
-        for r in rows:
-            ep    = r["entry"]; now = r["now"]; stop = r["stop"]
-            pnl   = r["pnl"];   ppc = r["ppc"]
-            live  = r["live"]
-            near  = stop > 0 and now is not None and now < stop * 1.05
+        from itertools import groupby as _groupby
 
-            pc      = (GR if pnl >= 0 else RD) if live and pnl is not None else DM
-            stp_col = f"{RD}{BD}" if near else DM
-            ex_col  = YL if "0d left" in r["exit"] or "1d left" in r["exit"] else DM
-            reg_col = REGIME_COL.get(r["regime"].upper(), DM)
+        _STRAT_ORDER = [
+            "US Blend", "US Reversion", "US Intraday Reversion",
+            "US SMA Crossover", "US RSI Reversal", "US Momentum", "US Ensemble",
+        ]
+        _STRAT_COL = {
+            "US Blend": BL, "US Reversion": CY, "US Intraday Reversion": CY,
+            "US SMA Crossover": MG, "US RSI Reversal": MG,
+            "US Momentum": MG, "US Ensemble": MG,
+        }
+        # Resolve a truncated / partial strategy label to the canonical full name.
+        def _full_strat(s: str) -> str:
+            s = s.strip()
+            for full in _STRAT_ORDER:
+                if full == s or full.startswith(s) or s.startswith(full[: len(s)]):
+                    return full
+            return s
 
-            now_s  = f"{now:.2f}"  if now  is not None and now  > 0 else "—"
-            stop_s = f"{stop:.2f}" if stop > 0 else "—"
-            pnl_s  = f"{'+'if pnl>=0 else ''}{pnl:,.0f}" if live and pnl is not None else "—"
-            ppc_s  = f"{'+'if ppc>=0 else ''}{ppc:.2f}%" if live and ppc is not None else "—"
+        def _sort_key(r):
+            s = _full_strat(r.get("strategy") or "")
+            try:
+                return _STRAT_ORDER.index(s)
+            except ValueError:
+                return len(_STRAT_ORDER)
 
-            L.append(
-                f"  {BD}{r['ticker']:<7}{W}  {r['shs']:>5,}  "
-                f"{DM}{ep:>8.2f}{W}  {BD}{now_s:>8}{W}  "
-                f"{stp_col}{stop_s:>8}{W}  "
-                f"{_rpad(f'{pc}{pnl_s}{W}', 17):}  "
-                f"{_rpad(f'{pc}{ppc_s}{W}', 12):}  "
-                f"{DM}{r['strategy']:<14}{W}  "
-                f"{ex_col}{r['exit']:<22}{W}  "
-                f"{reg_col}{r['regime']}{W}"
-            )
+        sorted_rows = sorted(rows, key=_sort_key)
+        groups = [(k, list(g)) for k, g in _groupby(sorted_rows, key=lambda r: _full_strat(r.get("strategy") or "—"))]
 
-        L.append(HR)
+        for strat, grp in groups:
+            sc = _STRAT_COL.get(strat, YL)
+            grp_pnl  = sum(r["pnl"] for r in grp if r["live"] and r["pnl"] is not None)
+            grp_live = any(r["live"] for r in grp)
+
+            bar = "─" * max(0, W_TOTAL - len(strat) - 12)
+            L.append(f"  {DM}──{W} {BD}{strat}{W}  {DM}({len(grp)} pos)  {bar}{W}")
+            L.append("")
+
+            for r in grp:
+                ep    = r["entry"]; now = r["now"]; stop = r["stop"]
+                pnl   = r["pnl"];   ppc = r["ppc"]
+                live  = r["live"]
+                near  = stop > 0 and now is not None and now < stop * 1.05
+
+                pc      = (GR if pnl >= 0 else RD) if live and pnl is not None else DM
+                stp_col = f"{RD}{BD}" if near else DM
+                ex_col  = YL if "0d left" in r["exit"] or "1d left" in r["exit"] else DM
+                reg_col = REGIME_COL.get(r["regime"].upper(), DM)
+
+                now_s  = f"{now:.2f}"  if now  is not None and now  > 0 else "—"
+                stop_s = f"{stop:.2f}" if stop > 0 else "—"
+                pnl_s  = f"{'+'if pnl>=0 else ''}{pnl:,.0f}" if live and pnl is not None else "—"
+                ppc_s  = f"{'+'if ppc>=0 else ''}{ppc:.2f}%" if live and ppc is not None else "—"
+
+                L.append(
+                    f"  {BD}{r['ticker']:<7}{W}  {r['shs']:>5,}  "
+                    f"{DM}{ep:>8.2f}{W}  {BD}{now_s:>8}{W}  "
+                    f"{stp_col}{stop_s:>8}{W}  "
+                    f"{_rpad(f'{pc}{pnl_s}{W}', 17):}  "
+                    f"{_rpad(f'{pc}{ppc_s}{W}', 12):}  "
+                    f"{DM}{r['strategy']:<14}{W}  "
+                    f"{ex_col}{r['exit']:<22}{W}  "
+                    f"{reg_col}{r['regime']}{W}"
+                )
+
+            # Per-group subtotal
+            if grp_live:
+                pc = GR if grp_pnl >= 0 else RD
+                pnl_str = f"{'+'if grp_pnl>=0 else ''}{grp_pnl:,.0f} USD"
+            else:
+                pc, pnl_str = DM, "—"
+            subtot_prefix = f"  {DM}  {strat} subtotal  {len(grp)} pos{W}"
+            pad = " " * max(1, 60 - _len(subtot_prefix))
+            L.append(f"{subtot_prefix}{pad}{pc}{BD}{pnl_str}{W}")
+            L.append(HR)
+
         any_live_pnl = any(r["live"] for r in rows)
         if any_live_pnl:
             tc = GR if total_pnl >= 0 else RD
