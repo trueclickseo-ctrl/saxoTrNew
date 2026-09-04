@@ -1,8 +1,8 @@
 {
   "paper": true,
   "host": "127.0.0.1",
-  "port_paper": 7497,
-  "port_live": 7496,
+  "port_paper": 4002,
+  "port_live": 4001,
   "client_id": 10,
   "capital": {
     "budget_usd": 10000,
