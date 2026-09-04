@@ -69,7 +69,8 @@ import forex.strategy_donchian_quality as strat_donchian_quality
 import forex.strategy_donchian_ai as strat_donchian_ai  # 2026-09-03: SIM A/B + AI gates
 import forex.strategy_bb          as strat_bb
 import forex.strategy_advanced_bb_master as strat_advanced_bb_master
-import forex.strategy_bb_quality  as strat_bb_quality
+import forex.strategy_bb_quality    as strat_bb_quality
+import forex.strategy_bb_quality_hv as strat_bb_quality_hv
 import forex.strategy_pullback    as strat_pullback
 import forex.strategy_advanced_pullback_master as strat_advanced_pullback_master
 import forex.strategy_gap         as strat_gap
@@ -216,7 +217,8 @@ STRATEGIES = {
     # the high-DI-spread signals; the low-DI-spread half ran +0.15-0.22 R,
     # PF ~2, positive in both halves. "bb" is UNTOUCHED. Never in either LIVE
     # allowlist. See forex/strategy_bb_quality.py.
-    "bb_quality":  strat_bb_quality,
+    "bb_quality":    strat_bb_quality,
+    "bb_quality_hv": strat_bb_quality_hv,   # 2026-09-04: A/B twin + HIGH_VOLATILITY regime gate (H20260904-37779e)
     "pullback":    strat_pullback,
     # 2026-08-30: SIM-only A/B vs "pullback" (user-supplied "master"
     # design). Adds EMA5>EMA20>EMA50 structure, ATR-percentile band,
@@ -305,7 +307,7 @@ RETIRED_STRATEGIES: set[str] = {
 # LIVE (SEK rsi / EUR exits-only) is UNAFFECTED -- that path resolves from
 # LIVE_ALLOWED_STRATEGIES, never this.
 SIM_ACTIVE_STRATEGIES: list[str] = [
-    "rsi", "rsi_trend", "rsi_atr", "ema_trend", "bb_quality", "zscore_quality",
+    "rsi", "rsi_trend", "rsi_atr", "ema_trend", "bb_quality", "bb_quality_hv", "zscore_quality",
     "donchian_ai",  # 2026-09-03: SIM-only A/B; donchian raw retired, AI-gated twin enters forward study
 ]
 _ACTIVE_STRATEGIES = [k for k in SIM_ACTIVE_STRATEGIES if k in STRATEGIES]
@@ -340,7 +342,8 @@ SLOTS_PER_STRATEGY = {
     # so every swing strategy can take a position in every pair it signals on.
     "ema": _SWING_SLOTS, "advanced_ema": _SWING_SLOTS,  # advanced_ema (2026-08-30): uncapped, mirrors "ema" for a clean A/B
     "ema_trend": _SWING_SLOTS,   # 2026-09-02: mirrors "ema" -- full universe, clean A/B
-    "bb_quality": _SWING_SLOTS,  # 2026-09-02: mirrors "bb"  -- full universe, clean A/B
+    "bb_quality":    _SWING_SLOTS,  # 2026-09-02: mirrors "bb"  -- full universe, clean A/B
+    "bb_quality_hv": _SWING_SLOTS,  # 2026-09-04: A/B twin of bb_quality + HIGH_VOLATILITY regime gate
     "rsi": _SWING_SLOTS, "rsi_trend": _SWING_SLOTS, "rsi_atr": _SWING_SLOTS,  # 2026-09-03: rsi_atr SIM twin
     "donchian": _SWING_SLOTS, "donchian_ai": strat_donchian_ai.MAX_POSITIONS,  # 2026-09-03: AI-gated cap matches module
     "bb": _SWING_SLOTS,
