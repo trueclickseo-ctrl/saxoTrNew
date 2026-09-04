@@ -4,13 +4,17 @@ ai_research_analyst.py -- AI Research Analyst (roadmap #19). Read-only.
   python ai_research_analyst.py                 run the pipeline:
                                                 digest -> propose -> auto-gate
                                                 -> append new hypotheses
-  python ai_research_analyst.py --sweep         also refresh the decomposition
-                                                harness cache first (slow: a
-                                                ~13y yfinance replay per strategy)
+  python ai_research_analyst.py --sweep         also refresh both forex AND stocks
+                                                decomposition caches first (slow)
   python ai_research_analyst.py --report        print the ranked backlog
   python ai_research_analyst.py --digest        print the aggregation digest only
   python ai_research_analyst.py --since 2026-08-15
   python ai_research_analyst.py --set-status H20260903-ab12cd shelved "overfit"
+
+Phase 2 (2026-09-04): the digest and hypothesis pipeline now covers both the 5
+forex SIM strategies AND the 4 US Signals stock strategies (us_sma_crossover,
+us_rsi_reversal, us_momentum, us_ensemble). Stock decomposition cache is
+separate: data/ai_research_stocks_decomp_cache.json (5y replay vs 13y forex).
 
 The analyst turns the trade record into a triaged backlog of SPECIFIED,
 testable strategy-improvement hypotheses. It never edits a strategy or

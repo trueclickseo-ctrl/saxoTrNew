@@ -44,27 +44,35 @@ import ai.features.trade_journal as tj
 from ai.research import decompose as D
 
 _DATA_DIR = tj._DATA_DIR
-HYPOTHESES_LOG = os.path.join(_DATA_DIR, "ai_research_hypotheses.jsonl")
-DIGEST_PATH    = os.path.join(_DATA_DIR, "ai_research_digest.json")
+HYPOTHESES_LOG   = os.path.join(_DATA_DIR, "ai_research_hypotheses.jsonl")
+DIGEST_PATH      = os.path.join(_DATA_DIR, "ai_research_digest.json")
+_STOCK_CARDS_LOG = os.path.join(_DATA_DIR, "stock_observation_cards.jsonl")
 
-_ROSTER = D.ROSTER
+_ROSTER        = D.ROSTER
+_STOCKS_ROSTER = D.STOCKS_ROSTER
 _RECENT_DAYS_FOR_THEMES = 21
 _STATUSES = {"proposed", "gate_passed", "gate_failed", "backtesting",
              "validated", "falsified", "shelved", "shipped"}
 EVAL_TIMEOUT_S = 120.0
 MAX_TOKENS = 8000
 
-_SYSTEM = """You are ATOS's quant Research Analyst. ATOS is a systematic FX bot that \
-runs 5 daily-bar strategies (rsi = RSI(2) pullback with trend filter; rsi_trend = \
+_SYSTEM = """You are ATOS's quant Research Analyst. ATOS runs two systematic trading books:
+
+FOREX: 5 daily-bar FX strategies (rsi = RSI(2) pullback + trend filter; rsi_trend = \
 rsi gated to TRENDING regimes; ema_trend = EMA(5/30) crossover, fresh + DI-backed; \
 bb_quality = Bollinger reversion in non-directional markets; zscore_quality = \
-z-score reversion, low DI-spread) across 184 currency pairs on a SIM paper account.
+z-score reversion, low DI-spread) across 184 currency pairs on SIM paper.
+
+STOCKS (US equities, SIM paper): 4 US Signals strategies (us_sma_crossover = \
+SMA crossover buy/sell; us_rsi_reversal = RSI oversold reversal; us_momentum = \
+price momentum breakout; us_ensemble = ensemble of the 3 above). All are long-only, \
+2×ATR stop, 30-day time limit. Strategy confidence score (0–1) is available at entry.
 
 You are given a digest of how each strategy has actually behaved -- win rate and \
-average R by market regime and by pair-tier, give-back (how much of the favourable \
-excursion is handed back), recurring lessons from the trade journal, and the \
-results of a decomposition harness that replays each strategy over ~13 years and \
-tells you which entry-context buckets carry a statistically stable edge.
+average R by market regime, give-back (favourable excursion handed back), recurring \
+lessons from the trade journal, and results of a decomposition harness that replays \
+each strategy over historical daily bars and tells you which entry-context buckets \
+carry a statistically stable edge.
 
 Your job: propose a SHORT list of concrete, testable improvements -- an entry gate, \
 an exit rule, or a sizing tweak -- each falsifiable by the decomposition harness. \
@@ -78,7 +86,8 @@ bb_quality entry only when adx < 20").
 - expected_effect_r: your estimate of the change in average R per trade, with a \
 sign. Be honest; small is fine.
 - decompose_spec: {"strategy": ..., "feature": one of \
-[regime, di_spread, adx, atr_pctile, crossover_age, dist_ema200_atr, dow]}. \
+[regime, di_spread, adx, atr_pctile, crossover_age, dist_ema200_atr, dow, confidence]}. \
+For stocks, `confidence` is valid; for forex, use the others. \
 The harness will bucket the real replayed trades by that feature and check whether \
 your proposed bucket is positive in both halves of history with a bootstrap CI \
 that excludes zero.
@@ -141,6 +150,46 @@ def _tier(symbol) -> str:
         return "?"
 
 
+def _stock_trade_rows() -> list[dict]:
+    """Per-closed-stock-trade rows from data/stock_observation_cards.jsonl."""
+    cards: dict = {}
+    try:
+        for row in tj._load_jsonl(_STOCK_CARDS_LOG):
+            cid = row.get("card_id")
+            if not cid:
+                continue
+            ev = row.get("event")
+            if ev == "entry":
+                cards[cid] = {"entry": row}
+            elif ev == "exit" and cid in cards:
+                cards[cid]["exit"] = row
+    except Exception:
+        return []
+
+    out = []
+    for card in cards.values():
+        ex = card.get("exit")
+        en = card.get("entry")
+        if not ex or not en:
+            continue
+        r = ex.get("r_multiple")
+        if not isinstance(r, (int, float)):
+            continue
+        out.append({
+            "day": str(ex.get("timestamp", ""))[:10],
+            "strategy": en.get("strategy"),
+            "symbol": en.get("symbol"),
+            "tier": en.get("account_env", "sim"),
+            "regime": None,
+            "r_multiple": float(r),
+            "give_back": None,
+            "exit_reason": ex.get("exit_reason"),
+            "market": "equity",
+            "confidence": en.get("signal_confidence"),
+        })
+    return out
+
+
 def _agg(rows: list[dict], key) -> list[dict]:
     groups: dict = defaultdict(list)
     for row in rows:
@@ -196,6 +245,15 @@ def build_research_digest(since: str | None = None) -> dict:
     since_day = since or _n_days_ago(_RECENT_DAYS_FOR_THEMES)
     roster_rows = [r for r in rows if r["strategy"] in _ROSTER]
 
+    # stocks
+    try:
+        stock_rows = _stock_trade_rows()
+    except Exception:
+        stock_rows = []
+    if since:
+        stock_rows = [r for r in stock_rows if r["day"] >= since]
+    stocks_roster_rows = [r for r in stock_rows if r.get("strategy") in _STOCKS_ROSTER]
+
     digest = {
         "generated": datetime.now(timezone.utc).isoformat(),
         "window_since": since or "all",
@@ -207,6 +265,12 @@ def build_research_digest(since: str | None = None) -> dict:
         "by_strategy_tier": _agg(roster_rows, lambda r: f'{r["strategy"]} / {r["tier"]}'),
         "journal": _journal_themes(since_day),
         "decomposition_cache": _decomp_summary(),
+        # Phase 2 stocks section
+        "stocks_n_closed_trades": len(stock_rows),
+        "stocks_by_strategy": _agg(stocks_roster_rows, lambda r: r["strategy"]),
+        "stocks_by_strategy_account": _agg(
+            stocks_roster_rows, lambda r: f'{r["strategy"]} / {r["tier"]}'),
+        "stocks_decomposition_cache": _stocks_decomp_summary(),
     }
     if err:
         digest["_warning"] = err
@@ -242,6 +306,30 @@ def _decomp_summary() -> dict:
                     })
         out[strat] = {"ts": blob.get("ts"), "base_by_feature":
                       {v["feature"]: v["base_avg_r"] for v in blob.get("verdicts", [])},
+                      "gate_passing_buckets": passing}
+    return out
+
+
+def _stocks_decomp_summary() -> dict:
+    """Compact view of the stocks decomposition cache."""
+    cache = D.cached_stock_verdicts()
+    out = {}
+    for strat, blob in cache.items():
+        if "error" in blob:
+            out[strat] = {"error": blob["error"], "ts": blob.get("ts")}
+            continue
+        passing = []
+        for v in blob.get("verdicts", []):
+            for b in v.get("buckets", []):
+                if b.get("gate_pass"):
+                    passing.append({
+                        "feature": v["feature"], "bucket": b["label"], "n": b["n"],
+                        "avg_r": b["avg_r"], "pf": b.get("pf"),
+                        "halves": [b["first_half_avg_r"], b["second_half_avg_r"]],
+                    })
+        out[strat] = {"ts": blob.get("ts"),
+                      "base_by_feature":
+                          {v["feature"]: v["base_avg_r"] for v in blob.get("verdicts", [])},
                       "gate_passing_buckets": passing}
     return out
 
@@ -331,12 +419,15 @@ def auto_gate(hyp: dict, trades_by_strategy: dict | None = None,
     Deterministic, read-only, never raises."""
     spec = hyp.get("decompose_spec") or {}
     strat, feature = spec.get("strategy"), spec.get("feature")
-    if strat not in D.MODULE_IMPORT or not feature:
+    is_stock = strat in D.STOCKS_MODULE_IMPORT
+    if (strat not in D.MODULE_IMPORT and not is_stock) or not feature:
         return {"status": "gate_skipped", "verdict": None,
                 "note": f"no runnable spec ({strat}/{feature})"}
     try:
         if trades_by_strategy is not None and strat in trades_by_strategy:
             trades = trades_by_strategy[strat]
+        elif is_stock:
+            trades = D.replay_stock_trades(strat, years=min(years, 5))
         else:
             trades = D.replay_trades(strat, years=years, core_only=True)
         verdict = D.bucket_and_gate(trades, feature)
@@ -406,6 +497,10 @@ def run(since: str | None = None, sweep_first: bool = False) -> dict:
     if sweep_first:
         try:
             D.refresh_cache(years=years)
+        except Exception:
+            pass
+        try:
+            D.refresh_stocks_cache(years=min(years, 5))
         except Exception:
             pass
 

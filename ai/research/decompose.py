@@ -67,6 +67,17 @@ MODULE_IMPORT = {
 # The roster the analyst sweeps by default (forex v1).
 ROSTER = ["rsi", "rsi_trend", "ema_trend", "bb_quality", "zscore_quality"]
 
+# ── stocks Phase 2 ──────────────────────────────────────────────────────
+# strategy snake_key -> usa_strategy class name (used by us_signals._run_one)
+STOCKS_MODULE_IMPORT = {
+    "us_sma_crossover": "SMAStrategy",
+    "us_rsi_reversal":  "RSIStrategy",
+    "us_momentum":      "MomentumStrategy",
+    "us_ensemble":      "EnsembleStrategy",
+}
+STOCKS_ROSTER = ["us_sma_crossover", "us_rsi_reversal", "us_momentum", "us_ensemble"]
+STOCKS_CACHE_PATH = os.path.join(_DATA_DIR, "ai_research_stocks_decomp_cache.json")
+
 _MIN_BARS = 220          # warmup for EMA(200)-style filters (matches _bfu)
 # The live runner fetches CHART_BARS=500 daily bars per pair and passes
 # exactly that to generate_signals / should_exit. Replaying with the full
@@ -103,6 +114,7 @@ class Trade:
     dist_ema200_atr: float | None = None
     dow: int | None = None
     crossover_age: int | None = None
+    confidence: float | None = None    # signal confidence (stocks only)
 
 
 # ── replay ─────────────────────────────────────────────────────────────
@@ -308,6 +320,10 @@ _DEFAULT_BUCKETS = {
     "dist_ema200_atr": [("near<=1", lambda v: v is not None and abs(v) <= 1),
                         ("mid", lambda v: v is not None and 1 < abs(v) <= 3),
                         ("far>3", lambda v: v is not None and abs(v) > 3)],
+    # stocks-only
+    "confidence": [("low<0.5",    lambda v: v is not None and v < 0.5),
+                   ("mid0.5-0.75", lambda v: v is not None and 0.5 <= v < 0.75),
+                   ("high>=0.75", lambda v: v is not None and v >= 0.75)],
 }
 
 
@@ -394,6 +410,13 @@ _SWEEP_FEATURES = {
     "zscore":         ["regime", "di_spread", "adx", "atr_pctile"],
 }
 
+_STOCKS_SWEEP_FEATURES = {
+    "us_sma_crossover": ["confidence", "dow", "atr_pctile", "adx"],
+    "us_rsi_reversal":  ["confidence", "rsi", "atr_pctile", "dow"],
+    "us_momentum":      ["confidence", "dow", "atr_pctile", "adx"],
+    "us_ensemble":      ["confidence", "dow", "atr_pctile"],
+}
+
 
 def sweep(strategy: str, years: int = 13, core_only: bool = True,
           price_data: dict | None = None, trades: list[Trade] | None = None) -> list[Verdict]:
@@ -402,6 +425,225 @@ def sweep(strategy: str, years: int = 13, core_only: bool = True,
         trades = replay_trades(strategy, years=years, core_only=core_only, price_data=price_data)
     feats = _SWEEP_FEATURES.get(strategy, ["regime", "di_spread", "adx"])
     return [bucket_and_gate(trades, f) for f in feats]
+
+
+# ── stocks replay (Phase 2) ─────────────────────────────────────────────
+
+def _default_stocks_tickers() -> list[str]:
+    """Top 50 S&P 500 components as a replay default (yfinance tickers)."""
+    try:
+        import atos_runner as _ar
+        cand = getattr(_ar, "US_TICKERS", None) or getattr(_ar, "_UNIVERSE_TICKERS", None)
+        if cand:
+            return list(cand)[:100]
+    except Exception:
+        pass
+    return [
+        "AAPL", "MSFT", "AMZN", "NVDA", "GOOGL", "META", "TSLA", "UNH", "LLY", "JPM",
+        "XOM", "JNJ", "V", "PG", "MA", "HD", "CVX", "MRK", "ABBV", "PEP",
+        "KO", "AVGO", "BAC", "WMT", "COST", "TMO", "MCD", "CSCO", "ACN", "DHR",
+        "NEE", "NKE", "PM", "T", "VZ", "BMY", "AMGN", "RTX", "HON", "INTC",
+        "QCOM", "IBM", "CAT", "BA", "GE", "MMM", "DE", "AXP", "GS", "MS",
+    ]
+
+
+def _replay_one_stock(strategy_key: str, ticker: str, df: pd.DataFrame) -> list[Trade]:
+    """Bar-by-bar replay for one US equity ticker.
+
+    Uses the real usa_strategy generate/SELL signal and ATR stop logic.
+    Avoids date.today() comparisons (uses held_days counter instead).
+    """
+    from atos.us_signals import _run_one, _prep_df, MAX_HOLD_DAYS, ATR_STOP_MULT, HARD_STOP_PCT
+
+    pkg_cls = STOCKS_MODULE_IMPORT[strategy_key]
+    n = len(df)
+    if n < _MIN_BARS + 30:
+        return []
+
+    ind = _precompute(df)   # works on yfinance OHLCV (High/Low/Close)
+    out: list[Trade] = []
+    pos = None
+
+    for day in range(_MIN_BARS, n):
+        window = df.iloc[max(0, day - _WINDOW + 1):day + 1]
+        hi_col = "High" if "High" in window.columns else "high"
+        lo_col = "Low"  if "Low"  in window.columns else "low"
+        cl_col = "Close" if "Close" in window.columns else "close"
+        cur_close = float(window[cl_col].iloc[-1])
+
+        if pos is not None:
+            held = day - pos["entry_idx"]
+            hi = float(window[hi_col].iloc[-1])
+            lo = float(window[lo_col].iloc[-1])
+            pos["mfe"] = max(pos["mfe"], hi - pos["entry_price"])
+            pos["mae"] = min(pos["mae"], lo - pos["entry_price"])
+
+            # exit checks
+            exit_flag, reason = False, ""
+            if cur_close <= pos["stop_price"]:
+                exit_flag, reason = True, "stop"
+            elif held >= MAX_HOLD_DAYS:
+                exit_flag, reason = True, f"time exit {held}d"
+            else:
+                try:
+                    wdf = _prep_df(window)
+                    res = _run_one(pkg_cls, ticker, wdf)
+                    if res is not None and res.signal == "SELL":
+                        exit_flag, reason = True, "SELL signal"
+                except Exception:
+                    pass
+
+            if exit_flag:
+                pnl = cur_close - pos["entry_price"]    # always long
+                r = pos["r_price"] or np.nan
+                out.append(Trade(
+                    strategy=strategy_key, symbol=ticker, tier="US", direction="Buy",
+                    entry_date=pos["entry_date_str"], entry_price=pos["entry_price"],
+                    r_price=pos["r_price"],
+                    r_multiple=float(pnl / r) if r and not np.isnan(r) else 0.0,
+                    mfe_r=float(pos["mfe"] / r) if r and not np.isnan(r) else 0.0,
+                    mae_r=float(pos["mae"] / r) if r and not np.isnan(r) else 0.0,
+                    holding_bars=held, exit_reason=str(reason),
+                    regime=pos["feat"].get("regime"),
+                    di_spread=pos["feat"].get("di_spread"),
+                    adx=pos["feat"].get("adx"),
+                    rsi=pos["feat"].get("rsi"),
+                    atr_pctile=pos["feat"].get("atr_pctile"),
+                    dist_ema200_atr=pos["feat"].get("dist_ema200_atr"),
+                    dow=pos["feat"].get("dow"),
+                    crossover_age=None,
+                    confidence=pos["feat"].get("confidence"),
+                ))
+                pos = None
+
+        if pos is None:
+            try:
+                wdf = _prep_df(window)
+                result = _run_one(pkg_cls, ticker, wdf)
+            except Exception:
+                result = None
+            if result is not None and result.signal == "BUY":
+                entry = cur_close
+                atrv = float(ind["atr"].iloc[day])
+                atrv = None if np.isnan(atrv) else atrv
+                atr_stop = (entry - ATR_STOP_MULT * atrv) if atrv else 0.0
+                hard_stop = entry * (1 - HARD_STOP_PCT)
+                stop = max(atr_stop, hard_stop)
+                try:
+                    reg = classify_regime(window.iloc[-140:])["label"]
+                except Exception:
+                    reg = None
+                feat = {
+                    "regime": reg,
+                    "di_spread": _f(ind["di_spread"].iloc[day]),
+                    "adx": _f(ind["adx"].iloc[day]),
+                    "rsi": _f(ind["rsi"].iloc[day]),
+                    "atr_pctile": _f(ind["atr_pctile"].iloc[day]),
+                    "dist_ema200_atr": (
+                        _f((entry - ind["ema200"].iloc[day]) / atrv) if atrv else None),
+                    "dow": int(df.index[day].dayofweek),
+                    "confidence": _f(getattr(result, "confidence", None)),
+                }
+                pos = {
+                    "direction": "Buy", "entry_price": entry, "stop_price": stop,
+                    "entry_idx": day, "entry_date_str": str(df.index[day])[:10],
+                    "r_price": abs(entry - stop), "mfe": 0.0, "mae": 0.0,
+                    "feat": feat,
+                }
+    return out
+
+
+def replay_stock_trades(strategy_key: str, tickers: list[str] | None = None,
+                        years: int = 5, price_data: dict | None = None) -> list[Trade]:
+    """Replay `strategy_key` across US equity tickers. `price_data` (ticker ->
+    OHLCV DataFrame) can be supplied to skip the yfinance download (tests)."""
+    if strategy_key not in STOCKS_MODULE_IMPORT:
+        raise ValueError(
+            f"unknown stock strategy {strategy_key!r} -- one of {sorted(STOCKS_MODULE_IMPORT)}")
+
+    if price_data is None:
+        if tickers is None:
+            tickers = _default_stocks_tickers()
+        import yfinance as yf
+        end   = pd.Timestamp.now()
+        start = end - pd.Timedelta(days=int(years * 365.25) + 30)
+        price_data = {}
+        for tk in tickers:
+            try:
+                df = yf.download(tk, start=start, end=end, progress=False, auto_adjust=True)
+                # yfinance may return MultiIndex columns -- flatten
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                if len(df) > _MIN_BARS:
+                    price_data[tk] = df
+            except Exception:
+                pass
+
+    trades: list[Trade] = []
+    for ticker, df in price_data.items():
+        if tickers is not None and ticker not in tickers:
+            continue
+        trades.extend(_replay_one_stock(strategy_key, ticker, df))
+
+    trades.sort(key=lambda t: t.entry_date)
+    mid = len(trades) // 2
+    for i, t in enumerate(trades):
+        t.half = 1 if i < mid else 2
+    return trades
+
+
+def sweep_stocks(strategy_key: str, years: int = 5,
+                 tickers: list[str] | None = None,
+                 price_data: dict | None = None,
+                 trades: list[Trade] | None = None) -> list[Verdict]:
+    """Run bucket_and_gate over the standard stock feature set."""
+    if trades is None:
+        trades = replay_stock_trades(strategy_key, tickers=tickers, years=years,
+                                     price_data=price_data)
+    feats = _STOCKS_SWEEP_FEATURES.get(strategy_key, ["confidence", "dow", "atr_pctile"])
+    # only sweep features that actually have values in this replay
+    active = [f for f in feats if any(getattr(t, f, None) is not None for t in trades)]
+    return [bucket_and_gate(trades, f) for f in active]
+
+
+def refresh_stocks_cache(strategies: list[str] | None = None, years: int = 5,
+                         tickers: list[str] | None = None) -> dict:
+    """Re-run sweep_stocks() for each stock strategy and write the cache."""
+    strategies = strategies or STOCKS_ROSTER
+    cache = _load_stocks_cache()
+    for s in strategies:
+        try:
+            verds = sweep_stocks(s, years=years, tickers=tickers)
+            cache[s] = {
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "years": years,
+                "verdicts": [_verdict_to_dict(v) for v in verds],
+            }
+        except Exception as exc:
+            cache[s] = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "error": str(exc)[:300]}
+    try:
+        os.makedirs(_DATA_DIR, exist_ok=True)
+        tmp = STOCKS_CACHE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cache, f, indent=2)
+        os.replace(tmp, STOCKS_CACHE_PATH)
+    except Exception:
+        pass
+    return cache
+
+
+def _load_stocks_cache() -> dict:
+    try:
+        with open(STOCKS_CACHE_PATH, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def cached_stock_verdicts() -> dict:
+    """The last refresh_stocks_cache() output. Read-only."""
+    return _load_stocks_cache()
 
 
 def refresh_cache(strategies: list[str] | None = None, years: int = 13) -> dict:
@@ -467,32 +709,48 @@ def _print_verdict(v: Verdict) -> None:
 
 
 def main(argv=None) -> int:
+    all_strategies = sorted(MODULE_IMPORT) + sorted(STOCKS_MODULE_IMPORT)
     ap = argparse.ArgumentParser(description="Strategy edge-decomposition harness (read-only).")
-    ap.add_argument("--strategy", required=True, choices=sorted(MODULE_IMPORT))
+    ap.add_argument("--strategy", required=True, choices=all_strategies)
     ap.add_argument("--feature", help="one feature to bucket by (default: full sweep)")
     ap.add_argument("--sweep", action="store_true", help="run the standard feature set")
-    ap.add_argument("--years", type=int, default=13)
-    ap.add_argument("--core-only", action="store_true", help="49 CORE pairs only (matches the 2026-09-02 sweep)")
+    ap.add_argument("--years", type=int, default=None,
+                    help="lookback years (default 13 for forex, 5 for stocks)")
+    ap.add_argument("--core-only", action="store_true",
+                    help="forex: 49 CORE pairs only (matches the 2026-09-02 sweep)")
     ap.add_argument("--json", action="store_true", help="emit JSON instead of a table")
     ap.add_argument("--refresh-cache", action="store_true",
-                    help="re-run the full roster sweep and write data/ai_research_decomp_cache.json")
+                    help="re-run the full roster sweep and write the decomp cache")
+    ap.add_argument("--stocks", action="store_true",
+                    help="refresh the stocks cache (use with --refresh-cache)")
     args = ap.parse_args(argv)
 
+    is_stock = args.strategy in STOCKS_MODULE_IMPORT
+    years = args.years or (5 if is_stock else 13)
+
     if args.refresh_cache:
-        cache = refresh_cache(years=args.years)
+        if args.stocks or is_stock:
+            cache = refresh_stocks_cache(years=years)
+        else:
+            cache = refresh_cache(years=years)
         print(json.dumps({k: (v.get("ts") or v.get("error")) for k, v in cache.items()}, indent=2))
         return 0
 
-    trades = replay_trades(args.strategy, years=args.years, core_only=args.core_only)
+    if is_stock:
+        trades = replay_stock_trades(args.strategy, years=years)
+    else:
+        trades = replay_trades(args.strategy, years=years, core_only=args.core_only)
     print(f"replayed {len(trades)} {args.strategy} trades "
-          f"({'core' if args.core_only else 'full'} universe, {args.years}y)")
+          f"({'stock' if is_stock else ('core' if args.core_only else 'full')} universe, {years}y)")
     if not trades:
         return 1
 
     if args.feature and not args.sweep:
         verds = [bucket_and_gate(trades, args.feature)]
+    elif is_stock:
+        verds = sweep_stocks(args.strategy, years=years, trades=trades)
     else:
-        verds = sweep(args.strategy, years=args.years, core_only=args.core_only, trades=trades)
+        verds = sweep(args.strategy, years=years, core_only=args.core_only, trades=trades)
 
     if args.json:
         print(json.dumps([_verdict_to_dict(v) for v in verds], indent=2))
