@@ -65,7 +65,7 @@ def cmd_positions(ib, account_id: str) -> None:
     if not positions:
         print("  No open IBKR positions.")
         return
-    prices = ic.get_prices(ib, [p["symbol"] for p in positions])
+    prices = {s: ic.abs_price(p) for s, p in ic.get_prices(ib, [p["symbol"] for p in positions]).items()}
     print(f"\n  IBKR positions (account {account_id}):")
     print(f"  {'Symbol':<8} {'Qty':>5} {'AvgCost':>8} {'Last':>8} {'Value':>10} {'Gain%':>7}")
     print("  " + "-" * 55)

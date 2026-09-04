@@ -108,12 +108,25 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
     if signal.get("risk_off"):
         print("  [RISK OFF] Signal is in defensive mode.")
 
-    # Fetch live state
+    # TRADING RULE: execution uses IBKR live prices only — never Yahoo Finance.
     held    = ic.get_positions(ib, account_id)
     symbols = list({*targets, *[p["symbol"] for p in held]})
-    prices  = ic.get_prices(ib, symbols)
+    prices  = ic.get_prices(ib, symbols)   # returns 0 if IBKR has no data
+    ibkr_ok = not all(v == 0.0 for v in prices.values())
     cash    = ic.get_cash_balance(ib, account_id)
     print(f"  Cash available: ${cash:,.2f}")
+    if not ibkr_ok:
+        print("  [WARNING] IBKR returned no prices — plan shown as Yahoo estimates, not for execution.")
+
+    if not dry_run and not ic.is_market_open():
+        print("\n  [BLOCKED] US market is closed. Orders can only be placed "
+              "09:30–16:00 ET (14:30–21:00 UTC).")
+        return
+
+    if not dry_run and not ibkr_ok:
+        print("\n  [BLOCKED] No IBKR live prices available. "
+              "Cannot execute without live market data.")
+        return
 
     buys, sells = _compute_plan(
         targets       = targets,
@@ -197,7 +210,7 @@ def trail_stops(ib, account_id: str, cfg: dict, dry_run: bool = True) -> None:
         return
 
     symbols = [p["symbol"] for p in positions]
-    prices  = ic.get_prices(ib, symbols)
+    prices  = {s: ic.abs_price(p) for s, p in ic.get_prices(ib, symbols).items()}
     print(f"  Trail-stop check for {len(positions)} position(s) | stop_pct={stop_pct*100:.0f}%\n")
 
     for pos in positions:
@@ -282,10 +295,37 @@ def run_reversion_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
         print("  No new reversion candidates.")
         return
 
+    # Fetch live IBKR prices. TRADING RULE: execution uses IBKR prices only.
+    # Yahoo Finance is for signal generation (RSI/EMA/scan) only — never for
+    # sizing or placing a live order.
+    live_syms   = [c["ticker"] for c in new_cands[:slots_free]]
+    live_prices = ic.get_prices(ib, live_syms)   # returns 0 if IBKR has no data
+
+    if not dry_run and not ic.is_market_open():
+        print(f"\n  [BLOCKED] US market is closed. Orders can only be placed "
+              f"09:30–16:00 ET (14:30–21:00 UTC).")
+        return
+
     per_slot = budget / max_slots
 
     for c in new_cands[:slots_free]:
-        price = c["price"]
+        ibkr_price  = live_prices.get(c["ticker"], 0.0)
+        yahoo_price = c["price"]   # daily close from scan signal — display only
+        ibkr_ok     = bool(ibkr_price and ibkr_price > 0)
+
+        # Dry-run: show estimate even without live price (clearly labeled)
+        if dry_run:
+            price     = ibkr_price if ibkr_ok else yahoo_price
+            price_src = "IBKR" if ibkr_ok else "Yahoo est. (IBKR unavailable — not for execution)"
+        else:
+            # Execute: IBKR price required
+            if not ibkr_ok:
+                print(f"\n  [BLOCKED] {c['ticker']}: no IBKR live price. "
+                      f"Cannot size order. Run during market hours with IBKR market data.")
+                continue
+            price     = ibkr_price
+            price_src = "IBKR live"
+
         if not price or price <= 0:
             continue
         qty      = math.floor(per_slot / price)
@@ -298,8 +338,8 @@ def run_reversion_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
 
         print(f"\n  [{label}] BUY  {c['ticker']:<8}  "
               f"RSI={c['rsi']:.0f}  dip={c['dip_pct']}%  vol={c['vol_ratio']}x")
-        print(f"    qty={qty}  price~${price:.2f}  notional~${notional:,.0f}  "
-              f"stop=${stop_price:.2f}")
+        print(f"    qty={qty}  price~${price:.2f} [{price_src}]  "
+              f"notional~${notional:,.0f}  stop=${stop_price:.2f}")
 
         if dry_run:
             print("    [DRY RUN] would place buy + stop")
@@ -353,7 +393,7 @@ def run_reversion_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
     symbols = [p["symbol"] for p in open_pos]
     if indicators is None:
         indicators = sig.reversion_exit_indicators(symbols)
-    ibkr_prices = ic.get_prices(ib, symbols)
+    ibkr_prices = {s: ic.abs_price(p) for s, p in ic.get_prices(ib, symbols).items()}
     today      = datetime.date.today()
 
     print(f"\n  [reversion exits] {len(open_pos)} position(s)")

@@ -209,18 +209,33 @@ def get_prices(ib: IB, symbols: list[str]) -> dict[str, float]:
     if _prices_are_empty(result):
         result = _fetch(4)  # delayed frozen
 
-    # Final fallback: Yahoo Finance daily close (paper account / no subscription)
     if _prices_are_empty(result):
-        try:
-            from ibkr_module import ibkr_signals as _sig
-            yp = _sig.yahoo_prices(symbols)
-            if not _prices_are_empty(yp):
-                print("  [prices] IBKR market data unavailable — using Yahoo Finance close prices")
-                result = {s: yp.get(s, 0.0) for s in symbols}
-        except Exception:
-            pass
+        print("  [prices] IBKR returned no market data (outside hours / no subscription).")
 
     return result
+
+
+def abs_price(price: float) -> float:
+    """Return the price as-is (compatibility shim — Yahoo fallback removed)."""
+    return float(price) if price else 0.0
+
+
+def is_market_open() -> bool:
+    """Return True if the US stock market is currently open (09:30–16:00 ET)."""
+    import datetime as _dt
+    try:
+        import zoneinfo
+        et = zoneinfo.ZoneInfo("America/New_York")
+    except ImportError:
+        import datetime
+        # UTC-4 (EDT) / UTC-5 (EST) — approximate with fixed -4 offset
+        et = _dt.timezone(_dt.timedelta(hours=-4))
+    now_et = _dt.datetime.now(tz=et)
+    if now_et.weekday() >= 5:   # Saturday / Sunday
+        return False
+    market_open  = now_et.replace(hour=9,  minute=30, second=0, microsecond=0)
+    market_close = now_et.replace(hour=16, minute=0,  second=0, microsecond=0)
+    return market_open <= now_et < market_close
 
 
 # ── Orders ────────────────────────────────────────────────────────────────────
