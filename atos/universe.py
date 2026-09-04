@@ -39,7 +39,6 @@ SP500_TICKERS = [
     "NOW",   # ServiceNow — workflow automation
 
     # ── Technology — enterprise software & IT services (8) ───────────────────
-    "INTU",  # Intuit — TurboTax/QuickBooks, pricing power
     "ACN",   # Accenture — IT consulting, $200B+
     "IBM",   # IBM — hybrid cloud/AI, defensive, dividend
     "PANW",  # Palo Alto Networks — cybersecurity platform

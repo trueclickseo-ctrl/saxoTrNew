@@ -189,18 +189,23 @@ def get_prices(ib: IB, symbols: list[str]) -> dict[str, float]:
     except Exception:
         pass
 
+    _BATCH = 50  # IBKR paper accounts cap concurrent ticker subscriptions
+
     def _fetch(market_data_type: int) -> dict[str, float]:
         ib.reqMarketDataType(market_data_type)
-        tickers = [ib.reqMktData(c, "", False, False) for c in contracts]
-        ib.sleep(3.0)
         out = {}
-        for sym, contract, ticker in zip(symbols, contracts, tickers):
-            raw = ticker.last or ticker.close
-            if raw and not math.isnan(float(raw)) and float(raw) > 0:
-                out[sym] = float(raw)
-            else:
-                out[sym] = 0.0
-            ib.cancelMktData(contract)
+        pairs = list(zip(symbols, contracts))
+        for i in range(0, len(pairs), _BATCH):
+            chunk = pairs[i:i + _BATCH]
+            chunk_tickers = [ib.reqMktData(c, "", False, False) for _, c in chunk]
+            ib.sleep(3.0)
+            for (sym, contract), ticker in zip(chunk, chunk_tickers):
+                raw = ticker.last or ticker.close
+                if raw and not math.isnan(float(raw)) and float(raw) > 0:
+                    out[sym] = float(raw)
+                else:
+                    out[sym] = 0.0
+                ib.cancelMktData(contract)
         return out
 
     result = _fetch(1)  # real-time
