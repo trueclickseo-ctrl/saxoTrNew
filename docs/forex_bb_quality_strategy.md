@@ -57,3 +57,12 @@ the untouched `bb`, plus a proper walk-forward (rolling train/test, full
 LIVE consideration until that clears.
 
 Scratch backtests: `~/.claude/.../scratchpad/{st_bb_decompose,composite_verify}.py`.
+
+## Regime-gated A/B twin
+
+**`bb_quality_hv`** ([`forex/strategy_bb_quality_hv.py`](../forex/strategy_bb_quality_hv.py)) —
+added 2026-09-04 (H20260904-37779e). Keeps only signals where the AI regime
+classifier labels the pair `HIGH_VOLATILITY` at the signal bar. Gate evidence:
+base avg_r +0.024; HIGH_VOLATILITY bucket n=33, avg_r +0.247, PF 2.70, both
+halves positive (+0.215 / +0.348). Bootstrap 95% CI excludes 0. Status: `backtesting`.
+See [`forex_bb_quality_hv_strategy.md`](forex_bb_quality_hv_strategy.md).

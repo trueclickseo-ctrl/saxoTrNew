@@ -5,11 +5,12 @@ it runs today** — parameters, entry/exit rules, sizing, where it runs (SIM /
 LIVE), and any known stale docstring notes. **None of these describe changes** —
 the strategies run as-is.
 
-The 24 strategies are the keys of `STRATEGIES` in [`forex/runner.py`](../forex/runner.py).
-The `advanced_*` / `*_master` / `rsi_trend` / `ema_trend` / `bb_quality` /
-`zscore_quality` ones are SIM-only experiments running in parallel with their
-untouched originals — none of them can place a real-money order.
-All 24 appear in the SIM scan and in `forex_dashboard.py` (`STRAT_LABELS_ALL` /
+The 26 strategies are the keys of `STRATEGIES` in [`forex/runner.py`](../forex/runner.py).
+The `advanced_*` / `*_master` / `rsi_trend` / `ema_trend` / `rsi_atr` /
+`bb_quality` / `bb_quality_hv` / `zscore_quality` / `zscore_quality_tb` ones are
+SIM-only experiments running in parallel with their untouched originals — none of
+them can place a real-money order.
+All 26 appear in the SIM scan and in `forex_dashboard.py` (`STRAT_LABELS_ALL` /
 `STRAT_COL` / the strategy legend + per-strategy breakdown tables).
 
 `rsi_confirm` (the confirmation-delay idea) was built + backtested + **retired
@@ -24,9 +25,10 @@ positions keep full exit management) but are **excluded from the default
 entry rotation** — they never open anything new. `--strategy <name>` still
 runs one, with a warning, for research.
 
-**SIM ROSTER cut to 5, 2026-09-02** (`SIM_ACTIVE_STRATEGIES` in
-`forex/runner.py`, explicit user decision): the SIM forex book now runs
-**only** `rsi`, `rsi_trend`, `ema_trend`, `bb_quality`, `zscore_quality`.
+**SIM ROSTER** (`SIM_ACTIVE_STRATEGIES` in `forex/runner.py`): cut to 5 on
+2026-09-02, then expanded to **9** on 2026-09-04. Current roster: `rsi`,
+`rsi_trend`, `rsi_atr`, `ema_trend`, `bb_quality`, `bb_quality_hv`,
+`zscore_quality`, `zscore_quality_tb`, `donchian_ai`.
 Every other strategy — the untouched originals (`ema`/`bb`/`zscore`), all
 `advanced_*`/`*_master` A/B experiments, the retired set, the LBO day-trade
 book — is **dormant**: module stays importable, open positions still
@@ -45,17 +47,20 @@ exits-only) is unaffected.
 | `rsi` | [forex_rsi_strategy.md](forex_rsi_strategy.md) | RSI(2) pullback (mean-reversion) | SIM **+ LIVE_EUR (real money)** |
 | `advanced_rsi_master` | [forex_advanced_rsi_master_strategy.md](forex_advanced_rsi_master_strategy.md) | `rsi` + EMA50/200 alignment + slope + distance + reversal-confirm (A/B vs `rsi`) | SIM |
 | `rsi_trend` | [forex_rsi_trend_strategy.md](forex_rsi_trend_strategy.md) | `rsi` + regime gate: Buy only in `TRENDING_BULLISH`, Sell only in `TRENDING_BEARISH` (A/B vs `rsi`, 2026-09-02) | SIM |
+| `rsi_atr` | [forex_rsi_atr_strategy.md](forex_rsi_atr_strategy.md) | `rsi` + `atr_pctile > 0.66` — entry only when current ATR(14) is in the top-third of its 50-bar distribution (A/B vs `rsi`, 2026-09-03, H20260903-74e4df) | SIM |
 | `rsi_confirm` | [forex_rsi_confirm_strategy.md](forex_rsi_confirm_strategy.md) | `rsi` signal → LIVE-CANDIDATE bucket → observe 6–30h → enter only on a confirmed dip-then-recover; ONE conviction position at a time + fast ATR take-profit (2026-09-02, backtest pending) | SIM |
 | ~~`donchian`~~ | [forex_donchian_strategy.md](forex_donchian_strategy.md) | 30-day channel breakout (strict) | **RETIRED** — exits only |
 | ~~`donchian_quality`~~ | [forex_donchian_quality_strategy.md](forex_donchian_quality_strategy.md) | `donchian` + breakout-quality filters (A/B) | **RETIRED** — exits only |
 | `bb` | [forex_bb_strategy.md](forex_bb_strategy.md) | Bollinger(20,2) + RSI reversion | SIM **+ SEK LIVE** (task Disabled) |
 | `advanced_bb_master` | [forex_advanced_bb_master_strategy.md](forex_advanced_bb_master_strategy.md) | `bb` + ADX ceiling + band-width + excursion + reversal-confirm (A/B vs `bb`) | SIM |
 | `bb_quality` | [forex_bb_quality_strategy.md](forex_bb_quality_strategy.md) | `bb` + non-directional-market gate `|+DI−−DI|≤14` (A/B vs `bb`, 2026-09-02) | SIM |
+| `bb_quality_hv` | [forex_bb_quality_hv_strategy.md](forex_bb_quality_hv_strategy.md) | `bb_quality` + HIGH_VOLATILITY regime gate (A/B vs `bb_quality`, 2026-09-04, H20260904-37779e) | SIM |
 | ~~`pullback`~~ | [forex_pullback_strategy.md](forex_pullback_strategy.md) | trend pullback to EMA(20) | **RETIRED** — exits only |
 | `advanced_pullback_master` | [forex_advanced_pullback_master_strategy.md](forex_advanced_pullback_master_strategy.md) | `pullback` + EMA5>20>50 structure + vol-percentile + DI + same-day bounce (A/B vs `pullback`) | SIM (own design — kept) |
 | ~~`supertrend`~~ | [forex_supertrend_strategy.md](forex_supertrend_strategy.md) | SuperTrend(10,3) + EMA(200) | **RETIRED** — exits only |
 | `zscore` | [forex_zscore_strategy.md](forex_zscore_strategy.md) | z-score(20) ±2σ reversion | SIM |
 | `zscore_quality` | [forex_zscore_quality_strategy.md](forex_zscore_quality_strategy.md) | `zscore` + non-directional-market gate `|+DI−−DI|≤14` (A/B vs `zscore`, 2026-09-02) | SIM |
+| `zscore_quality_tb` | [forex_zscore_quality_tb_strategy.md](forex_zscore_quality_tb_strategy.md) | `zscore_quality` + TRENDING_BULLISH regime gate (A/B vs `zscore_quality`, 2026-09-04, H20260904-c9e606) | SIM |
 | ~~`ml`~~ | [forex_ml_strategy.md](forex_ml_strategy.md) | per-pair logistic regression, 7 features | **RETIRED** — exits only |
 | `advanced_ml` | [forex_advanced_ml_strategy.md](forex_advanced_ml_strategy.md) | regularized logistic reg + regime + trend filters (A/B vs `ml`) | SIM (own design — kept) |
 | `cnn_lstm` | [forex_cnn_lstm_strategy.md](forex_cnn_lstm_strategy.md) | CNN + BiLSTM + attention (⚠️ barely fires) | SIM |

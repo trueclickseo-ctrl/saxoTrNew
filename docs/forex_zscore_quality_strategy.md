@@ -68,3 +68,14 @@ to the *exact same* filter (low DI spread) — worth consolidating in the
 eventual strategy cleanup.
 
 Scratch backtest: `~/.claude/.../scratchpad/zscore_decompose.py`.
+
+## Regime-gated A/B twin
+
+**`zscore_quality_tb`** ([`forex/strategy_zscore_quality_tb.py`](../forex/strategy_zscore_quality_tb.py)) —
+added 2026-09-04 (H20260904-c9e606). Keeps only signals where the AI regime
+classifier labels the pair `TRENDING_BULLISH` at the signal bar. Gate evidence:
+base avg_r +0.004; TRENDING_BULLISH bucket n=54, avg_r +0.150, PF 2.23, both
+halves positive (+0.231 / +0.119). Bootstrap 95% CI excludes 0. Note: RANGING
+(the nominal design intention) failed the gate — `TRENDING_BULLISH` is the
+empirical winner, not the prior. Status: `backtesting`.
+See [`forex_zscore_quality_tb_strategy.md`](forex_zscore_quality_tb_strategy.md).

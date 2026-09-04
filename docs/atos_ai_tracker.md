@@ -188,6 +188,39 @@ Not in the v1 sprint plan. Cheap interim version (hardcoded economic-calendar bl
 
 ## Change log for THIS file
 
+- **2026-09-04 (commits `198dbfe` `581fb1c` `aee7466` `aa21000`) — LIVE/SIM universe split + two new SIM A/B twins + dashboard fix**
+
+  **LIVE/SIM universe split (`198dbfe`) — `atos/universe.py` + `atos_runner.py`:**
+  - New `SIM_ONLY_TICKERS` frozenset (61 names): regional banks, China ADRs, speculative biotech, thin medical/diagnostics, near-distressed, new adds still building SIM track record, low-ADV financials, marginal insurance, thin niche names.
+  - New `LIVE_TICKERS = [t for t in US_TICKERS if t not in SIM_ONLY_TICKERS]` (~337 tickers, LIVE-eligible).
+  - `US_TICKERS` (398) unchanged — still the download and SIM/IBKR scan universe.
+  - `run_us_momentum()`: `tickers_for_scan = LIVE_TICKERS if _sx() == "live" else list(US_TICKERS)`. Download stays on `US_TICKERS` so any currently open LIVE position gets price data for trailing stops.
+  - `run_us_blend_ai()` and IBKR paths keep `US_TICKERS` (full SIM universe).
+
+  **`bb_quality_hv` SIM A/B twin (`581fb1c`, H20260904-37779e):**
+  - New [`forex/strategy_bb_quality_hv.py`](../forex/strategy_bb_quality_hv.py) — `bb_quality` + HIGH_VOLATILITY regime gate. All exit/sizing/trailing delegated to `bb_quality`.
+  - Gate evidence: base avg_r +0.024; HIGH_VOLATILITY bucket n=33, avg_r +0.247, PF 2.70, both halves positive (+0.215 / +0.348). Bootstrap 95% CI excludes 0.
+  - Added to `STRATEGIES`, `SIM_ACTIVE_STRATEGIES` (8th), `STRATEGY_SLOT_CAPS`.
+  - Never in `LIVE_ALLOWED_STRATEGIES` / `LIVE_EUR_ALLOWED_STRATEGIES`. H20260904-37779e status: `backtesting`.
+
+  **`zscore_quality_tb` SIM A/B twin (`aee7466`, H20260904-c9e606):**
+  - New [`forex/strategy_zscore_quality_tb.py`](../forex/strategy_zscore_quality_tb.py) — `zscore_quality` + TRENDING_BULLISH regime gate. All exit/sizing delegated to `zscore_quality`.
+  - Gate evidence: base avg_r +0.004; TRENDING_BULLISH bucket n=54, avg_r +0.150, PF 2.23, both halves positive (+0.231 / +0.119). Bootstrap 95% CI excludes 0. Note: RANGING (the nominal design intention) failed the gate — TRENDING_BULLISH is the empirical winner.
+  - Added to `STRATEGIES`, `SIM_ACTIVE_STRATEGIES` (9th), `STRATEGY_SLOT_CAPS`.
+  - Never in `LIVE_ALLOWED_STRATEGIES` / `LIVE_EUR_ALLOWED_STRATEGIES`. H20260904-c9e606 status: `backtesting`.
+
+  **SIM roster now 9 strategies** (`SIM_ACTIVE_STRATEGIES`): `rsi`, `rsi_trend`, `rsi_atr`, `ema_trend`, `bb_quality`, `bb_quality_hv`, `zscore_quality`, `zscore_quality_tb`, `donchian_ai`.
+
+  **Forex dashboard all-strategy visibility fix (`aa21000`):**
+  - `STRAT_LABELS_ALL` / `STRAT_COL` / legend now cover all 9 SIM roster strategies: added `rsi_atr` (salmon-pink), `bb_quality_hv` (orange-gold), `zscore_quality_tb` (violet), `donchian_ai` (pale green).
+  - Fallback `_SIM_ROSTER` updated 5 → 9. Without an entry in `STRAT_LABELS_ALL`, a strategy with real closed trades is silently dropped from the per-strategy breakdown — root cause of 4 strategies being invisible in the dashboard output.
+
+  **Research Analyst 2026-09-04 run — 8 new hypotheses, 8/8 gate_passed:**
+  - H20260904-37779e (`bb_quality / HIGH_VOLATILITY`) → gate_passed → `backtesting` → shipped as `bb_quality_hv` (this session).
+  - H20260904-c9e606 (`zscore_quality / TRENDING_BULLISH`) → gate_passed → `backtesting` → shipped as `zscore_quality_tb` (this session).
+  - H20260904-404882 (`rsi / atr_pctile > 0.66`) → gate_passed → `shelved`: duplicate of `rsi_atr` (H20260903-74e4df, already shipped `75b97bd`).
+  - H20260904-0d6b52 (`us_rsi_reversal / dow Mon-Tue`, +0.350R), H20260904-2157d8 (`us_sma_crossover / dow Wed`, +0.300R), H20260904-871dfb (`rsi / dow Mon-Tue`, +0.010R), H20260904-54e150 (`bb_quality / adx 20–25`, +0.047R): gate_passed, not yet built — pending human backtest review.
+
 - **2026-09-04 (`101bb19`) — Research Analyst Phase 2: stocks coverage**
 
   Extends the AI Research Analyst from forex-only (Phase 1, 2026-09-03) to also cover all 4 US Signals stock strategies.
