@@ -902,6 +902,70 @@ def get_pair_summary(module: str = "forex") -> list[dict]:
     return result
 
 
+def get_concurrency_summary(module: str = "forex") -> list[dict]:
+    """Win-rate breakdown by how many strategies were concurrently open on
+    the same pair at the same time as each trade.
+
+    For each closed trade T, counts how many *other* strategies had an
+    overlapping open period on the same symbol (timestamp_open < T.close
+    AND timestamp_close > T.open).  Groups closed trades by that count:
+
+      concurrent=0  → solo trade (only one strategy on the pair at that time)
+      concurrent=1  → 2 strategies agreed on the pair simultaneously
+      concurrent=2+ → 3 or more strategies agreed
+
+    Returns a list of dicts sorted by concurrency level ascending.
+    Trades with NULL timestamps are excluded.
+    """
+    with _conn() as c:
+        rows = c.execute("""
+            SELECT
+                t1.id,
+                t1.realized_pnl,
+                COUNT(t2.id) AS concurrent
+            FROM trades t1
+            LEFT JOIN trades t2
+                   ON  t2.symbol          = t1.symbol
+                   AND t2.strategy       != t1.strategy
+                   AND t2.module          = t1.module
+                   AND t2.status          = 'closed'
+                   AND t2.timestamp_open  < t1.timestamp_close
+                   AND t2.timestamp_close > t1.timestamp_open
+            WHERE t1.module  = ?
+              AND t1.status  = 'closed'
+              AND t1.timestamp_open  IS NOT NULL
+              AND t1.timestamp_close IS NOT NULL
+            GROUP BY t1.id
+        """, (module,)).fetchall()
+
+    from collections import defaultdict
+    buckets: dict = defaultdict(list)
+    for r in rows:
+        # cap label at "3+" so tiny sample sizes don't create many thin rows
+        level = min(r["concurrent"], 3)
+        buckets[level].append(r["realized_pnl"] or 0.0)
+
+    result = []
+    labels = {0: "Solo (1 strategy)", 1: "2 strategies agreed",
+              2: "3 strategies agreed", 3: "3+ strategies agreed"}
+    for level in sorted(buckets):
+        pnls = buckets[level]
+        n    = len(pnls)
+        wins = sum(1 for p in pnls if p > 0)
+        gp   = sum(p for p in pnls if p > 0)
+        gl   = abs(sum(p for p in pnls if p < 0))
+        result.append({
+            "label":         labels.get(level, f"{level+1}+ strategies agreed"),
+            "concurrent":    level,
+            "trades":        n,
+            "wins":          wins,
+            "win_rate":      round(wins / n * 100, 1) if n else 0.0,
+            "total_pnl":     round(sum(pnls), 2),
+            "profit_factor": round(gp / gl, 2) if gl > 0 else None,
+        })
+    return result
+
+
 def get_summary(module: str = None) -> dict:
     """
     Return P&L summary. If module given, returns stats for that module only.

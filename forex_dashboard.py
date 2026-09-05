@@ -746,6 +746,15 @@ def _positions_section(title: str, positions_subset: list, live: dict,
         for p in positions_subset:
             by_pair.setdefault(p["symbol"], []).append(p)
 
+        # Historical WR per pair (all strategies combined) — shown in the
+        # pair header when 2+ strategies are open so you can see whether this
+        # pair has been a winner historically when multiple strategies agree.
+        try:
+            import pnl_tracker as _pnl
+            _pair_hist = {r["symbol"]: r for r in _pnl.get_pair_summary("forex")}
+        except Exception:
+            _pair_hist = {}
+
         def _row_metrics(p):
             """(pnl_eur|None, cost_eur|None, dist_pct|None) for one position."""
             sym, ep, qty = p["symbol"], p["entry"], p["qty"]
@@ -787,11 +796,22 @@ def _positions_section(title: str, positions_subset: list, live: dict,
             hc = GR if pair_pnl >= 0 else RD
             pnl_txt = (f"{hc}{pair_pnl:>+,.0f} EUR{W}" if _priced else f"{DM}—{W}")
             close_txt = (f"  ·  closest stop {closest:.2f}%" if closest is not None else "")
+            # Historical WR tag — only shown when 2+ strategies are on this
+            # pair. Answers "has this pair been profitable when multiple
+            # strategies agree?" without cluttering single-strategy rows.
+            hist = _pair_hist.get(sym)
+            if n_strat >= 2 and hist and hist["trades"] >= 2:
+                _wr  = hist["win_rate"]
+                _n   = hist["trades"]
+                _wrc = GR if _wr >= 55 else YL if _wr >= 45 else RD
+                wr_tag = f"  ·  {_wrc}hist WR {_wr:.0f}% ({_n}t){W}{DM}"
+            else:
+                wr_tag = ""
             L.append(
                 f"  {color}{BD}{sym:<7}{W}  {DM}"
                 f"{n_strat} strateg{'y' if n_strat == 1 else 'ies'}  ·  "
                 f"{pair_units:,} unit{'' if pair_units == 1 else 's'}  ·  "
-                f"{W}{pnl_txt}{DM}{close_txt}{W}"
+                f"{W}{pnl_txt}{DM}{wr_tag}{close_txt}{W}"
             )
 
             for p in grp:

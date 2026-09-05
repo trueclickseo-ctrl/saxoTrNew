@@ -362,6 +362,85 @@ ws_ps.conditional_formatting.add(
 ws_ps.freeze_panes = "A4"
 ws_ps.auto_filter.ref = f"A3:J3"
 
+# ============================================================
+# Sheet 7: Multi-Strategy Agreement
+# WR / PF / P&L grouped by how many strategies were concurrently
+# open on the same pair at trade time (solo / 2 agree / 3+ agree).
+# The research question: does multi-strategy agreement predict higher WR?
+# ============================================================
+sys.path.insert(0, BASE_DIR)
+import pnl_tracker as _pt
+
+concurrency_rows = _pt.get_concurrency_summary("forex")
+
+ws_ma = wb.create_sheet("Multi-Strategy Agreement")
+ws_ma["A1"] = (
+    f"ATOS Forex -- Multi-Strategy Agreement -- last updated {NOW} PKT  "
+    f"(does 2 or 3 strategies agreeing on a pair improve Win Rate?)"
+)
+ws_ma["A1"].font = Font(bold=True, size=13)
+ws_ma.merge_cells("A1:H1")
+
+MA_HEADERS = ["Concurrency", "Trades", "Wins", "WR %",
+              "Net P&L (EUR)", "Profit Factor", "Interpretation"]
+style_header(ws_ma, MA_HEADERS, row=3)
+
+INTERP = {
+    0: "Only one strategy on this pair at the time — baseline",
+    1: "Two strategies agreed on direction simultaneously",
+    2: "Three strategies agreed on direction simultaneously",
+    3: "Three or more strategies agreed on direction simultaneously",
+}
+
+ma_row = 4
+for cr in concurrency_rows:
+    n   = cr["trades"]
+    wr  = cr["win_rate"]
+    pnl = cr["total_pnl"]
+    pf  = cr["profit_factor"]
+
+    ws_ma.cell(row=ma_row, column=1, value=cr["label"]).font = BOLD
+    ws_ma.cell(row=ma_row, column=2, value=n)
+    ws_ma.cell(row=ma_row, column=3, value=cr["wins"])
+    ws_ma.cell(row=ma_row, column=4, value=wr)
+    ws_ma.cell(row=ma_row, column=5, value=pnl)
+    ws_ma.cell(row=ma_row, column=6, value=pf if pf is not None else "n/a")
+    ws_ma.cell(row=ma_row, column=7, value=INTERP.get(cr["concurrent"], ""))
+
+    for col in range(1, 8):
+        ws_ma.cell(row=ma_row, column=col).border = BORDER
+
+    # Colour WR cell: green ≥55%, yellow 45–54%, red <45%
+    wr_cell = ws_ma.cell(row=ma_row, column=4)
+    if wr >= 55:
+        wr_cell.fill = GREEN_FILL
+    elif wr < 45:
+        wr_cell.fill = RED_FILL
+    else:
+        wr_cell.fill = PatternFill("solid", fgColor="FFF8DC")  # light yellow
+
+    # Colour P&L cell
+    pnl_cell = ws_ma.cell(row=ma_row, column=5)
+    pnl_cell.fill = GREEN_FILL if pnl >= 0 else RED_FILL
+
+    ma_row += 1
+
+if not concurrency_rows:
+    ws_ma.cell(row=4, column=1,
+               value="No closed trades with timestamps found yet.").font = Font(italic=True, color="999999")
+
+# Summary note below the table
+note_row = ma_row + 1
+ws_ma.cell(row=note_row, column=1,
+           value="How to read: if 2-strategy WR > solo WR, multi-strategy agreement is a positive "
+                 "quality signal. If lower, strategies are overlapping on the same losing pair.").font = Font(
+                 italic=True, color="555555", size=10)
+ws_ma.merge_cells(f"A{note_row}:G{note_row}")
+
+for i, w in enumerate([30, 9, 7, 7, 14, 13, 55], 1):
+    ws_ma.column_dimensions[get_column_letter(i)].width = w
+ws_ma.freeze_panes = "A4"
+
 out_path = os.path.join(DATA_DIR, "forex_performance_tracker.xlsx")
 wb.save(out_path)
 print("Saved (single persistent file, overwritten in place):", out_path)
