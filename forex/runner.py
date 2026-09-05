@@ -292,7 +292,11 @@ STRATEGIES = {k: v for k, v in STRATEGIES.items() if v is not None}
 # An explicit `--strategy <name>` still runs one (for research) with a warning.
 # To un-retire: remove from this set + re-confirm with a fresh walk-forward.
 RETIRED_STRATEGIES: set[str] = {
-    "donchian", "donchian_quality", "pullback", "ml", "supertrend",
+    # donchian + pullback re-activated 2026-09-05 as AI research tracks --
+    # removed from this set so the scanner runs them without a warning.
+    # They are SIM-paper only; AI copilot scores every signal so we can
+    # measure whether the AI improves their edge over the original.
+    "donchian_quality", "ml", "supertrend",
 }
 
 # ── SIM entry roster (2026-09-02, explicit user decision) ───────────────────
@@ -311,7 +315,11 @@ RETIRED_STRATEGIES: set[str] = {
 SIM_ACTIVE_STRATEGIES: list[str] = [
     "rsi", "rsi_trend", "rsi_atr", "ema_trend", "bb_quality", "bb_quality_hv",
     "zscore_quality", "zscore_quality_tb",
-    "donchian_ai",  # 2026-09-03: SIM-only A/B; donchian raw retired, AI-gated twin enters forward study
+    "donchian_ai",  # 2026-09-03: SIM-only A/B; original donchian raw was retired, AI-gated twin entered forward study
+    # 2026-09-05: AI research tracks -- SIM paper only, copilot scores every
+    # signal. Goal: AI observes, learns, and proposes improvements to these
+    # net-negative strategies before any live consideration.
+    "donchian", "pullback",
 ]
 _ACTIVE_STRATEGIES = [k for k in SIM_ACTIVE_STRATEGIES if k in STRATEGIES]
 

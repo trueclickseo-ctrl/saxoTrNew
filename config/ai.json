@@ -19,7 +19,7 @@
   "agent_model": "claude-sonnet-5",
 
   "_cost_controls_comment": "agent_strategies: which strategies the paid agent evaluates -- ['*'] for all, or a list. 2026-09-02: set to the 5-strategy SIM roster (SIM_ACTIVE_STRATEGIES in forex/runner.py) -- the user wants the AI watching all of them for a few weeks before deciding which to keep. Proposal-logging + the Journal already cover EVERY strategy for free; this list only scopes the PAID copilot evaluation. `rsi` fires a lot (unfiltered/184 pairs); the 4 gated twins fire far less. Deduped daily. agent_dedup: evaluate each signal (account|strategy|symbol|date) ONCE per day, not every 30-min rescan.",
-  "agent_strategies": ["rsi", "rsi_trend", "ema_trend", "bb_quality", "zscore_quality"],
+  "agent_strategies": ["rsi", "rsi_trend", "ema_trend", "bb_quality", "zscore_quality", "donchian", "pullback"],
   "agent_dedup": true,
 
   "_journal_comment": "AI Trading Journal (roadmap #18): an LLM retrospective on each CLOSED trade (entry/exit quality, why it won/lost, the lesson) + a daily pattern summary. READ-ONLY -- ai/features/trade_journal.py only reads closed-trade logs (observation cards, AI shadow decisions, exit-advisor shadow) and writes data/ai_trade_journal.jsonl. It never places/amends/cancels an order, never touches a position or stop, never influences a strategy or sizing decision. Cost: ONE batched LLM call per trading day (not per trade). Runs from daily_summary.py; also `python ai_trade_journal.py`.",
