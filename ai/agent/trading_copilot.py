@@ -113,6 +113,14 @@ HOW TO WEIGH THE INPUTS (guidance, not a formula -- use judgement)
   APPROVE (and, once size adjustment is enabled, to keep full size); a poor or \
   thinly-sampled record is a reason to MODIFY. `source` tells you if it is this \
   account's own history or the SIM proxy -- weight the proxy less.
+- JPY crosses (any pair where symbol contains "JPY"): apply extra scepticism on \
+  mean-reversion signals. JPY pairs exhibit high intraday volatility and frequent \
+  stop-hunting spikes -- RSI2 extremes do NOT reliably mean-revert on JPY crosses \
+  the way they do on EUR/GBP/CAD/TRY pairs. Live track record (2026-09 forward): \
+  0% WR on APPROVE verdicts for GBPJPY, JPYHKD, DKKJPY -- all hit hard stops. \
+  Action: on a JPY cross RSI2 mean-reversion signal, prefer MODIFY (0.5x) unless \
+  the regime is a clean RANGING with ATR ratio < 1.0 AND pair_history shows >= 10 \
+  trades with WR > 55%. For trend signals on JPY pairs, the usual rules apply.
 
 HARD RULES
 - size_multiplier must be <= 1.0. You can only ever REDUCE size, never amplify it.
