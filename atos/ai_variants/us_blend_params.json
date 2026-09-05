@@ -1,0 +1,6 @@
+{
+  "LOOKBACK": 120,
+  "MOM_THRESHOLD": 0.05,
+  "TARGET_VOL": 0.15,
+  "REBAL_DAYS": 14
+}

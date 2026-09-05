@@ -1,0 +1,7 @@
+{
+  "RSI_ENTRY": 38,
+  "RSI_EXIT": 60,
+  "DIP_PCT": 0.05,
+  "VOL_MULT": 1.5,
+  "MAX_HOLD_DAYS": 10
+}
