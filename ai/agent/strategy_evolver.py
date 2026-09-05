@@ -385,8 +385,10 @@ def send_email_report(results: list[dict]) -> bool:
 
 _FOREX_VARIANTS_DIR = os.path.join(BASE, "forex", "ai_variants")
 _FOREX_STRATEGY_SOURCES = {
-    "donchian": os.path.join(BASE, "forex", "strategy_donchian.py"),
+    "donchian":  os.path.join(BASE, "forex", "strategy_donchian.py"),
     "pullback":  os.path.join(BASE, "forex", "strategy_pullback.py"),
+    "rsi":       os.path.join(BASE, "forex", "strategy_rsi.py"),
+    "ema_trend": os.path.join(BASE, "forex", "strategy_ema_trend.py"),
 }
 _FOREX_OVERRIDE_FILES = {
     s: os.path.join(_FOREX_VARIANTS_DIR, f"strategy_{s}_override.py")
@@ -513,7 +515,7 @@ def _fetch_copilot_shadow(strategy_name: str) -> dict:
 def _ast_validate_override(code: str) -> str | None:
     """Return error string if code is unsafe, None if OK."""
     import ast as _ast
-    _ALLOWED = {"pandas", "numpy", "math", "ta", "collections", "datetime",
+    _ALLOWED = {"__future__", "pandas", "numpy", "math", "ta", "collections", "datetime",
                 "functools", "itertools", "statistics", "typing", "forex"}
     _FORBIDDEN = {"eval", "exec", "open", "compile", "__import__",
                   "subprocess", "socket", "urllib", "requests"}
@@ -667,8 +669,10 @@ RULES
    Import pattern: from forex.strategy_<name> import should_exit as _orig_should_exit
    Signature you must match: (position: dict, df: pd.DataFrame, calendar_days_held: int) -> tuple
    Must return (bool, str). Call _orig_should_exit first; you may override its decision.
-3. Only these imports are allowed: pandas, numpy, math, ta, collections, datetime,
+3. Only these imports are allowed: __future__, pandas, numpy, math, ta, collections, datetime,
    functools, itertools, statistics, typing, forex. Any other import will be rejected.
+   Do NOT use "from __future__ import annotations" or any other __future__ import unless
+   strictly necessary — prefer explicit type annotations without it.
 4. Forbidden calls: eval, exec, open, __import__, compile, subprocess, os, sys,
    socket, urllib, requests.
 5. The position dict contains at minimum: direction, stop_price, entry_price, symbol.
@@ -745,35 +749,35 @@ def evolve_forex_exit(strategy: str, dry_run: bool = False) -> dict | None:
     if not os.path.exists(source_path):
         print(f"  source not found: {source_path}")
         return None
-    if not os.path.exists(ov_path):
-        print(f"  no Phase 2 override yet — run evolve_forex_strategy first")
-        return None
 
     with open(source_path, encoding="utf-8") as f:
         source = f.read()
-    with open(ov_path, encoding="utf-8") as f:
-        existing_override = f.read()
+    existing_override = ""
+    if ov_path and os.path.exists(ov_path):
+        with open(ov_path, encoding="utf-8") as f:
+            existing_override = f.read()
 
     exit_data = _fetch_exit_breakdown(strategy)
     total = exit_data.get("total_quality_trades", 0)
     print(f"  quality closed trades: {total}")
     print(f"  exit breakdown: {exit_data.get('by_exit_reason', {})}")
 
+    has_phase2 = bool(existing_override)
     prompt = f"""Strategy: {strategy} (forex, SIM paper research track)
 
 === STRATEGY SOURCE CODE ===
 {source[:5000]}
 
-=== EXISTING PHASE 2 OVERRIDE (preserve generate_signals verbatim) ===
-{existing_override}
+=== EXISTING PHASE 2 ENTRY OVERRIDE ===
+{existing_override if has_phase2 else "(none -- no entry filter exists yet for this strategy)"}
 
 === EXIT REASON BREAKDOWN (from pnl_ledger.db) ===
 {json.dumps(exit_data, indent=2, default=str)}
 
 === TASK ===
 Total quality closed trades: {total}
-Write an UPDATED override module that keeps the existing generate_signals() wrapper
-unchanged and adds a should_exit() wrapper based on the exit breakdown above.
+{"Preserve the existing generate_signals() wrapper verbatim and ADD a should_exit() wrapper." if has_phase2 else
+ "No Phase 2 entry filter exists yet. Write a module with: (1) a pass-through generate_signals() that calls the original unchanged, and (2) a should_exit() wrapper with the exit improvement."}
 Focus on exit_reason types with high loss counts and low/zero win rates.
 
 Return the JSON object described in your instructions.
@@ -859,6 +863,7 @@ def _call_claude(prompt_user: str, system: str = _SYSTEM) -> dict | None:
         latency_ms = round((time.monotonic() - t0) * 1000)
         # claude-sonnet-5 may return ThinkingBlock + TextBlock — find the text
         text = ""
+        _block_types = [type(b).__name__ for b in (msg.content or [])]
         for block in (msg.content or []):
             if hasattr(block, "text"):
                 text = block.text.strip()
@@ -887,7 +892,8 @@ _FOREX_STRATEGIES = list(_FOREX_STRATEGY_SOURCES.keys())   # ["donchian", "pullb
 def main(argv=None):
     ap = argparse.ArgumentParser(description="AI strategy param + code evolver")
     ap.add_argument("--strategy",
-                    choices=["us_blend", "us_reversion", "donchian", "pullback", "all"],
+                    choices=["us_blend", "us_reversion", "donchian", "pullback",
+                             "rsi", "ema_trend", "all"],
                     default="all")
     ap.add_argument("--dry-run", action="store_true",
                     help="Print proposals without writing variant files")

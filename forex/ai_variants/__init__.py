@@ -39,7 +39,7 @@ import sys
 _VARIANTS_DIR = os.path.dirname(__file__)
 
 _ALLOWED_TOP_MODULES: set[str] = {
-    "pandas", "numpy", "math", "ta", "collections", "datetime",
+    "__future__", "pandas", "numpy", "math", "ta", "collections", "datetime",
     "functools", "itertools", "statistics", "typing",
     # forex strategy originals -- overrides may call the original
     "forex",
