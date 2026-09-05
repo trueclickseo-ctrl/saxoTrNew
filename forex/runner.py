@@ -3931,15 +3931,29 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 # this pair/strategy's closed-trade track record. Commission
                 # is size-flat; a nominal 10k lot is representative for the
                 # spread term too.
-                _uic_ai = get_pair(sym)["uic"]
-                _rt_q = _round_trip_cost_quote_ccy(_uic_ai, 10_000, akey)
-                _q_rate = _eur_rate_for_log(sym[3:6] if len(sym) >= 6 else "", akey)[0]
-                _b_rate = _eur_rate_for_log(sym[:3], akey)[0]
+                _uic_ai   = get_pair(sym)["uic"]
+                _q_rate   = _eur_rate_for_log(sym[3:6] if len(sym) >= 6 else "", akey)[0]
+                _b_rate   = _eur_rate_for_log(sym[:3], akey)[0]
+                _entry_px = float(sig.get("close") or 0)
+                _stop_px  = float(sig.get("stop_price") or 0)
+                # Derive realistic position size for cost estimation.
+                # Hardcoding 10k units inflates gold/silver notional by ~1000x
+                # (XAU ~2500 EUR/oz → 10k oz = 25M EUR notional, ~3700 EUR
+                # apparent cost for a 45 EUR risk trade). For RSI with a fixed
+                # risk budget, compute expected qty from stop-distance × rate.
+                _risk_dist = abs(_entry_px - _stop_px) if _entry_px and _stop_px else 0
+                _ref_risk  = RSI_LIVE_FIXED_RISK_EUR if strat_name == "rsi" else None
+                if _ref_risk and _risk_dist and _q_rate:
+                    _risk_pu = _risk_dist * _q_rate      # EUR risk per 1 unit
+                    _est_qty = max(1, int(round(_ref_risk / _risk_pu))) if _risk_pu > 0 else 10_000
+                else:
+                    _est_qty = 10_000                    # FX lot default for non-RSI
+                _rt_q     = _round_trip_cost_quote_ccy(_uic_ai, _est_qty, akey)
                 _comm_eur = round(_rt_q * _q_rate, 2) if (_rt_q and _q_rate) else None
                 _all_in_eur = _live_all_in_cost_eur(
                     commission_eur=_comm_eur, spread_pct=_spread_pct(_uic_ai),
-                    entry_px=float(sig.get("close") or 0),
-                    notional_eur=(10_000 * _b_rate) if _b_rate else None,
+                    entry_px=_entry_px,
+                    notional_eur=(_est_qty * _b_rate) if _b_rate else None,
                     quote_ccy=sym[3:6] if len(sym) >= 6 else "")
                 _prop = _ai_build_proposal(
                     account_env=ACCOUNT_ENV, strategy=strat_name, symbol=sym,

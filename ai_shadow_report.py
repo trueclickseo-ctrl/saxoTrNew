@@ -95,11 +95,20 @@ def main():
 
         # approved vs rejected, joined to realised P&L
         buckets = {"APPROVE": [], "REJECT": [], "MODIFY": []}
+        matched_rows = []   # (action, ts, strategy, symbol, pnl, comment)
         for d in ad:
             pnl = _match(d, closed)
             if pnl is None or d.get("agent_action") not in buckets:
                 continue
             buckets[d["agent_action"]].append(pnl)
+            matched_rows.append((
+                d.get("agent_action", "?"),
+                (d.get("ts") or "")[:10],
+                d.get("strategy", ""),
+                d.get("symbol", ""),
+                pnl,
+                (d.get("agent_comment") or "").strip(),
+            ))
         print(f"\n  {DIM}verdict     n   win%    total P&L   avg P&L{X}")
         for act, pnls in buckets.items():
             if not pnls:
@@ -107,6 +116,27 @@ def main():
                 continue
             wr = 100 * sum(1 for p in pnls if p > 0) / len(pnls)
             print(f"  {act:<9} {len(pnls):>3}  {wr:>5.1f}  {sum(pnls):>+10.1f}  {sum(pnls)/len(pnls):>+8.2f}")
+
+        # Per-trade breakdown with agent reasoning
+        if matched_rows:
+            print(f"\n  {DIM}-- matched trades (agent reasoning) --{X}")
+            for act, ts, strat, sym, pnl, comment in sorted(matched_rows, key=lambda r: r[1]):
+                colour = G if pnl > 0 else R
+                tag = "WIN" if pnl > 0 else "LOSS"
+                act_col = (G if act == "APPROVE" else R if act == "REJECT" else Y)
+                print(f"  {act_col}{act:<7}{X} {ts}  {strat:<14} {sym:<10} "
+                      f"{colour}{tag} {pnl:>+7.1f}{X}")
+                if comment:
+                    # Wrap at 90 chars
+                    words, line = comment.split(), []
+                    for w in words:
+                        if sum(len(x) + 1 for x in line) + len(w) > 88:
+                            print(f"           {DIM}{' '.join(line)}{X}")
+                            line = [w]
+                        else:
+                            line.append(w)
+                    if line:
+                        print(f"           {DIM}{' '.join(line)}{X}")
 
         appr = buckets["APPROVE"]
         rej = buckets["REJECT"]
