@@ -221,7 +221,7 @@ def _call_claude_unused_ref(prompt_user: str) -> dict | None:
 
 def evolve_strategy(strategy: str, dry_run: bool = False) -> dict | None:
     """Run the evolver for one strategy. Returns the accepted proposal or None."""
-    print(f"\n[evolver] ── {strategy.upper()} ─────────────────────────────")
+    print(f"\n[evolver] -- {strategy.upper()} ----------------------------")
 
     source = _read_source(strategy)
     current_params = _read_current_params(strategy)
@@ -392,8 +392,10 @@ _FOREX_OVERRIDE_FILES = {
     s: os.path.join(_FOREX_VARIANTS_DIR, f"strategy_{s}_override.py")
     for s in _FOREX_STRATEGY_SOURCES
 }
-# Minimum closed SIM trades before the evolver writes code (not just analysis)
-_FOREX_CODE_GATE = 50
+# Minimum closed SIM trades (with non-null realized_pnl) before writing code.
+# Lowered 50->30 on 2026-09-05: legacy dedup/reconcile artifacts leave ~35
+# quality rows for donchian/pullback even with 70+ total closed rows.
+_FOREX_CODE_GATE = 30
 
 _FOREX_SYSTEM = """You are the ATOS AI Strategy Evolver — Phase 2 (forex code writer).
 You read a forex strategy's SOURCE CODE and its closed SIM trade record, then write
@@ -544,7 +546,7 @@ def _ast_validate_override(code: str) -> str | None:
 
 def evolve_forex_strategy(strategy: str, dry_run: bool = False) -> dict | None:
     """Run the Phase 2 evolver for one forex strategy."""
-    print(f"\n[evolver:forex] ── {strategy.upper()} ────────────────────────────")
+    print(f"\n[evolver:forex] -- {strategy.upper()} --------------------------")
 
     source_path = _FOREX_STRATEGY_SOURCES.get(strategy, "")
     if not os.path.exists(source_path):
@@ -670,10 +672,10 @@ def _call_claude(prompt_user: str, system: str = _SYSTEM) -> dict | None:
     try:
         msg = client.messages.create(
             model="claude-sonnet-5",
-            max_tokens=2048,
+            max_tokens=8192,
             system=system,
             messages=[{"role": "user", "content": prompt_user}],
-            timeout=90.0,
+            timeout=180.0,
         )
         latency_ms = round((time.monotonic() - t0) * 1000)
         # claude-sonnet-5 may return ThinkingBlock + TextBlock — find the text
