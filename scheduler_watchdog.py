@@ -486,6 +486,18 @@ INTRADAY_REPEATING_TASKS = {
     "IBKR Intraday Reversion",  # 5x/day during US session (2026-09-04)
 }
 
+# Tasks that fire hourly but have zero trading activity on weekends (US market
+# is closed Sat/Sun, so every run exits with "market closed"). On a weekend the
+# PC may sleep for many hours — StartWhenAvailable catches up on wake, so the
+# tasks ARE healthy; a gap up to WEEKEND_CEILING_HOURS is not an incident.
+# Forex/LIVE/Keepalive are NOT here: forex LBO/exit-check can matter on
+# weekends, and the LIVE token keepalive must never lapse.
+WEEKEND_SLEEP_EXEMPT = {
+    "Stocks Daily Run", "ETF Daily Run", "ETF Midday Run",
+    "Futures Daily Run", "Futures Midday Run",
+}
+WEEKEND_CEILING_HOURS = 14  # PC sleep of up to ~14h on Sat/Sun is acceptable
+
 # Tasks the watchdog is allowed to auto-restart (Start-ScheduledTask) the
 # moment it detects one has gone stale -- added 2026-08-28 after the SIM
 # "Forex Intraday Scan" outage recurred a SECOND time the same day (Task
@@ -757,12 +769,24 @@ def _check_windows_task(name: str, task_name: str, log_file: str, grace_min: int
         # NextRunTime claims. The softer, NextRunTime-aware check below
         # still applies to the more ambiguous 3x-grace-to-10h zone, where a
         # genuine overnight dormant window is still a plausible explanation.
+        #
+        # Weekend exception: market-hours tasks (WEEKEND_SLEEP_EXEMPT) fire
+        # hourly but skip every run on Sat/Sun. If the PC sleeps during the
+        # day, StartWhenAvailable catches up on wake -- no trading is missed.
+        # Allow up to WEEKEND_CEILING_HOURS (14h) before flagging these tasks
+        # on weekends, so a normal Saturday sleep doesn't fire an alert.
+        is_weekend = now.weekday() in (5, 6)
+        ceiling_hours = (WEEKEND_CEILING_HOURS
+                         if is_weekend and name in WEEKEND_SLEEP_EXEMPT
+                         else 10)
         stale_msg = None
-        if now - last_run > timedelta(hours=10):
+        if now - last_run > timedelta(hours=ceiling_hours):
             mins_ago = (now - last_run).total_seconds() / 60
+            weekend_note = (f" (weekend ceiling relaxed to {ceiling_hours}h for market-closed tasks)"
+                            if ceiling_hours != 10 else "")
             stale_msg = (f"'{task_name}' hasn't fired since {last_run:%Y-%m-%d %H:%M} "
-                    f"({mins_ago:.0f} min ago, {mins_ago/60:.1f}h) -- past the 10h hard ceiling no "
-                    f"member of INTRADAY_REPEATING_TASKS has a legitimate dormant window anywhere "
+                    f"({mins_ago:.0f} min ago, {mins_ago/60:.1f}h) -- past the {ceiling_hours}h hard ceiling{weekend_note}. "
+                    f"No member of INTRADAY_REPEATING_TASKS has a legitimate dormant window anywhere "
                     f"close to, so this is flagged regardless of how healthy NextRunTime looks (a "
                     f"repeating trigger's NextRunTime reflects the SCHEDULE, not whether occurrences "
                     f"actually fired -- it can look perfectly fine while every intraday slot today "
