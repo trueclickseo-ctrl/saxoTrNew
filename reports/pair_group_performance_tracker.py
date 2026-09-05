@@ -260,6 +260,108 @@ build_time_sheet("Daily Performance", "K", day_key)
 build_time_sheet("Weekly Performance", "L", week_key)
 build_time_sheet("Monthly Performance", "M", month_key)
 
+# ============================================================
+# Sheet 6: Per-Pair × Strategy  (only pairs with 2+ strategies)
+# One row per (pair, strategy) combo so the user can see which strategy
+# is carrying / dragging each multi-strategy pair.
+# ============================================================
+ws_ps = wb.create_sheet("Per-Pair × Strategy")
+ws_ps["A1"] = (
+    f"ATOS Forex -- Per-Pair × Strategy -- last updated {NOW} PKT  "
+    f"(pairs with 2+ strategies only)"
+)
+ws_ps["A1"].font = Font(bold=True, size=13)
+ws_ps.merge_cells("A1:J1")
+
+PS_HEADERS = ["Pair", "Group", "Strategy", "Trades", "Wins",
+              "WR %", "Gross P&L (EUR)", "Commission (EUR)", "Net P&L (EUR)", "Profit Factor"]
+style_header(ws_ps, PS_HEADERS, row=3)
+PS_COL_WIDTHS = [10, 24, 28, 9, 7, 7, 15, 15, 14, 13]
+for i, w in enumerate(PS_COL_WIDTHS, 1):
+    ws_ps.column_dimensions[get_column_letter(i)].width = w
+
+# Build (pair → {strategy → group}) lookup from Trade Detail data
+from collections import defaultdict
+pair_strategy_group: dict = defaultdict(dict)  # pair → strategy → group
+for t in usable:
+    pair_strategy_group[t["symbol"]][t["strategy"]] = t.get("group", "")
+
+# Only pairs that appear with 2+ distinct strategies in closed trades
+multi_strat_pairs = sorted(
+    sym for sym, strats in pair_strategy_group.items() if len(strats) >= 2
+)
+
+ps_row = 4
+prev_pair = None
+for sym in multi_strat_pairs:
+    strategies = sorted(pair_strategy_group[sym].keys())
+    group = next(iter(pair_strategy_group[sym].values()), "")
+    for strat in strategies:
+        # Shade alternate pairs for readability
+        is_alt = (multi_strat_pairs.index(sym) % 2 == 1)
+        alt_fill = PatternFill("solid", fgColor="F0F4F8") if is_alt else None
+
+        ws_ps.cell(row=ps_row, column=1, value=sym if strat == strategies[0] else "").font = BOLD
+        ws_ps.cell(row=ps_row, column=2, value=group if strat == strategies[0] else "")
+        ws_ps.cell(row=ps_row, column=3, value=strat)
+
+        # COUNTIFS / SUMIFS keyed on (Pair=col B, Strategy=col A, Net Result=col J)
+        pair_range = f"{TD}!$B$2:$B${LAST_ROW}"
+        strat_range = f"{TD}!$A$2:$A${LAST_ROW}"
+        result_range = f"{TD}!$J$2:$J${LAST_ROW}"
+        gross_range = f"{TD}!$G$2:$G${LAST_ROW}"
+        comm_range = f"{TD}!$H$2:$H${LAST_ROW}"
+        net_range = f"{TD}!$I$2:$I${LAST_ROW}"
+        pair_crit = f'"{sym}"'
+        strat_crit = f'"{strat}"'
+        base_crit = f"{pair_range},{pair_crit},{strat_range},{strat_crit}"
+
+        ws_ps.cell(row=ps_row, column=4,
+                   value=f'=COUNTIFS({base_crit})')
+        ws_ps.cell(row=ps_row, column=5,
+                   value=f'=COUNTIFS({base_crit},{result_range},"WIN")')
+        ws_ps.cell(row=ps_row, column=6,
+                   value=f'=IFERROR(ROUND(E{ps_row}/D{ps_row}*100,1),"")')
+        ws_ps.cell(row=ps_row, column=7,
+                   value=f'=ROUND(SUMIFS({gross_range},{pair_range},{pair_crit},{strat_range},{strat_crit}),2)')
+        ws_ps.cell(row=ps_row, column=8,
+                   value=f'=ROUND(SUMIFS({comm_range},{pair_range},{pair_crit},{strat_range},{strat_crit}),2)')
+        ws_ps.cell(row=ps_row, column=9,
+                   value=f'=ROUND(SUMIFS({net_range},{pair_range},{pair_crit},{strat_range},{strat_crit}),2)')
+        win_sum = (f'SUMIFS({net_range},{pair_range},{pair_crit},'
+                   f'{strat_range},{strat_crit},{net_range},">0")')
+        loss_sum = (f'SUMIFS({net_range},{pair_range},{pair_crit},'
+                    f'{strat_range},{strat_crit},{net_range},"<0")')
+        ws_ps.cell(row=ps_row, column=10,
+                   value=f'=IFERROR(ROUND({win_sum}/ABS({loss_sum}),2),'
+                         f'IF(D{ps_row}=0,"",">0 (no losers)"))')
+
+        for col in range(1, 11):
+            c = ws_ps.cell(row=ps_row, column=col)
+            c.border = BORDER
+            if alt_fill:
+                c.fill = alt_fill
+
+        ps_row += 1
+
+    # Thin separator row between pairs (empty row with just a bottom border)
+    for col in range(1, 11):
+        ws_ps.cell(row=ps_row, column=col).border = Border(bottom=THIN)
+    ps_row += 1
+
+LAST_PS_ROW = ps_row - 1
+# Green/red on Net P&L column (col I = column 9)
+ws_ps.conditional_formatting.add(
+    f"I4:I{LAST_PS_ROW}",
+    CellIsRule(operator="greaterThanOrEqual", formula=["0"], fill=GREEN_FILL)
+)
+ws_ps.conditional_formatting.add(
+    f"I4:I{LAST_PS_ROW}",
+    CellIsRule(operator="lessThan", formula=["0"], fill=RED_FILL)
+)
+ws_ps.freeze_panes = "A4"
+ws_ps.auto_filter.ref = f"A3:J3"
+
 out_path = os.path.join(DATA_DIR, "forex_performance_tracker.xlsx")
 wb.save(out_path)
 print("Saved (single persistent file, overwritten in place):", out_path)

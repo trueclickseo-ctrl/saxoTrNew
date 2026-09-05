@@ -72,7 +72,10 @@ You are given a digest of how each strategy has actually behaved -- win rate and
 average R by market regime, give-back (favourable excursion handed back), recurring \
 lessons from the trade journal, and results of a decomposition harness that replays \
 each strategy over historical daily bars and tells you which entry-context buckets \
-carry a statistically stable edge.
+carry a statistically stable edge. The digest also includes `by_pair_strategy`: a \
+per-pair × strategy table showing win_rate and avg_r for every pair where 2+ strategies \
+have closed trades. Use this to identify pairs where one strategy consistently helps \
+while another consistently hurts -- that is strong evidence for a pair-specific gate.
 
 Your job: propose a SHORT list of concrete, testable improvements -- an entry gate, \
 an exit rule, or a sizing tweak -- each falsifiable by the decomposition harness. \
@@ -207,6 +210,40 @@ def _agg(rows: list[dict], key) -> list[dict]:
     return out
 
 
+def _pair_strategy_agg(rows: list[dict]) -> list[dict]:
+    """Per-pair × strategy win-rate table, limited to pairs that have
+    closed trades under 2+ distinct strategies (so a single-strategy pair
+    doesn't add noise). Sorted by pair then strategy."""
+    from collections import defaultdict
+    # group by (symbol, strategy)
+    groups: dict = defaultdict(list)
+    for row in rows:
+        sym = row.get("symbol")
+        strat = row.get("strategy")
+        if sym and strat:
+            groups[(sym, strat)].append(row)
+
+    # find pairs with 2+ strategies
+    from collections import Counter
+    pair_strat_counts = Counter(sym for sym, _ in groups)
+    multi = {sym for sym, cnt in pair_strat_counts.items() if cnt >= 2}
+
+    out = []
+    for (sym, strat), g in sorted(groups.items()):
+        if sym not in multi:
+            continue
+        rs = [x["r_multiple"] for x in g]
+        out.append({
+            "pair": sym,
+            "strategy": strat,
+            "tier": g[0].get("tier", "?"),
+            "n": len(g),
+            "win_rate": round(sum(1 for r in rs if r > 0) / len(rs) * 100, 1),
+            "avg_r": round(mean(rs), 3),
+        })
+    return out
+
+
 def _journal_themes(since_day: str) -> dict:
     rows = tj._load_jsonl(tj.JOURNAL_LOG)
     tags = Counter()
@@ -263,6 +300,9 @@ def build_research_digest(since: str | None = None) -> dict:
             [r for r in roster_rows if r["regime"]],
             lambda r: f'{r["strategy"]} / {r["regime"]}'),
         "by_strategy_tier": _agg(roster_rows, lambda r: f'{r["strategy"]} / {r["tier"]}'),
+        # Per-pair × strategy: only pairs where 2+ strategies have closed trades,
+        # so the AI can see which strategy is helping vs hurting each pair.
+        "by_pair_strategy": _pair_strategy_agg(rows),
         "journal": _journal_themes(since_day),
         "decomposition_cache": _decomp_summary(),
         # Phase 2 stocks section
