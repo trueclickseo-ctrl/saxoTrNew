@@ -32,7 +32,7 @@
     "enabled": true,
     "journal": true,
     "shadow_copilot_reversion": true,
-    "shadow_copilot_signals": false,
+    "shadow_copilot_signals": true,
     "basket_ranker_blend": true
   },
 
