@@ -427,3 +427,104 @@ Not in the v1 sprint plan. Cheap interim version (hardcoded economic-calendar bl
   - GitHub App integrated via claude.ai org settings (was previously blocked); Claude iOS app installed for push delivery.
   - **Routine `trig_012sdULpsGUUzFzaoFv5ZdKj`** — "AI Strategy Evolver first data check", fires 2026-09-12 09:00 PKT; manual run fired now, push notification delivered to iPhone.
   - **Routine `trig_01CgQHK3unzmcrJkiTLqBQUA`** — "ATOS M5 + Slippage check", fires 2026-09-13 09:00 PKT; reminder includes exact commands + XAU-stripping logic + M5 gate criteria.
+
+---
+
+## Roadmap: Fully Automated AI Trading Bot
+
+**Principle:** SIM first (weeks of validation), then LIVE under a written go/no-go. Claude never flips LIVE autonomy. Each phase requires the previous one to pass its gate.
+
+---
+
+### Phase A — Portfolio-Level Exposure Controller (build next)
+
+**Problem:** The Copilot currently approves trades one-at-a-time and can accumulate dangerous correlated exposure across sequential decisions (e.g. approving 10 JPY-short trades in one scan). The evolver overrides filter signals but are stateless w.r.t. the live book.
+
+**What to build:** `ai/portfolio/exposure_controller.py`
+
+Core data it maintains (refreshed each runner cycle from `pnl_ledger.db` + Saxo positions snapshot):
+- Per-currency net open risk (EUR): long EUR, short JPY, etc.
+- Per-strategy slot usage vs slot cap
+- Total open risk as % of account equity
+- Correlated cluster sizes: e.g. "JPY shorts" = all positions where JPY is the quote or base in the short direction
+- Drawdown headroom: remaining EUR risk budget before hitting the 50% live-margin gate
+
+API the controller exposes:
+```python
+controller.check_entry(signal) -> (ok: bool, reason: str, size_modifier: float)
+controller.rebalance_recommendations() -> list[dict]  # which positions to trim/close
+controller.snapshot() -> dict  # full exposure table for logging/dashboard
+```
+
+Hard limits (tunable via `config/ai.json`):
+- `max_single_currency_risk_pct`: 20% of total open risk in any one currency direction
+- `max_correlated_cluster_positions`: 5 same-direction same-currency positions
+- `max_open_risk_pct_equity`: 15% of account equity as total open risk
+- `max_same_pair_positions`: 1 (no doubling up on the same symbol)
+
+Integration into `forex/runner.py`:
+1. Controller snapshot computed at start of each cycle
+2. `check_entry()` called BEFORE the Copilot advisory block — hard block if limits breached (no LLM call needed)
+3. Copilot sees `controller.snapshot()` in its context so it can make softer concentration calls
+4. `rebalance_recommendations()` logged to `data/rebalance_log.jsonl` — on SIM executes trims autonomously; on LIVE escalates via `attention.py`
+
+**Gate to proceed to Phase B:** Controller running for 1 week on SIM with no false-positive blocks (i.e. it doesn't block trades it shouldn't) and catches at least one genuine over-concentration event that the Copilot missed.
+
+---
+
+### Phase B — Full Copilot Integration on SIM (Sprint 4 flip)
+
+**Prerequisite:** M5 gate met (clean APPROVE > REJECT, 10+ trades/bucket). Target: 2026-09-13 check.
+
+What changes: `shadow_mode → false` in `config/ai.json`. The Copilot's APPROVE/MODIFY/REJECT verdict is the actual sizing decision on the SIM account. Evolver Phase 2+3 overrides also active. Controller gates every entry before the Copilot is even called.
+
+**Gate to proceed to Phase C:** Sprint 4 SIM runs for 3 weeks. AI SIM P&L ≥ deterministic SIM P&L on a risk-adjusted basis (Sharpe or expectancy), and no runaway exposure events.
+
+---
+
+### Phase C — Autonomous Exit Management on SIM
+
+**What to build:** AI-driven trailing stop / partial exit logic, integrated into `forex/runner.py` exit loop.
+- Currently exits are fully deterministic (hard_stop, TP, roster_flatten, trend_break).
+- Phase C: after 1R MFE reached, the Copilot (or a dedicated exit agent) decides whether to trail the stop, take partial profit, or hold.
+- The RSI give-back finding (79% of trades that reach ≥1R MFE give it all back) is the primary hypothesis to test here.
+- Override file `strategy_rsi_exit_trail.py` is the natural home — extends Phase 3 rsi override.
+
+**Gate to proceed to Phase D:** 4 weeks SIM data showing Phase C exits improve expectancy vs Phase B baseline.
+
+---
+
+### Phase D — Full SIM Autonomy
+
+AI controls all decisions on SIM account: entry filter (evolver override), entry sizing (Copilot), exit timing (Phase C agent), rebalancing (controller). Human monitors weekly dashboard and email digest. No human approval needed per-trade on SIM.
+
+**Gate to proceed to Phase E:** 4+ weeks of Phase D SIM with:
+- AI SIM Sharpe > deterministic SIM Sharpe
+- No single-week drawdown > 15% of SIM equity
+- At least one genuine adverse week survived without manual intervention
+- Written go/no-go document signed by user (thresholds, kill-switch rules, max LIVE allocation)
+
+---
+
+### Phase E — Limited LIVE Autonomy (Forex)
+
+Start with a capped allocation: max 5 concurrent LIVE positions, €45 risk each, RSI strategy only (highest-volume, best-understood). AI makes every decision; human receives attention emails only when kill-switch criteria approach. After 4 weeks, expand to full strategy roster if drawdown gate holds.
+
+---
+
+### Stocks Autonomy (after Forex Phase E)
+
+Same Phase A→E structure, 4–6 weeks behind Forex. US Reversion evolver proposals expected 2026-09-15 to 2026-09-19 (first ~15-20 closed AI twin trades). Full stocks autonomy target: ~2026-12-01.
+
+---
+
+### Summary timeline
+
+| Phase | What | Target |
+|---|---|---|
+| A — Exposure Controller | Build + 1-week SIM validation | 2026-09-06 → ~2026-09-20 |
+| B — Sprint 4 SIM flip | M5 gate + full Copilot on SIM | ~2026-09-13 → ~2026-10-04 |
+| C — Autonomous exits | Trail/partial-exit agent on SIM | ~2026-10-04 → ~2026-10-25 |
+| D — Full SIM autonomy | No per-trade human approval | ~2026-10-25 → ~2026-11-22 |
+| E — Limited LIVE (Forex) | Written go/no-go → LIVE | ~2026-11-22 |
+| Stocks full autonomy | Phase A→E repeated | ~2026-12-01 |
