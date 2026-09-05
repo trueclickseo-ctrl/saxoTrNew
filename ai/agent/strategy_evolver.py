@@ -539,8 +539,8 @@ def _ast_validate_override(code: str) -> str | None:
             if name and name in _FORBIDDEN:
                 return f"disallowed call: {name}"
     top_names = {n.name for n in _ast.walk(tree) if isinstance(n, _ast.FunctionDef)}
-    if "generate_signals" not in top_names:
-        return "must define generate_signals()"
+    if "generate_signals" not in top_names and "should_exit" not in top_names:
+        return "must define generate_signals() or should_exit()"
     return None
 
 
@@ -654,6 +654,185 @@ Return the JSON object described in your instructions.
     return log_entry
 
 
+# ── Phase 3: Forex exit logic evolver ────────────────────────────────────────
+
+_FOREX_EXIT_SYSTEM = """You are the ATOS AI Strategy Evolver -- Phase 3 (forex exit logic).
+You read a forex strategy's SOURCE CODE, its closed SIM trade record with exit_reason
+breakdown, and the EXISTING Phase 2 entry-filter override module. You produce an UPDATED
+override module that ALSO wraps should_exit() with improved exit logic.
+
+RULES
+1. Copy the existing generate_signals() wrapper VERBATIM. Do not change it.
+2. Wrap should_exit() by importing the original and adding pre/post logic.
+   Import pattern: from forex.strategy_<name> import should_exit as _orig_should_exit
+   Signature you must match: (position: dict, df: pd.DataFrame, calendar_days_held: int) -> tuple
+   Must return (bool, str). Call _orig_should_exit first; you may override its decision.
+3. Only these imports are allowed: pandas, numpy, math, ta, collections, datetime,
+   functools, itertools, statistics, typing, forex. Any other import will be rejected.
+4. Forbidden calls: eval, exec, open, __import__, compile, subprocess, os, sys,
+   socket, urllib, requests.
+5. The position dict contains at minimum: direction, stop_price, entry_price, symbol.
+   df has columns: Open, High, Low, Close (daily bars). calendar_days_held is an int.
+6. Add ONE clear exit improvement backed directly by the exit_reason data.
+   Good candidates:
+   - Confirmation bars: require 2 consecutive closes past the exit trigger (not just one)
+   - Breakeven trail: if unrealized_profit > 0.5 * ATR, suggest stop move (return False
+     with a note -- stop-moving is the runner's job; you can only block an early exit)
+   - Skip exit in clearly wrong regime (e.g. trend_break in RANGING)
+7. If the exit data shows no clear pattern, output the existing code UNCHANGED and set
+   exit_rationale explaining why (code will still be written to preserve Phase 2).
+
+OUTPUT FORMAT -- respond ONLY with this JSON object, no markdown fences:
+{
+  "strategy": "<strategy_name>",
+  "phase": 3,
+  "code": "<full Python module with BOTH generate_signals() AND should_exit() wrappers>",
+  "exit_rationale": "<1-3 sentences: what exit rule was added and why>",
+  "confidence": "<low|medium|high>",
+  "sample_note": "<comment on exit data quality>",
+  "exit_description": "<plain-English description of the exit rule, for email report>"
+}
+
+The code must be a complete valid Python module. Use \\n for newlines in the JSON string.
+Start with:
+# AI-WRITTEN Phase 2+3 <date> by claude-sonnet-5
+# Entry filter: <one line from Phase 2>
+# Exit filter: <one line from Phase 3>
+"""
+
+
+def _fetch_exit_breakdown(strategy_name: str) -> dict:
+    """Return exit_reason x wins/losses breakdown from pnl_ledger.db."""
+    db_path = os.path.join(BASE, "data", "pnl_ledger.db")
+    if not os.path.exists(db_path):
+        return {"error": "pnl_ledger.db not found"}
+    try:
+        import sqlite3 as _sq
+        con = _sq.connect(db_path)
+        rows = con.execute(
+            "SELECT exit_reason, realized_pnl FROM trades "
+            "WHERE strategy=? AND status='closed' AND realized_pnl IS NOT NULL AND realized_pnl != 0",
+            (strategy_name,)
+        ).fetchall()
+        con.close()
+    except Exception as e:
+        return {"error": str(e)}
+
+    buckets: dict = {}
+    for reason, pnl in rows:
+        key = (reason or "unknown").split("(")[0].strip()  # normalize e.g. "hard_stop (1.35)"
+        b = buckets.setdefault(key, {"n": 0, "wins": 0, "total_pnl": 0.0})
+        b["n"] += 1
+        b["total_pnl"] = round(b["total_pnl"] + pnl, 2)
+        if pnl > 0:
+            b["wins"] += 1
+
+    for b in buckets.values():
+        b["losses"] = b["n"] - b["wins"]
+        b["win_rate_pct"] = round(b["wins"] / b["n"] * 100, 1) if b["n"] else 0
+        b["avg_pnl"] = round(b["total_pnl"] / b["n"], 1) if b["n"] else 0
+
+    return {"strategy": strategy_name, "total_quality_trades": len(rows), "by_exit_reason": buckets}
+
+
+def evolve_forex_exit(strategy: str, dry_run: bool = False) -> dict | None:
+    """Run Phase 3: add should_exit() wrapper to an existing forex override."""
+    print(f"\n[evolver:forex:exit] -- {strategy.upper()} ----------------------")
+
+    source_path = _FOREX_STRATEGY_SOURCES.get(strategy, "")
+    ov_path = _FOREX_OVERRIDE_FILES.get(strategy, "")
+
+    if not os.path.exists(source_path):
+        print(f"  source not found: {source_path}")
+        return None
+    if not os.path.exists(ov_path):
+        print(f"  no Phase 2 override yet — run evolve_forex_strategy first")
+        return None
+
+    with open(source_path, encoding="utf-8") as f:
+        source = f.read()
+    with open(ov_path, encoding="utf-8") as f:
+        existing_override = f.read()
+
+    exit_data = _fetch_exit_breakdown(strategy)
+    total = exit_data.get("total_quality_trades", 0)
+    print(f"  quality closed trades: {total}")
+    print(f"  exit breakdown: {exit_data.get('by_exit_reason', {})}")
+
+    prompt = f"""Strategy: {strategy} (forex, SIM paper research track)
+
+=== STRATEGY SOURCE CODE ===
+{source[:5000]}
+
+=== EXISTING PHASE 2 OVERRIDE (preserve generate_signals verbatim) ===
+{existing_override}
+
+=== EXIT REASON BREAKDOWN (from pnl_ledger.db) ===
+{json.dumps(exit_data, indent=2, default=str)}
+
+=== TASK ===
+Total quality closed trades: {total}
+Write an UPDATED override module that keeps the existing generate_signals() wrapper
+unchanged and adds a should_exit() wrapper based on the exit breakdown above.
+Focus on exit_reason types with high loss counts and low/zero win rates.
+
+Return the JSON object described in your instructions.
+"""
+
+    result = _call_claude(prompt, system=_FOREX_EXIT_SYSTEM)
+    if result is None:
+        print(f"  [evolver:forex:exit] no response -- {strategy} unchanged")
+        return None
+
+    code        = result.get("code")
+    rationale   = result.get("exit_rationale", "")
+    confidence  = result.get("confidence", "unknown")
+    sample_note = result.get("sample_note", "")
+    exit_desc   = result.get("exit_description", "")
+    meta        = result.get("_meta", {})
+
+    print(f"  confidence: {confidence}")
+    print(f"  exit_rationale: {rationale}")
+    print(f"  exit_description: {exit_desc}")
+    print(f"  code: {'<{} chars>'.format(len(code)) if code else 'null'}")
+
+    log_entry = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "module": "forex",
+        "phase": 3,
+        "strategy": strategy,
+        "code_written": False,
+        "exit_rationale": rationale,
+        "confidence": confidence,
+        "sample_note": sample_note,
+        "exit_description": exit_desc,
+        "exit_breakdown": exit_data,
+        "dry_run": dry_run,
+        "meta": meta,
+    }
+
+    if code:
+        err = _ast_validate_override(code)
+        if err:
+            print(f"  AST validation FAILED: {err} -- not written")
+            log_entry["ast_error"] = err
+        elif not dry_run:
+            with open(ov_path, "w", encoding="utf-8") as f:
+                f.write(code)
+            print(f"  written -> {ov_path}")
+            log_entry["code_written"] = True
+        else:
+            print("  [DRY-RUN] override not written")
+            print(f"  --- proposed code (first 800 chars) ---\n{code[:800]}\n  ---")
+    else:
+        print("  no code returned")
+
+    with open(EVOLUTION_LOG, "a", encoding="utf-8") as f:
+        f.write(json.dumps(log_entry) + "\n")
+
+    return log_entry
+
+
 def _call_claude(prompt_user: str, system: str = _SYSTEM) -> dict | None:
     """Call Claude API with a given system prompt. Returns parsed JSON or None."""
     try:
@@ -684,6 +863,13 @@ def _call_claude(prompt_user: str, system: str = _SYSTEM) -> dict | None:
             if hasattr(block, "text"):
                 text = block.text.strip()
                 break
+        # Strip markdown fences if model wrapped the JSON (```json ... ```)
+        if text.startswith("```"):
+            text = text.split("```", 2)[-1] if text.count("```") >= 2 else text
+            # remove optional language tag on first line
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.rstrip("`").strip()
         parsed = json.loads(text)
         parsed["_meta"] = {"ok": True, "latency_ms": latency_ms, "model": "claude-sonnet-5"}
         return parsed
@@ -708,9 +894,11 @@ def main(argv=None):
     ap.add_argument("--email", action="store_true",
                     help="Send email report after running (implies real run, not dry-run)")
     ap.add_argument("--forex-only", action="store_true",
-                    help="Run forex Phase 2 evolver only")
+                    help="Run forex Phase 2+3 evolver only")
     ap.add_argument("--stocks-only", action="store_true",
                     help="Run stocks Phase 1 evolver only")
+    ap.add_argument("--exit-only", action="store_true",
+                    help="Run forex Phase 3 (exit logic) only, skip Phase 2 entry evolver")
     args = ap.parse_args(argv)
 
     if args.email:
@@ -740,12 +928,19 @@ def main(argv=None):
         for s in stocks_targets:
             results.append(evolve_strategy(s, dry_run=args.dry_run))
 
-    # ── Forex Phase 2 ─────────────────────────────────────────────────────────
-    if run_forex:
+    # ── Forex Phase 2 (entry filters) ─────────────────────────────────────────
+    if run_forex and not args.exit_only:
         forex_targets = (_FOREX_STRATEGIES if args.strategy == "all"
                          else [args.strategy])
         for s in forex_targets:
             results.append(evolve_forex_strategy(s, dry_run=args.dry_run))
+
+    # ── Forex Phase 3 (exit logic) ────────────────────────────────────────────
+    if run_forex:
+        forex_targets = (_FOREX_STRATEGIES if args.strategy == "all"
+                         else [args.strategy])
+        for s in forex_targets:
+            results.append(evolve_forex_exit(s, dry_run=args.dry_run))
 
     if args.email:
         send_email_report(results)
