@@ -48,24 +48,37 @@ import backtest_forex_universe as _bfu                           # noqa: E402
 _DATA_DIR = os.path.join(_ROOT, "data")
 CACHE_PATH = os.path.join(_DATA_DIR, "ai_research_decomp_cache.json")
 
-# name -> pure signal module. The 5-strategy SIM roster + the base
-# strategies each roster twin was decomposed from. Kept here (not imported
-# from forex.runner, which is trade-capable) -- same pattern as
-# backtest_forex_universe._MODULE_IMPORT.
+# name -> pure signal module. Full SIM roster + retired base strategies
+# retained so historical decomp cache entries remain readable.
+# Kept here (not imported from forex.runner, which is trade-capable) --
+# same pattern as backtest_forex_universe._MODULE_IMPORT.
 MODULE_IMPORT = {
-    "ema":            "forex.strategy",
-    "ema_trend":      "forex.strategy_ema_trend",
-    "rsi":            "forex.strategy_rsi",
-    "rsi_trend":      "forex.strategy_rsi_trend",
-    "rsi_atr":        "forex.strategy_rsi_atr",
-    "bb":             "forex.strategy_bb",
-    "bb_quality":     "forex.strategy_bb_quality",
-    "zscore":         "forex.strategy_zscore",
-    "zscore_quality": "forex.strategy_zscore_quality",
+    # ── active SIM roster (SIM_ACTIVE_STRATEGIES as of 2026-09-04) ──────
+    "rsi":               "forex.strategy_rsi",
+    "rsi_trend":         "forex.strategy_rsi_trend",
+    "rsi_atr":           "forex.strategy_rsi_atr",
+    "ema_trend":         "forex.strategy_ema_trend",
+    "bb_quality":        "forex.strategy_bb_quality",
+    "bb_quality_hv":     "forex.strategy_bb_quality_hv",
+    "zscore_quality":    "forex.strategy_zscore_quality",
+    "zscore_quality_tb": "forex.strategy_zscore_quality_tb",
+    "donchian_ai":       "forex.strategy_donchian_ai",
+    # ── retired base strategies (cache compatibility) ────────────────────
+    "ema":               "forex.strategy",
+    "bb":                "forex.strategy_bb",
+    "zscore":            "forex.strategy_zscore",
 }
 
-# The roster the analyst sweeps by default (forex v1).
-ROSTER = ["rsi", "rsi_trend", "ema_trend", "bb_quality", "zscore_quality"]
+# All 9 active SIM strategies — the analyst sweeps every one of these.
+# Updated 2026-09-04 from 5 to 9 (added rsi_atr, bb_quality_hv,
+# zscore_quality_tb, donchian_ai which were missing from the original list).
+ROSTER = [
+    "rsi", "rsi_trend", "rsi_atr",
+    "ema_trend",
+    "bb_quality", "bb_quality_hv",
+    "zscore_quality", "zscore_quality_tb",
+    "donchian_ai",
+]
 
 # ── stocks Phase 2 ──────────────────────────────────────────────────────
 # strategy snake_key -> usa_strategy class name (used by us_signals._run_one)

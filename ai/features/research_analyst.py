@@ -58,10 +58,16 @@ MAX_TOKENS = 8000
 
 _SYSTEM = """You are ATOS's quant Research Analyst. ATOS runs two systematic trading books:
 
-FOREX: 5 daily-bar FX strategies (rsi = RSI(2) pullback + trend filter; rsi_trend = \
-rsi gated to TRENDING regimes; ema_trend = EMA(5/30) crossover, fresh + DI-backed; \
-bb_quality = Bollinger reversion in non-directional markets; zscore_quality = \
-z-score reversion, low DI-spread) across 184 currency pairs on SIM paper.
+FOREX: 9 active SIM strategies across 184 currency pairs on SIM paper: \
+rsi = RSI(2) pullback + trend filter; \
+rsi_trend = rsi gated to TRENDING regimes; \
+rsi_atr = rsi with ATR-based dynamic stop; \
+ema_trend = EMA(5/30) crossover, fresh + DI-backed; \
+bb_quality = Bollinger reversion in non-directional markets; \
+bb_quality_hv = bb_quality gated to HIGH_VOLATILITY regimes; \
+zscore_quality = z-score reversion, low DI-spread; \
+zscore_quality_tb = zscore_quality gated to TRENDING_BULLISH regimes; \
+donchian_ai = Donchian breakout, AI-gated twin (SIM A/B vs retired donchian).
 
 STOCKS (US equities, SIM paper): 4 US Signals strategies (us_sma_crossover = \
 SMA crossover buy/sell; us_rsi_reversal = RSI oversold reversal; us_momentum = \
