@@ -70,6 +70,14 @@
     "min_samples": 50
   },
 
+  "_exit_copilot_comment": "Phase C — AI exit timing agent (ai/agent/exit_copilot.py). Evaluates open SIM positions that have reached ≥min_mfe_r profit (default 1.0R) and decides HOLD or EXIT_NOW. Runs in the _run_exits pass after the deterministic exit_advisor. Ships SHADOW-ONLY (shadow_mode:true) — logs every decision to data/ai_exit_decisions.jsonl with est_pnl_eur_at_decision so report_phase_c_counterfactual.py can measure give-back saved vs actual exit. Flip shadow_mode:false only after Phase B proves out (3 weeks SIM A/B). LIVE is never in the apply path. Deduped once per position per day.",
+  "exit_copilot": {
+    "enabled": true,
+    "shadow_mode": true,
+    "min_mfe_r": 1.0,
+    "model": "claude-sonnet-5"
+  },
+
   "_exposure_controller_comment": "Phase A — portfolio-level exposure controller (ai/portfolio/exposure_controller.py). Runs BEFORE the Trading Copilot on every entry signal; blocks trades that breach the cluster/pair/risk-pct caps and logs to data/exposure_controller.jsonl. Defaults are permissive for the first week of observation — tighten after the gate passes (see docs/atos_ai_tracker.md Phase A gate). max_currency_cluster_positions: max open positions net-long or net-short any one currency. max_open_risk_pct_equity: total open risk (sum of risk_eur_at_entry) as % of account equity. max_same_pair_positions: max open positions for the same 6-char symbol across all strategies.",
   "exposure_controller": {
     "enabled": true,

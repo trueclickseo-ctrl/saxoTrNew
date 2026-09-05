@@ -130,12 +130,14 @@ try:
                                             log_shadow_decision as _ai_log_shadow,
                                             already_evaluated as _ai_already_evaluated)
     from ai.portfolio.exposure_controller import ExposureController as _ExposureController
+    import ai.agent.exit_copilot as _ai_exit_copilot
 except Exception as _ai_import_exc:                      # pragma: no cover
     logging.getLogger(__name__).warning(
         "  [ai] advisory layer unavailable, running deterministic-only: %s", _ai_import_exc)
     ai_config = None
     ai_trading_copilot = None
     _ExposureController = None
+    _ai_exit_copilot = None
     def _ai_build_proposal(*a, **k): return {}
     def _ai_log_proposal(*a, **k): return None
     def _ai_log_shadow(*a, **k): return None
@@ -3352,23 +3354,35 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
         # position's give-back risk and LOG what it would recommend; never
         # act on it. See forex/exit_advisor.py and EXIT_ADVISOR_MODE. Runs
         # after the MAE/MFE update above so pos["mfe_eur"] is current.
+        _adv_result = None
         if EXIT_ADVISOR_MODE == "shadow" and not dry_run:
             try:
-                adv = exit_advisor.score(pos, df, strat_name)
-                if adv is not None:
+                _adv_result = exit_advisor.score(pos, df, strat_name)
+                if _adv_result is not None:
                     forward_observation.log_exit_advisor_shadow(
                         account_env=ACCOUNT_ENV, strategy=strat_name, symbol=sym,
                         card_id=pos.get("observation_card_id"),
-                        score=adv["score"], recommendation=adv["recommendation"],
-                        r_now=adv["r_now"], mfe_r=adv["mfe_r"], signals=adv["signals"],
+                        score=_adv_result["score"], recommendation=_adv_result["recommendation"],
+                        r_now=_adv_result["r_now"], mfe_r=_adv_result["mfe_r"],
+                        signals=_adv_result["signals"],
                         cur_stop=float(pos.get("stop_price", 0) or 0),
                     )
-                    if adv["recommendation"] != "HOLD":
-                        logger.info(f"  [exit-advisor:SHADOW] {key}: {adv['recommendation']} "
-                                    f"(score {adv['score']}, {adv['r_now']}R now / {adv['mfe_r']}R peak) "
-                                    f"— not acted on")
+                    if _adv_result["recommendation"] != "HOLD":
+                        logger.info(f"  [exit-advisor:SHADOW] {key}: {_adv_result['recommendation']} "
+                                    f"(score {_adv_result['score']}, {_adv_result['r_now']}R now / "
+                                    f"{_adv_result['mfe_r']}R peak) — not acted on")
             except Exception:
                 pass
+
+        # Exit Copilot (Phase C) — shadow-only until exit_copilot.shadow_mode=false.
+        # Only fires for positions ≥1R MFE; deduped once per position per day.
+        if _ai_exit_copilot is not None and _adv_result is not None and not dry_run:
+            try:
+                _close_px = float(df["Close"].iloc[-1]) if df is not None and len(df) else 0.0
+                _ai_exit_copilot.evaluate_position(
+                    pos, sym, strat_name, _adv_result, _close_px, ACCOUNT_ENV)
+            except Exception as _ec_exc:
+                logger.debug(f"  [exit-copilot] {sym}: {_ec_exc}")
 
         exit_flag, reason = strat_mod.should_exit(pos, df, cal_days)
         if not exit_flag:
