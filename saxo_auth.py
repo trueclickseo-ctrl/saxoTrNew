@@ -286,8 +286,11 @@ def get_valid_access_token(env: str = "sim") -> str:
         )
 
     expires_at = tokens["obtained_at"] + tokens.get("expires_in", 1200)
-    # Refresh a bit early (60s buffer) rather than cutting it exactly at expiry
-    if time.time() < expires_at - 60:
+    # 300s buffer: with a 15-min keepalive and 20-min TTL, 60s was too thin —
+    # the keepalive would see 6 min remaining (>60s) and skip the refresh, then
+    # the token expired before the next tick (T+15 → expires T+20 → next keepalive T+30).
+    # 300s ensures the keepalive at T+15 always refreshes (5 min left ≤ 5 min buffer).
+    if time.time() < expires_at - 300:
         return tokens["access_token"]
 
     try:
