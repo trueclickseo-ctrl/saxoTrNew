@@ -249,6 +249,7 @@ class ExposureController:
             "reason": reason,
             "book_n": self._n_positions,
             "book_risk_eur": round(self._total_risk_eur, 2),
+            "equity_eur": round(self._equity, 2) if self._equity else None,
         }
         try:
             with open(_LOG_PATH, "a", encoding="utf-8") as f:
