@@ -187,6 +187,11 @@ WINDOWS_TASKS = {
     # IBKR blend rebalance (2026-09-04) -- fortnightly dry-run scan (logs signal, no orders).
     # Execution is manual (--execute). grace=30, max_first_run_wait=26h.
     "IBKR Blend Rebalance":    ("ATOS IBKR Blend Rebalance",    "ibkr_blend_rebalance.log",   30, 26),
+    # AI Strategy Evolver (2026-09-05) -- weekly Saturday 09:00 PKT. Evolves
+    # US Blend + US Reversion AI twin params, sends email report. Weekly cadence
+    # so max_log_age=200h (7d + 32h buffer). grace=60 (generous; run is slow
+    # due to Claude API calls). Writes atos/ai_variants/*.json.
+    "AI Strategy Evolver":     ("ATOS AI Strategy Evolver",     "ai_evolver.log",             60, 200),
     # IBKR US Signals (2026-09-04) -- 4 strategies (SMA Crossover, RSI Reversal,
     # US Momentum, US Ensemble). Entries: 16:00 PKT (07:00 ET, pre-open).
     # Exits: 09:00 PKT (00:00 ET, post-close). Both dry-run only; execution manual.

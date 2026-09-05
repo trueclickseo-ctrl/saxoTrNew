@@ -286,22 +286,118 @@ parameter set for the AI twin. Return ONLY the JSON object described in your ins
     return log_entry
 
 
+_DEFAULTS = {
+    "us_blend":     {"LOOKBACK": 120, "MOM_THRESHOLD": 0.05, "TARGET_VOL": 0.15, "REBAL_DAYS": 14},
+    "us_reversion": {"RSI_ENTRY": 38, "RSI_EXIT": 60, "DIP_PCT": 0.05, "VOL_MULT": 1.5, "MAX_HOLD_DAYS": 10},
+}
+
+
+def _email_html(results: list[dict]) -> tuple[str, str]:
+    """Build (subject, html) email report from a list of evolve_strategy() results."""
+    now = datetime.now()
+    any_changed = any(r.get("proposed") != _DEFAULTS.get(r.get("strategy"), {})
+                      for r in results if r)
+
+    subj = (f"[AI Evolver] params CHANGED — {now:%Y-%m-%d}"
+            if any_changed else
+            f"[AI Evolver] held defaults — {now:%Y-%m-%d}")
+
+    rows_html = ""
+    for r in results:
+        if not r:
+            continue
+        s = r.get("strategy", "?")
+        defaults = _DEFAULTS.get(s, {})
+        proposed = r.get("proposed", {})
+        hist = r.get("trade_summary", {})
+        changed = proposed != defaults
+
+        color = "#1e6b2e" if not changed else "#7d4e00"
+        badge = ("&#9679; held defaults" if not changed else "&#9650; PARAMS CHANGED")
+        badge_color = "#27ae60" if not changed else "#e67e22"
+
+        param_rows = "".join(
+            f"<tr><td style='padding:2px 8px'>{k}</td>"
+            f"<td style='padding:2px 8px;font-weight:bold;"
+            f"color:{'#e67e22' if proposed.get(k) != defaults.get(k) else '#333'}'>"
+            f"{proposed.get(k, '—')}</td>"
+            f"<td style='padding:2px 8px;color:#888'>{defaults.get(k, '—')}</td></tr>"
+            for k in sorted(set(list(defaults) + list(proposed)))
+        )
+
+        rows_html += f"""
+        <h3 style='margin-bottom:4px;color:{color}'>{s.replace('_',' ').title()}
+          <span style='font-size:12px;background:{badge_color};color:#fff;
+            padding:2px 6px;border-radius:3px;margin-left:8px'>{badge}</span>
+        </h3>
+        <table style='border-collapse:collapse;margin-bottom:4px;font-size:13px'>
+          <tr style='color:#888'><th align='left' style='padding:2px 8px'>Param</th>
+            <th align='left' style='padding:2px 8px'>AI twin</th>
+            <th align='left' style='padding:2px 8px'>Default</th></tr>
+          {param_rows}
+        </table>
+        <p style='margin:4px 0;font-size:13px'>
+          <b>Closed:</b> {hist.get('closed', 0)} &nbsp;
+          <b>WR:</b> {hist.get('win_rate_pct', '—')}% &nbsp;
+          <b>PF:</b> {hist.get('profit_factor', '—')} &nbsp;
+          <b>P&L:</b> {hist.get('total_pnl_sek', '—')} SEK
+        </p>
+        <p style='margin:4px 0;font-size:13px;color:#444'>
+          <b>Rationale:</b> {r.get('rationale', '—')}
+        </p>
+        <p style='margin:4px 0 12px;font-size:12px;color:#888'>
+          Confidence: {r.get('confidence', '?')} &nbsp;·&nbsp; {r.get('sample_note', '')}
+        </p>
+        <hr style='border:none;border-top:1px solid #eee'>
+        """
+
+    html = f"""<!DOCTYPE html><html><body style='font-family:sans-serif;color:#222;max-width:640px'>
+    <h2>AI Strategy Evolver — weekly report</h2>
+    <p style='color:#888;font-size:12px'>{now:%Y-%m-%d %H:%M} PKT &nbsp;·&nbsp;
+       run_ai_strategy_evolver.bat &nbsp;·&nbsp; atos/ai_variants/</p>
+    {rows_html}
+    <p style='font-size:11px;color:#aaa'>Re-run manually: python -m ai.agent.strategy_evolver</p>
+    </body></html>"""
+    return subj, html
+
+
+def send_email_report(results: list[dict]) -> bool:
+    try:
+        from forex.notifier import _send
+        subj, html = _email_html(results)
+        ok = bool(_send(subj, html))
+        print(f"[evolver] email {'sent' if ok else 'FAILED'}: {subj}")
+        return ok
+    except Exception as exc:
+        print(f"[evolver] email error: {exc}")
+        return False
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="AI strategy param evolver")
     ap.add_argument("--strategy", choices=["us_blend", "us_reversion", "all"],
                     default="all")
     ap.add_argument("--dry-run", action="store_true",
                     help="Print proposals without writing variant files")
+    ap.add_argument("--email", action="store_true",
+                    help="Send email report after running (implies real run, not dry-run)")
     args = ap.parse_args(argv)
+
+    if args.email:
+        args.dry_run = False  # email implies real run
 
     targets = (list(_BOUNDS.keys()) if args.strategy == "all"
                else [args.strategy])
 
     print(f"[evolver] running {datetime.now():%Y-%m-%d %H:%M:%S}  "
-          f"dry_run={args.dry_run}  strategies={targets}")
+          f"dry_run={args.dry_run}  email={args.email}  strategies={targets}")
 
+    results = []
     for s in targets:
-        evolve_strategy(s, dry_run=args.dry_run)
+        results.append(evolve_strategy(s, dry_run=args.dry_run))
+
+    if args.email:
+        send_email_report(results)
 
     print(f"\n[evolver] done. Log: {EVOLUTION_LOG}")
 
