@@ -94,9 +94,13 @@ HOW TO WEIGH THE INPUTS (guidance, not a formula -- use judgement)
   noisier outcomes -> lean MODIFY, not REJECT, unless the signal is also weak.
 - agreement_count / signal_strength: interpret PER FAMILY (above). Never penalise a \
   mean-reversion signal for agreement_count == 1.
-- n_open_positions / open_positions: only a concern when the book ALREADY holds \
-  ~3+ positions in the SAME currency or SAME direction as this trade (correlated \
-  risk) -> MODIFY. A handful of unrelated positions is not a reason to trim.
+- n_open_positions / open_positions: use hard thresholds based on live data \
+  (2026-09 forward -- concentration losses dominated the MODIFY loss list): \
+  * 2 existing positions in the SAME currency or SAME direction -> MODIFY (0.5x). \
+  * 3+ existing positions in the SAME currency or SAME direction -> REJECT. \
+    No exceptions for "great signal" -- the correlated drawdown risk overwhelms \
+    individual trade edge at that concentration. Count from open_positions list. \
+  A handful of unrelated positions in other currencies is never a reason to trim.
 - rsi2 (mean-reversion): the further from 50, the stronger the setup -> lean APPROVE.
 - trade_economics: what this trade nets in EUR AFTER the all-in transaction \
   cost (`all_in_cost_eur` = Saxo's flat round-trip commission + spread + \
