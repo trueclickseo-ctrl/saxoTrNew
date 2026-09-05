@@ -3198,6 +3198,57 @@ def _reconcile_closed_vs_saxo() -> None:
         logger.warning(f"  [reconcile-vs-saxo] skipped (non-fatal): {exc}")
 
 
+_SLIPPAGE_LOG = os.path.join(BASE, "data", "stop_slippage.jsonl")
+
+
+def _log_stop_slippage(
+    strategy: str, symbol: str, direction: str,
+    stop_price: float, fill_price: float,
+    entry_price: float, df,
+) -> None:
+    """Log intended_stop vs actual_fill for hard_stop exits (P4 measurement).
+
+    Called once per hard_stop close after the fill price is confirmed. Writes
+    to data/stop_slippage.jsonl — read-only analysis, never affects orders.
+    Slippage is adverse when a long fills BELOW the stop (stop > fill) or a
+    short fills ABOVE it (fill > stop).
+    """
+    try:
+        from forex.strategy import _atr as _atr_fn
+        atr_val: float | None = None
+        if df is not None and len(df) >= 14:
+            try:
+                atr_val = float(_atr_fn(df["High"], df["Low"], df["Close"]).iloc[-1])
+            except Exception:
+                pass
+
+        is_long = direction.lower() in ("buy", "long")
+        # Adverse slippage is negative for longs, positive for shorts
+        slip_price = fill_price - stop_price if is_long else stop_price - fill_price
+        risk_price = abs(entry_price - stop_price) if entry_price and stop_price else None
+        slip_r = (slip_price / risk_price) if (risk_price and risk_price > 0) else None
+        slip_atr = (slip_price / atr_val) if (atr_val and atr_val > 0) else None
+
+        row = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "account": ACCOUNT_ENV,
+            "strategy": strategy,
+            "symbol": symbol,
+            "direction": direction,
+            "stop_price": round(stop_price, 6),
+            "fill_price": round(fill_price, 6),
+            "slippage_price": round(slip_price, 6),
+            "slippage_atr": round(slip_atr, 4) if slip_atr is not None else None,
+            "slippage_r": round(slip_r, 4) if slip_r is not None else None,
+            "entry_price": round(entry_price, 6),
+            "atr": round(atr_val, 6) if atr_val is not None else None,
+        }
+        with open(_SLIPPAGE_LOG, "a", encoding="utf-8") as _f:
+            _f.write(json.dumps(row) + "\n")
+    except Exception:
+        pass
+
+
 def _run_exits(strat_name: str, strat_mod, positions: dict,
                market_data: dict, akey: str, dry_run: bool,
                today_str: str, state: dict | None = None) -> int:
@@ -3470,6 +3521,14 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
                                 f"quote {live_px:.5f} ({(_real_exit/live_px-1)*100:+.2f}%)")
                 live_px = _real_exit
                 pnl_pct = ((live_px - entry) / entry * 100) if is_long else ((entry - live_px) / entry * 100)
+
+        # P4 — stop-slippage measurement: log intended stop_price vs actual
+        # fill for hard_stop exits (market order latency + spread). Read-only.
+        if not dry_run and not _paper and "hard_stop" in reason.lower():
+            _sp = pos.get("stop_price")
+            if _sp:
+                _log_stop_slippage(strat_name, sym, direction,
+                                   float(_sp), live_px, entry, df)
 
         _log_order({"side": close_side, "symbol": sym, "strategy": strat_name,
                     "uic": uic, "quantity": qty, "exit_price": live_px,
