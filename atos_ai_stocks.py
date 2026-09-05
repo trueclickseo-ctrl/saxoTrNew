@@ -91,21 +91,56 @@ def run(argv=None) -> int:
         return subprocess.call([sys.executable, "-X", "utf8",
                                 os.path.join(_ROOT, "ai_dashboard.py"), *extra])
 
-    print(f"\n{'='*60}\n[AI SIM STOCKS] US Blend twin — {datetime.now():%Y-%m-%d %H:%M:%S}\n{'='*60}")
+    print(f"\n{'='*60}\n[AI SIM STOCKS] {datetime.now():%Y-%m-%d %H:%M:%S}\n{'='*60}")
     if not proc_lock.acquire(proc_lock.ATOS_AI_STOCKS_LOCK, "atos_ai_stocks"):
         print("  could not acquire the ai-stocks lock — proceeding unprotected")
     try:
         import atos_runner
         import ai.config as ai_config
+        from atos.ai_variants import reversion_context
         if not ai_config.basket_ranker_applies("ai_sim"):
             print("  [ai stocks] stocks_ai / agent not enabled -- nothing to do "
                   "(config/ai.json enabled_ai_sim + stocks_ai.enabled + agent_enabled)")
             return 0
+
         budget = _blend_budget_sek()
         print(f"  budget {budget:,.0f} SEK  (same % of SIM cash as the deterministic book)")
+
+        # ── US Blend AI twin ─────────────────────────────────────────────────
         result = atos_runner.run_us_blend_ai(budget_sek=budget)
-        print(f"  [AI SIM STOCKS] done — {result['buy']} buy / {result['sell']} sell "
+        print(f"  [AI SIM] Blend done — {result['buy']} buy / {result['sell']} sell "
               f"(paper, data/atos_ai.db)")
+
+        # ── US Reversion AI twin ─────────────────────────────────────────────
+        if atos_runner.US_REVERSION_ENABLED:
+            print("  [AI SIM] running US Reversion twin...")
+            try:
+                import numpy as np  # noqa: F401 (used inside atos_runner)
+                raw = atos_runner.download_universe(list(atos_runner.US_TICKERS))
+                from atos.features import add_all
+                feat_data: dict = {}
+                for tk, dfr in raw.items():
+                    try:
+                        feat_data[tk] = add_all(dfr)
+                    except Exception as _fe:
+                        print(f"  [AI SIM rev] features failed for {tk}: {_fe}")
+                if feat_data:
+                    rev_actions: list = []
+                    with reversion_context():
+                        atos_runner.run_us_reversion(
+                            feat_data, atos_runner.db.get_open_trades(), rev_actions,
+                            available_cash_sek=budget,
+                            account_env="ai_sim",
+                        )
+                    rev_buy  = sum(1 for a in rev_actions if a.get("action") == "BUY")
+                    rev_sell = sum(1 for a in rev_actions if a.get("action") in ("SELL", "EXIT"))
+                    print(f"  [AI SIM] Reversion done — {rev_buy} buy / {rev_sell} sell "
+                          f"(paper, data/atos_ai.db)")
+                else:
+                    print("  [AI SIM rev] no market data — skipping reversion")
+            except Exception as _re:
+                print(f"  [AI SIM] run_us_reversion error: {_re}")
+
         _write_status(result, budget)
         return 0
     finally:

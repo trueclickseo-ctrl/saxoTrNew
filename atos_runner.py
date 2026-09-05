@@ -2384,12 +2384,14 @@ def run_us_blend_ai(*, budget_sek: float) -> dict:
         print("  [ai stocks] no market data — aborting")
         return {"actions": [], "buy": 0, "sell": 0, "signal": {}, "book_state": {}}
 
-    try:
-        run_us_momentum(feat_data, db.get_open_trades(), todays_actions,
-                        available_cash_sek=max(0.0, float(budget_sek)),
-                        account_env="ai_sim")
-    except Exception as e:
-        print(f"  [ai stocks] run_us_momentum error: {e}")
+    from atos.ai_variants import blend_context
+    with blend_context():
+        try:
+            run_us_momentum(feat_data, db.get_open_trades(), todays_actions,
+                            available_cash_sek=max(0.0, float(budget_sek)),
+                            account_env="ai_sim")
+        except Exception as e:
+            print(f"  [ai stocks] run_us_momentum error: {e}")
 
     buy_n  = sum(1 for a in todays_actions if a.get("action") == "BUY")
     sell_n = sum(1 for a in todays_actions if a.get("action") in ("SELL", "EXIT"))
@@ -2402,7 +2404,7 @@ def run_us_blend_ai(*, budget_sek: float) -> dict:
 
 
 def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
-                     available_cash_sek: float = 0.0):
+                     available_cash_sek: float = 0.0, account_env: str = "sim"):
     """US Mean Reversion — short-term dip-buying strategy (3-10 day holds).
 
     Completely independent of US Blend: separate DB rows (strategy='US Reversion'),
@@ -2410,10 +2412,15 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
     available_cash_sek: if >0, slot size = this / MAX_POSITIONS (dynamic mode).
     Otherwise uses fixed REVERSION_SLEEVE_SEK.
 
+    account_env="ai_sim": runs as the AI paper twin — all trades booked paper
+    (no Saxo orders), uses AI variant params from atos/ai_variants/.
+
     Enabled only when US_REVERSION_ENABLED = True (after backtest passes).
     """
     from atos import us_reversion as USR
     from instrument_map import load_instrument_map
+
+    _paper_twin = account_env == "ai_sim"
 
     if kill_switch_active():
         print("  [US reversion] STOP_TRADING present — skip"); return
@@ -2422,7 +2429,7 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
     except Exception as e:
         print(f"  [US reversion] instrument_map load failed: {e}"); return
 
-    tag = "[US reversion]"
+    tag = "[US reversion AI-SIM]" if _paper_twin else "[US reversion]"
     fx_usd = _rate_to_sek("USD")
 
     # Current open reversion positions (this strategy only)
@@ -2640,49 +2647,47 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
               f"vol={cand['vol_ratio']}x | {shares} shares @ ${price:.2f} "
               f"(~{cost_sek:,.0f} SEK) [US Reversion sleeve]")
         try:
-            # This used to call the nonexistent saxo_client.place_order() --
-            # confirmed live 2026-08-21: the strategy's first-ever real
-            # candidate (ROST) failed with "module 'saxo_client' has no
-            # attribute 'place_order'". Fixed to the real function, and
-            # attached an atomic broker-side stop-loss the same way US Blend
-            # was fixed earlier this session -- this path previously
-            # hardcoded stop_price=0 in the DB record, meaning even a
-            # successful order would have sat with no protection at all.
             stop_p = round(price * (1 - USR.STOP_PCT), 2)
-            entry_oid, stop_oid, _ = saxo_order.place_with_stop(
-                post_fn=saxo_client.post,
-                account_key=saxo_client.get_account_key(),
-                uic=uic, asset_type="Stock", amount=shares,
-                buy_sell="Buy", stop_price=stop_p,
-                label=f"US Reversion:{ticker}",
-            )
-            paper = 0
-            if entry_oid is None:
-                if not _stocks_paper_fill_enabled():
-                    print(f"  {tag} buy {ticker} REJECTED — no position opened, no DB row recorded")
-                    continue
+            if _paper_twin:
+                # AI SIM twin — no Saxo order, book paper directly
                 paper = 1
-                print(f"  {tag} PAPER-FILL {ticker}: {shares} @ ${price:.2f} — Saxo SIM "
-                      f"rejected the order; booked locally, managed by ATOS should_exit() logic")
+                entry_oid = None
+                stop_oid = None
             else:
-                _ok, _fp = _confirm_stock_fill(entry_oid, uic)
-                if _ok:
-                    if _fp > 0 and abs(_fp - price) / max(price, 1e-9) > 0.001:
-                        print(f"  {tag} {ticker} real fill ${_fp:.2f} (scan ${price:.2f})")
-                    price = _fp or price
-                else:
-                    for _o in (entry_oid, stop_oid):
-                        try:
-                            _o and saxo_client.cancel_order(str(_o))
-                        except Exception:
-                            pass
+                entry_oid, stop_oid, _ = saxo_order.place_with_stop(
+                    post_fn=saxo_client.post,
+                    account_key=saxo_client.get_account_key(),
+                    uic=uic, asset_type="Stock", amount=shares,
+                    buy_sell="Buy", stop_price=stop_p,
+                    label=f"US Reversion:{ticker}",
+                )
+                paper = 0
+                if entry_oid is None:
                     if not _stocks_paper_fill_enabled():
-                        print(f"  {tag} buy {ticker} entry {entry_oid} unfilled — "
-                              f"cancelled, no DB row recorded")
+                        print(f"  {tag} buy {ticker} REJECTED — no position opened, no DB row recorded")
                         continue
                     paper = 1
-                    print(f"  {tag} {ticker}: entry {entry_oid} accepted but unfilled — "
-                          f"cancelled, booking paper (no phantom row)")
+                    print(f"  {tag} PAPER-FILL {ticker}: {shares} @ ${price:.2f} — Saxo SIM "
+                          f"rejected the order; booked locally, managed by ATOS should_exit() logic")
+                else:
+                    _ok, _fp = _confirm_stock_fill(entry_oid, uic)
+                    if _ok:
+                        if _fp > 0 and abs(_fp - price) / max(price, 1e-9) > 0.001:
+                            print(f"  {tag} {ticker} real fill ${_fp:.2f} (scan ${price:.2f})")
+                        price = _fp or price
+                    else:
+                        for _o in (entry_oid, stop_oid):
+                            try:
+                                _o and saxo_client.cancel_order(str(_o))
+                            except Exception:
+                                pass
+                        if not _stocks_paper_fill_enabled():
+                            print(f"  {tag} buy {ticker} entry {entry_oid} unfilled — "
+                                  f"cancelled, no DB row recorded")
+                            continue
+                        paper = 1
+                        print(f"  {tag} {ticker}: entry {entry_oid} accepted but unfilled — "
+                              f"cancelled, booking paper (no phantom row)")
             comm = commission_sek(shares, cost_sek)
             db.insert_trade({
                 "strategy": "US Reversion", "market_group": "US Equities",
@@ -2724,13 +2729,14 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
                            f"dip {cand['dip_pct']}%, vol {cand['vol_ratio']}x"),
                 "pnl_sek": None,
             })
-            notifier.notify_trade_executed(
-                side="BUY", ticker=ticker, shares=shares, price_usd=price,
-                value_sek=cost_sek, strategy="US Reversion",
-                account_balance_sek=get_total_equity(db.get_open_trades()),
-                reason=(("[PAPER-FILL — Saxo SIM down] " if paper else "")
-                        + f"RSI {cand['rsi']:.1f} | Dip {cand['dip_pct']}% | Vol {cand['vol_ratio']}x"),
-            )
+            if not _paper_twin:
+                notifier.notify_trade_executed(
+                    side="BUY", ticker=ticker, shares=shares, price_usd=price,
+                    value_sek=cost_sek, strategy="US Reversion",
+                    account_balance_sek=get_total_equity(db.get_open_trades()),
+                    reason=(("[PAPER-FILL — Saxo SIM down] " if paper else "")
+                            + f"RSI {cand['rsi']:.1f} | Dip {cand['dip_pct']}% | Vol {cand['vol_ratio']}x"),
+                )
         except Exception as e:
             print(f"  {tag} buy {ticker} FAILED: {e}")
 

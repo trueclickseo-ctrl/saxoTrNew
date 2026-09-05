@@ -97,6 +97,30 @@ def _stock_line(dbp: str) -> dict:
             "holds": {t["ticker"]: t["shares"] for t in op}}
 
 
+def _reversion_line(dbp: str) -> dict:
+    if not os.path.exists(dbp):
+        return {"closed": 0, "pnl": 0.0, "wr": 0.0, "pf": None, "open": 0, "holds": {}}
+    c = sqlite3.connect(dbp); c.row_factory = sqlite3.Row
+    try:
+        cl = [dict(r) for r in c.execute(
+            "select pnl_sek, exit_reason from trades "
+            "where exit_price is not null and strategy='US Reversion'")]
+        op = [dict(r) for r in c.execute(
+            "select ticker, shares from trades "
+            "where exit_price is null and strategy='US Reversion'")]
+    except Exception:
+        cl, op = [], []
+    finally:
+        c.close()
+    pnls = [t["pnl_sek"] or 0 for t in cl]
+    w = sum(1 for p in pnls if p > 0)
+    gp = sum(p for p in pnls if p > 0); gl = -sum(p for p in pnls if p < 0)
+    return {"closed": len(cl), "pnl": round(sum(pnls), 0),
+            "wr": round(w / len(cl) * 100, 1) if cl else 0.0,
+            "pf": round(gp / gl, 2) if gl else None, "open": len(op),
+            "holds": {t["ticker"]: t["shares"] for t in op}}
+
+
 def _pf(x) -> str:
     return f"{x:.2f}" if x else "—"
 
@@ -171,11 +195,11 @@ def render() -> str:
         applied = sum(1 for d in dec if d.get("applied"))
         L.append(f"  {DM}copilot on the twin: {dict(acts)} · {applied} applied to sizing · {len(dec)} total{W}")
 
-    # ── STOCKS ───────────────────────────────────────────────────────────
+    # ── STOCKS — US Blend ────────────────────────────────────────────────
     dets = _stock_line(DET_STOCKS_DB)
     ais  = _stock_line(AI_STOCKS_DB)
     L.append("")
-    L.append(f"{BD}  STOCKS — US Blend{W}   {DM}(deterministic top-N vs the basket-ranker's re-ranked pick){W}")
+    L.append(f"{BD}  STOCKS — US Blend{W}   {DM}(deterministic top-N vs AI basket-ranker's re-ranked pick){W}")
     L.append(f"  {DM}{'':12}  {'Closed':>7}  {'WR%':>6}  {'PF':>6}  {'P&L (SEK)':>12}  {'Open':>5}{W}")
     L.append(f"  {'deterministic':12}  {dets['closed']:>7}  {dets['wr']:>6.1f}  "
              f"{_pf(dets['pf']):>6}  {dets['pnl']:>12,.0f}  {dets['open']:>5}")
@@ -198,6 +222,28 @@ def render() -> str:
             ch = f"{YL}re-ranked{W}" if r.get("changed") else f"{DM}kept{W}"
             L.append(f"    {DM}{str(r.get('as_of_date',''))}{W}  {r.get('det_offense')} → "
                      f"{r.get('ai_offense')}  {ch}  {DM}{(r.get('reasoning') or '')[:70]}{W}")
+
+    # ── STOCKS — US Reversion ────────────────────────────────────────────
+    det_rev = _reversion_line(DET_STOCKS_DB)
+    ai_rev  = _reversion_line(AI_STOCKS_DB)
+    L.append("")
+    L.append(f"{BD}  STOCKS — US Reversion{W}   {DM}(deterministic vs AI twin w/ evolver params){W}")
+    L.append(f"  {DM}{'':12}  {'Closed':>7}  {'WR%':>6}  {'PF':>6}  {'P&L (SEK)':>12}  {'Open':>5}{W}")
+    L.append(f"  {'deterministic':12}  {det_rev['closed']:>7}  {det_rev['wr']:>6.1f}  "
+             f"{_pf(det_rev['pf']):>6}  {det_rev['pnl']:>12,.0f}  {det_rev['open']:>5}")
+    L.append(f"  {CY}{'AI twin':12}{W}  {ai_rev['closed']:>7}  {ai_rev['wr']:>6.1f}  "
+             f"{_pf(ai_rev['pf']):>6}  {ai_rev['pnl']:>12,.0f}  {ai_rev['open']:>5}")
+    L.append(f"  {DM}verdict:{W} {_verdict(ai_rev['pnl'], det_rev['pnl'], ai_rev['closed'], det_rev['closed'])}")
+    # Show active variant params if any
+    _vpath = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "atos", "ai_variants", "us_reversion_params.json")
+    if os.path.exists(_vpath):
+        try:
+            import json as _j
+            _vp = _j.load(open(_vpath, encoding="utf-8"))
+            L.append(f"  {DM}evolver params: {_vp}{W}")
+        except Exception:
+            pass
 
     # ── IBKR PAPER ──────────────────────────────────────────────────────────
     ibkr = _ibkr_line()
