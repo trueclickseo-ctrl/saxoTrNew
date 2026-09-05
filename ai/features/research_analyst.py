@@ -81,7 +81,15 @@ each strategy over historical daily bars and tells you which entry-context bucke
 carry a statistically stable edge. The digest also includes `by_pair_strategy`: a \
 per-pair × strategy table showing win_rate and avg_r for every pair where 2+ strategies \
 have closed trades. Use this to identify pairs where one strategy consistently helps \
-while another consistently hurts -- that is strong evidence for a pair-specific gate.
+while another consistently hurts -- that is strong evidence for a pair-specific gate. \
+\
+The digest also includes `multi_strategy_agreement`: WR, profit_factor and total_pnl \
+broken down by how many strategies were concurrently open on the same pair at trade \
+time (concurrent=0 means solo, concurrent=1 means 2 strategies agreed, etc.). Use \
+this to judge whether multi-strategy agreement is a quality signal: if 2- or 3-strategy \
+agreement buckets show materially higher WR or PF than the solo bucket, propose a \
+sizing or entry-gate hypothesis that exploits agreement as a filter. If agreement \
+predicts LOWER WR, propose a cap or cooldown to stop strategies piling into already-held pairs.
 
 Your job: propose a SHORT list of concrete, testable improvements -- an entry gate, \
 an exit rule, or a sizing tweak -- each falsifiable by the decomposition harness. \
@@ -250,6 +258,16 @@ def _pair_strategy_agg(rows: list[dict]) -> list[dict]:
     return out
 
 
+def _concurrency_agg() -> list[dict]:
+    """Pull multi-strategy agreement stats from pnl_tracker and return a
+    compact list the AI can reason about. Never raises."""
+    try:
+        import pnl_tracker
+        return pnl_tracker.get_concurrency_summary("forex")
+    except Exception:
+        return []
+
+
 def _journal_themes(since_day: str) -> dict:
     rows = tj._load_jsonl(tj.JOURNAL_LOG)
     tags = Counter()
@@ -309,6 +327,10 @@ def build_research_digest(since: str | None = None) -> dict:
         # Per-pair × strategy: only pairs where 2+ strategies have closed trades,
         # so the AI can see which strategy is helping vs hurting each pair.
         "by_pair_strategy": _pair_strategy_agg(rows),
+        # Multi-strategy agreement: WR/PF/PNL broken down by how many strategies
+        # were concurrently open on the same pair at trade time. Tells the AI
+        # whether agreement between strategies is a quality signal worth gating on.
+        "multi_strategy_agreement": _concurrency_agg(),
         "journal": _journal_themes(since_day),
         "decomposition_cache": _decomp_summary(),
         # Phase 2 stocks section
