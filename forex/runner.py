@@ -129,11 +129,13 @@ try:
                                             log_proposal as _ai_log_proposal,
                                             log_shadow_decision as _ai_log_shadow,
                                             already_evaluated as _ai_already_evaluated)
+    from ai.portfolio.exposure_controller import ExposureController as _ExposureController
 except Exception as _ai_import_exc:                      # pragma: no cover
     logging.getLogger(__name__).warning(
         "  [ai] advisory layer unavailable, running deterministic-only: %s", _ai_import_exc)
     ai_config = None
     ai_trading_copilot = None
+    _ExposureController = None
     def _ai_build_proposal(*a, **k): return {}
     def _ai_log_proposal(*a, **k): return None
     def _ai_log_shadow(*a, **k): return None
@@ -3863,6 +3865,16 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
     entered_syms: list[str] = []
     _ai_shadow_pending: list = []   # (sym, proposal, decision) -- flushed after the loop
     _ai_decision_by_sym: dict = {}  # AI Sprint 4: latest decision per symbol, for the sizing hook
+    # Phase A — portfolio exposure controller: constructed once per cycle so
+    # cluster/risk counts are stable across the signal loop. None when the AI
+    # package didn't import (deterministic-only mode) or equity is unavailable.
+    _exposure_ctrl = None
+    if _ExposureController is not None and equity and equity > 0:
+        try:
+            _exposure_ctrl = _ExposureController.from_positions(
+                positions, float(equity), account_env=ACCOUNT_ENV)
+        except Exception as _ec_exc:
+            logger.warning(f"  [exposure_ctrl] init failed, skipping: {_ec_exc}")
     def _rej(stage: str, detail: str = "") -> None:
         # Structured record for a signal dropped BEFORE the cost gate (so it
         # never reaches cost_gate_decisions.jsonl). Pure observation.
@@ -3910,6 +3922,29 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             continue
         agrees = features["agreement_count"]
         ml_info = (f"  ml_prob={features['ml_prob']}" if features.get("ml_prob") else "")
+
+        # ── Phase A: portfolio exposure controller ────────────────────────
+        # Hard gate BEFORE the LLM call: blocks entries that would breach the
+        # currency-cluster cap, same-pair cap, or total-open-risk cap. Cheap
+        # (pure Python dict lookup, no network). Logged to
+        # data/exposure_controller.jsonl. Skipped when controller unavailable.
+        if _exposure_ctrl is not None:
+            try:
+                _sig_risk_eur = float(sig.get("risk_eur_at_entry") or 0)
+                if not _sig_risk_eur:
+                    # estimate from stop distance if not pre-computed
+                    _ep = float(sig.get("close") or 0)
+                    _sp = float(sig.get("stop_price") or 0)
+                    _q_rate_ec = _eur_rate_for_log(sym[3:6] if len(sym) >= 6 else "", akey)[0]
+                    if _ep and _sp and _q_rate_ec:
+                        _sig_risk_eur = abs(_ep - _sp) * _q_rate_ec * 10_000
+                _ec_ok, _ec_reason, _ = _exposure_ctrl.check_entry(sym, direction, _sig_risk_eur)
+                if not _ec_ok:
+                    logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] — {_ec_reason}")
+                    _rej("exposure_controller", _ec_reason)
+                    continue
+            except Exception as _ec_exc:
+                logger.debug(f"  [exposure_ctrl] check failed for {sym}: {_ec_exc}")
 
         # ── AI advisory layer (Sprints 2-3) — INERT, log-only ─────────────
         # For a signal that passed every deterministic filter above:
@@ -3966,6 +4001,8 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                     est_all_in_cost_eur=(round(_all_in_eur, 2) if _all_in_eur else None),
                     fixed_risk_eur=(RSI_LIVE_FIXED_RISK_EUR if strat_name == "rsi" else None),
                     pair_stats=_pair_history_stats(sym, strat_name),
+                    exposure_snapshot=(_exposure_ctrl.snapshot()
+                                       if _exposure_ctrl is not None else None),
                 )
                 _ai_log_proposal(_prop)
                 if (ai_config.agent_enabled_for(ACCOUNT_ENV)

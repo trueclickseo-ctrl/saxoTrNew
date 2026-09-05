@@ -45,7 +45,8 @@ def build_proposal(*, account_env: str, strategy: str, symbol: str, direction: s
                    regime_bars=None, est_commission_eur: float | None = None,
                    est_all_in_cost_eur: float | None = None,
                    fixed_risk_eur: float | None = None,
-                   pair_stats: dict | None = None) -> dict:
+                   pair_stats: dict | None = None,
+                   exposure_snapshot: dict | None = None) -> dict:
     """Assemble one trade-proposal dict. `sig` is the strategy's signal dict
     (close/stop_price/atr/score, optionally rsi/range_pips/breakout_level).
     `features` is signal_filter.evaluate()'s output (agreement_count,
@@ -118,6 +119,12 @@ def build_proposal(*, account_env: str, strategy: str, symbol: str, direction: s
         # closed trades yet). A high, well-sampled win rate is a reason to
         # lean APPROVE; a poor one is a reason to MODIFY or REJECT.
         "pair_history": pair_stats,
+        # ── Portfolio exposure snapshot (Phase A controller) ──────────────
+        # Compact book-level summary from ExposureController.snapshot():
+        # n_open_positions, total_open_risk_eur, open_risk_pct_equity,
+        # top_currency_clusters. Gives the Copilot accurate concentration
+        # data computed BEFORE this signal (not the stale positions list).
+        "portfolio_exposure": exposure_snapshot,
         # ── Trade Outcome Predictor (TOP) win probability ─────────────────
         # GradientBoosting score from ai/models/trade_outcome_predictor.py:
         # "probability this entry produces r_multiple > 0", trained on our
