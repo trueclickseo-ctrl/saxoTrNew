@@ -23,7 +23,7 @@ import trade_logger
 import saxo_order
 from typing import List, Optional
 
-from core.saxo_client import SaxoClient
+from core.saxo_client import SaxoClient, SaxoAPIError
 from core.etf_state import ETFStateStore
 from core.etf_strategy import ETFSignal
 from config.etf_config import ETFConfig
@@ -402,8 +402,17 @@ class ETFExecutor:
         if self.cfg.dry_run:
             logger.info(f"[DRY RUN] Would SELL {quantity}x {symbol} — {reason} @ ~{live_price:.2f}")
         else:
-            resp = self.client.post("/trade/v2/orders", json_body=order)
-            logger.info(f"ETF SELL {resp.get('OrderId','?')}: {quantity}x {symbol} — {reason} @ ~{live_price:.2f}")
+            try:
+                resp = self.client.post("/trade/v2/orders", json_body=order)
+                logger.info(f"ETF SELL {resp.get('OrderId','?')}: {quantity}x {symbol} — {reason} @ ~{live_price:.2f}")
+            except SaxoAPIError as exc:
+                if "SellOrdersAlreadyExistForOwnedContracts" in str(exc):
+                    logger.warning(
+                        f"[trim] {symbol}: Saxo reports sell order already exists — "
+                        f"treating as queued for exit, removing from local state"
+                    )
+                else:
+                    raise
 
         self.state.remove_position(uic)
         self.state.log_order({
