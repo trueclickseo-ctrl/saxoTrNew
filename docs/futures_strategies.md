@@ -4,7 +4,7 @@
 **Markets**: 13 across 5 asset classes and 3 currencies (see [Market Overview](#market-overview))  
 **7 strategies × 5 slots = 35 max open positions**  
 **Risk per trade**: 1% of `risk_equity_eur` (config), ATR-based sizing  
-**Scheduled**: daily at 06:15 PKT (01:15 UTC) via `run_futures_daily.bat`  
+**Scheduled**: 19:30 PKT (Daily Run, post-session close) + 23:00 PKT (Midday Run, electronic session) via `run_futures_daily.bat`; UIC/contract refresh at 06:10 PKT  
 **Price source**: Saxo's own live quotes and `/chart/v3/charts` for
 historical bars — already 100% Saxo-native, no Yahoo dependency found
 anywhere in this module (audited 2026-08-22).  
@@ -22,7 +22,8 @@ futures' own book. Added 2026-08-24 after ~24M EUR of legacy forex
 positions pushed real utilization to 98.56%, which would have blocked
 futures (and everything else) from trading regardless of futures' own
 risk numbers looking fine.  
-**Last updated**: 2026-08-19 (concurrency/margin notes added 2026-08-24)
+**Dashboard**: `futures_dashboard.py` — run `python futures_dashboard.py` for a live view; refreshes every 30 s. Shows open positions, per-strategy win rate / realized P&L / profit factor, full closed-trade history, and the P&L ledger breakdown.  
+**Last updated**: 2026-09-05 (dashboard overhauled; schedule corrected)
 
 ---
 

@@ -190,11 +190,32 @@ def _last_log_lines(n: int = 8) -> list:
         return []
 
 
+def _strategy_summary() -> dict:
+    """Per-strategy closed-trade stats from pnl_ledger.db, keyed by strategy name."""
+    try:
+        import pnl_tracker
+        rows = pnl_tracker.get_strategy_summary("futures")
+        return {r["strategy"]: r for r in rows}
+    except Exception:
+        return {}
+
+
+def _closed_trades(limit: int = 20) -> list:
+    """Recent closed futures trades from pnl_ledger.db."""
+    try:
+        import pnl_tracker
+        return pnl_tracker.get_closed_trades("futures", limit=limit)
+    except Exception:
+        return []
+
+
 def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     now_ts    = datetime.now().strftime("%Y-%m-%d  %H:%M:%S")
     positions = _read_positions()
     token     = price_service.load_token()
     uic_cache = _load_uic_cache()
+    strat_db  = _strategy_summary()
+    closed    = _closed_trades(20)
 
     # Live prices keyed by UIC
     px_by_uic = _saxo_live_prices(token)
@@ -389,13 +410,22 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
 
     # ── Strategy breakdown ────────────────────────────────────────
     L.append("")
-    L.append(f"  {BD}STRATEGY BREAKDOWN{W}")
+    L.append(f"  {BD}STRATEGY BREAKDOWN{W}  {DM}(closed stats from ledger + live unrealized){W}")
     L.append("")
-    for strat in ["donchian", "rsi", "ema", "macd", "squeeze", "ma_cross"]:
+    _sb_hdr = (
+        f"  {DM}{'Strategy':<11}  {'Description':<28}  {'Open':>5}  "
+        f"{'Closed':>7}  {'Wins':>5}  {'WR%':>6}  {'PF':>5}  "
+        f"{'Realized':>12}  {'Unrealized':>12}{W}"
+    )
+    L.append(_sb_hdr)
+    L.append(HR)
+    for strat in ["donchian", "rsi", "ema", "macd", "squeeze", "ma_cross", "trend_ma"]:
         sc    = STRAT_COL.get(strat, DM)
         desc  = STRAT_DESC.get(strat, strat)
-        count = sum(1 for p in positions if p["strategy"] == strat)
-        strat_pnl = 0.0
+        open_count = sum(1 for p in positions if p["strategy"] == strat)
+
+        # unrealized P&L from live prices
+        unreal = 0.0
         for p in positions:
             if p["strategy"] != strat:
                 continue
@@ -403,14 +433,35 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
             now_px = px_by_uic.get(uic) if uic else None
             if now_px and p["entry"] > 0:
                 raw = (now_px - p["entry"]) if p["direction"] == "Buy" else (p["entry"] - now_px)
-                strat_pnl += raw * p["qty"]
-        pc = GR if strat_pnl >= 0 else RD
+                unreal += raw * p["qty"]
+
+        # closed stats from DB
+        db = strat_db.get(strat, {})
+        n_closed = int(db.get("trades", 0) or 0)
+        wins     = int(db.get("wins", 0) or 0)
+        losses   = int(db.get("losses", 0) or 0)
+        real_pnl = float(db.get("total_pnl", 0) or 0)
+        wr       = float(db.get("win_rate", 0) or 0)
+        pf       = db.get("profit_factor")
+        pf_s     = f"{pf:.2f}" if pf is not None else "—"
+
+        # skip strategies with nothing at all
+        if open_count == 0 and n_closed == 0:
+            continue
+
+        rc  = GR if real_pnl >= 0 else RD
+        uc  = GR if unreal >= 0 else RD
+        wrc = GR if wr >= 50 else (YL if wr >= 40 else RD)
         L.append(
             f"  {sc}{BD}{strat:<11}{W}  {DM}{desc:<28}{W}  "
-            f"{count}/5 active    "
-            f"P&L: {pc}{BD}{strat_pnl:>+,.2f} USD{W}"
+            f"{BD}{open_count:>5}{W}  "
+            f"{DM}{n_closed:>7}  {wins:>5}  {W}{wrc}{wr:>5.1f}%{W}  "
+            f"{DM}{pf_s:>5}{W}  "
+            f"{rc}{BD}{real_pnl:>+12,.2f}{W}  "
+            f"{uc}{unreal:>+12,.2f}{W}"
         )
 
+    L.append(HR)
     L.append("")
     L.append(HR)
 
@@ -450,6 +501,57 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     L.append("")
     L.append(HR)
 
+    # ── Closed trade history ──────────────────────────────────────
+    L.append("")
+    L.append(f"  {BD}TRADE HISTORY{W}  {DM}(last 20 closed, newest first){W}")
+    L.append("")
+    _th_hdr = (
+        f"  {DM}{'#':>3}  {'Strategy':<11}  {'Sym':<5}  {'Dir':<5}  "
+        f"{'Qty':>6}  {'Entry':>10}  {'Exit':>10}  "
+        f"{'P&L (USD)':>12}  {'Days':>5}  {'Exit Reason':<40}{W}"
+    )
+    L.append(_th_hdr)
+    L.append(HR)
+    # filter to real closed trades (skip dedup/phantom rows)
+    real_closed = [
+        t for t in closed
+        if t.get("realized_pnl") is not None
+        and "dedup" not in (t.get("exit_reason") or "")
+        and "never_filled" not in (t.get("exit_reason") or "")
+    ]
+    if real_closed:
+        for i, t in enumerate(real_closed, 1):
+            strat   = t.get("strategy", "?")
+            sym     = t.get("symbol", "?")
+            dire    = t.get("direction", "?")
+            qty     = t.get("quantity", 0) or 0
+            ep      = float(t.get("entry_price") or 0)
+            xp      = float(t.get("exit_price") or 0)
+            pnl     = float(t.get("realized_pnl") or 0)
+            reason  = (t.get("exit_reason") or "—")[:40]
+            t_open  = (t.get("timestamp_open") or "")[:10]
+            t_close = (t.get("timestamp_close") or "")[:10]
+            try:
+                from datetime import date as _date
+                days = (_date.fromisoformat(t_close) - _date.fromisoformat(t_open)).days if t_open and t_close else 0
+            except Exception:
+                days = 0
+            sc  = STRAT_COL.get(strat, DM)
+            pc  = GR if pnl >= 0 else RD
+            dc  = GR if dire == "Buy" else RD
+            ep_s = f"{ep:,.2f}" if ep else "—"
+            xp_s = f"{xp:,.2f}" if xp else "—"
+            L.append(
+                f"  {DM}{i:>3}{W}  {sc}{BD}{strat:<11}{W}  "
+                f"{BD}{sym:<5}{W}  {dc}{dire:<5}{W}  "
+                f"{DM}{qty:>6.0f}  {ep_s:>10}  {xp_s:>10}{W}  "
+                f"{pc}{BD}{pnl:>+12,.2f}{W}  "
+                f"{DM}{days:>5}d  {reason}{W}"
+            )
+    else:
+        L.append(f"  {DM}No closed trades in ledger.{W}")
+    L.append(HR)
+
     # ── Scheduler log ─────────────────────────────────────────────
     log_lines = _last_log_lines(8)
     if log_lines:
@@ -480,13 +582,40 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         L.append(f"  {BD}FUTURES P&L LEDGER{W}  {DM}(pnl_ledger.db){W}")
         L.append(HR)
         L.append(
-            f"  {BD}Realized P&L:{W}  {pc}{BD}{pr:>+,.2f} USD{W}     "
+            f"  {BD}TOTAL Realized:{W}  {pc}{BD}{pr:>+,.2f} USD{W}     "
             f"{DM}Closed: {s.get('closed_trades',0)}  |  "
             f"Win rate: {s.get('win_rate',0):.1f}%  |  "
             f"Best: +{s.get('best_trade',0):.2f}  |  "
             f"Worst: {s.get('worst_trade',0):+.2f}  |  "
             f"Profit factor: {s.get('profit_factor') or '—'}{W}"
         )
+        # per-strategy row
+        if strat_db:
+            L.append("")
+            L.append(f"  {DM}  {'Strategy':<11}  {'Closed':>7}  {'W':>3}  {'L':>3}  {'WR%':>6}  {'Best':>10}  {'Worst':>11}  {'Realized':>12}{W}")
+            L.append(f"  {DM}  {'─'*11}  {'─'*7}  {'─'*3}  {'─'*3}  {'─'*6}  {'─'*10}  {'─'*11}  {'─'*12}{W}")
+            for strat in ["donchian", "rsi", "ema", "macd", "squeeze", "ma_cross", "trend_ma"]:
+                db = strat_db.get(strat)
+                if not db:
+                    continue
+                sc      = STRAT_COL.get(strat, DM)
+                n       = int(db.get("trades", 0) or 0)
+                w       = int(db.get("wins", 0) or 0)
+                l       = int(db.get("losses", 0) or 0)
+                wr      = float(db.get("win_rate", 0) or 0)
+                best    = float(db.get("best", 0) or 0)
+                worst   = float(db.get("worst", 0) or 0)
+                rp      = float(db.get("total_pnl", 0) or 0)
+                rc      = GR if rp >= 0 else RD
+                wrc     = GR if wr >= 50 else (YL if wr >= 40 else RD)
+                bc      = GR if best >= 0 else RD
+                woc     = RD if worst < 0 else GR
+                L.append(
+                    f"  {DM}  {W}{sc}{BD}{strat:<11}{W}  "
+                    f"{DM}{n:>7}  {w:>3}  {l:>3}  {W}{wrc}{wr:>5.1f}%{W}  "
+                    f"{bc}{best:>+10,.2f}{W}  {woc}{worst:>+11,.2f}{W}  "
+                    f"{rc}{BD}{rp:>+12,.2f}{W}"
+                )
         L.append(HR)
     except Exception:
         pass
