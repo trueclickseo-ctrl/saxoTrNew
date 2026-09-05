@@ -416,3 +416,14 @@ Not in the v1 sprint plan. Cheap interim version (hardcoded economic-calendar bl
   - **Fix (`forex/runner.py`):** For RSI, derive `_est_qty = fixed_risk_eur / (stop_distance × quote_rate)` (e.g. ~7 oz for gold vs 10,000 oz hardcoded). Non-RSI FX pairs still fall back to 10,000 units (realistic for spot FX). Only the quantity fed to the cost-display block changes — stop/TP/size logic is untouched.
   - **M5 status:** NOT flipped to `shadow_mode=false`. Current APPROVE vs REJECT split (5 APPROVE / 8 REJECT closed) too small AND includes the gold-corrupted decisions. Re-review in ~1 week once corrected cost data feeds into new shadow decisions and sample grows.
   - **Shadow report comments:** `ai_shadow_report.py` was reading `d.get("comment")` → always None. Real field is `agent_comment` (all 237 rows populated). Fixed to `d.get("agent_comment")`. Each matched trade now prints the word-wrapped agent reasoning (90-char wrap). Also fixed UnicodeEncodeError on Windows cp1252: `✓`/`✗` → `"WIN"`/`"LOSS"`.
+- **2026-09-06 — M5 data check findings (post gold-cost-fix analysis)**
+  - `python ai_shadow_report.py sim` run with 237 decisions logged, 64 matched closed trades.
+  - Raw: APPROVE 5 trades 20% WR −218.7 EUR total; REJECT 8 trades 50% WR +70.3 EUR total — appears agent is mis-ranking.
+  - **Artefact stripped:** 6 of 8 REJECT trades are XAU/XAG pairs (XAUCHF/XAUJPY/XAUHKD/XAUEUR/XAUTRY/XAUTHB), all from 2026-09-02, all REJECT-ed citing "all-in cost ~€3,719" — the gold cost bug. Gold actually won +178.2 EUR combined.
+  - **Clean sample (non-XAU):** APPROVE 5 trades −43.7 avg; REJECT 2 trades (JPYEUR −53.8, JPYUSD −54.0) 0% WR −53.9 avg. APPROVE is less bad. Agent's JPY-concentration REJECTs were genuine skill.
+  - **M5 gate: NOT met.** Clean sample is 5+2 = 7 trades total. Need 10+ per bucket. New decisions from 2026-09-03 onward use corrected gold cost. Re-review 2026-09-13.
+  - Stop-slippage log: `data/stop_slippage.jsonl` does not exist yet — no hard_stop closes since logging shipped. Re-check 2026-09-13.
+- **2026-09-06 — Cloud routines + push notifications set up**
+  - GitHub App integrated via claude.ai org settings (was previously blocked); Claude iOS app installed for push delivery.
+  - **Routine `trig_012sdULpsGUUzFzaoFv5ZdKj`** — "AI Strategy Evolver first data check", fires 2026-09-12 09:00 PKT; manual run fired now, push notification delivered to iPhone.
+  - **Routine `trig_01CgQHK3unzmcrJkiTLqBQUA`** — "ATOS M5 + Slippage check", fires 2026-09-13 09:00 PKT; reminder includes exact commands + XAU-stripping logic + M5 gate criteria.
