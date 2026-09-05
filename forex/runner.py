@@ -4948,9 +4948,24 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
     )
 
     # ── Run each strategy ─────────────────────────────────────────────────────
+    # ai_sim only: load AI-written override module if one exists for this
+    # strategy (forex/ai_variants/strategy_<name>_override.py). Falls back
+    # to the original on any error. Never runs on live accounts.
+    _forex_ai_overrides: dict = {}
+    if ACCOUNT_ENV == "ai_sim":
+        try:
+            from forex.ai_variants import get_override as _get_forex_override
+            for _sn in active_strategies:
+                _ov = _get_forex_override(_sn)
+                if _ov is not None:
+                    _forex_ai_overrides[_sn] = _ov
+                    logger.info(f"  [ai_sim] loaded AI override for {_sn}")
+        except Exception as _ov_exc:
+            logger.warning(f"  [ai_sim] forex ai_variants load error: {_ov_exc}")
+
     total_exits = total_entries = 0
     for strat_name in active_strategies:
-        strat_mod = STRATEGIES[strat_name]
+        strat_mod = _forex_ai_overrides.get(strat_name) or STRATEGIES[strat_name]
         prefix    = f"{strat_name}:"
         holding   = sum(1 for k in positions if k.startswith(prefix))
         w         = strat_weights.get(strat_name, 1.0)
