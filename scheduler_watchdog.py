@@ -491,7 +491,12 @@ INTRADAY_REPEATING_TASKS = {
     # broken trigger. The standard result-code + log-freshness checks at the
     # bottom of _check_windows_task still cover genuine failures for these tasks.
     "Stocks Daily Run", "Intraday Monitor",
-    "IBKR Intraday Reversion",  # 5x/day during US session (2026-09-04)
+    # IBKR Intraday Reversion deliberately NOT here: it has 5 discrete
+    # fixed-time triggers (19:00/20:30/22:00/23:30/00:30 PKT, Repeat=Disabled)
+    # not a continuous repeat trigger. The overnight gap 00:30->19:00 (18.5h)
+    # exceeds the 12h NextRunTime health threshold and the 10h hard ceiling,
+    # causing a false alarm + spurious auto-restart every night. Standard
+    # result-code + log-freshness checks still cover genuine failures.
 }
 
 # Tasks that fire hourly but have zero trading activity on weekends (US market
@@ -862,6 +867,11 @@ def _check_windows_task(name: str, task_name: str, log_file: str, grace_min: int
 
     mtime = _log_mtime(log_file)
     if mtime is None:
+        # Stocks Daily Run exits before the engine runs on market-closed weekends
+        # (Sat/Sun), so engine_YYYY-MM-DD.log is never created on those days.
+        # That's expected — not a silent no-op. Skip the missing-log alert.
+        if name == "Stocks Daily Run" and now.weekday() in (5, 6):
+            return None
         if now - last_run > timedelta(minutes=grace_min):
             return (f"'{task_name}' ran at {last_run:%Y-%m-%d %H:%M} (reported success) but {log_file} "
                     f"does not exist — likely silent no-op. {_remediation(task_name)}")
