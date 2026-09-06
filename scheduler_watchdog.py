@@ -482,7 +482,15 @@ INTRADAY_REPEATING_TASKS = {
     # both Disabled (real-money trading moved to stocks). The two LIVE Exit
     # Check tasks are once-daily, so deliberately NOT here.
     "Saxo LIVE Token Keepalive",
-    "Stocks Daily Run", "ETF Daily Run", "ETF Midday Run", "Futures Daily Run", "Futures Midday Run", "Intraday Monitor",
+    # Futures Daily Run (19:30 PKT), Futures Midday Run (23:00 PKT),
+    # ETF Daily Run (19:30 PKT), and ETF Midday Run (23:00 PKT) are
+    # deliberately NOT here -- all four fire once per day, confirmed via
+    # schtasks (Repeat: Every = Disabled). Including them caused false alarms:
+    # after the daily run completes, the 90-min grace check fires, NextRunTime
+    # is the next day (>12h out), and the watchdog wrongly treats the gap as a
+    # broken trigger. The standard result-code + log-freshness checks at the
+    # bottom of _check_windows_task still cover genuine failures for these tasks.
+    "Stocks Daily Run", "Intraday Monitor",
     "IBKR Intraday Reversion",  # 5x/day during US session (2026-09-04)
 }
 
@@ -493,8 +501,12 @@ INTRADAY_REPEATING_TASKS = {
 # Forex/LIVE/Keepalive are NOT here: forex LBO/exit-check can matter on
 # weekends, and the LIVE token keepalive must never lapse.
 WEEKEND_SLEEP_EXEMPT = {
-    "Stocks Daily Run", "ETF Daily Run", "ETF Midday Run",
-    "Futures Daily Run", "Futures Midday Run",
+    "Stocks Daily Run",
+    # ETF Daily/Midday and Futures Daily/Midday removed from both
+    # INTRADAY_REPEATING_TASKS and here (all four are once-daily, not hourly --
+    # confirmed via schtasks Repeat:Disabled). WEEKEND_SLEEP_EXEMPT only
+    # matters for tasks that are also in INTRADAY_REPEATING_TASKS; it has no
+    # effect for tasks not in that set.
 }
 WEEKEND_CEILING_HOURS = 14  # PC sleep of up to ~14h on Sat/Sun is acceptable
 
