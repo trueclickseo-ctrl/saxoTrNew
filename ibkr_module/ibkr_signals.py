@@ -81,7 +81,7 @@ def _download(tickers: list[str], lookback_days: int = 260) -> dict[str, pd.Data
     end   = datetime.date.today()
     start = end - datetime.timedelta(days=lookback_days + 90)
 
-    print(f"  [signals] downloading {len(tickers)} tickers ({start} → {end})...")
+    print(f"  [signals] downloading {len(tickers)} tickers ({start} -> {end})...")
     try:
         raw = yf.download(
             tickers, start=str(start), end=str(end),

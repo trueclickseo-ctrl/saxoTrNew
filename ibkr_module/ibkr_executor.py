@@ -1,12 +1,12 @@
-"""
+﻿"""
 ibkr_executor.py
 ----------------
 Strategy executors for the IBKR stocks sleeve.
 
 Strategies:
-  blend     — US cross-sectional momentum (fortnightly rebalance)
-  reversion — US mean reversion (entry + exit checks, intraday variant)
-  signals   — 4 US Signals strategies (SMA Crossover, RSI Reversal, Momentum, Ensemble)
+  blend     â€” US cross-sectional momentum (fortnightly rebalance)
+  reversion â€” US mean reversion (entry + exit checks, intraday variant)
+  signals   â€” 4 US Signals strategies (SMA Crossover, RSI Reversal, Momentum, Ensemble)
 
 Signal generation: ibkr_signals.py (Yahoo Finance only).
 No Saxo imports. No Avanza imports.
@@ -25,7 +25,7 @@ from ibkr_module import ibkr_signals as sig
 
 _ROOT = Path(__file__).parent.parent
 
-# ── AI observation layer (2026-09-04) -- OBSERVE/LOG ONLY, ships OFF ──
+# â”€â”€ AI observation layer (2026-09-04) -- OBSERVE/LOG ONLY, ships OFF â”€â”€
 # Same guard pattern as atos_runner.py: if the ai package is missing, every
 # hook sees _ai_cards = None and silently no-ops. NO apply path -- these hooks
 # only log observation cards; no order, position, or stop is ever touched here.
@@ -90,7 +90,7 @@ def _compute_plan(
     return buys, sells
 
 
-# ── US Blend rebalance ────────────────────────────────────────────────────────
+# â”€â”€ US Blend rebalance â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
                   signal: dict | None = None) -> None:
@@ -120,7 +120,7 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
     if signal.get("risk_off"):
         print("  [RISK OFF] Signal is in defensive mode.")
 
-    # TRADING RULE: execution uses IBKR live prices only — never Yahoo Finance.
+    # TRADING RULE: execution uses IBKR live prices only â€” never Yahoo Finance.
     # Held positions come from the local DB (blend-only) so the rebalancer never
     # sells positions that belong to another strategy (scorer, reversion, etc.).
     held    = st.get_open_positions(strategy="blend")
@@ -130,11 +130,11 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
     cash    = ic.get_cash_balance(ib, account_id)
     print(f"  Cash available: ${cash:,.2f}")
     if not ibkr_ok:
-        print("  [WARNING] IBKR returned no prices — plan shown as Yahoo estimates, not for execution.")
+        print("  [WARNING] IBKR returned no prices â€” plan shown as Yahoo estimates, not for execution.")
 
     if not dry_run and not ic.is_market_open():
         print("\n  [BLOCKED] US market is closed. Orders can only be placed "
-              "09:30–16:00 ET (14:30–21:00 UTC).")
+              "09:30â€“16:00 ET (14:30â€“21:00 UTC).")
         return
 
     if not dry_run and not ibkr_ok:
@@ -162,7 +162,7 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
         _print_plan(buys, sells, stop_pct)
         return
 
-    # ── Execute SELLs ─────────────────────────────────────────────────────────
+    # â”€â”€ Execute SELLs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     for s in sells:
         print(f"\n  SELL {s['qty']} {s['symbol']} @ ~${s['price']:.2f}  "
               f"(value ~${s['value']:,.0f})")
@@ -182,7 +182,7 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
             print(f"  Filled @ ${fill:.4f}")
             st.mark_filled(str(trade.order.orderId), fill, side="SELL")
 
-    # ── Execute BUYs ──────────────────────────────────────────────────────────
+    # â”€â”€ Execute BUYs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     for b in buys:
         stop_price = round(b["price"] * (1 - stop_pct), 2)
         print(f"\n  BUY  {b['qty']} {b['symbol']} @ ~${b['price']:.2f}  "
@@ -214,7 +214,7 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
     print("\n  Rebalance complete.")
 
 
-# ── Trail stops ───────────────────────────────────────────────────────────────
+# â”€â”€ Trail stops â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def trail_stops(ib, account_id: str, cfg: dict, dry_run: bool = True) -> None:
     stop_pct = cfg["risk"]["stop_pct"]
@@ -236,7 +236,7 @@ def trail_stops(ib, account_id: str, cfg: dict, dry_run: bool = True) -> None:
         qty          = int(pos["qty"])
 
         if cur_price <= 0:
-            print(f"  {sym:<8}  no price — skipped")
+            print(f"  {sym:<8}  no price â€” skipped")
             continue
 
         new_high = max(trail_high, cur_price)
@@ -244,10 +244,10 @@ def trail_stops(ib, account_id: str, cfg: dict, dry_run: bool = True) -> None:
 
         if new_stop <= cur_stop:
             print(f"  {sym:<8}  price=${cur_price:.2f}  stop=${cur_stop:.2f}  "
-                  f"high=${new_high:.2f}  → no change")
+                  f"high=${new_high:.2f}  â†’ no change")
             continue
 
-        print(f"  {sym:<8}  price=${cur_price:.2f}  stop ${cur_stop:.2f} → ${new_stop:.2f}  "
+        print(f"  {sym:<8}  price=${cur_price:.2f}  stop ${cur_stop:.2f} â†’ ${new_stop:.2f}  "
               f"high=${new_high:.2f}")
 
         if dry_run:
@@ -267,12 +267,12 @@ def trail_stops(ib, account_id: str, cfg: dict, dry_run: bool = True) -> None:
         ib.sleep(0.5)
         st.update_stop(sym, new_stop, str(new_stop_trade.order.orderId), new_high,
                        strategy=pos.get("strategy"))
-        print(f"           → stop updated (new id={new_stop_trade.order.orderId})")
+        print(f"           â†’ stop updated (new id={new_stop_trade.order.orderId})")
 
     print("\n  Trail-stop pass complete.")
 
 
-# ── US Reversion entries ───────────────────────────────────────────────────────
+# â”€â”€ US Reversion entries â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def run_reversion_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
                           intraday: bool = False,
@@ -311,27 +311,27 @@ def run_reversion_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
         return
 
     # Fetch live IBKR prices. TRADING RULE: execution uses IBKR prices only.
-    # Yahoo Finance is for signal generation (RSI/EMA/scan) only — never for
+    # Yahoo Finance is for signal generation (RSI/EMA/scan) only â€” never for
     # sizing or placing a live order.
     live_syms   = [c["ticker"] for c in new_cands[:slots_free]]
     live_prices = ic.get_prices(ib, live_syms)   # returns 0 if IBKR has no data
 
     if not dry_run and not ic.is_market_open():
         print(f"\n  [BLOCKED] US market is closed. Orders can only be placed "
-              f"09:30–16:00 ET (14:30–21:00 UTC).")
+              f"09:30â€“16:00 ET (14:30â€“21:00 UTC).")
         return
 
     per_slot = budget / max_slots
 
     for c in new_cands[:slots_free]:
         ibkr_price  = live_prices.get(c["ticker"], 0.0)
-        yahoo_price = c["price"]   # daily close from scan signal — display only
+        yahoo_price = c["price"]   # daily close from scan signal â€” display only
         ibkr_ok     = bool(ibkr_price and ibkr_price > 0)
 
         # Dry-run: show estimate even without live price (clearly labeled)
         if dry_run:
             price     = ibkr_price if ibkr_ok else yahoo_price
-            price_src = "IBKR" if ibkr_ok else "Yahoo est. (IBKR unavailable — not for execution)"
+            price_src = "IBKR" if ibkr_ok else "Yahoo est. (IBKR unavailable â€” not for execution)"
         else:
             # Execute: IBKR price required
             if not ibkr_ok:
@@ -385,7 +385,7 @@ def run_reversion_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
     print(f"\n  [{label}] entry scan complete.")
 
 
-# ── US Reversion exits ────────────────────────────────────────────────────────
+# â”€â”€ US Reversion exits â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def run_reversion_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
                         indicators: dict | None = None) -> None:
@@ -440,7 +440,7 @@ def run_reversion_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
         rsi_str = f"{current_rsi:.0f}" if current_rsi is not None else "n/a"
         print(f"  {sym:<8}  px=${cur_price:.2f}  entry=${entry_px:.2f}  "
               f"rsi={rsi_str}  held={td_held}d  "
-              f"{'→ EXIT: ' + reason if should_exit else 'HOLD'}")
+              f"{'â†’ EXIT: ' + reason if should_exit else 'HOLD'}")
 
         if not should_exit:
             continue
@@ -475,7 +475,7 @@ def run_reversion_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
     print("\n  Reversion exit check complete.")
 
 
-# ── US Signals entries (SMA Crossover / RSI Reversal / Momentum / Ensemble) ──
+# â”€â”€ US Signals entries (SMA Crossover / RSI Reversal / Momentum / Ensemble) â”€â”€
 
 def run_us_signals_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
                             feat_data: dict | None = None) -> None:
@@ -497,7 +497,7 @@ def run_us_signals_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
     if feat_data is None:
         feat_data = sig.us_signals_data()
 
-    # Count currently open positions per (ticker, strategy) — a ticker may be
+    # Count currently open positions per (ticker, strategy) â€” a ticker may be
     # held by multiple strategies simultaneously.
     open_by_strategy: dict[str, set[str]] = {s: set() for s in ALL_SIGNAL_STRATEGY_NAMES}
     for pos in st.get_open_positions():
@@ -507,7 +507,7 @@ def run_us_signals_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
 
     print("\n  [us signals] scanning for BUY signals across 4 strategies...")
 
-    # Collect all raw signals (no slot cap yet — apply it after sorting by confidence).
+    # Collect all raw signals (no slot cap yet â€” apply it after sorting by confidence).
     all_raw: list[dict] = []
     for ticker, df in feat_data.items():
         try:
@@ -543,7 +543,7 @@ def run_us_signals_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
 
     if not dry_run and not ic.is_market_open():
         print("\n  [BLOCKED] US market is closed. Orders can only be placed "
-              "09:30–16:00 ET (14:30–21:00 UTC).")
+              "09:30â€“16:00 ET (14:30â€“21:00 UTC).")
         return
 
     sig_tickers  = list({s["ticker"] for s in signals_found})
@@ -571,7 +571,7 @@ def run_us_signals_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
             price_src = "IBKR" if ibkr_ok else "Yahoo est. (not for execution)"
         else:
             if not ibkr_ok:
-                print(f"  [BLOCKED] {ticker} ({strat}): no IBKR live price — skip")
+                print(f"  [BLOCKED] {ticker} ({strat}): no IBKR live price â€” skip")
                 continue
             price     = ibkr_price
             price_src = "IBKR live"
@@ -617,7 +617,7 @@ def run_us_signals_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
         st.update_stop(ticker, actual_stop, str(stop_trade.order.orderId), fill,
                        strategy=strat)
         print(f"  Stop placed @ ${actual_stop:.2f} (id={stop_trade.order.orderId})")
-        # AI entry card (OBSERVE/LOG only — no apply path)
+        # AI entry card (OBSERVE/LOG only â€” no apply path)
         if _ai_cfg is not None and _ai_cfg.stocks_enabled() and _ai_cards is not None:
             try:
                 _strat_key = strat.lower().replace(" ", "_")
@@ -636,7 +636,7 @@ def run_us_signals_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
     print("\n  [us signals] entry scan complete.")
 
 
-# ── US Signals exits ──────────────────────────────────────────────────────────
+# â”€â”€ US Signals exits â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def run_us_signals_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
                           feat_data: dict | None = None) -> None:
@@ -674,7 +674,7 @@ def run_us_signals_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
 
         df = feat_data.get(sym)
         if df is None or df.empty:
-            print(f"  {sym:<8}  [{strat[:14]:<14}]  no data — skipped")
+            print(f"  {sym:<8}  [{strat[:14]:<14}]  no data â€” skipped")
             continue
 
         cur_price = live_prices.get(sym, 0.0)
@@ -692,7 +692,7 @@ def run_us_signals_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
         gain_pct = ((cur_price / entry_px) - 1) * 100 if entry_px > 0 else 0
         print(f"  {sym:<8}  [{strat[:16]:<16}]  px=${cur_price:.2f}  "
               f"entry=${entry_px:.2f}  {gain_pct:+.1f}%  "
-              f"{'→ EXIT: ' + reason if exit_flag else 'HOLD'}")
+              f"{'â†’ EXIT: ' + reason if exit_flag else 'HOLD'}")
 
         if not exit_flag:
             continue
@@ -724,7 +724,7 @@ def run_us_signals_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
             pnl = (fill - entry_px) * qty
             print(f"  Sold {qty} {sym} @ ${fill:.4f}  P&L: ${pnl:+,.2f}")
             st.mark_filled(str(sell_trade.order.orderId), fill, side="SELL")
-            # AI exit card (OBSERVE/LOG only — no apply path)
+            # AI exit card (OBSERVE/LOG only â€” no apply path)
             if _ai_cfg is not None and _ai_cfg.stocks_enabled() and _ai_cards is not None:
                 try:
                     _strat_key = strat.lower().replace(" ", "_")
@@ -745,7 +745,7 @@ def run_us_signals_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
     print("\n  [us signals] exit check complete.")
 
 
-# ── Scorer entries (ATOS US 500 scoring engine) ───────────────────────────────
+# â”€â”€ Scorer entries (ATOS US 500 scoring engine) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def run_scorer_entries(
     ib,
@@ -758,8 +758,8 @@ def run_scorer_entries(
     """Buy top-scored candidates from the ATOS US 500 scoring engine.
 
     Runs two sub-books in the same call:
-      scorer_swing     — top Swing/Momentum picks (tighter stop, faster signals)
-      scorer_portfolio — top Hybrid/Portfolio picks (wider stop, quality bias)
+      scorer_swing     â€” top Swing/Momentum picks (tighter stop, faster signals)
+      scorer_portfolio â€” top Hybrid/Portfolio picks (wider stop, quality bias)
 
     scorer_results: pre-generated dict from ibkr_scorer.run_scan(). Pass from
     main() so the Yahoo download finishes before the IBKR connection opens.
@@ -827,7 +827,7 @@ def run_scorer_entries(
 
     if not dry_run and not ic.is_market_open():
         print("\n  [BLOCKED] US market is closed. Orders can only be placed "
-              "09:30–16:00 ET (14:30–21:00 UTC).")
+              "09:30â€“16:00 ET (14:30â€“21:00 UTC).")
         return
 
     if not dry_run and not ibkr_any_ok:
@@ -835,8 +835,8 @@ def run_scorer_entries(
         if is_paper:
             # Paper account: IBKR often returns no market data without a
             # data subscription. Fall back to Yahoo delayed prices for sizing
-            # only — the actual market order fills at IBKR's real price.
-            print("  [prices] Paper account — falling back to Yahoo prices for sizing.")
+            # only â€” the actual market order fills at IBKR's real price.
+            print("  [prices] Paper account â€” falling back to Yahoo prices for sizing.")
             all_scored = (scorer_results or {}).get("all_scored", pd.DataFrame())
             if not all_scored.empty and "ticker" in all_scored.columns:
                 for t in all_new_tickers:
@@ -889,7 +889,7 @@ def run_scorer_entries(
                 price_src = "IBKR" if ibkr_ok else "Yahoo delayed (paper sizing)"
             else:
                 if not ibkr_ok:
-                    print(f"\n  [scorer/{label}] {ticker}: no IBKR price — skip")
+                    print(f"\n  [scorer/{label}] {ticker}: no IBKR price â€” skip")
                     continue
                 price     = ibkr_px
                 price_src = "IBKR live"
@@ -1039,7 +1039,7 @@ def run_scorer_exits(
 
             print(f"  {sym:<8}  px=${cur_px:.2f}  entry=${entry_px:.2f}  "
                   f"{gain_pct:+.1f}%  {score_col}={cur_score:.1f}  grade={setup}  "
-                  f"{'→ EXIT: ' + reason if should_exit else 'HOLD'}")
+                  f"{'â†’ EXIT: ' + reason if should_exit else 'HOLD'}")
 
             if not should_exit:
                 continue
@@ -1048,7 +1048,7 @@ def run_scorer_exits(
                 continue
 
             if not cur_px or cur_px <= 0:
-                print(f"    [BLOCKED] no live price for {sym} — cannot execute exit")
+                print(f"    [BLOCKED] no live price for {sym} â€” cannot execute exit")
                 continue
 
             confirm = input(f"  Confirm EXIT {sym} ({label})? [y/N]: ").strip().lower()
@@ -1083,7 +1083,7 @@ def run_scorer_exits(
     _check_book(po_open, po_min_score, "trade_score", "scorer_portfolio")
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _print_plan(buys: list[dict], sells: list[dict], stop_pct: float) -> None:
     if sells:
@@ -1098,3 +1098,4 @@ def _print_plan(buys: list[dict], sells: list[dict], stop_pct: float) -> None:
             print(f"    {b['symbol']:<8} qty={b['qty']}  price~${b['price']:.2f}  "
                   f"notional~${b['notional']:,.0f}  stop=${stop:.2f}")
     print()
+
