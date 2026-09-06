@@ -42,7 +42,7 @@ try {
 
 $logExits = "$base\data\ibkr_signals_exits.log"
 $actionExits = New-ScheduledTaskAction -Execute "wscript.exe" `
-    -Argument ('"' + $vbs + '" "' + $base + '\run_ibkr_signals.bat --exits" "' + $logExits + '"')
+    -Argument ('"' + $vbs + '" "' + $base + '\run_ibkr_signals_exits.bat" "' + $logExits + '"')
 $triggerExits = New-ScheduledTaskTrigger -Daily -At "09:00"
 
 try {

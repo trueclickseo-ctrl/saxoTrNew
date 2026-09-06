@@ -3202,7 +3202,7 @@ def _reconcile_closed_vs_saxo() -> None:
         logger.warning(f"  [reconcile-vs-saxo] skipped (non-fatal): {exc}")
 
 
-_SLIPPAGE_LOG = os.path.join(BASE, "data", "stop_slippage.jsonl")
+_SLIPPAGE_LOG = os.path.join(_ROOT, "data", "stop_slippage.jsonl")
 
 
 def _log_stop_slippage(

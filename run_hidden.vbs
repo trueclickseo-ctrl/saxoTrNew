@@ -44,7 +44,26 @@ Dim q : q = Chr(34)
 Dim rawCmd : rawCmd = cmd  ' keep the un-redirected command for the no-log fallback below
 
 Function WithLog(baseCmd, target)
-    WithLog = "cmd.exe /c " & q & q & baseCmd & q & " >> " & q & target & q & " 2>&1" & q
+    ' Determine the executable/bat path (first space-separated token of baseCmd).
+    Dim exePath
+    Dim sp : sp = InStr(baseCmd, " ")
+    If sp > 0 Then
+        exePath = Left(baseCmd, sp - 1)
+    Else
+        exePath = baseCmd
+    End If
+    ' If neither the exe path nor the log target contain spaces, a simple
+    ' single outer-wrap is enough: cmd /c "baseCmd >> target 2>&1".
+    ' cmd.exe strips the outer quotes and the command runs correctly.
+    ' The double-wrap approach (outer + inner command-path quoting) is still
+    ' needed when either path contains spaces, because two separate inner
+    ' quoted segments confuse cmd.exe's quote-stripping — it blindly removes
+    ' the first and last quote characters and mangles both paths.
+    If InStr(exePath, " ") = 0 And InStr(target, " ") = 0 Then
+        WithLog = "cmd.exe /c " & q & baseCmd & " >> " & target & " 2>&1" & q
+    Else
+        WithLog = "cmd.exe /c " & q & q & baseCmd & q & " >> " & q & target & q & " 2>&1" & q
+    End If
 End Function
 
 If WScript.Arguments.Count >= 2 Then
