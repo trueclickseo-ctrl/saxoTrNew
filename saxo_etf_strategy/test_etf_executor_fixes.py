@@ -180,5 +180,40 @@ class TestSuccessfulExit(unittest.TestCase):
         self.ex.state.log_order.assert_called_once()
 
 
+class TestSaxoClientNoRetryOn4xx(unittest.TestCase):
+    """SaxoClient._request must raise immediately on 4xx — never retry."""
+
+    def setUp(self):
+        from core.saxo_client import SaxoClient
+        import requests as _req
+        self.SaxoClient = SaxoClient
+        self._req = _req
+
+    def test_400_raises_immediately_no_retry(self):
+        from unittest.mock import patch, MagicMock
+        mock_resp = MagicMock()
+        mock_resp.status_code = 400
+        mock_resp.text = '{"ErrorInfo":{"ErrorCode":"CouldNotCompleteRequest"}}'
+        mock_resp.headers = {}
+
+        call_count = [0]
+        def fake_request(*a, **kw):
+            call_count[0] += 1
+            return mock_resp
+
+        with patch("requests.Session.request", side_effect=fake_request):
+            client = self.SaxoClient(
+                base_url="https://example.com",
+                token_provider=lambda: "tok",
+                max_retries=3,
+                request_delay_sec=0,
+            )
+            with self.assertRaises(SaxoAPIError) as ctx:
+                client.post("/trade/v2/orders", json_body={})
+
+        self.assertEqual(call_count[0], 1, "Should not retry a 400 error")
+        self.assertIn("CouldNotCompleteRequest", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
