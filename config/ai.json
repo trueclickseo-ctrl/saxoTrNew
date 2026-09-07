@@ -52,7 +52,7 @@
 
   "_outcome_predictor_comment": "Trade Outcome Predictor (2026-09-03, roadmap #20): ai/models/trade_outcome_predictor.py. GradientBoosting classifier trained on our real closed observation cards (entry context features + r_multiple label) to predict whether a new entry will be profitable. Replaces the CNN-LSTM's raw price-direction approach with direct trade-profitability prediction using features logged at entry time: regime, RSI, ADX, strategy, ATR%, spread-cost ratio, pair historical WR. Gate: 100 closed non-orphaned cards needed before training (data accumulating from 2026-09-01). enabled: true wires top_win_prob into every proposal the Copilot sees. Ships OFF until gate clears. Retrain: python ai_outcome_predictor.py --train (weekly).",
   "outcome_predictor": {
-    "enabled": false,
+    "enabled": true,
     "min_samples": 100
   },
 
