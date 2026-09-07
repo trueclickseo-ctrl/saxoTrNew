@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 BASE         = os.path.dirname(os.path.abspath(__file__))
 ARTIFACT_URL = "https://claude.ai/code/artifact/fe13027d-7e60-41b2-91fa-67d01257efd1"
 LOG          = os.path.join(BASE, "data", "push_ai_dashboard.log")
+# Full path so Task Scheduler (limited PATH) can find the CLI
+_CLAUDE_CMD  = r"C:\Users\Kwaseem\AppData\Roaming\npm\claude.cmd"
 AI_SINCE     = "2026-09-03"   # forex A/B started
 
 
@@ -202,8 +204,9 @@ def push(docs: dict) -> bool:
         f"{json.dumps(writes, separators=(',', ':'))}"
     )
 
+    claude_exe = _CLAUDE_CMD if os.path.exists(_CLAUDE_CMD) else "claude"
     result = subprocess.run(
-        ["claude", "-p", prompt],
+        [claude_exe, "-p", prompt],
         capture_output=True, text=True,
         encoding="utf-8", errors="replace",
         timeout=180, cwd=BASE,
