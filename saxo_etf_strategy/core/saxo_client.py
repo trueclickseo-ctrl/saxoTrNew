@@ -73,7 +73,9 @@ class SaxoClient:
                 time.sleep(self.request_delay_sec)
                 return resp.json() if resp.text.strip() else {}
 
-            except (requests.RequestException, SaxoAPIError) as exc:
+            except SaxoAPIError:
+                raise  # 4xx/5xx API errors are definitive — never retry
+            except requests.RequestException as exc:
                 last_exc = exc
                 logger.warning(f"Attempt {attempt}/{self.max_retries} failed for {path}: {exc}")
                 time.sleep(min(2 ** attempt, 10))
