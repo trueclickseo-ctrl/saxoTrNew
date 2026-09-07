@@ -73,30 +73,38 @@ class ETFBot:
         self.state            = ETFStateStore(cfg.state_path)
         self.executor         = ETFExecutor(self.client, self.state, cfg)
 
-    def run_once(self, force_refresh_universe: bool = False) -> None:
+    def run_once(self, force_refresh_universe: bool = False,
+                 force_trim: bool = False) -> None:
         log = logging.getLogger("etf_bot")
 
         # US-listed ETFs don't trade on weekends -- skip the whole cycle
         # rather than burn a universe fetch + strategy scan + exit review
         # against a closed market every single Saturday/Sunday.
-        if date.today().weekday() >= 5:  # 5=Saturday, 6=Sunday
+        # Exception: --force-trim bypasses this so a manual trim can be run
+        # on a weekend/holiday when positions are stuck above the top-N cap.
+        if date.today().weekday() >= 5 and not force_trim:
             log.info("=== ETF run skipped -- weekend, US market closed ===")
             return
 
-        log.info(f"=== ETF run  strategy={self.cfg.strategy.strategy_name}  "
-                 f"dry_run={self.cfg.dry_run} ===")
+        if force_trim:
+            log.info(f"=== ETF FORCE-TRIM  strategy={self.cfg.strategy.strategy_name}  "
+                     f"dry_run={self.cfg.dry_run}  (market-closed bypass) ===")
+        else:
+            log.info(f"=== ETF run  strategy={self.cfg.strategy.strategy_name}  "
+                     f"dry_run={self.cfg.dry_run} ===")
 
         universe = self.universe_builder.get_universe(force_refresh=force_refresh_universe)
         log.info(f"Universe: {len(universe)} ETFs")
 
-        # Exits first — free slots before looking for entries
-        self.executor.review_exits()
+        if not force_trim:
+            # Exits first — free slots before looking for entries
+            self.executor.review_exits()
 
-        # Trail all open stops to 8% below running high (risk management, always runs)
-        try:
-            self.executor.trail_stops()
-        except Exception:
-            log.exception("[trail-stops] ETF trailing pass failed")
+            # Trail all open stops to 8% below running high (risk management, always runs)
+            try:
+                self.executor.trail_stops()
+            except Exception:
+                log.exception("[trail-stops] ETF trailing pass failed")
 
         signals = self.strategy.generate_signals(universe)
         log.info(f"Signals: {len(signals)} BUY candidate(s) this run")
@@ -104,7 +112,8 @@ class ETFBot:
         # Sell any open position that dropped out of the top-N ranking
         self.executor.trim_out_of_ranking(signals)
 
-        self.executor.process_signals(signals)
+        if not force_trim:
+            self.executor.process_signals(signals)
 
         try:
             self.executor.log_rank_performance()
@@ -135,6 +144,15 @@ class ETFBot:
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--force-trim", action="store_true",
+                        help="Bypass weekend/holiday check and run trim-only "
+                             "(use to sell out-of-ranking positions on a closed day)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Log what would happen without placing real orders")
+    args = parser.parse_args()
+
     # Gracefully exit if the Saxo token is not available (e.g. Task Scheduler firing
     # before the daily_run has had a chance to refresh it).
     try:
@@ -143,6 +161,9 @@ if __name__ == "__main__":
         print(f"[etf_bot] Token not available — skipping run: {e}")
         sys.exit(0)
 
-    setup_logging(DEFAULT_CONFIG)
-    bot = ETFBot(token_provider=_get_saxo_token, cfg=DEFAULT_CONFIG)
-    bot.run_once()
+    from dataclasses import replace as _dc_replace
+    cfg = _dc_replace(DEFAULT_CONFIG, dry_run=True) if args.dry_run else DEFAULT_CONFIG
+
+    setup_logging(cfg)
+    bot = ETFBot(token_provider=_get_saxo_token, cfg=cfg)
+    bot.run_once(force_trim=args.force_trim)

@@ -401,25 +401,32 @@ class ETFExecutor:
 
         if self.cfg.dry_run:
             logger.info(f"[DRY RUN] Would SELL {quantity}x {symbol} — {reason} @ ~{live_price:.2f}")
-        else:
-            try:
-                resp = self.client.post("/trade/v2/orders", json_body=order)
-                logger.info(f"ETF SELL {resp.get('OrderId','?')}: {quantity}x {symbol} — {reason} @ ~{live_price:.2f}")
-            except SaxoAPIError as exc:
-                if "SellOrdersAlreadyExistForOwnedContracts" in str(exc):
-                    logger.warning(
-                        f"[trim] {symbol}: Saxo reports sell order already exists — "
-                        f"treating as queued for exit, removing from local state"
-                    )
-                else:
-                    raise
+            return  # dry run: log only, never mutate state or ledger
+        try:
+            resp = self.client.post("/trade/v2/orders", json_body=order)
+            logger.info(f"ETF SELL {resp.get('OrderId','?')}: {quantity}x {symbol} — {reason} @ ~{live_price:.2f}")
+        except SaxoAPIError as exc:
+            exc_str = str(exc)
+            if "SellOrdersAlreadyExistForOwnedContracts" in exc_str:
+                logger.warning(
+                    f"[trim] {symbol}: Saxo reports sell order already exists — "
+                    f"treating as queued for exit, removing from local state"
+                )
+            elif "CouldNotCompleteRequest" in exc_str:
+                logger.warning(
+                    f"[trim] {symbol}: Saxo rejected sell (market closed, code 90) — "
+                    f"position kept in local state, will retry next cycle"
+                )
+                return  # market closed — position still open, keep local state intact
+            else:
+                raise
 
         self.state.remove_position(uic)
         self.state.log_order({
             "uic": uic, "symbol": symbol,
             "side": "Sell", "quantity": quantity,
             "exit_price": live_price, "reason": reason,
-            "dry_run": self.cfg.dry_run,
+            "dry_run": False,
         })
         trade_logger.log_trade(
             module   = "etf",
@@ -428,12 +435,11 @@ class ETFExecutor:
             side     = "Sell",
             quantity = quantity,
             price    = live_price,
-            dry_run  = self.cfg.dry_run,
+            dry_run  = False,
             notes    = reason,
         )
-        if not self.cfg.dry_run:
-            pnl_tracker.log_close("etf", symbol, live_price, reason, strategy="ETF Rotation",
-                                  asset_type="ETF")
+        pnl_tracker.log_close("etf", symbol, live_price, reason, strategy="ETF Rotation",
+                               asset_type="ETF")
 
     # ------------------------------------------------------------------
     # Trailing stop — 8% below the running high (Option A)
