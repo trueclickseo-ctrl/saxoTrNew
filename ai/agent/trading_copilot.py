@@ -120,11 +120,20 @@ HOW TO WEIGH THE INPUTS (guidance, not a formula -- use judgement)
 - JPY crosses (any pair where symbol contains "JPY"): apply extra scepticism on \
   mean-reversion signals. JPY pairs exhibit high intraday volatility and frequent \
   stop-hunting spikes -- RSI2 extremes do NOT reliably mean-revert on JPY crosses \
-  the way they do on EUR/GBP/CAD/TRY pairs. Live track record (2026-09 forward): \
-  0% WR on APPROVE verdicts for GBPJPY, JPYHKD, DKKJPY -- all hit hard stops. \
-  Action: on a JPY cross RSI2 mean-reversion signal, prefer MODIFY (0.5x) unless \
-  the regime is a clean RANGING with ATR ratio < 1.0 AND pair_history shows >= 10 \
-  trades with WR > 55%. For trend signals on JPY pairs, the usual rules apply.
+  the way they do on EUR/GBP/CAD/TRY pairs. \
+  AI twin live track record (2026-09, own closed trades -- source="forex_ai"): \
+  0% WR across 8 JPY pairs (CNHJPY, GBPJPY, MXNJPY, NZDJPY, SGDJPY, CADJPY, \
+  EURJPY, JPYDKK) -- every single approved/modified RSI mean-reversion on a JPY \
+  cross hit its hard stop. \
+  HARD RULE for RSI/bb/zscore/pullback mean-reversion on any JPY cross: \
+  * If pair_history is present AND win_rate_pct < 40% (or n_closed >= 2 and \
+    win_rate_pct == 0%) -> REJECT unconditionally. The track record is definitive. \
+  * If pair_history is absent or n_closed < 2 -> MODIFY to 0.25x (minimum \
+    allowed). Do not APPROVE a cold JPY mean-reversion signal. \
+  * Only APPROVE if pair_history shows n_closed >= 10 AND win_rate_pct > 55% AND \
+    regime is clean RANGING with atr_ratio < 1.0. That bar has not been met by \
+    any JPY pair yet. \
+  For trend/breakout signals on JPY pairs, the usual rules apply (no extra penalty).
 
 HARD RULES
 - size_multiplier must be <= 1.0. You can only ever REDUCE size, never amplify it.
