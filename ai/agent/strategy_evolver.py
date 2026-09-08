@@ -384,11 +384,31 @@ def send_email_report(results: list[dict]) -> bool:
 # ── Phase 2: Forex code evolver ──────────────────────────────────────────────
 
 _FOREX_VARIANTS_DIR = os.path.join(BASE, "forex", "ai_variants")
+
+# 2026-09-08: expanded from 4 → all swing strategies so the AI accumulates
+# data from every active SIM track and writes overrides when the gate is met.
 _FOREX_STRATEGY_SOURCES = {
-    "donchian":  os.path.join(BASE, "forex", "strategy_donchian.py"),
-    "pullback":  os.path.join(BASE, "forex", "strategy_pullback.py"),
-    "rsi":       os.path.join(BASE, "forex", "strategy_rsi.py"),
-    "ema_trend": os.path.join(BASE, "forex", "strategy_ema_trend.py"),
+    s: os.path.join(BASE, "forex", f"strategy_{s}.py")
+    for s in [
+        # Validated core
+        "rsi", "rsi_trend", "rsi_atr",
+        "ema_trend",
+        "bb_quality", "bb_quality_hv",
+        "zscore_quality", "zscore_quality_tb",
+        "donchian_ai",
+        # AI research tracks (re-activated 2026-09-05/09-08)
+        "donchian", "pullback",
+        "donchian_quality", "ml", "supertrend",
+        # Dormant originals
+        "bb", "zscore", "cnn_lstm",
+        # A/B master experiments
+        "advanced_ema", "advanced_ml",
+        "advanced_bb_master", "advanced_pullback_master",
+        "advanced_rsi_master", "advanced_cnn_lstm_master",
+        # Gap strategies
+        "gap", "gap_weekend",
+    ]
+    if os.path.exists(os.path.join(BASE, "forex", f"strategy_{s}.py"))
 }
 _FOREX_OVERRIDE_FILES = {
     s: os.path.join(_FOREX_VARIANTS_DIR, f"strategy_{s}_override.py")
@@ -886,15 +906,16 @@ def _call_claude(prompt_user: str, system: str = _SYSTEM) -> dict | None:
         return None
 
 
-_FOREX_STRATEGIES = list(_FOREX_STRATEGY_SOURCES.keys())   # ["donchian", "pullback"]
+_FOREX_STRATEGIES = list(_FOREX_STRATEGY_SOURCES.keys())   # all active forex strategies
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="AI strategy param + code evolver")
+    _all_choices = ["us_blend", "us_reversion", "all"] + _FOREX_STRATEGIES
     ap.add_argument("--strategy",
-                    choices=["us_blend", "us_reversion", "donchian", "pullback",
-                             "rsi", "ema_trend", "all"],
-                    default="all")
+                    choices=_all_choices,
+                    default="all",
+                    metavar=f"{{{'|'.join(_all_choices[:4])}|...}}")
     ap.add_argument("--dry-run", action="store_true",
                     help="Print proposals without writing variant files")
     ap.add_argument("--email", action="store_true",
@@ -918,6 +939,8 @@ def main(argv=None):
     if args.strategy != "all":
         if args.strategy in _FOREX_STRATEGIES:
             run_stocks = False
+        elif args.strategy in ("us_blend", "us_reversion"):
+            run_forex = False
         else:
             run_forex = False
 

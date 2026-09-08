@@ -1,7 +1,11 @@
 @echo off
 REM Windows Task Scheduler target for ai/agent/strategy_evolver.py --email.
-REM Runs weekly (Saturday 09:00 PKT): evolves US Blend + US Reversion AI twin
-REM params, writes to atos/ai_variants/, and sends an email report.
+REM Runs DAILY at 01:30 PKT (after all NY-close scans complete):
+REM   - Stocks Phase 1: us_blend + us_reversion param tuning
+REM   - Forex Phase 2: entry-filter overrides for all 25 active strategies
+REM   - Forex Phase 3: exit-logic overrides for all 25 active strategies
+REM Writes overrides only for strategies that meet the 30-closed-trade gate.
+REM Sends email digest summarising what the AI learned / changed.
 REM See ai/agent/strategy_evolver.py and docs/atos_ai_tracker.md.
 
 REM Do NOT redirect output here -- Task Scheduler invokes this .bat via
