@@ -690,3 +690,35 @@ Then news/sentiment (#14/#15) and strategy discovery (#19) after those ten.
 - [ ] #17 AI Portfolio Manager (whole-book view, builds on #13)
 - [ ] #14 Economic Event Intelligence (start with a hard-coded calendar blackout, not full NLP)
 - [ ] #15 Sentiment Analysis, #19 Strategy Discovery, #20 AI Model Evolution pipeline (lowest priority, most speculative — #19/#20 also define the promotion process every earlier model should retroactively be held to)
+
+---
+
+## Phase 3 — AI Self-Improvement (data-gated, not time-gated)
+
+These three capabilities are explicitly deferred until the AI has enough closed-trade history to learn from. Do not build any of them early — tuning to sparse data is tuning to noise.
+
+### ⏳ AI modifies/writes strategy code (Phase 2 of Strategy Evolver)
+
+**Gate: ≥50 closed trades per strategy in `atos_ai.db`.**
+
+Phase 1 (shipped 2026-09-05) already evolves bounded JSON *params*. Phase 2 lets the Evolver read strategy source code, propose code-level changes (new indicator, different entry condition), write them to `atos/ai_variants/`, and run the backtest gate automatically. The same governance chain applies: AI proposes → backtest verifies → human approves → SIM-only → then LIVE gate.
+
+**Do not build until:** (a) the ≥50 trades gate is cleared for at least 2 strategies, AND (b) the param-only Phase 1 has shown positive delta vs deterministic on those strategies for at least 4 consecutive weeks.
+
+### ❌ Reinforcement loop (feedback on outcomes)
+
+**Gate: ≥200 closed AI-twin trades with full feature records.**
+
+The copilot today is stateless inference — it does not update based on what it previously decided. A real feedback loop requires: log `(decision_inputs, action, size_multiplier) → actual_pnl` per trade; periodically mine that dataset to find which proposal features correlate with copilot-added or copilot-destroyed value; update the system prompt (or a fine-tuned model) with statistically significant findings.
+
+The Phase B counterfactual report (`report_phase_b_counterfactual.py`) is the precursor — it already tracks counterfactual P&L by decision type and regime. Once there are enough closed trades to compute stable per-feature correlations (target: ≥200), this becomes the input dataset for the first real learning iteration.
+
+**Shape when built:** A periodic job (weekly) reads all closed AI-twin rows from `pnl_tracker`, joins against logged shadow decisions, runs a lightweight regression/correlation sweep, and outputs a human-readable "what the AI gets right/wrong and why" report. A human reviews → edits system prompt → reruns shadow. No auto-patching of the prompt.
+
+### ❌ AI writes net-new strategies
+
+**Gate: Phase 2 (code modification) proven stable AND ≥1,000 closed trades in the full trade memory.**
+
+The hardest capability and the last to build. The AI would mine the full trade history (the "trade memory" spec in the Governance section above), identify a high-expectancy regime×instrument×condition cluster that no existing strategy covers, generate a strategy skeleton in Python, submit it through the standard backtest→walk-forward→SIM→LIVE pipeline. Governance principle #3 applies unconditionally: **AI proposes → backtester verifies. Never AI proposes → live immediately.**
+
+This maps onto wishlist item #19 (Strategy Discovery) and #20 (AI Model Evolution). It is explicitly the last thing to build — not because it is hardest technically, but because validating that an AI-authored strategy works requires the same statistical infrastructure (stable regime detection, trade memory, walk-forward harness) that every earlier phase is building.
