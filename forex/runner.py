@@ -1967,6 +1967,29 @@ def _spread_pct(uic: int) -> float | None:
         return None
 
 
+def _fetch_entry_quote(uic: int) -> dict | None:
+    """For execution_monitor: one live bid/ask/mid fetch for a forex pair.
+    Returns {"bid", "ask", "mid", "spread_pct"} or None."""
+    try:
+        resp = _get("/trade/v1/infoprices",
+                    {"Uic": uic, "AssetType": ASSET_TYPE, "FieldGroups": "Quote"})
+        q   = resp.get("Quote", {})
+        bid = q.get("Bid")
+        ask = q.get("Ask")
+        if bid and ask:
+            bid, ask = float(bid), float(ask)
+            mid = (bid + ask) / 2.0
+            return {"bid": bid, "ask": ask, "mid": mid,
+                    "spread_pct": (ask - bid) / mid * 100.0 if mid > 0 else 0.0}
+        mid = q.get("Mid")
+        if mid:
+            return {"bid": float(mid), "ask": float(mid),
+                    "mid": float(mid), "spread_pct": 0.0}
+        return None
+    except Exception:
+        return None
+
+
 def _fetch_live_prices(pairs: list) -> dict:
     """Current bid/ask mid for a list of pairs, {symbol: mid}.
 
@@ -2117,6 +2140,16 @@ _FILL_CONFIRM_ATTEMPTS = 3
 _FILL_CONFIRM_DELAY_S   = 1.5
 _FILL_RECENT_OPEN_S     = 180
 _FILL_LOG_THRESHOLD     = 0.0005   # 5 bp: log the correction when it matters
+
+# ── Execution monitor window (see execution_monitor.py) ───────────────────────
+# Monitor live bid/ask for up to this many seconds before placing each entry
+# order. Enter as soon as the ask (Buy) or bid (Sell) has not moved adversely
+# beyond _EXEC_MAX_ADVERSE_PCT from the signal close. On timeout, enter at
+# market as before. dry_run and paper-only accounts skip the window.
+# Vary this constant to A/B test 15 / 30 / 60 s window lengths; the DB
+# records elapsed_seconds so post-hoc analysis can compare fill quality.
+_EXEC_WINDOW_S       = 30.0    # seconds; change to 15.0 or 60.0 for A/B
+_EXEC_MAX_ADVERSE    = 0.001   # 10 bps — don't enter if price ran this far against us
 
 
 def _confirm_entry_fill(entry_oid: str, uic: int) -> tuple[bool, float]:
@@ -4334,20 +4367,44 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         stop_oid = None; tp_oid = None
         agree_tag = f"  agree={agrees}/{len(STRATEGIES)}{ml_info}"
 
-        # Fetch live Saxo mid-price before computing the bracket — sig["close"]
-        # is the scan-bar close (H1 = up to 1h stale; daily = up to ~20h stale).
-        # Keep the ATR stop DISTANCE unchanged; shift both stop and TP so they
-        # are anchored to the live tradable price rather than the bar close.
-        _live_entry = _live_price(uic, akey)
+        # ── Live-price anchor + execution monitor ────────────────────────────
+        # sig["close"] is the scan-bar close (H1 = up to 1h stale; daily =
+        # up to ~20h stale). For dry_run / paper-only: single live fetch as
+        # before. For a real order: monitor bid/ask for up to _EXEC_WINDOW_S
+        # seconds and enter when the price hasn't moved adversely beyond
+        # _EXEC_MAX_ADVERSE. Everything is recorded to execution_quality.db.
+        _bar_close  = float(sig["close"])
+        _stop_dist  = abs(_bar_close - float(sig["stop_price"]))
+        _tp_dist    = abs(tp - _bar_close)
+        _exec_mon   = None   # WindowResult, set only on the real-order path
+
+        if dry_run or _paper_only_account():
+            _live_entry = _live_price(uic, akey)
+        else:
+            import execution_monitor as _em
+            _exec_mon   = _em.run_window(
+                fetch_quote_fn  = lambda _u=uic: _fetch_entry_quote(_u),
+                direction       = direction,
+                signal_price    = _bar_close,
+                module          = "forex",
+                strategy        = strat_name,
+                symbol          = sym,
+                env             = ACCOUNT_ENV,
+                window_seconds  = _EXEC_WINDOW_S,
+                max_adverse_pct = _EXEC_MAX_ADVERSE,
+            )
+            _live_entry = _exec_mon.order_price if _exec_mon else _live_price(uic, akey)
+
         if _live_entry:
-            _bar_c     = float(sig["close"])
-            _stop_dist = abs(_bar_c - float(sig["stop_price"]))
-            _tp_dist   = abs(tp - _bar_c)
-            if abs(_live_entry - _bar_c) / max(abs(_bar_c), 1e-9) > _FILL_LOG_THRESHOLD:
-                logger.info(f"  [{strat_name}] {sym}: bar {_bar_c:.5f} → "
+            if abs(_live_entry - _bar_close) / max(abs(_bar_close), 1e-9) > _FILL_LOG_THRESHOLD:
+                _mon_note = (f"  [exec_mon: {_exec_mon.entry_condition}, "
+                             f"spread={_exec_mon.spread_pct_at_entry:.3f}%]"
+                             if _exec_mon else "")
+                logger.info(f"  [{strat_name}] {sym}: bar {_bar_close:.5f} → "
                             f"live {_live_entry:.5f} "
-                            f"({(_live_entry/_bar_c-1)*100:+.3f}%) "
-                            f"— re-anchoring stop/TP to live price")
+                            f"({(_live_entry/_bar_close-1)*100:+.3f}%)"
+                            f"{_mon_note}"
+                            f" — re-anchoring stop/TP to live price")
             sig["close"]      = _live_entry
             sig["stop_price"] = (_live_entry - _stop_dist if direction == "Buy"
                                  else _live_entry + _stop_dist)
@@ -4425,13 +4482,17 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 # Saxo's order POST returned an OrderId but no fill/price.
                 # Confirm the position actually opened and record its REAL
                 # average fill, not sig["close"] (a stale scan-bar close).
+                _order_ts_s = time.monotonic()
                 _filled, _fill_px = _confirm_entry_fill(entry_oid, uic)
+                _fill_elapsed_s = time.monotonic() - _order_ts_s
                 if _filled:
                     if abs(_fill_px - sig["close"]) / max(abs(sig["close"]), 1e-9) > _FILL_LOG_THRESHOLD:
                         logger.info(
                             f"  [{strat_name}] {sym} real fill {_fill_px:.5f} vs scan "
                             f"close {sig['close']:.5f} ({(_fill_px/sig['close']-1)*100:+.2f}%)")
                     sig["close"] = _fill_px
+                    if _exec_mon:
+                        _exec_mon.record_fill(_fill_px, _fill_elapsed_s)
                 elif ACCOUNT_ENV in ("live", "live_eur"):
                     # Real money: an accepted-but-unfilled entry becomes a
                     # phantom position the moment we record it. Pull the

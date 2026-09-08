@@ -28,8 +28,13 @@ import sys
 import json
 import ftplib
 import subprocess
+import time
 import numpy as np
 from datetime import datetime, date
+
+# ── Execution monitor window (see execution_monitor.py) ───────────────────────
+STOCKS_EXEC_WINDOW_S    = 30.0   # seconds; vary for A/B (15 / 30 / 60)
+STOCKS_MAX_ADVERSE_PCT  = 0.003  # 30 bps — don't buy if price ran this far up
 
 
 class _Tee:
@@ -1611,16 +1616,32 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
             if side == "Sell" and cur_trade is None:
                 return False
         elif side == "Buy":
-            # Fetch the live Saxo mid-price before computing stop/TP so we
-            # anchor the bracket to the actual tradable price, not a bar close
-            # that may be hours stale (e.g. a 19:20 PKT run uses yesterday's
-            # daily close; the stock may have gapped 3-5% by open).
-            _live = saxo_client.get_quote(imap[ticker]["uic"], "Stock", env=_sx())
+            # Monitor live bid/ask for up to STOCKS_EXEC_WINDOW_S seconds and
+            # enter when the ask hasn't run more than STOCKS_MAX_ADVERSE_PCT
+            # above the signal close. Falls back to immediate entry on timeout.
+            _uic_buy = imap[ticker]["uic"]
+            import execution_monitor as _em
+            _exec_mon = _em.run_window(
+                fetch_quote_fn  = lambda _u=_uic_buy, _e=_sx(): saxo_client.get_full_quote(_u, "Stock", env=_e),
+                direction       = "Buy",
+                signal_price    = price,
+                module          = "stocks",
+                strategy        = account_env,
+                symbol          = ticker,
+                env             = _sx(),
+                window_seconds  = STOCKS_EXEC_WINDOW_S,
+                max_adverse_pct = STOCKS_MAX_ADVERSE_PCT,
+            )
+            _live = _exec_mon.order_price if _exec_mon else saxo_client.get_quote(_uic_buy, "Stock", env=_sx())
             if _live:
                 if abs(_live - price) / max(price, 1e-9) > 0.001:
-                    print(f"  [US momentum] {ticker}: scan ${price:.2f} → live "
-                          f"${_live:.2f} ({(_live / price - 1) * 100:+.2f}%) "
-                          f"— using live price for stop/TP")
+                    _mon_note = (f"  [exec_mon: {_exec_mon.entry_condition}, "
+                                 f"spread={_exec_mon.spread_pct_at_entry:.3f}%]"
+                                 if _exec_mon else "")
+                    print(f"  [US momentum] {ticker}: scan ${price:.2f} -> live "
+                          f"${_live:.2f} ({(_live / price - 1) * 100:+.2f}%)"
+                          f"{_mon_note}"
+                          f" — using live price for stop/TP")
                 price = _live
             elif account_env in ("live", "live_eur"):
                 # LIVE trade with no live price — alert prominently; use scan close as fallback
@@ -1665,11 +1686,15 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
                 print(f"  [US momentum] PAPER-FILL {ticker}: {shares} @ ${price:.2f} — "
                       f"Saxo SIM rejected the order; booked locally")
             else:
+                _order_ts_s = time.monotonic()
                 _ok, _fp = _confirm_stock_fill(entry_oid, imap[ticker]["uic"])
+                _fill_elapsed_s = time.monotonic() - _order_ts_s
                 if _ok:
                     if _fp > 0 and abs(_fp - price) / max(price, 1e-9) > 0.001:
                         print(f"  [US momentum] {ticker} real fill ${_fp:.2f} "
                               f"(scan ${price:.2f})")
+                    if _exec_mon and _fp > 0:
+                        _exec_mon.record_fill(_fp, _fill_elapsed_s)
                     price = _fp or price
                 else:
                     for _o in (entry_oid, stop_oid):

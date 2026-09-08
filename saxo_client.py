@@ -281,6 +281,35 @@ def get_quote(uic: int, asset_type: str, env: str = "sim") -> float | None:
     return None
 
 
+def get_full_quote(uic: int, asset_type: str, env: str = "sim") -> dict | None:
+    """Live bid/ask/mid/spread_pct for one instrument via /trade/v1/infoprices.
+
+    Returns {"bid": float, "ask": float, "mid": float, "spread_pct": float}
+    or None on failure.  No internal retry — used inside a polling loop
+    (execution_monitor.run_window) that supplies its own cadence.
+    """
+    try:
+        params = {"Uic": uic, "AssetType": asset_type, "FieldGroups": "Quote"}
+        resp = _request_with_retry("GET", f"{_base_url(env)}/trade/v1/infoprices",
+                                   headers=_headers(env), params=params)
+        resp.raise_for_status()
+        q   = resp.json().get("Quote", {})
+        bid = q.get("Bid")
+        ask = q.get("Ask")
+        if bid and ask:
+            bid, ask = float(bid), float(ask)
+            mid = (bid + ask) / 2.0
+            sp  = (ask - bid) / mid * 100.0 if mid > 0 else 0.0
+            return {"bid": bid, "ask": ask, "mid": mid, "spread_pct": sp}
+        mid = q.get("Mid")
+        if mid:
+            return {"bid": float(mid), "ask": float(mid),
+                    "mid": float(mid), "spread_pct": 0.0}
+        return None
+    except Exception:
+        return None
+
+
 def patch_order(order_id: str, body: dict, env: str = "sim") -> dict:
     """PATCH an existing order — used to modify stop price for trailing stops.
     Same raise-on-error convention as post()."""
