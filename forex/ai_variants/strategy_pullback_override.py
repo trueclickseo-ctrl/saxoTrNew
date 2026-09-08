@@ -1,6 +1,6 @@
-# AI-WRITTEN Phase 2+3 2026-09-05 by claude-sonnet-5
+# AI-WRITTEN Phase 2+3 2026-09-12 by claude-sonnet-5
 # Entry filter: Filters out NZD-involved pairs, which caused ~71% of realized losses.
-# Exit filter: Requires 2 consecutive daily closes past EMA(50) before honoring a trend_break exit, since single-bar trend_break exits were 14/15 losers.
+# Exit filter: Requires 2 consecutive daily closes past EMA(50) before honoring a trend_break exit, since single-bar trend_break exits were 14/15 losers (unchanged this cycle -- see rationale).
 
 import pandas as pd
 import numpy as np
@@ -43,16 +43,27 @@ def _is_trend_break_reason(reason: str) -> bool:
 def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tuple:
     """Wrap original should_exit, adding a 2-bar confirmation filter for trend_break exits.
 
-    Exit-reason data shows 'trend_break' exits (close crosses EMA(50)) were
+    Exit-reason data (both the original diagnosis and this cycle's refreshed
+    ledger pull) shows 'trend_break' exits (close crosses EMA(50)) are
     extremely poor: 15 trades, 14 losses, only 1 win, avg -38.8 EUR/trade,
     total -582 EUR -- by far the worst-performing exit bucket. This looks
     like single-bar whipsaw across EMA(50) rather than a genuine trend
     reversal. We require the close to have been on the 'broken' side of
     EMA(50) for the last TWO consecutive closed bars before honoring a
-    trend_break exit signal from the original strategy. Other exit reasons
-    (hard_stop, time stop, roster flatten) are passed through unchanged since
-    hard_stop had a positive-ish win rate (30%) and no clear improvement
-    pattern was evident there.
+    trend_break exit signal from the original strategy.
+
+    Other exit-reason buckets were reviewed this cycle and NOT touched:
+      - hard_stop: 74 trades, 44.6% win rate, avg +0.1 EUR/trade -- roughly
+        breakeven with no directional bias to exploit; the 1.5xATR stop
+        distance appears reasonably calibrated already.
+      - Five singleton 'STOP-LOSS hit @ <price>' rows (n=1 each, all
+        losses, -562 EUR combined) -- each is a distinct symbol/price with
+        a sample size of one. This is too sparse to distinguish a genuine
+        systematic flaw (e.g. gap-through stops) from random bad luck, and
+        adding a rule tuned to five single-instance observations would be
+        overfitting. No change made.
+      - roster_flatten: forced administrative exits, not a strategy signal
+        -- left untouched.
     """
     orig_exit, orig_reason = _orig_should_exit(position, df, calendar_days_held)
 

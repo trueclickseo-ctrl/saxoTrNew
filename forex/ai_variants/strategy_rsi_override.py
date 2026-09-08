@@ -1,4 +1,4 @@
-# AI-WRITTEN Phase 2+3 2026-09-03 by claude-sonnet-5
+# AI-WRITTEN Phase 2+3 2026-09-10 by claude-sonnet-5
 # Entry filter: none -- no Phase 2 entry override exists yet, pass-through only
 # Exit filter: require 2 consecutive daily closes beyond stop_price before honoring a hard-stop exit
 
@@ -21,15 +21,16 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
     Wrap the original RSI(2) should_exit() with a confirmation-bar rule
     applied only to the hard-stop exit path.
 
-    Exit-reason breakdown (138 quality trades) showed:
-      - rsi_recovery: 62 trades, 71.0% win rate, +1701.21 total pnl (healthy, untouched)
-      - hard_stop:    37 trades, only 2.7% win rate, -2166.60 total pnl
-      - six one-off "STOP-LOSS hit @ <price>" rows: 6 trades, 0% win rate, all losses
+    Updated exit-reason breakdown (152 quality trades) still shows the same
+    pattern documented when this rule was first written:
+      - rsi_recovery: 69 trades, 69.6% win rate, +1737.28 total pnl (healthy, untouched)
+      - hard_stop:    41 trades, only 2.4% win rate, -2302.06 total pnl
+      - nine one-off "STOP-LOSS hit @ <price>" rows: 9 trades, 0% win rate, all losses (~-635 combined)
       - roster_flatten_2026-09-02: 32 trades, 31.2% win rate -- an operational
         roster event, not an exit-logic defect, so left untouched here.
 
-    The hard-stop / raw "STOP-LOSS hit" bucket (43 trades combined) losing
-    on essentially every occurrence is consistent with single-bar wick or
+    The hard-stop / raw "STOP-LOSS hit" bucket (50 trades combined) losing on
+    essentially every occurrence is consistent with single-bar wick or
     whipsaw touches of the stop level that would have reversed by the next
     bar. Since this module cannot re-derive or move the stop (that is the
     runner's job per the strategy docstring), the only lever available here
@@ -39,6 +40,16 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
     one more bar, letting the runner's ratchet continue to manage the stop.
     rsi_recovery and time-stop exits are passed through unchanged since
     they already perform well / are structural (not stop-related).
+
+    This is the same rule introduced in the prior Phase 3 revision. The
+    fresh 152-trade sample reproduces the identical failure signature
+    (hard_stop still the dominant loser bucket) rather than showing a new
+    or different pattern, and most of the 41 hard_stop trades in this
+    sample predate the confirmation-bar rule's deployment (2026-09-03), so
+    there is not yet an independent out-of-sample read on whether it
+    helped. Per the evolution rules, absent a *new* data-backed pattern the
+    existing, already-justified rule is preserved rather than replaced
+    with an untested variant.
     """
     exit_flag, reason = _orig_should_exit(position, df, calendar_days_held)
 

@@ -1,6 +1,6 @@
-# AI-WRITTEN Phase 2+3 2026-09-04 by claude-sonnet-5
+# AI-WRITTEN Phase 2+3 2026-09-05 by claude-sonnet-5
 # Entry filter: Block new entries on exotic-quote currency pairs (TRY, MXN, CZK, DKK, PLN, NOK, HUF, ZAR, SGD) due to clustered hard_stop losses / re-entry churn.
-# Exit filter: Require 2 consecutive daily closes past the ATR hard-stop level before honoring a hard_stop exit, to filter single-bar whipsaw stop-outs.
+# Exit filter: UNCHANGED from Phase 2 -- require 2 consecutive daily closes past the ATR hard-stop level before honoring a hard_stop exit; no new pattern in the latest ledger justifies further change.
 
 import pandas as pd
 import numpy as np
@@ -42,14 +42,23 @@ def _closed_past_stop(direction: str, close_val: float, stop_price: float) -> bo
 
 
 def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tuple:
-    """Wraps the original Donchian should_exit. The closed-trade ledger shows
-    'hard_stop' is by far the dominant exit reason (18 of 35 quality trades)
-    with only a 27.8% win rate (13 losses vs 5 wins) -- consistent with
-    single-bar whipsaw stop-outs on daily closes near the ATR stop level.
-    We require TWO consecutive daily closes past the ATR hard-stop level
-    before honoring a hard_stop exit; a single-bar breach is deferred one
-    bar to filter noise. All other exit reasons (Donchian trailing exit,
-    time stop, etc.) pass through unchanged.
+    """Wraps the original Donchian should_exit. Phase 2 introduced a
+    two-consecutive-close confirmation requirement for hard_stop exits
+    after the ledger showed hard_stop dominating loss counts with a low
+    win rate (single-bar whipsaw hypothesis).
+
+    Re-reviewing the updated ledger (39 quality trades): hard_stop is
+    still the dominant reason (22 trades) but now shows a POSITIVE
+    average PnL (+517.3) despite a 40.9% win rate -- i.e. winners are
+    large and losers are small/contained, which is consistent with a
+    working ATR-stop mechanism rather than a broken one. The remaining
+    loss-heavy buckets ("STOP-LOSS hit @ X", the recovered broker-audit
+    fill, manual_close, roster_flatten) are one-off broker/operator
+    events outside should_exit's control -- they are not raised by this
+    function and cannot be filtered here. No new, data-backed exit rule
+    is added in this pass; the Phase 2 hard_stop confirmation logic is
+    preserved unchanged since it remains a reasonable, evidence-based
+    fix and no better-supported alternative is visible in this ledger.
     """
     should_exit_flag, reason = _orig_should_exit(position, df, calendar_days_held)
 
