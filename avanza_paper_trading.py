@@ -36,34 +36,43 @@ _STATE_FILE = os.path.join(_ROOT, "data", "avanza_paper_positions.json")
 
 INSTRUMENTS = {
     "DAX": {
-        "yahoo":    "^GDAXI",
-        "name":     "DAX (Germany)",
-        "strategy": "reversion",
-        "leverage": 5,
-        "budget_sek": 2000.0,
+        "yahoo":       "^GDAXI",
+        "name":        "DAX (Germany)",
+        "strategy":    "reversion",
+        "leverage":    5,
+        "budget_sek":  2000.0,
         "financing_rate": 0.055,
-        "ma_days":  20,
-        "active":   True,
+        "ma_days":     20,
+        "active":      True,
+        # Confirmed Avanza instrument (BULL DAX X5 AVA, orderBookId 738752)
+        "avanza_id":   "738752",
+        "avanza_name": "BULL DAX X5 AVA",
     },
     "SP500": {
-        "yahoo":    "^GSPC",
-        "name":     "S&P 500 (US)",
-        "strategy": "reversion",
-        "leverage": 5,
-        "budget_sek": 2000.0,
+        "yahoo":       "^GSPC",
+        "name":        "S&P 500 (US)",
+        "strategy":    "reversion",
+        "leverage":    5,
+        "budget_sek":  2000.0,
         "financing_rate": 0.055,
-        "ma_days":  20,
-        "active":   True,
+        "ma_days":     20,
+        "active":      True,
+        # Confirmed Avanza instrument (BULL S&P 500 X5 VON, orderBookId 530545)
+        "avanza_id":   "530545",
+        "avanza_name": "BULL S&P 500 X5 VON",
     },
     "GOLD": {
-        "yahoo":    "GC=F",
-        "name":     "Gold",
-        "strategy": "trend",
-        "leverage": 5,
-        "budget_sek": 2000.0,
+        "yahoo":       "GC=F",
+        "name":        "Gold",
+        "strategy":    "trend",
+        "leverage":    5,
+        "budget_sek":  2000.0,
         "financing_rate": 0.055,
-        "ma_days":  20,
-        "active":   False,   # enabled via --add-gold
+        "ma_days":     20,
+        "active":      False,   # enabled via --add-gold
+        # Confirmed Avanza instrument (BULL GULD X5 N, orderBookId 856393)
+        "avanza_id":   "856393",
+        "avanza_name": "BULL GULD X5 N",
     },
 }
 
@@ -247,7 +256,10 @@ def run_update(state: dict, dry_run: bool = False) -> None:
             fin_lvl  = price * (1.0 - 1.0 / lever)
             ko_dist  = (price - fin_lvl) / price * 100
 
+            avanza_name = cfg.get("avanza_name", "")
+            avanza_id   = cfg.get("avanza_id", "")
             print(f"\n    >> PAPER ENTRY at {price:,.2f}")
+            print(f"       Avanza instrument: {avanza_name}  (id={avanza_id})")
             print(f"       Financing level (KO barrier): {fin_lvl:,.2f}  "
                   f"({ko_dist:.1f}% below current price)")
             print(f"       Budget: {cfg['budget_sek']:,.0f} SEK  |  Leverage: {lever}x")
