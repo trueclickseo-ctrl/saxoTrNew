@@ -73,6 +73,7 @@ import forex.strategy_bb_quality    as strat_bb_quality
 import forex.strategy_bb_quality_hv as strat_bb_quality_hv
 import forex.strategy_pullback    as strat_pullback
 import forex.strategy_advanced_pullback_master as strat_advanced_pullback_master
+import forex.strategy_nzd_reversal as strat_nzd_reversal  # 2026-09-08: AI-derived contrarian
 import forex.strategy_gap         as strat_gap
 import forex.strategy_gap_weekend as strat_gap_weekend
 import forex.strategy_supertrend  as strat_supertrend
@@ -225,6 +226,10 @@ STRATEGIES = {
     "bb_quality":    strat_bb_quality,
     "bb_quality_hv": strat_bb_quality_hv,   # 2026-09-04: A/B twin + HIGH_VOLATILITY regime gate (H20260904-37779e)
     "pullback":    strat_pullback,
+    # 2026-09-08: AI-derived contrarian — NZD pairs only, RSI(2) direction reversed.
+    # Data: NZD Buy lost across every strategy (RSI 27%WR, Pullback 20%WR, Gap 38%WR).
+    # SIM-only research track; never in LIVE_ALLOWED_STRATEGIES.
+    "nzd_reversal": strat_nzd_reversal,
     # 2026-08-30: SIM-only A/B vs "pullback" (user-supplied "master"
     # design). Adds EMA5>EMA20>EMA50 structure, ATR-percentile band,
     # ADX-not-fading check, DI confirmation, and a same-day bounce
@@ -323,6 +328,9 @@ SIM_ACTIVE_STRATEGIES: list[str] = [
     # AI-derived fixes already applied to pullback (NZD filter + 2-bar exit).
     # donchian has an AI override in ai_variants/; copilot scores every signal.
     "donchian", "pullback",
+    # 2026-09-08: NZD contrarian — reverses RSI direction on NZD pairs.
+    # All NZD Buy signals systematically lose; reversed Sell captures that edge.
+    "nzd_reversal",
     # ── AI research tracks (re-activated 2026-09-08) ─────────────────────────
     # Formally retired: AI to find rescuing filters / improved exit logic.
     "donchian_quality", "ml", "supertrend",
@@ -372,7 +380,8 @@ SLOTS_PER_STRATEGY = {
     "rsi": _SWING_SLOTS, "rsi_trend": _SWING_SLOTS, "rsi_atr": _SWING_SLOTS,  # 2026-09-03: rsi_atr SIM twin
     "donchian": _SWING_SLOTS, "donchian_ai": strat_donchian_ai.MAX_POSITIONS,  # 2026-09-03: AI-gated cap matches module
     "bb": _SWING_SLOTS,
-    "pullback": _SWING_SLOTS, "gap": _SWING_SLOTS, "gap_weekend": _SWING_SLOTS,
+    "pullback": _SWING_SLOTS, "nzd_reversal": _SWING_SLOTS,
+    "gap": _SWING_SLOTS, "gap_weekend": _SWING_SLOTS,
     # 2026-08-30: the 4 user-supplied "advanced_*_master" A/B strategies --
     # each uncapped, mirroring its original (rsi / bb / pullback / cnn_lstm)
     # so neither side of the comparison has an artificial concurrency edge.
