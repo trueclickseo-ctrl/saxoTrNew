@@ -295,35 +295,45 @@ STRATEGIES = {k: v for k, v in STRATEGIES.items() if v is not None}
 #   supertrend                  -- negative in 10 of 12 years; own score inverted
 # An explicit `--strategy <name>` still runs one (for research) with a warning.
 # To un-retire: remove from this set + re-confirm with a fresh walk-forward.
-RETIRED_STRATEGIES: set[str] = {
-    # donchian + pullback re-activated 2026-09-05 as AI research tracks --
-    # removed from this set so the scanner runs them without a warning.
-    # They are SIM-paper only; AI copilot scores every signal so we can
-    # measure whether the AI improves their edge over the original.
-    "donchian_quality", "ml", "supertrend",
-}
+# 2026-09-08: all formerly-retired strategies re-activated as AI research tracks
+# (donchian_quality / ml / supertrend removed from this set so they scan without
+# a warning). AI copilot scores every signal from every strategy; goal is for the
+# AI to observe, learn, and propose improvements over time before any live
+# consideration. LIVE is unaffected (LIVE_ALLOWED_STRATEGIES is the gate).
+RETIRED_STRATEGIES: set[str] = set()
 
-# ── SIM entry roster (2026-09-02, explicit user decision) ───────────────────
-# The user cut the SIM forex book down to the day-1 RSI(2) baseline + the four
-# decomposition-validated "improved" twins, and force-flattened everything
-# else once (close_all_forex_sim.py). Only these take NEW SIM entries and only
-# these show on forex_dashboard.py. Every other strategy -- the untouched
-# originals (ema/bb/zscore), the advanced_*/*_master A/B experiments, the
-# RETIRED_STRATEGIES set, the LBO day-trade book -- is dormant: its module
-# stays importable and any lingering open position still exit-manages
-# (run_exits_only iterates ALL of STRATEGIES; run_daily's _legacy_exit path
-# covers the rest), but it opens nothing new. `--strategy <name>` still runs
-# any one on explicit request, with a warning. Reversible: edit this list.
+# ── SIM entry roster ──────────────────────────────────────────────────────────
+# 2026-09-02: narrowed to validated strategies only.
+# 2026-09-08: re-opened to ALL swing strategies as AI research tracks. Every
+# strategy now generates SIM paper trades so the AI copilot can accumulate
+# signal-quality data and propose improvements (ai_variants overrides) before
+# any live consideration. Dormant originals (ema/bb/zscore/cnn_lstm) run
+# alongside their improved twins for direct A/B comparison. Retired strategies
+# (donchian_quality/ml/supertrend) run so the AI can find rescuing filters.
 # LIVE (SEK rsi / EUR exits-only) is UNAFFECTED -- that path resolves from
-# LIVE_ALLOWED_STRATEGIES, never this.
+# LIVE_ALLOWED_STRATEGIES, never this. Reversible: edit this list.
 SIM_ACTIVE_STRATEGIES: list[str] = [
-    "rsi", "rsi_trend", "rsi_atr", "ema_trend", "bb_quality", "bb_quality_hv",
+    # ── Validated core (positive edge confirmed, both halves + bootstrap-CI) ──
+    "rsi", "rsi_trend", "rsi_atr",
+    "ema_trend",
+    "bb_quality", "bb_quality_hv",
     "zscore_quality", "zscore_quality_tb",
-    "donchian_ai",  # 2026-09-03: SIM-only A/B; original donchian raw was retired, AI-gated twin entered forward study
-    # 2026-09-05: AI research tracks -- SIM paper only, copilot scores every
-    # signal. Goal: AI observes, learns, and proposes improvements to these
-    # net-negative strategies before any live consideration.
+    "donchian_ai",
+    # ── AI research tracks (previously retired, 2026-09-05) ──────────────────
+    # AI-derived fixes already applied to pullback (NZD filter + 2-bar exit).
+    # donchian has an AI override in ai_variants/; copilot scores every signal.
     "donchian", "pullback",
+    # ── AI research tracks (re-activated 2026-09-08) ─────────────────────────
+    # Formally retired: AI to find rescuing filters / improved exit logic.
+    "donchian_quality", "ml", "supertrend",
+    # Dormant originals: run alongside improved twins for live A/B comparison.
+    "ema", "bb", "zscore", "cnn_lstm",
+    # A/B master experiments (user-supplied designs, 2026-08-30).
+    "advanced_ema", "advanced_ml",
+    "advanced_bb_master", "advanced_pullback_master",
+    "advanced_rsi_master", "advanced_cnn_lstm_master",
+    # Gap strategies: session-time-gated internally — no-op when not in session.
+    "gap", "gap_weekend",
 ]
 _ACTIVE_STRATEGIES = [k for k in SIM_ACTIVE_STRATEGIES if k in STRATEGIES]
 
