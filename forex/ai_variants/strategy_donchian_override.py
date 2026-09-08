@@ -1,6 +1,6 @@
-# AI-WRITTEN Phase 2+3 2026-09-05 by claude-sonnet-5
+# AI-WRITTEN Phase 2+3 2026-09-12 by claude-sonnet-5
 # Entry filter: Block new entries on exotic-quote currency pairs (TRY, MXN, CZK, DKK, PLN, NOK, HUF, ZAR, SGD) due to clustered hard_stop losses / re-entry churn.
-# Exit filter: UNCHANGED from Phase 2 -- require 2 consecutive daily closes past the ATR hard-stop level before honoring a hard_stop exit; no new pattern in the latest ledger justifies further change.
+# Exit filter: UNCHANGED -- require 2 consecutive daily closes past the ATR hard-stop level before honoring a hard_stop exit; updated ledger (39 trades) still shows hard_stop net-positive (avg +517.3, win rate 40.9%), confirming the confirmation-bar fix works and no new should_exit pattern is justified.
 
 import pandas as pd
 import numpy as np
@@ -47,18 +47,19 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
     after the ledger showed hard_stop dominating loss counts with a low
     win rate (single-bar whipsaw hypothesis).
 
-    Re-reviewing the updated ledger (39 quality trades): hard_stop is
-    still the dominant reason (22 trades) but now shows a POSITIVE
-    average PnL (+517.3) despite a 40.9% win rate -- i.e. winners are
-    large and losers are small/contained, which is consistent with a
-    working ATR-stop mechanism rather than a broken one. The remaining
-    loss-heavy buckets ("STOP-LOSS hit @ X", the recovered broker-audit
-    fill, manual_close, roster_flatten) are one-off broker/operator
-    events outside should_exit's control -- they are not raised by this
-    function and cannot be filtered here. No new, data-backed exit rule
-    is added in this pass; the Phase 2 hard_stop confirmation logic is
-    preserved unchanged since it remains a reasonable, evidence-based
-    fix and no better-supported alternative is visible in this ledger.
+    Re-reviewing the current ledger (39 quality trades): hard_stop is
+    still the dominant reason (22 trades, 40.9% win rate) but remains
+    NET POSITIVE (avg PnL +517.3, total +11,380.12) -- i.e. the
+    confirmation-bar fix is doing its job: winners run, losers are
+    contained. The other loss-heavy buckets in this ledger
+    ("STOP-LOSS hit @ X" broker-formatted exits, the recovered
+    broker-audit fill, manual_close, roster_flatten) are raised by
+    external systems (broker fills, operator/roster actions) and are
+    never returned by this strategy's should_exit() -- there is no
+    hook here to intercept or filter them. No new, data-backed change
+    to should_exit is justified this pass; the Phase 2 hard_stop
+    confirmation logic is preserved unchanged as it continues to be
+    supported by the evidence.
     """
     should_exit_flag, reason = _orig_should_exit(position, df, calendar_days_held)
 

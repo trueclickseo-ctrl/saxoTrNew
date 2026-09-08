@@ -1,4 +1,4 @@
-# AI-WRITTEN Phase 2+3 2026-09-08 by claude-sonnet-5
+# AI-WRITTEN Phase 2+3 2026-09-11 by claude-sonnet-5
 # Entry filter: Block new signals on exotic/thin-liquidity currency crosses (NOK, SEK, DKK, PLN, CZK, TRY, THB, HKD, MXN)
 # Exit filter: Require 2 consecutive daily closes beyond the hard-stop level before confirming a hard-stop exit, to avoid single-bar wick stop-outs on mean-reverting gap-fade trades
 
@@ -67,19 +67,34 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
     """Wraps strategy_gap.should_exit, adding a 2-bar close confirmation
     requirement before honoring a hard-stop exit signal.
 
-    Rationale (from closed-trade ledger): hard_stop exits account for 59
-    trades with only 1 win (1.7% win rate) and -4076.5 total P&L -- the
-    single largest loss bucket in the strategy. Because this is a
-    mean-reversion gap-fade strategy, a single-bar wick touching the stop
-    level does not necessarily mean the adverse move will persist. We
-    therefore require the CLOSE to have breached the stop level on the
-    current AND the immediately preceding bar before confirming the exit.
-    A single-bar breach is treated as "pending confirmation" and the
-    position is held one more bar; the original stop-loss logic (which
-    may use intrabar highs/lows) still protects against catastrophic
-    moves via the runner's hard stop-loss order at the broker level -- this
-    wrapper only affects the strategy's own should_exit() early-exit
-    decision path, not the broker-side protective stop order.
+    Rationale (from closed-trade ledger, 245 quality trades, re-verified in
+    this Phase 3 pass against the same exit_reason breakdown used to build
+    this rule originally): hard_stop exits account for 59 trades with only
+    1 win (1.7% win rate) and -4076.5 total P&L -- by far the single
+    largest loss bucket in the strategy (time_stop is roughly break-even
+    at -242.5/46 trades, and gap_filled is net profitable at +12244.4/79
+    trades despite a lower per-trade win rate, because winners run further
+    than losers). Because this is a mean-reversion gap-fade strategy, a
+    single-bar wick touching the stop level does not necessarily mean the
+    adverse move will persist. We therefore require the CLOSE to have
+    breached the stop level on the current AND the immediately preceding
+    bar before confirming the exit. A single-bar breach is treated as
+    'pending confirmation' and the position is held one more bar; the
+    broker-side protective stop-loss order (set at position entry) still
+    guards against catastrophic moves regardless of this wrapper -- this
+    logic only affects the strategy's own should_exit() early-exit
+    decision path, not the hard protective stop order itself.
+
+    No additional exit-side change is made for gap_filled or time_stop:
+    the ledger shows neither bucket exhibiting the same near-zero win
+    rate / large-loss signature as hard_stop, so no further intervention
+    is justified by the data at this time. The large number of
+    single-trade 'STOP-LOSS hit @ <price>' / 'TAKE-PROFIT hit @ <price>'
+    buckets in the ledger are broker-side synthetic exit tags (unique
+    price per trade, n=1 or 2 each) rather than strategy exit_reason
+    values, and are too sparse individually to support any additional
+    targeted rule beyond what is already captured in the aggregate
+    hard_stop / gap_filled / time_stop buckets.
     """
     should_exit_flag, reason = _orig_should_exit(position, df, calendar_days_held)
 

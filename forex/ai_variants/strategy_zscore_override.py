@@ -1,6 +1,6 @@
-# AI-WRITTEN Phase 2+3 2026-09-05 by claude-sonnet-5
+# AI-WRITTEN Phase 2+3 2026-09-06 by claude-sonnet-5
 # Entry filter: none -- pass-through to original generate_signals()
-# Exit filter: none -- pass-through to original should_exit(), data dominated by external forced flatten
+# Exit filter: none -- pass-through to original should_exit(), data still dominated by external forced flatten
 
 import pandas as pd
 
@@ -18,8 +18,12 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
     # level forced liquidation unrelated to should_exit()'s own decisions),
     # leaving only 1 trade that actually exercised the strategy's native
     # zscore_reverted / hard_stop / time_stop logic. That single sample
-    # (a winner) is not enough to justify any rule change. Preserving
-    # original exit behavior unchanged pending a larger sample of trades
-    # that close under normal (non-flatten) conditions.
+    # (a winner) is not enough to justify any rule change -- the poor
+    # win-rate/avg-pnl on 'roster_flatten_2026-09-02' reflects an external
+    # forced-liquidation event, not a flaw in should_exit()'s own decision
+    # logic (zscore reversion, hard stop, time stop), so no exit-logic fix
+    # here would address it. Preserving original exit behavior unchanged
+    # pending a larger sample of trades that close under normal
+    # (non-flatten) conditions.
     exit_flag, reason = _orig_should_exit(position, df, calendar_days_held)
     return exit_flag, reason

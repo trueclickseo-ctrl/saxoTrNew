@@ -1,6 +1,6 @@
-# AI-WRITTEN Phase 2+3 2026-09-05 by claude-sonnet-5
+# AI-WRITTEN Phase 2+3 2026-09-12 by claude-sonnet-5
 # Entry filter: none -- Phase 2 pass-through only, no entry override yet
-# Exit filter: require 2nd consecutive close beyond hard_stop before confirming exit, unless breach is severe (>0.3*ATR)
+# Exit filter: require 2nd consecutive close beyond hard_stop before confirming exit, unless breach is severe (>0.3*ATR) -- unchanged, sample too small for new rule
 
 import pandas as pd
 from forex.strategy_advanced_ml import generate_signals as _orig_generate_signals

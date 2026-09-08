@@ -27,10 +27,14 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
         an external, one-off portfolio-level flatten event (a research
         roster change), NOT a decision made inside should_exit(). It cannot
         be fixed by editing exit logic here, and building a rule around a
-        single calendar-dated administrative event would be pure overfit.
+        single calendar-dated administrative event would be pure overfit
+        (6/11 = 55% of the entire sample is this one event).
       - STOP-LOSS hit (n=1): -75.6, but n=1 gives no statistical basis for
         a confirmation-bar or breakeven-trail rule -- one sample cannot
-        distinguish a bad stop-placement pattern from noise.
+        distinguish a bad stop-placement pattern from noise, and adding a
+        confirmation-bar delay on a single stop-loss observation risks
+        turning contained losses into larger ones on the next trade if the
+        pattern doesn't actually repeat.
 
     Per governance rule 7: with no clear, data-backed exit pattern at this
     sample size, the original should_exit() is called and its decision is

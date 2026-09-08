@@ -21,10 +21,13 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> Tu
     Exit-reason breakdown for this strategy shows only 5 trades that closed via
     the strategy's own exit logic (time_stop=3, hard_stop=1, bb_mid_reversion=1);
     the remaining 11 of 16 quality trades closed via an external roster-flatten
-    event unrelated to should_exit's decision logic. With n<=3 per organic exit
-    reason, there is no statistically defensible pattern to encode as an override
-    (e.g. confirmation bars or breakeven trail) without risking overfitting to
-    noise. No change is made; the original decision is returned unmodified.
+    event (roster_flatten_2026-09-02) unrelated to should_exit's decision logic.
+    That flatten bucket has a poor total_pnl (-577.72) but it was not triggered
+    by should_exit -- it was an external forced-close event, so no should_exit
+    rule change can address it. With n<=3 per organic exit reason, there is no
+    statistically defensible pattern (e.g. confirmation bars, breakeven trail)
+    to encode without risking overfitting to noise. No change is made; the
+    original decision is returned unmodified.
     """
     exit_flag, exit_reason = _orig_should_exit(position, df, calendar_days_held)
     return exit_flag, exit_reason
