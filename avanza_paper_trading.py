@@ -39,27 +39,31 @@ INSTRUMENTS = {
         "yahoo":       "^GDAXI",
         "name":        "DAX (Germany)",
         "strategy":    "reversion",
-        "leverage":    5,
+        "leverage":    5.2,
         "budget_sek":  2000.0,
         "financing_rate": 0.055,
         "ma_days":     20,
         "active":      True,
-        # Confirmed Avanza instrument (BULL DAX X5 AVA, orderBookId 738752)
-        "avanza_id":   "738752",
-        "avanza_name": "BULL DAX X5 AVA",
+        # True mini future on Nordic MTF: parity 1000 (1000 units = 1 DAX point)
+        # barrier=21003, financing=20591, DAX~26007 → KO distance 19.2% → 5.2x actual leverage
+        "avanza_id":   "2047459",
+        "avanza_name": "MINI L DAX LEV18",
+        "parity":      1000,
     },
     "SP500": {
         "yahoo":       "^GSPC",
         "name":        "S&P 500 (US)",
         "strategy":    "reversion",
-        "leverage":    5,
+        "leverage":    4.9,
         "budget_sek":  2000.0,
         "financing_rate": 0.055,
         "ma_days":     20,
         "active":      True,
-        # Confirmed Avanza instrument (BULL S&P 500 X5 VON, orderBookId 530545)
-        "avanza_id":   "530545",
-        "avanza_name": "BULL S&P 500 X5 VON",
+        # True mini future on Nordic MTF: parity 100 (100 units = 1 SPX point)
+        # barrier=5904, financing=5788, SPX~7400 → KO distance 20.2% → 4.9x actual leverage
+        "avanza_id":   "2129934",
+        "avanza_name": "MINI L SPX LEV12",
+        "parity":      100,
     },
     "GOLD": {
         "yahoo":       "GC=F",
@@ -70,9 +74,10 @@ INSTRUMENTS = {
         "financing_rate": 0.055,
         "ma_days":     20,
         "active":      False,   # enabled via --add-gold
-        # Confirmed Avanza instrument (BULL GULD X5 N, orderBookId 856393)
+        # Certificate (BULL GULD X5 N) — true mini future ID TBD when Gold added
         "avanza_id":   "856393",
         "avanza_name": "BULL GULD X5 N",
+        "parity":      None,
     },
 }
 
