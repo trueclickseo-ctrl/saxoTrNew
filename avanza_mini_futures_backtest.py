@@ -109,8 +109,14 @@ class Trade:
 def _simulate(closes: list[float], highs: list[float], lows: list[float],
               dates: list[str], ma: list[Optional[float]],
               direction: str, leverage: float, financing_rate: float,
-              budget_sek: float, ma_days: int) -> list[Trade]:
-    """Run the signal-driven mini futures simulation."""
+              budget_sek: float, ma_days: int,
+              strategy: str = "trend") -> list[Trade]:
+    """Run the signal-driven mini futures simulation.
+
+    strategy='trend'    : buy when price crosses ABOVE MA, sell when crosses below.
+    strategy='reversion': buy when price crosses BELOW MA (oversold bounce),
+                          sell when price crosses back ABOVE MA.
+    """
     trades: list[Trade] = []
     in_position = False
     financing_level = 0.0
@@ -121,6 +127,7 @@ def _simulate(closes: list[float], highs: list[float], lows: list[float],
     equity = budget_sek
 
     daily_rate = financing_rate / 252   # per trading day
+    rev = (strategy == "reversion")
 
     for i in range(ma_days, len(closes)):
         S    = closes[i]
@@ -138,11 +145,16 @@ def _simulate(closes: list[float], highs: list[float], lows: list[float],
             if ma_prev is None:
                 continue
 
-            signal_long  = direction == "LONG"  and closes[i - 1] <= ma_prev and S > ma_i
-            signal_short = direction == "SHORT" and closes[i - 1] >= ma_prev and S < ma_i
+            if not rev:
+                # Trend: buy crossover above MA
+                signal_long  = direction == "LONG"  and closes[i - 1] <= ma_prev and S > ma_i
+                signal_short = direction == "SHORT" and closes[i - 1] >= ma_prev and S < ma_i
+            else:
+                # Reversion: buy crossover below MA (dip → expect bounce)
+                signal_long  = direction == "LONG"  and closes[i - 1] >= ma_prev and S < ma_i
+                signal_short = direction == "SHORT" and closes[i - 1] <= ma_prev and S > ma_i
 
             if signal_long or signal_short:
-                # Set financing level based on leverage
                 if direction == "LONG":
                     financing_level = S * (1.0 - 1.0 / leverage)
                 else:
@@ -174,10 +186,18 @@ def _simulate(closes: list[float], highs: list[float], lows: list[float],
             ma_prev = ma[i - 1]
             exit_signal = False
             if ma_prev is not None:
-                if direction == "LONG"  and S < ma_i:
-                    exit_signal = True
-                if direction == "SHORT" and S > ma_i:
-                    exit_signal = True
+                if not rev:
+                    # Trend: exit when crosses below
+                    if direction == "LONG"  and S < ma_i:
+                        exit_signal = True
+                    if direction == "SHORT" and S > ma_i:
+                        exit_signal = True
+                else:
+                    # Reversion: exit when price returns above MA
+                    if direction == "LONG"  and S > ma_i:
+                        exit_signal = True
+                    if direction == "SHORT" and S < ma_i:
+                        exit_signal = True
 
             # Last bar — force exit
             last_bar = (i == len(closes) - 1)
@@ -288,7 +308,7 @@ def _print_trades(trades: list[Trade]) -> None:
 
 def _print_stats(s: dict, budget_sek: float, ticker: str,
                  direction: str, leverage: float, ma_days: int,
-                 financing_rate: float, years: int) -> None:
+                 financing_rate: float, years: int, **kwargs) -> None:
     w = 60
     print("\n" + "=" * w)
     print("  AVANZA MINI FUTURES BACKTEST RESULTS")
@@ -297,7 +317,9 @@ def _print_stats(s: dict, budget_sek: float, ticker: str,
     print(f"  Underlying : {ticker}  ({info.get('name','')}  {info.get('ccy','')})")
     print(f"  Direction  : {direction}")
     print(f"  Leverage   : {leverage:.0f}x  (KO at {100/leverage:.1f}% adverse move)")
-    print(f"  Signal     : {ma_days}-day MA crossover")
+    strategy = kwargs.get("strategy", "trend")
+    strat_label = "MA crossover (trend)" if strategy == "trend" else "MA crossover (mean-reversion)"
+    print(f"  Signal     : {ma_days}-day {strat_label}")
     print(f"  Financing  : {financing_rate*100:.1f}% annual  "
           f"= {financing_rate/252*100:.4f}% per day")
     print(f"  Budget     : {budget_sek:,.0f} SEK")
@@ -351,6 +373,10 @@ def main() -> None:
                    help="Starting capital in SEK (default 2000)")
     p.add_argument("--years",           type=float, default=3.0,
                    help="Backtest lookback in years (default 3)")
+    p.add_argument("--strategy",        default="trend",
+                   choices=["trend", "reversion"],
+                   help="trend: buy MA crossover up (default); "
+                        "reversion: buy MA crossover down (dip bounce)")
     p.add_argument("--no-trades",       action="store_true",
                    help="Show only summary stats, not the trade list")
     p.add_argument("--list-underlyings", action="store_true",
@@ -374,7 +400,8 @@ def main() -> None:
 
     print(f"  Simulating {args.direction} mini future  "
           f"{args.leverage:.0f}x leverage  "
-          f"({100/args.leverage:.1f}% KO distance)...")
+          f"({100/args.leverage:.1f}% KO distance)  "
+          f"strategy={args.strategy}...")
 
     trades = _simulate(
         closes, highs, lows, dates, ma,
@@ -383,6 +410,7 @@ def main() -> None:
         financing_rate  = args.financing_rate,
         budget_sek      = args.budget_sek,
         ma_days         = args.ma_days,
+        strategy        = args.strategy,
     )
 
     if not args.no_trades:
@@ -391,7 +419,8 @@ def main() -> None:
 
     s = _stats(trades, args.budget_sek)
     _print_stats(s, args.budget_sek, ticker, args.direction,
-                 args.leverage, args.ma_days, args.financing_rate, int(args.years))
+                 args.leverage, args.ma_days, args.financing_rate,
+                 int(args.years), strategy=args.strategy)
 
 
 if __name__ == "__main__":
