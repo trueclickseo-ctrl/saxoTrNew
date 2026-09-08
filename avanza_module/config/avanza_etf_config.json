@@ -1,0 +1,26 @@
+{
+  "_comment": "Avanza ETF sleeve — broad market momentum, monthly rebalance. B3: set budget_sek manually per deposit allocation decision.",
+
+  "capital": {
+    "budget_sek":    0,
+    "max_positions": 3,
+    "min_trade_sek": 300
+  },
+
+  "strategy": {
+    "momentum_weights": {"3m": 0.5, "6m": 0.5},
+    "top_n":            3,
+    "exit_rank":        5,
+    "rebalance":        "monthly"
+  },
+
+  "risk": {
+    "stop_pct":              0.12,
+    "stop_sell_slippage_pct": 0.01
+  },
+
+  "account": {
+    "type":           "ISK",
+    "account_id_env": "AVANZA_ACCOUNT_ID"
+  }
+}
