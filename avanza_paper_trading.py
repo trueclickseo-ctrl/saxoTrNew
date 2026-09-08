@@ -1,12 +1,16 @@
 """
 avanza_paper_trading.py
 -----------------------
-Paper trading dry-run for Avanza mini futures: DAX + S&P 500 (reversion) + Gold (trend).
+Paper trading dry-run for Avanza mini futures.
+  Indices (reversion): DAX, S&P 500
+  Commodities/Stocks (trend): Gold, Apple, Google
 
 Backtested results (5 years, 5x leverage, 2,000 SEK budget):
-  DAX  reversion : +294%,  82% WR,  0 KOs
-  SP500 reversion: +192%,  81% WR,  0 KOs
-  Gold  trend    : +247%,  33% WR,  0 KOs  ← best single-direction return
+  DAX   reversion : +294%,  82% WR,  0 KOs
+  SP500 reversion : +192%,  81% WR,  0 KOs
+  Gold  trend     : +247%,  33% WR,  0 KOs
+  Apple trend     : +442%,  45% WR,  0 KOs
+  Google trend    : +377%,  45% WR,  0 KOs
 
 Instruments use Avanza-issued (AVA) true mini futures — most liquid on Nordic MTF.
 After N_MIN_TRADES paper trades per instrument with positive expectancy,
@@ -78,6 +82,38 @@ INSTRUMENTS = {
         "avanza_id":      "2039813",
         "avanza_name":    "MINI L GULD AVA 247",
         "parity":         100,
+    },
+    "APPLE": {
+        "yahoo":          "AAPL",
+        "name":           "Apple (AAPL)",
+        "strategy":       "trend",
+        "leverage":       5.2,
+        "budget_sek":     2000.0,
+        "financing_rate": 0.055,
+        "ma_days":        20,
+        "active":         True,
+        # AVA mini future (Avanza-issued, ~112K SEK daily turnover): parity 10
+        # barrier 255.9, AAPL ~316.3 → KO distance 19.1% → 5.2x
+        # Backtest: +442%, 0 KOs, 74% max DD, PF 1.44, 5-year TREND strategy
+        "avanza_id":      "2474069",
+        "avanza_name":    "MINI L APPLE AVA 91",
+        "parity":         10,
+    },
+    "GOOGLE": {
+        "yahoo":          "GOOGL",
+        "name":           "Google (GOOGL)",
+        "strategy":       "trend",
+        "leverage":       4.7,
+        "budget_sek":     2000.0,
+        "financing_rate": 0.055,
+        "ma_days":        20,
+        "active":         True,
+        # AVA mini future (Avanza-issued, ~50K SEK daily turnover): parity 10
+        # MINI L GOOGLE AVA 63 → 4.7x, closest to 5x available
+        # Backtest: +377%, 0 KOs, 73% max DD, PF 1.71, 5-year TREND strategy
+        "avanza_id":      "2228507",
+        "avanza_name":    "MINI L GOOGLE AVA 63",
+        "parity":         10,
     },
 }
 
