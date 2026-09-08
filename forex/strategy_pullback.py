@@ -134,6 +134,10 @@ def generate_signals(market_data: dict, open_symbols: set = None) -> list:
             continue
         if df is None or len(df) < MIN_BARS:
             continue
+        # AI-derived filter (2026-09-05): NZD crosses drove ~71% of pullback losses
+        # (14 of 35 trades, two catastrophic). Skip them entirely.
+        if "NZD" in sym.upper():
+            continue
 
         h, l, c = df["High"], df["Low"], df["Close"]
         n = len(c)
@@ -232,16 +236,21 @@ def should_exit(position: dict, df: pd.DataFrame,
     if calendar_days_held >= TIME_STOP_DAYS:
         return True, f"time_stop ({calendar_days_held}d)"
 
+    # AI-derived fix (2026-09-05): single-bar trend_break exits were 14/15 losers
+    # (whipsaw across EMA50). Require 2 consecutive closes on the broken side.
+    prev_ema_slow = float(ema_slow.iloc[-2])
+    prev_close    = float(c.iloc[-2])
+
     if direction == "Buy":
-        # Trend break — price closes below EMA(50)
-        if cur_close < cur_ema_slow:
+        # Trend break — price closes below EMA(50) for 2 consecutive bars
+        if cur_close < cur_ema_slow and prev_close < prev_ema_slow:
             return True, f"trend_break (close {cur_close:.5f} < EMA50 {cur_ema_slow:.5f})"
         # Hard stop
         if cur_low <= stop_price:
             return True, f"hard_stop ({stop_price:.5f})"
     else:
-        # Trend break — price closes above EMA(50)
-        if cur_close > cur_ema_slow:
+        # Trend break — price closes above EMA(50) for 2 consecutive bars
+        if cur_close > cur_ema_slow and prev_close > prev_ema_slow:
             return True, f"trend_break (close {cur_close:.5f} > EMA50 {cur_ema_slow:.5f})"
         # Hard stop
         if cur_high >= stop_price:
