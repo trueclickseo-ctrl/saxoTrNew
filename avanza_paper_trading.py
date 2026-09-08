@@ -1,24 +1,22 @@
 """
 avanza_paper_trading.py
 -----------------------
-Paper trading dry-run for Avanza mini futures (DAX + S&P 500 reversion).
+Paper trading dry-run for Avanza mini futures: DAX + S&P 500 (reversion) + Gold (trend).
 
-Run this daily (or any time). It:
-  1. Fetches recent prices from Yahoo Finance
-  2. Calculates the 20-day MA for each instrument
-  3. Detects entry/exit signals
-  4. Auto-enters / auto-exits paper positions — no real money touched
-  5. Prints a status report with open P&L and trade history
+Backtested results (5 years, 5x leverage, 2,000 SEK budget):
+  DAX  reversion : +294%,  82% WR,  0 KOs
+  SP500 reversion: +192%,  81% WR,  0 KOs
+  Gold  trend    : +247%,  33% WR,  0 KOs  ← best single-direction return
 
+Instruments use Avanza-issued (AVA) true mini futures — most liquid on Nordic MTF.
 After N_MIN_TRADES paper trades per instrument with positive expectancy,
 review and decide whether to go live on Avanza.
 
 Usage:
-    python avanza_paper_trading.py              # check signals + update
+    python avanza_paper_trading.py              # check signals + update (run 3x daily)
     python avanza_paper_trading.py --status     # status only, no update
     python avanza_paper_trading.py --history    # full trade history
     python avanza_paper_trading.py --reset      # clear all paper state
-    python avanza_paper_trading.py --add-gold   # also track Gold trend signal
 """
 from __future__ import annotations
 
@@ -36,48 +34,50 @@ _STATE_FILE = os.path.join(_ROOT, "data", "avanza_paper_positions.json")
 
 INSTRUMENTS = {
     "DAX": {
-        "yahoo":       "^GDAXI",
-        "name":        "DAX (Germany)",
-        "strategy":    "reversion",
-        "leverage":    5.2,
-        "budget_sek":  2000.0,
+        "yahoo":          "^GDAXI",
+        "name":           "DAX (Germany)",
+        "strategy":       "reversion",
+        "leverage":       5.4,
+        "budget_sek":     2000.0,
         "financing_rate": 0.055,
-        "ma_days":     20,
-        "active":      True,
-        # True mini future on Nordic MTF: parity 1000 (1000 units = 1 DAX point)
-        # barrier=21003, financing=20591, DAX~26007 → KO distance 19.2% → 5.2x actual leverage
-        "avanza_id":   "2047459",
-        "avanza_name": "MINI L DAX LEV18",
-        "parity":      1000,
+        "ma_days":        20,
+        "active":         True,
+        # AVA mini future (Avanza-issued, most liquid): parity 1000
+        # barrier 21,163, fin 20,748, DAX ~26,007 → KO distance 18.6% → 5.4x
+        "avanza_id":      "2037484",
+        "avanza_name":    "MINI L DAX AVA 850",
+        "parity":         1000,
     },
     "SP500": {
-        "yahoo":       "^GSPC",
-        "name":        "S&P 500 (US)",
-        "strategy":    "reversion",
-        "leverage":    4.9,
-        "budget_sek":  2000.0,
+        "yahoo":          "^GSPC",
+        "name":           "S&P 500 (US)",
+        "strategy":       "reversion",
+        "leverage":       5.8,
+        "budget_sek":     2000.0,
         "financing_rate": 0.055,
-        "ma_days":     20,
-        "active":      True,
-        # True mini future on Nordic MTF: parity 100 (100 units = 1 SPX point)
-        # barrier=5904, financing=5788, SPX~7400 → KO distance 20.2% → 4.9x actual leverage
-        "avanza_id":   "2129934",
-        "avanza_name": "MINI L SPX LEV12",
-        "parity":      100,
+        "ma_days":        20,
+        "active":         True,
+        # AVA mini future (Avanza-issued): parity 100
+        # barrier 6,400, fin 6,274, SPX ~7,718 → KO distance 17.1% → 5.8x
+        "avanza_id":      "2094745",
+        "avanza_name":    "MINI L SP500 AVA 339",
+        "parity":         100,
     },
     "GOLD": {
-        "yahoo":       "GC=F",
-        "name":        "Gold",
-        "strategy":    "trend",
-        "leverage":    5,
-        "budget_sek":  2000.0,
+        "yahoo":          "GC=F",
+        "name":           "Gold",
+        "strategy":       "trend",
+        "leverage":       5.0,
+        "budget_sek":     2000.0,
         "financing_rate": 0.055,
-        "ma_days":     20,
-        "active":      False,   # enabled via --add-gold
-        # Certificate (BULL GULD X5 N) — true mini future ID TBD when Gold added
-        "avanza_id":   "856393",
-        "avanza_name": "BULL GULD X5 N",
-        "parity":      None,
+        "ma_days":        20,
+        "active":         True,
+        # AVA mini future (Avanza-issued, 1.5M SEK daily turnover): parity 100
+        # barrier 3,477, fin 3,397, Gold ~4,355 → KO distance 20.2% → 5.0x
+        # Backtest: +247%, 0 KOs, 5-year trend strategy
+        "avanza_id":      "2039813",
+        "avanza_name":    "MINI L GULD AVA 247",
+        "parity":         100,
     },
 }
 
@@ -394,12 +394,8 @@ def main() -> None:
     p.add_argument("--status",    action="store_true", help="Show status only, no update")
     p.add_argument("--history",   action="store_true", help="Show full trade history")
     p.add_argument("--reset",     action="store_true", help="Clear all paper positions")
-    p.add_argument("--add-gold",  action="store_true", help="Also track Gold trend signal")
     p.add_argument("--dry-run",   action="store_true", help="Detect signals but don't record")
     args = p.parse_args()
-
-    if args.add_gold:
-        INSTRUMENTS["GOLD"]["active"] = True
 
     state = _load()
 
