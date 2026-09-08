@@ -194,7 +194,8 @@ def get_stock_price(client: Avanza, order_book_id: str) -> dict:
         info    = client.get_stock_info(order_book_id)
         quote   = info.get("quote") or {}
         listing = info.get("listing") or {}
-        price   = float(quote.get("last") or quote.get("buy") or 0.0)
+        # quote.sell = ASK (what you pay to buy); quote.buy = BID; quote.last = last traded
+        price   = float(quote.get("sell") or quote.get("last") or 0.0)
         currency = listing.get("currency", info.get("currency", "USD"))
         return {
             "price":    price,
@@ -244,18 +245,15 @@ def confirm_fill(client: Avanza, account_id: str, order_id: str, ob_id: str,
         still_open = any(str(o.get("order_id", "")) == str(order_id) for o in open_orders)
         if not still_open:
             print(" filled")
-            # Read fill price from the position that just opened
+            # averageAcquiredPrice from get_positions is in SEK (account currency),
+            # not USD — use get_stock_price for the native-currency fill proxy instead.
             try:
-                positions = get_positions(client, account_id)
-                for pos in positions:
-                    if str(pos.get("order_book_id", "")) == str(ob_id):
-                        fill_price = pos.get("avg_price") or pos.get("current_price") or 0.0
-                        if fill_price:
-                            return float(fill_price)
+                price_info = get_stock_price(client, ob_id)
+                if price_info["price"] > 0:
+                    return float(price_info["price"])
             except Exception:
                 pass
-            # Fallback: we know it filled but can't read price; return 0 signals caller to
-            # use the limit price as a proxy
+            # Fallback: return 0 signals caller to use the limit price as proxy
             return 0.0
 
     # Timeout — cancel
@@ -291,26 +289,26 @@ def get_open_orders(client: Avanza) -> list[dict]:
 
 def place_buy(client: Avanza, account_id: str, order_book_id: str,
               qty: int, price: float) -> dict:
-    """Place a BUY limit order valid for 7 days. Returns Avanza response dict."""
+    """Place a BUY limit order valid for today only (US stocks require day orders)."""
     return client.place_order(
         account_id=account_id,
         order_book_id=order_book_id,
         order_type=OrderType.BUY,
         price=round(price, 2),
-        valid_until=date.today() + timedelta(days=7),
+        valid_until=date.today(),
         volume=qty,
     )
 
 
 def place_sell(client: Avanza, account_id: str, order_book_id: str,
                qty: int, price: float) -> dict:
-    """Place a SELL limit order valid for 7 days. Returns Avanza response dict."""
+    """Place a SELL limit order valid for today only (US stocks require day orders)."""
     return client.place_order(
         account_id=account_id,
         order_book_id=order_book_id,
         order_type=OrderType.SELL,
         price=round(price, 2),
-        valid_until=date.today() + timedelta(days=7),
+        valid_until=date.today(),
         volume=qty,
     )
 

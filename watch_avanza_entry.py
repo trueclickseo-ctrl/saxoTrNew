@@ -70,8 +70,9 @@ def _get_quote(client, order_book_id: str) -> dict | None:
     try:
         info  = client.get_stock_info(order_book_id)
         quote = info.get("quote") or {}
-        bid   = float(quote.get("sell") or quote.get("last") or 0.0)
-        ask   = float(quote.get("buy")  or quote.get("last") or 0.0)
+        # Avanza API: quote.buy = BID (best buy order), quote.sell = ASK (best sell order)
+        bid   = float(quote.get("buy")  or quote.get("last") or 0.0)
+        ask   = float(quote.get("sell") or quote.get("last") or 0.0)
         last  = float(quote.get("last") or 0.0)
         if ask <= 0 and last > 0:
             ask = last
