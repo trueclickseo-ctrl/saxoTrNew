@@ -206,7 +206,7 @@ def push(docs: dict) -> bool:
 
     claude_exe = _CLAUDE_CMD if os.path.exists(_CLAUDE_CMD) else "claude"
     result = subprocess.run(
-        [claude_exe, "-p", prompt],
+        [claude_exe, "-p", prompt, "--model", "claude-haiku-4-5-20251001"],
         capture_output=True, text=True,
         encoding="utf-8", errors="replace",
         timeout=180, cwd=BASE,
