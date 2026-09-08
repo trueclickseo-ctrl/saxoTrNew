@@ -203,13 +203,13 @@ def _call_claude_unused_ref(prompt_user: str) -> dict | None:
     t0 = time.monotonic()
     try:
         msg = client.messages.create(
-            model="claude-haiku-4-5-20251001", max_tokens=1024, system=_SYSTEM,
+            model="claude-sonnet-5", max_tokens=1024, system=_SYSTEM,
             messages=[{"role": "user", "content": prompt_user}], timeout=60.0,
         )
         latency_ms = round((time.monotonic() - t0) * 1000)
         text = next((b.text.strip() for b in (msg.content or []) if hasattr(b, "text")), "")
         parsed = json.loads(text)
-        parsed["_meta"] = {"ok": True, "latency_ms": latency_ms, "model": "claude-haiku-4-5-20251001"}
+        parsed["_meta"] = {"ok": True, "latency_ms": latency_ms, "model": "claude-sonnet-5"}
         return parsed
     except json.JSONDecodeError as e:
         print(f"  [evolver] JSON parse error: {e}\n  raw: {text[:300]}")
@@ -874,7 +874,7 @@ def _call_claude(prompt_user: str, system: str = _SYSTEM) -> dict | None:
     t0 = time.monotonic()
     try:
         msg = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="claude-sonnet-5",
             max_tokens=8192,
             system=system,
             messages=[{"role": "user", "content": prompt_user}],
@@ -896,7 +896,7 @@ def _call_claude(prompt_user: str, system: str = _SYSTEM) -> dict | None:
                 text = text[4:]
             text = text.rstrip("`").strip()
         parsed = json.loads(text)
-        parsed["_meta"] = {"ok": True, "latency_ms": latency_ms, "model": "claude-haiku-4-5-20251001"}
+        parsed["_meta"] = {"ok": True, "latency_ms": latency_ms, "model": "claude-sonnet-5"}
         return parsed
     except json.JSONDecodeError as e:
         print(f"  [evolver] JSON parse error: {e}\n  raw: {text[:300]}")
