@@ -99,12 +99,12 @@ def cmd_resolve_tickers(client, tickers: list[str]) -> None:
         ob_id = ic.lookup(client, ticker, cache, force_refresh=True)
         if ob_id:
             entry = cache.get(ticker, {})
-            print(f"  {ticker:<8} → order_book_id={ob_id}  "
+            print(f"  {ticker:<8} -> order_book_id={ob_id}  "
                   f"name={entry.get('name','')}  "
                   f"currency={entry.get('currency','')}  "
                   f"country={entry.get('country','')}")
         else:
-            print(f"  {ticker:<8} → NOT FOUND on Avanza")
+            print(f"  {ticker:<8} -> NOT FOUND on Avanza")
     ic.save_cache(cache)
     print("  Cache updated.")
 
@@ -181,6 +181,8 @@ def main() -> None:
     parser.add_argument("--trail-stops", action="store_true",
                         help="Ratchet stop-loss orders up as positions appreciate "
                              "(dry-run unless --execute is also passed)")
+    parser.add_argument("--only", metavar="TICKER",
+                        help="Process only this ticker (skip all others) — useful for single-stock test runs")
     parser.add_argument("--resolve-tickers", nargs="+", metavar="TICKER",
                         help="Test ticker → order_book_id lookup and exit")
     parser.add_argument("--interval",  type=int, default=30,
@@ -235,7 +237,8 @@ def main() -> None:
         print("  [DRY RUN] Showing plan only — pass --execute to place orders.\n")
 
     config = _load_config()
-    ex.run_rebalance(client, account_id, config, dry_run=dry_run)
+    ex.run_rebalance(client, account_id, config, dry_run=dry_run,
+                     only_ticker=args.only)
 
 
 if __name__ == "__main__":

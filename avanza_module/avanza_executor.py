@@ -235,8 +235,13 @@ def _print_action_table(actions: list[dict]) -> None:
 
 
 def run_rebalance(client: "Avanza", account_id: str,
-                  config: dict, dry_run: bool = True) -> dict:
-    """Main rebalance function. Returns summary dict for status file."""
+                  config: dict, dry_run: bool = True,
+                  only_ticker: str | None = None) -> dict:
+    """Main rebalance function. Returns summary dict for status file.
+
+    only_ticker: if set, restrict to this single ticker (skips all others).
+    Useful for single-stock test runs: python run_avanza.py --only STT --execute
+    """
 
     budget_sek   = float(config.get("budget_sek", 36000))
     max_positions = int(config.get("max_positions", 10))
@@ -253,6 +258,14 @@ def run_rebalance(client: "Avanza", account_id: str,
     if not signal["tickers"]:
         print("  No signal tickers found — nothing to do.")
         return {"buys": 0, "sells": 0, "skips": 0, "signal": signal}
+
+    if only_ticker:
+        only_up = only_ticker.upper()
+        signal["tickers"] = [t for t in signal["tickers"] if t.upper() == only_up]
+        if not signal["tickers"]:
+            print(f"  --only {only_ticker}: ticker not in signal basket — nothing to do.")
+            return {"buys": 0, "sells": 0, "skips": 0, "signal": signal}
+        print(f"  --only {only_ticker}: restricting to this ticker only.")
 
     print(f"  Target basket ({len(signal['tickers'])} tickers): {', '.join(signal['tickers'][:max_positions])}")
 
