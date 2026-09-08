@@ -63,6 +63,11 @@ DI_SPREAD_MIN    = 18    # |+DI − −DI| threshold; hypothesis: ≤14 → near
 ATR_LOOKBACK     = 50    # rolling window for ATR-percentile gate
 TRENDING_LABELS  = frozenset({"TRENDING_BULLISH", "TRENDING_BEARISH"})
 
+# AI-derived 2026-09-08: 1W/27L — same symbols (HKDJPY/JPYHKD/USDJPY) stopped
+# 16-19x each via rapid re-entry within hours. Block re-entry for 12h per symbol.
+COOLDOWN_HOURS = 12.0
+_last_signal_ts: dict = {}  # symbol → pd.Timestamp of last signal
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -108,7 +113,7 @@ def _atr_above_median(h: pd.Series, l: pd.Series, c: pd.Series) -> bool | None:
 # ── Signal generation ─────────────────────────────────────────────────────────
 
 def generate_signals(market_data: dict, open_symbols: set = None) -> list:
-    """Donchian breakout signals filtered by DI-spread + regime + ATR-percentile."""
+    """Donchian breakout signals filtered by DI-spread + regime + ATR-percentile + 12h cooldown."""
     if open_symbols is None:
         open_symbols = set()
 
@@ -118,6 +123,19 @@ def generate_signals(market_data: dict, open_symbols: set = None) -> list:
             continue
         if df is None or len(df) < MIN_BARS:
             continue
+
+        # 12h per-symbol cooldown: blocks rapid re-entry whipsaw (1W/27L evidence)
+        try:
+            import pandas as pd
+            now_ts = df.index[-1]
+            if not isinstance(now_ts, pd.Timestamp):
+                now_ts = pd.Timestamp(now_ts)
+            last_ts = _last_signal_ts.get(sym)
+            if last_ts is not None:
+                if (now_ts - last_ts).total_seconds() / 3600.0 < COOLDOWN_HOURS:
+                    continue
+        except Exception:
+            pass
 
         h, l, c = df["High"], df["Low"], df["Close"]
         today    = float(c.iloc[-1])
@@ -193,6 +211,12 @@ def generate_signals(market_data: dict, open_symbols: set = None) -> list:
                 "regime":         regime,
                 "atr_above_med":  bool(atr_ok) if atr_ok is not None else None,
             })
+
+        # Record signal time for cooldown
+        try:
+            _last_signal_ts[sym] = now_ts
+        except Exception:
+            pass
 
     signals.sort(key=lambda x: x["score"], reverse=True)
     return signals
