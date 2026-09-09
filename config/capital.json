@@ -67,14 +67,14 @@
       "2026-08-24: raised to 55200 (explicit request) so DAX/HK50/YM/NQ/ZC clear",
       "MAX_RISK_OVERSHOOT (1.5x) at RISK_PCT=1% -- see docs/futures_strategies.md's",
       "'only 2/13 markets tradeable' finding for the per-market numbers this solves.",
-      "This means futures alone is now sized as if backed by ~600,000 SEK, double",
-      "the account's stated 300,000 SEK -- forex still uses its own 27800 EUR (real",
-      "300,000 SEK) unchanged. LOWER THIS if futures should go back to sharing",
-      "capital with the ATOS equity sleeves instead of exceeding the full account."
+      "2026-09-10: raised to 90000 so ZC/ZS/ZW clear the 1% budget at current ATR",
+      "(ZC was skipping: 1 contract = 844 EUR risk vs 552 EUR budget at 55200 cap).",
+      "1% of 90000 = 900 EUR/trade. CL (5047 EUR/contract) and other large contracts",
+      "remain permanently blocked. Real account is ~700k EUR so 90k = 12.9% of real."
     ],
     "futures": {
       "enabled": true,
-      "risk_equity_eur": 55200
+      "risk_equity_eur": 90000
     },
 
     "_forex_comment": [
