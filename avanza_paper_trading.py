@@ -146,11 +146,10 @@ def _download(yahoo: str, days: int = 60) -> tuple[list[float], list[str]]:
     except ImportError:
         sys.exit("  ERROR: yfinance not installed — pip install yfinance")
 
-    end   = datetime.now(timezone.utc)
-    start = end - timedelta(days=days)
-    df = yf.download(yahoo,
-                     start=start.strftime("%Y-%m-%d"),
-                     end=end.strftime("%Y-%m-%d"),
+    # Use period= instead of start/end: more reliable for futures (GC=F rolls)
+    # and Swedish tickers (INVE-B.ST) where date-range fetches intermittently fail.
+    period = f"{days}d"
+    df = yf.download(yahoo, period=period,
                      auto_adjust=True, progress=False)
     if df.empty:
         return [], []
