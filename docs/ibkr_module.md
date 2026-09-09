@@ -93,9 +93,9 @@ Override with `--client-id N` if Gateway still holds a slot after a crash.
 | `ibkr_module/scoring_engine.py` | Pure-Python momentum/quality scoring: ROC(63), ADX(14), RS-vs-SPY, SMA200 filter, trend quality composite |
 | `ibkr_module/ibkr_client.py` | ib_insync wrapper — connect, get_positions, get_prices, place_market_order, place_stop_order, confirm_fill, cancel_order; all ib_insync loggers silenced at CRITICAL before connect |
 | `ibkr_module/ibkr_state.py` | SQLite ledger `data/ibkr_stocks.db`; strategy column per trade; record_order / mark_filled / mark_cancelled / update_stop / get_open_positions / count_open |
-| `ibkr_module/ibkr_executor.py` | run_rebalance (blend), run_scorer_strategy, run_reversion_entries/exits, run_us_signals_entries/exits, trail_stops; AI observation cards logged on every fill |
+| `ibkr_module/ibkr_executor.py` | run_rebalance (blend), run_scorer_strategy, run_reversion_entries/exits, run_us_signals_entries/exits, trail_stops |
 | `ibkr_module/config/ibkr_config.json` | paper=true, port_paper=4002, client_ids block, per-strategy budgets/slots |
-| `ai/features/ibkr_stock_cards.py` | AI entry/exit observation cards for IBKR fills → `data/stock_observation_cards.jsonl` (same file Saxo SIM feeds) |
+| `ai/features/ibkr_stock_cards.py` | ~~AI entry/exit observation cards for IBKR fills~~ **UNUSED** — AI pipeline is Saxo-only since 2026-09-09 |
 | `run_ibkr_stocks.py` | CLI entry point (`--strategy blend/reversion/intraday/scorer/signals/all`) |
 | `ibkr_dashboard.py` | Live dashboard — open positions by strategy, IBKR live prices (Yahoo fallback), WR/PF stats section for closed trades |
 | `scripts/ibkr_scan_signals.py` | Dry-run scanner + email for US Signals strategies |
@@ -175,18 +175,16 @@ pip install ib_insync yfinance pandas ta-lib
 
 ## AI observation layer
 
-Every confirmed fill (entry + exit) is logged to `data/stock_observation_cards.jsonl`
-via `ai/features/ibkr_stock_cards.py`. Cards use `account_env="ibkr_paper"` so they
-are distinct from Saxo SIM rows but flow into the same Stock Outcome Predictor and
-AI Trading Journal pipelines — no extra plumbing needed.
+**REMOVED 2026-09-09** (`9f5f3b8`) — AI data pipeline is Saxo-only.
 
-The AI dashboard (`ai_dashboard.py`) shows an **IBKR PAPER** section with total
-open/closed, WR, PF, P&L (USD), per-strategy open breakdown, and the running count
-of observation cards logged.
+The entry/exit card hooks and import of `ai/features/ibkr_stock_cards.py` were removed
+from `ibkr_executor.py`. IBKR trades no longer flow into `data/stock_observation_cards.jsonl`,
+the AI Trading Journal, or the Copilot pipeline. The `ai/features/ibkr_stock_cards.py`
+file is retained but unused.
 
-**Log-only — no AI decisions applied to IBKR.** The `can_apply_decision()` gate is
-hardcoded False for `ibkr_paper`; acting on IBKR would require an explicit code change
-and a separate written go/no-go.
+**Reason:** keep AI training data from a single, consistent source (Saxo SIM/LIVE) rather
+than mixing Saxo and IBKR fills that have different fill mechanics, currency conventions,
+and commission structures.
 
 ---
 
