@@ -1,4 +1,4 @@
-"""
+﻿"""
 ibkr_executor.py
 ----------------
 Strategy executors for the IBKR stocks sleeve.
@@ -26,6 +26,33 @@ from ibkr_module import ibkr_signals as sig
 _ROOT = Path(__file__).parent.parent
 
 # AI observation layer removed 2026-09-09 -- Saxo only for AI data pipeline.
+
+
+def _yahoo_prices(symbols: list[str]) -> dict[str, float]:
+    """Fetch latest close prices from Yahoo Finance for a list of symbols.
+
+    Used as fallback on paper accounts when IBKR has no market data.
+    The market order itself fills at IBKR's real bid/ask regardless.
+    """
+    import yfinance as yf
+    try:
+        raw = yf.download(symbols, period="5d", interval="1d",
+                          auto_adjust=True, progress=False, threads=True)
+        if raw.empty:
+            return {s: 0.0 for s in symbols}
+        closes = raw["Close"] if "Close" in raw.columns else raw.xs("Close", axis=1, level=0)
+        out = {}
+        for s in symbols:
+            try:
+                col = closes[s] if s in closes.columns else closes
+                last = float(col.dropna().iloc[-1])
+                out[s] = last if last > 0 else 0.0
+            except Exception:
+                out[s] = 0.0
+        return out
+    except Exception as e:
+        print(f"  [prices] Yahoo fallback failed: {e}")
+        return {s: 0.0 for s in symbols}
 
 
 def _compute_plan(
@@ -84,7 +111,7 @@ def _compute_plan(
 # â"€â"€ US Blend rebalance â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
-                  signal: dict | None = None) -> None:
+                  signal: dict | None = None, auto: bool = False) -> None:
     """US Blend cross-sectional momentum rebalance.
 
     signal: pre-generated result from ibkr_signals.blend_targets().
@@ -157,7 +184,7 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
     for s in sells:
         print(f"\n  SELL {s['qty']} {s['symbol']} @ ~${s['price']:.2f}  "
               f"(value ~${s['value']:,.0f})")
-        confirm = input("  Confirm? [y/N]: ").strip().lower()
+        confirm = "y" if auto else input("  Confirm? [y/N]: ").strip().lower()
         if confirm != "y":
             print("  Skipped.")
             continue
@@ -173,12 +200,11 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
             print(f"  Filled @ ${fill:.4f}")
             st.mark_filled(str(trade.order.orderId), fill, side="SELL")
 
-    # â"€â"€ Execute BUYs â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     for b in buys:
         stop_price = round(b["price"] * (1 - stop_pct), 2)
         print(f"\n  BUY  {b['qty']} {b['symbol']} @ ~${b['price']:.2f}  "
               f"notional ~${b['notional']:,.0f}  stop=${stop_price:.2f}")
-        confirm = input("  Confirm? [y/N]: ").strip().lower()
+        confirm = "y" if auto else input("  Confirm? [y/N]: ").strip().lower()
         if confirm != "y":
             print("  Skipped.")
             continue
@@ -203,6 +229,132 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
         print(f"  Stop placed @ ${actual_stop:.2f} (id={stop_trade.order.orderId})")
 
     print("\n  Rebalance complete.")
+
+
+# ── US Blend V2 rebalance ─────────────────────────────────────────────────────
+
+def run_rebalance_v2(ib, account_id: str, cfg: dict, dry_run: bool = True,
+                     signal: dict | None = None, auto: bool = False) -> None:
+    """US Blend V2 rebalance — skip-month momentum + volatility targeting.
+
+    Uses atos/us_blend_v2.py. Positions tracked under strategy='blend_v2'
+    in the IBKR state DB, fully isolated from the V1 'blend' book.
+
+    Vol-targeting: recent daily P&L returns come from ibkr_state
+    (get_recent_daily_returns). If fewer than 20 days are available, scale=1.0.
+    """
+    from atos import us_blend_v2 as V2
+
+    blend_cfg   = cfg.get("strategies", {}).get("blend_v2",
+                  cfg.get("strategies", {}).get("blend", cfg["capital"]))
+    budget_usd  = blend_cfg.get("budget_usd",   cfg["capital"]["budget_usd"])
+    max_pos     = blend_cfg.get("max_positions", cfg["capital"]["max_positions"])
+    min_usd     = blend_cfg.get("min_trade_usd", cfg["capital"]["min_trade_usd"])
+    buf_pct     = cfg["capital"]["cash_buffer_pct"]
+    stop_pct    = blend_cfg.get("stop_pct", cfg["risk"]["stop_pct"])
+
+    if signal is None:
+        print("\n  Generating US Blend V2 signal (Yahoo Finance)...")
+        signal = sig.blend_v2_targets()
+    targets = signal.get("targets", [])
+    if not targets:
+        print(f"  [blend_v2] No targets ({signal.get('reason', '')}). Nothing to do.")
+        return
+
+    print(f"  [blend_v2] targets ({len(targets)}): {', '.join(targets)}")
+
+    # Vol-targeting: read recent returns from state; fall back to 1.0 safely.
+    recent_rets = []
+    try:
+        recent_rets = st.get_recent_daily_returns(strategy="blend_v2") or []
+    except AttributeError:
+        pass
+    scale = V2.vol_scale(recent_rets)
+    effective_budget = budget_usd * scale
+    if scale < 1.0:
+        print(f"  [blend_v2] vol-scale={scale:.2f} -> effective budget ${effective_budget:,.0f}")
+
+    if signal.get("risk_off"):
+        print("  [blend_v2] RISK OFF — signal is defensive.")
+
+    held    = st.get_open_positions(strategy="blend_v2")
+    symbols = list({*targets, *[p["symbol"] for p in held]})
+    prices  = ic.get_prices(ib, symbols)
+    ibkr_ok = not all(v == 0.0 for v in prices.values())
+    cash    = ic.get_cash_balance(ib, account_id)
+    print(f"  [blend_v2] cash: ${cash:,.2f}")
+
+    if not dry_run and not ic.is_market_open():
+        print("  [blend_v2] BLOCKED — US market is closed.")
+        return
+    if not dry_run and not ibkr_ok:
+        print("  [blend_v2] BLOCKED — no IBKR live prices.")
+        return
+
+    buys, sells = _compute_plan(
+        targets         = targets,
+        held            = held,
+        prices          = prices,
+        budget_usd      = effective_budget,
+        max_positions   = max_pos,
+        min_trade_usd   = min_usd,
+        cash_buffer_pct = buf_pct,
+    )
+
+    print(f"\n  HOLD  ({len(held) - len(sells)}): "
+          f"{', '.join(p['symbol'] for p in held if p['symbol'] not in {s['symbol'] for s in sells})}")
+    print(f"  SELL  ({len(sells)}): {', '.join(s['symbol'] for s in sells)}")
+    print(f"  BUY   ({len(buys)}):  {', '.join(b['symbol'] for b in buys)}")
+
+    if dry_run:
+        print("\n  [blend_v2 DRY RUN] No orders placed. Pass --execute to trade.\n")
+        _print_plan(buys, sells, stop_pct)
+        return
+
+    for s in sells:
+        print(f"\n  SELL {s['qty']} {s['symbol']} @ ~${s['price']:.2f}")
+        confirm = "y" if auto else input("  Confirm? [y/N]: ").strip().lower()
+        if confirm != "y":
+            print("  Skipped.")
+            continue
+        trade = ic.place_market_order(ib, account_id, s["symbol"], "SELL", s["qty"])
+        st.record_order(str(trade.order.orderId), s["symbol"], "SELL", s["qty"],
+                        strategy="blend_v2")
+        fill = ic.confirm_fill(ib, trade)
+        if fill is None:
+            print(f"  WARNING: fill not confirmed for {s['symbol']}.")
+            st.mark_cancelled(str(trade.order.orderId))
+        else:
+            print(f"  Filled @ ${fill:.4f}")
+            st.mark_filled(str(trade.order.orderId), fill, side="SELL")
+
+    for b in buys:
+        actual_stop_est = round(b["price"] * (1 - stop_pct), 2)
+        print(f"\n  BUY  {b['qty']} {b['symbol']} @ ~${b['price']:.2f}  "
+              f"notional ~${b['notional']:,.0f}  stop~${actual_stop_est:.2f}")
+        confirm = "y" if auto else input("  Confirm? [y/N]: ").strip().lower()
+        if confirm != "y":
+            print("  Skipped.")
+            continue
+        trade = ic.place_market_order(ib, account_id, b["symbol"], "BUY", b["qty"])
+        st.record_order(str(trade.order.orderId), b["symbol"], "BUY", b["qty"],
+                        strategy="blend_v2")
+        fill = ic.confirm_fill(ib, trade)
+        if fill is None:
+            print(f"  WARNING: fill not confirmed for {b['symbol']}. Skipping stop.")
+            st.mark_cancelled(str(trade.order.orderId))
+            continue
+        print(f"  Filled @ ${fill:.4f}")
+        st.mark_filled(str(trade.order.orderId), fill, side="BUY")
+        actual_stop = round(fill * (1 - stop_pct), 2)
+        stop_trade  = ic.place_stop_order(ib, account_id, b["symbol"], b["qty"], actual_stop)
+        ib.sleep(1.0)
+        st.update_stop(b["symbol"], actual_stop,
+                       str(stop_trade.order.orderId), trailing_high=fill,
+                       strategy="blend_v2")
+        print(f"  Stop placed @ ${actual_stop:.2f} (id={stop_trade.order.orderId})")
+
+    print("\n  [blend_v2] Rebalance complete.")
 
 
 # â"€â"€ Trail stops â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
@@ -281,7 +433,8 @@ def trail_stops(ib, account_id: str, cfg: dict, dry_run: bool = True,
 
 def run_reversion_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
                           intraday: bool = False,
-                          candidates: list | None = None) -> None:
+                          candidates: list | None = None,
+                          auto: bool = False) -> None:
     """Scan for US Reversion entry signals and buy new slots.
 
     intraday=True uses 5-min yfinance bars (US market hours only).
@@ -365,7 +518,7 @@ def run_reversion_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
             print("    [DRY RUN] would place buy + stop")
             continue
 
-        confirm = input(f"  Confirm buy {c['ticker']}? [y/N]: ").strip().lower()
+        confirm = "y" if auto else input(f"  Confirm buy {c['ticker']}? [y/N]: ").strip().lower()
         if confirm != "y":
             print("  Skipped.")
             continue
@@ -393,7 +546,8 @@ def run_reversion_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
 # â"€â"€ US Reversion exits â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 def run_reversion_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
-                        indicators: dict | None = None) -> None:
+                        indicators: dict | None = None,
+                        auto: bool = False) -> None:
     """Check open reversion positions for exit conditions and close if triggered.
 
     indicators: pre-generated {symbol: {price, rsi, sma20}} from
@@ -454,7 +608,7 @@ def run_reversion_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
             print(f"    [DRY RUN] would sell {qty} {sym}")
             continue
 
-        confirm = input(f"  Confirm EXIT {sym}? [y/N]: ").strip().lower()
+        confirm = "y" if auto else input(f"  Confirm EXIT {sym}? [y/N]: ").strip().lower()
         if confirm != "y":
             print("  Skipped.")
             continue
@@ -478,12 +632,194 @@ def run_reversion_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
             st.mark_filled(str(sell_trade.order.orderId), fill, side="SELL")
 
     print("\n  Reversion exit check complete.")
+# -- US Reversion V2 entries ---------------------------------------------------
+
+def run_reversion_v2_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
+                              candidates: list | None = None,
+                              auto: bool = False) -> None:
+    """US Reversion V2 entry scan -- uses reversion_v2 state key so v1/v2 positions
+    are tracked independently. candidates: from ibkr_signals.reversion_v2_candidates().
+    """
+    from atos import us_reversion_v2 as _rev2
+
+    rev_cfg   = cfg["strategies"].get("reversion_v2", cfg["strategies"]["reversion"])
+    max_slots = rev_cfg["max_slots"]
+    stop_pct  = _rev2.STOP_PCT
+    min_usd   = rev_cfg.get("min_trade_usd", 50)
+    budget    = rev_cfg["budget_usd"]
+
+    open_pos   = st.get_open_positions("reversion_v2")
+    open_syms  = {p["symbol"] for p in open_pos}
+    slots_free = max_slots - len(open_pos)
+
+    print(f"\n  [reversion_v2] {len(open_pos)}/{max_slots} slots used  ({slots_free} free)")
+
+    if slots_free <= 0:
+        print("  All reversion_v2 slots full.")
+        return
+
+    if candidates is None:
+        candidates = sig.reversion_v2_candidates()
+    new_cands  = [c for c in candidates if c["ticker"] not in open_syms]
+
+    if not new_cands:
+        print("  No new reversion_v2 candidates.")
+        return
+
+    live_syms   = [c["ticker"] for c in new_cands[:slots_free]]
+    live_prices = ic.get_prices(ib, live_syms)
+
+    if not dry_run and not ic.is_market_open():
+        print("\n  [BLOCKED] US market is closed.")
+        return
+
+    per_slot = budget / max_slots
+
+    for c in new_cands[:slots_free]:
+        ibkr_price  = live_prices.get(c["ticker"], 0.0)
+        yahoo_price = c["price"]
+        ibkr_ok     = bool(ibkr_price and ibkr_price > 0)
+
+        if dry_run:
+            price     = ibkr_price if ibkr_ok else yahoo_price
+            price_src = "IBKR" if ibkr_ok else "Yahoo est. (IBKR unavailable -- not for execution)"
+        else:
+            if not ibkr_ok:
+                print(f"\n  [BLOCKED] {c['ticker']}: no IBKR live price.")
+                continue
+            price     = ibkr_price
+            price_src = "IBKR live"
+
+        if not price or price <= 0:
+            continue
+        qty      = math.floor(per_slot / price)
+        if qty < 1:
+            continue
+        notional = round(price * qty, 2)
+        if notional < min_usd:
+            continue
+        stop_price = round(price * (1 - stop_pct), 2)
+
+        print(f"\n  [reversion_v2] BUY  {c['ticker']:<8}  "
+              f"RSI={c['rsi']:.0f}  dip={c['dip_pct']}%  vol={c['vol_ratio']}x  R:R={c['rr_ratio']}")
+        print(f"    qty={qty}  price~${price:.2f} [{price_src}]  "
+              f"notional~${notional:,.0f}  stop=${stop_price:.2f}")
+
+        if dry_run:
+            print("    [DRY RUN] would place buy + stop")
+            continue
+
+        confirm = "y" if auto else input(f"  Confirm buy {c['ticker']}? [y/N]: ").strip().lower()
+        if confirm != "y":
+            print("  Skipped.")
+            continue
+
+        trade = ic.place_market_order(ib, account_id, c["ticker"], "BUY", qty)
+        st.record_order(str(trade.order.orderId), c["ticker"], "BUY", qty, strategy="reversion_v2")
+        print(f"  Order placed (id={trade.order.orderId}). Waiting for fill...")
+        fill = ic.confirm_fill(ib, trade)
+        if fill is None:
+            print(f"  WARNING: fill not confirmed for {c['ticker']}.")
+            st.mark_cancelled(str(trade.order.orderId))
+            continue
+
+        print(f"  Filled @ ${fill:.4f}")
+        st.mark_filled(str(trade.order.orderId), fill, side="BUY")
+        actual_stop = round(fill * (1 - stop_pct), 2)
+        stop_trade  = ic.place_stop_order(ib, account_id, c["ticker"], qty, actual_stop)
+        ib.sleep(1.0)
+        st.update_stop(c["ticker"], actual_stop, str(stop_trade.order.orderId), fill)
+        print(f"  Stop placed @ ${actual_stop:.2f} (id={stop_trade.order.orderId})")
+
+    print("\n  [reversion_v2] entry scan complete.")
+
+
+def run_reversion_v2_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
+                            indicators: dict | None = None,
+                            auto: bool = False) -> None:
+    """Exit check for open US Reversion V2 positions."""
+    from atos import us_reversion_v2 as _rev2
+
+    open_pos = st.get_open_positions("reversion_v2")
+    if not open_pos:
+        print("  No open reversion_v2 positions.")
+        return
+
+    symbols = [p["symbol"] for p in open_pos]
+    if indicators is None:
+        indicators = sig.reversion_v2_exit_indicators(symbols)
+    ibkr_prices = {s: ic.abs_price(p) for s, p in ic.get_prices(ib, symbols).items()}
+    today       = datetime.date.today()
+
+    print(f"\n  [reversion_v2 exits] {len(open_pos)} position(s)")
+
+    for pos in open_pos:
+        sym       = pos["symbol"]
+        entry_px  = float(pos.get("fill_price") or 0)
+        stop_oid  = pos.get("stop_order_id")
+        qty       = int(pos["qty"])
+
+        cur_price = ibkr_prices.get(sym, 0.0)
+        ind       = indicators.get(sym, {})
+        if not cur_price or cur_price <= 0:
+            cur_price = ind.get("price", 0.0)
+
+        filled_at_str = pos.get("filled_at") or pos.get("created_at", "")
+        filled_date   = datetime.date.fromisoformat(filled_at_str[:10])
+        td_held       = max(0, len(pd.bdate_range(filled_date, today)) - 1)
+
+        current_rsi = ind.get("rsi")
+        sma20       = ind.get("sma20")
+
+        trade_dict = {"entry_price": entry_px}
+        should_exit, reason = _rev2.should_exit(
+            trade_dict, cur_price, current_rsi, sma20, td_held
+        )
+
+        rsi_str = f"{current_rsi:.0f}" if current_rsi is not None else "n/a"
+        hold_or_exit = ("-> EXIT: " + reason) if should_exit else "HOLD"
+        print(f"  {sym:<8}  px=${cur_price:.2f}  entry=${entry_px:.2f}  "
+              f"rsi={rsi_str}  held={td_held}d  {hold_or_exit}")
+
+        if not should_exit:
+            continue
+
+        if dry_run:
+            print(f"    [DRY RUN] would sell {qty} {sym}")
+            continue
+
+        confirm = "y" if auto else input(f"  Confirm EXIT {sym}? [y/N]: ").strip().lower()
+        if confirm != "y":
+            print("  Skipped.")
+            continue
+
+        if stop_oid:
+            open_orders = ib.openTrades()
+            old = next((t for t in open_orders if str(t.order.orderId) == str(stop_oid)), None)
+            if old:
+                ic.cancel_order(ib, old)
+                ib.sleep(0.5)
+
+        sell_trade = ic.place_market_order(ib, account_id, sym, "SELL", qty)
+        st.record_order(str(sell_trade.order.orderId), sym, "SELL", qty, strategy="reversion_v2")
+        fill = ic.confirm_fill(ib, sell_trade)
+        if fill is None:
+            print(f"  WARNING: exit fill not confirmed for {sym}.")
+            st.mark_cancelled(str(sell_trade.order.orderId))
+        else:
+            pnl = (fill - entry_px) * qty
+            print(f"  Sold {qty} {sym} @ ${fill:.4f}  P&L: ${pnl:+,.2f}")
+            st.mark_filled(str(sell_trade.order.orderId), fill, side="SELL")
+
+    print("\n  Reversion v2 exit check complete.")
+
 
 
 # â"€â"€ US Signals entries (SMA Crossover / RSI Reversal / Momentum / Ensemble) â"€â"€
 
 def run_us_signals_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
-                            feat_data: dict | None = None) -> None:
+                            feat_data: dict | None = None,
+                            auto: bool = False) -> None:
     """Scan all 4 US Signals strategies for BUY signals and place entries.
 
     feat_data: pre-generated from ibkr_signals.us_signals_data(). Pass from main()
@@ -600,7 +936,7 @@ def run_us_signals_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
             print("    [DRY RUN] would place buy + stop")
             continue
 
-        confirm = input(f"  Confirm buy {ticker} ({strat})? [y/N]: ").strip().lower()
+        confirm = "y" if auto else input(f"  Confirm buy {ticker} ({strat})? [y/N]: ").strip().lower()
         if confirm != "y":
             print("  Skipped.")
             continue
@@ -630,7 +966,8 @@ def run_us_signals_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
 # â"€â"€ US Signals exits â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 def run_us_signals_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
-                          feat_data: dict | None = None) -> None:
+                          feat_data: dict | None = None,
+                          auto: bool = False) -> None:
     """Check open US Signals positions for exit conditions and close if triggered.
 
     feat_data: pre-generated from ibkr_signals.us_signals_data() or
@@ -692,7 +1029,7 @@ def run_us_signals_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
             print(f"    [DRY RUN] would sell {qty} {sym}")
             continue
 
-        confirm = input(f"  Confirm EXIT {sym} ({strat})? [y/N]: ").strip().lower()
+        confirm = "y" if auto else input(f"  Confirm EXIT {sym} ({strat})? [y/N]: ").strip().lower()
         if confirm != "y":
             print("  Skipped.")
             continue

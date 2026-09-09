@@ -149,7 +149,7 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="IBKR stocks sleeve -- all ATOS strategies")
     parser.add_argument("--strategy",
-                        choices=["blend", "reversion", "intraday", "signals", "scorer", "all"],
+                        choices=["blend", "blend_v2", "reversion", "reversion_v2", "intraday", "signals", "scorer", "all"],
                         default="blend",
                         help="Which strategy to run (default: blend); 'all' runs every strategy")
     parser.add_argument("--exits",       action="store_true",
@@ -183,6 +183,43 @@ def main() -> None:
         port      = cfg["port_paper"]
         is_paper  = True
 
+    # ── Live mode safety gate ─────────────────────────────────────────────────
+    # Read-only diagnostics (--info, --positions, --dashboard) are exempt from
+    # the confirmation gate -- they cannot place orders and are safe to run any time.
+    _live_readonly = not is_paper and (args.info or args.positions or args.dashboard)
+
+    if not is_paper and not _live_readonly:
+        if os.environ.get("IBKR_LIVE_CONFIRMED", "0").strip() != "1":
+            print("ERROR: IBKR live mode requires IBKR_LIVE_CONFIRMED=1 in environment.")
+            print("  Run:  setx IBKR_LIVE_CONFIRMED 1")
+            print("  Then restart the terminal or Task Scheduler service.")
+            sys.exit(1)
+
+        if not args.trail_stops and args.strategy not in ("blend",):
+            print(f"ERROR: --live only supports --strategy blend or --trail-stops.")
+            print(f"  Got: --strategy {args.strategy}.")
+            print("  Reversion / intraday / signals / scorer are paper-only strategies.")
+            sys.exit(1)
+
+        live_blend_cfg = cfg.get("strategies", {}).get("live_blend", {})
+        if live_blend_cfg.get("budget_usd", 0) <= 0:
+            print("ERROR: strategies.live_blend.budget_usd is not set in ibkr_config.json.")
+            print("  Set it to your ISK account capital in USD before running live.")
+            sys.exit(1)
+
+        # Swap in live_blend config so run_rebalance uses the live budget/slots
+        cfg = dict(cfg)
+        cfg["strategies"] = dict(cfg["strategies"])
+        cfg["strategies"]["blend"] = live_blend_cfg
+        cfg["paper"] = False
+
+    if not is_paper:
+        # Auto-set account from config when not overridden in env (all live ops)
+        if not os.environ.get("IBKR_ACCOUNT_ID"):
+            _live_acct = cfg.get("live_account_id", "")
+            if _live_acct:
+                os.environ["IBKR_ACCOUNT_ID"] = _live_acct
+
     host = cfg["host"]
 
     # Per-strategy client IDs prevent "client id already in use" when strategies
@@ -209,7 +246,8 @@ def main() -> None:
     # only ~3-5s (account lookup + positions + order placement).
     from ibkr_module import ibkr_signals as sig
 
-    pre_signal     = None   # blend
+    pre_signal     = None   # blend / blend_v2
+    pre_signal_v2  = None   # blend_v2 only
     pre_candidates = None   # reversion / intraday
     pre_indicators = None   # reversion exits
     pre_feat_data  = None   # signals (all 4 strategies)
@@ -224,6 +262,10 @@ def main() -> None:
             print("\n  Pre-generating US Blend signal (Yahoo Finance)...")
             pre_signal = sig.blend_targets()
 
+        if args.strategy in ("blend_v2",):
+            print("\n  Pre-generating US Blend V2 signal (Yahoo Finance)...")
+            pre_signal_v2 = sig.blend_v2_targets()
+
         if args.strategy in ("reversion", "all"):
             if args.exits:
                 from ibkr_module import ibkr_state as _st
@@ -237,6 +279,20 @@ def main() -> None:
             else:
                 print("\n  Pre-generating US Reversion candidates (Yahoo Finance)...")
                 pre_candidates = sig.reversion_candidates()
+
+        if args.strategy in ("reversion_v2",):
+            if args.exits:
+                from ibkr_module import ibkr_state as _st
+                open_syms = [p["symbol"] for p in _st.get_open_positions("reversion_v2")]
+                if open_syms:
+                    print(f"\n  Pre-generating v2 exit indicators for "
+                          f"{len(open_syms)} open position(s)...")
+                    pre_indicators = sig.reversion_v2_exit_indicators(open_syms)
+                else:
+                    print("\n  No open reversion_v2 positions -- skipping exit fetch.")
+            else:
+                print("\n  Pre-generating US Reversion V2 candidates (Yahoo Finance + SPY regime)...")
+                pre_candidates = sig.reversion_v2_candidates()
 
         if args.strategy in ("intraday", "all"):
             print("\n  Pre-generating intraday reversion candidates (Yahoo Finance)...")
@@ -343,7 +399,15 @@ def main() -> None:
             dry_run = not args.execute
             if dry_run:
                 print("  [DRY RUN] Showing blend plan -- pass --execute to place orders.\n")
-            ex.run_rebalance(ib, account_id, cfg, dry_run=dry_run, signal=pre_signal)
+            ex.run_rebalance(ib, account_id, cfg, dry_run=dry_run, signal=pre_signal,
+                             auto=args.auto)
+
+        elif args.strategy == "blend_v2":
+            dry_run = not args.execute
+            if dry_run:
+                print("  [DRY RUN] Showing US Blend V2 plan -- pass --execute to place orders.\n")
+            ex.run_rebalance_v2(ib, account_id, cfg, dry_run=dry_run, signal=pre_signal_v2,
+                                auto=args.auto)
 
         elif args.strategy == "reversion":
             dry_run = not args.execute
@@ -351,17 +415,30 @@ def main() -> None:
                 print("  [DRY RUN] pass --execute to place orders.\n")
             if args.exits:
                 ex.run_reversion_exits(ib, account_id, cfg, dry_run=dry_run,
-                                       indicators=pre_indicators)
+                                       indicators=pre_indicators, auto=args.auto)
             else:
                 ex.run_reversion_entries(ib, account_id, cfg, dry_run=dry_run,
-                                         intraday=False, candidates=pre_candidates)
+                                         intraday=False, candidates=pre_candidates,
+                                         auto=args.auto)
+
+        elif args.strategy == "reversion_v2":
+            dry_run = not args.execute
+            if dry_run:
+                print("  [DRY RUN] pass --execute to place orders.\n")
+            if args.exits:
+                ex.run_reversion_v2_exits(ib, account_id, cfg, dry_run=dry_run,
+                                          indicators=pre_indicators, auto=args.auto)
+            else:
+                ex.run_reversion_v2_entries(ib, account_id, cfg, dry_run=dry_run,
+                                            candidates=pre_candidates, auto=args.auto)
 
         elif args.strategy == "intraday":
             dry_run = not args.execute
             if dry_run:
                 print("  [DRY RUN] pass --execute to place orders.\n")
             ex.run_reversion_entries(ib, account_id, cfg, dry_run=dry_run,
-                                     intraday=True, candidates=pre_candidates)
+                                     intraday=True, candidates=pre_candidates,
+                                     auto=args.auto)
 
         elif args.strategy == "signals":
             dry_run = not args.execute
@@ -369,10 +446,10 @@ def main() -> None:
                 print("  [DRY RUN] pass --execute to place orders.\n")
             if args.exits:
                 ex.run_us_signals_exits(ib, account_id, cfg, dry_run=dry_run,
-                                         feat_data=pre_feat_data)
+                                        feat_data=pre_feat_data, auto=args.auto)
             else:
                 ex.run_us_signals_entries(ib, account_id, cfg, dry_run=dry_run,
-                                           feat_data=pre_feat_data)
+                                          feat_data=pre_feat_data, auto=args.auto)
 
         elif args.strategy == "scorer":
             dry_run = not args.execute

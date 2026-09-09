@@ -28,7 +28,9 @@ if str(_ROOT) not in sys.path:
 
 from atos.universe import US_TICKERS
 from atos import us_momentum as _mom
+from atos import us_blend_v2 as _momv2
 from atos import us_reversion as _rev
+from atos import us_reversion_v2 as _rev2
 
 _CACHE_FILE = _ROOT / "data" / "ibkr_price_cache.pkl"
 _CACHE_MAX_AGE_HOURS = 8   # re-download if cache is older than this
@@ -119,6 +121,21 @@ def blend_targets(lookback_days: int = 252) -> dict:
     print(f"  [blend] {len(feat_data)}/{len(US_TICKERS)} tickers with sufficient history")
     result = _mom.compute_targets(feat_data, US_TICKERS)
     print(f"  [blend] risk_off={result['risk_off']}  targets={result.get('targets', [])}")
+    return result
+
+
+def blend_v2_targets(lookback_days: int = 252) -> dict:
+    """US Blend V2 signal — skip-month momentum + vol-targeting.
+
+    Uses atos/us_blend_v2.py instead of us_momentum.py. The returned dict
+    includes a 'scale' key (always 1.0 here — vol-scaling requires the
+    portfolio's recent daily returns, which the executor manages via ibkr_state).
+    Returns {risk_off, targets, momentum, lowvol, reason, detail, scale}.
+    """
+    feat_data = _download(US_TICKERS, lookback_days=lookback_days)
+    print(f"  [blend_v2] {len(feat_data)}/{len(US_TICKERS)} tickers with sufficient history")
+    result = _momv2.compute_targets(feat_data, US_TICKERS)
+    print(f"  [blend_v2] risk_off={result['risk_off']}  targets={result.get('targets', [])}")
     return result
 
 
@@ -242,6 +259,40 @@ def us_signals_exit_data(symbols: list[str], lookback_days: int = 60) -> dict[st
         result[sym] = df
     print(f"  [us signals exits] {len(result)}/{len(symbols)} symbols loaded")
     return result
+
+
+def reversion_v2_candidates(lookback_days: int = 260) -> list[dict]:
+    """US Reversion V2 daily scan — enhanced variant with 4 improvements over v1.
+
+    Improvements: SPY regime filter (bear markets blocked), EMA200 × 1.02 buffer,
+    minimum R:R gate, volume conviction in score.
+    Returns ranked [{ticker, price, rsi, sma20, dip_pct, vol_ratio, rr_ratio, score}].
+    """
+    # Fetch SPY alongside the universe for the regime filter
+    all_tickers = list(US_TICKERS) + ["SPY"]
+    feat_data = _download(all_tickers, lookback_days=lookback_days)
+    print(f"  [reversion_v2] {len(feat_data)}/{len(US_TICKERS)} tickers with sufficient history")
+
+    # SPY regime check
+    spy_df = feat_data.get("SPY")
+    market_ok = True
+    if spy_df is not None and "Close" in spy_df.columns:
+        close = spy_df["Close"].dropna()
+        if len(close) >= 55:
+            spy_price = float(close.iloc[-1])
+            ema50 = float(close.ewm(span=50, adjust=False).mean().iloc[-1])
+            market_ok = spy_price > ema50
+            if not market_ok:
+                print(f"  [reversion_v2] SPY regime OFF: ${spy_price:.2f} < EMA50 ${ema50:.2f} — no new entries")
+
+    candidates = _rev2.scan(feat_data, US_TICKERS, market_ok=market_ok)
+    print(f"  [reversion_v2] {len(candidates)} signal(s) found (SPY regime: {'OK' if market_ok else 'OFF'})")
+    return candidates
+
+
+def reversion_v2_exit_indicators(symbols: list[str], lookback_days: int = 40) -> dict[str, dict]:
+    """Compute RSI(14) and SMA20 for open reversion_v2 positions — identical to v1."""
+    return reversion_exit_indicators(symbols, lookback_days=lookback_days)
 
 
 def reversion_exit_indicators(symbols: list[str], lookback_days: int = 40) -> dict[str, dict]:

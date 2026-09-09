@@ -1,13 +1,16 @@
 {
   "paper": true,
+  "ai_enabled": false,
+  "live_account_id": "U28013794",
   "host": "127.0.0.1",
   "port_paper": 4002,
   "port_live": 4001,
   "client_id": 10,
   "client_ids": {
-    "blend":     10,
-    "reversion": 11,
-    "intraday":  12,
+    "blend":        10,
+    "reversion":    11,
+    "reversion_v2": 18,
+    "intraday":     12,
     "trail":     13,
     "info":      14,
     "positions": 14,
@@ -25,6 +28,14 @@
     "stop_pct": 0.08
   },
   "strategies": {
+    "live_blend": {
+      "budget_usd": 1260,
+      "_budget_sek": 13000,
+      "max_positions": 4,
+      "stop_pct": 0.08,
+      "rebal_days": 14,
+      "min_trade_usd": 50
+    },
     "blend": {
       "budget_usd": 50000,
       "max_positions": 10,
@@ -41,6 +52,20 @@
       "rsi_exit": 60,
       "dip_pct_min": 0.05,
       "vol_mult": 1.5,
+      "min_trade_usd": 50
+    },
+    "reversion_v2": {
+      "budget_usd": 50000,
+      "max_slots": 10,
+      "stop_pct": 0.04,
+      "max_hold_days": 10,
+      "rsi_entry": 38,
+      "rsi_exit": 60,
+      "dip_pct_min": 0.05,
+      "vol_mult": 1.5,
+      "ema200_margin": 1.02,
+      "min_rr": 1.5,
+      "spy_regime_filter": true,
       "min_trade_usd": 50
     },
     "signals": {

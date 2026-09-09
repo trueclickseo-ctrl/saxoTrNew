@@ -200,7 +200,9 @@ LEGACY_PER_MARKET_STRATEGY_ENABLED = False
 # DISABLED until backtest_us_reversion.py shows Sharpe >= 0.8 and WinRate >= 50%.
 # Run:  python backtest_us_reversion.py
 # Then flip this to True when the verdict is ENABLE.
-US_REVERSION_ENABLED = True   # SIM enabled 2026-08-08 — honest OOS validated (Sharpe 2.39, WR 70%)
+US_REVERSION_ENABLED    = True   # SIM enabled 2026-08-08 — honest OOS validated (Sharpe 2.39, WR 70%)
+US_REVERSION_V2_ENABLED = True   # SIM A/B twin — 4 improvements over v1 (SPY regime, EMA buffer, R:R gate, vol score)
+US_BLEND_V2_ENABLED     = True   # SIM A/B twin — skip-month momentum + vol-targeting (atos/us_blend_v2.py)
 
 # ── USA Strategy signals (2026-09-03) ──────────────────────────────────────
 # 4 independent SIM-only strategies from the usa_strategy package:
@@ -790,7 +792,16 @@ def run_open_scan(log_fn=None) -> dict:
     except Exception as e:
         _log(f"  [trail-stop] skipped: {e}")
 
-    # ── US Reversion (mean reversion) ─────────────────────────────
+    # ── US Blend V2 (SIM A/B twin — skip-month mom + vol-targeting) ──
+    if US_BLEND_V2_ENABLED:
+        _log(f"  US Blend V2 (SIM A/B) — budget: {blend_budget:,.0f} SEK")
+        try:
+            run_us_momentum_v2(feat_data, db.get_open_trades(), todays_actions,
+                               available_cash_sek=blend_budget)
+        except Exception as e:
+            _log(f"  [US Blend V2 ERROR] {e}")
+
+    # ── US Reversion v1 (mean reversion — original) ───────────────
     rev_budget = min(cash_sek * REV_CASH_PCT, _max_deploy * REV_CASH_PCT)
     _log(f"  US Reversion — budget: {rev_budget:,.0f} SEK ({REV_CASH_PCT*100:.0f}% of cash, capped at {_max_deploy * REV_CASH_PCT:,.0f} SEK)")
     try:
@@ -798,6 +809,15 @@ def run_open_scan(log_fn=None) -> dict:
                          available_cash_sek=rev_budget)
     except Exception as e:
         _log(f"  [US Reversion ERROR] {e}")
+
+    # ── US Reversion v2 (SIM A/B twin — 4 improvements) ──────────
+    if US_REVERSION_V2_ENABLED:
+        _log(f"  US Reversion v2 (SIM A/B) — budget: {rev_budget:,.0f} SEK")
+        try:
+            run_us_reversion_v2(feat_data, db.get_open_trades(), todays_actions,
+                                available_cash_sek=rev_budget)
+        except Exception as e:
+            _log(f"  [US Reversion v2 ERROR] {e}")
 
     # ── US Signals (4 SIM-only strategies) ───────────────────────
     if US_SIGNALS_ENABLED:
@@ -1217,7 +1237,16 @@ def run_cycle():
     except Exception as e:
         print(f"  [trail-stop] skipped: {e}")
 
-    # ── 6d. US mean reversion (Option 3 — enable after backtest) ──
+    # ── 6c2. US Blend V2 (SIM A/B twin — skip-month mom + vol-targeting) ─
+    if US_BLEND_V2_ENABLED:
+        print(f"  Running US Blend V2 strategy (SIM A/B)... (budget: {blend_budget:,.0f} SEK)")
+        try:
+            run_us_momentum_v2(feat_data, db.get_open_trades(), todays_actions,
+                               available_cash_sek=blend_budget)
+        except Exception as e:
+            print(f"  [US Blend V2] ERROR: {e}")
+
+    # ── 6d. US mean reversion v1 (original validated strategy) ───
     rev_budget = min(cash_sek * REV_CASH_PCT, _max_deploy2 * REV_CASH_PCT)
     if US_REVERSION_ENABLED:
         print(f"  Running US reversion strategy... (budget: {rev_budget:,.0f} SEK = {REV_CASH_PCT*100:.0f}% of capital, capped at {_max_deploy2 * REV_CASH_PCT:,.0f})")
@@ -1226,6 +1255,15 @@ def run_cycle():
                              available_cash_sek=rev_budget)
         except Exception as e:
             print(f"  [US reversion] ERROR: {e}")
+
+    # ── 6d2. US mean reversion v2 (SIM A/B twin — 4 improvements) ─
+    if US_REVERSION_V2_ENABLED:
+        print(f"  Running US reversion v2 strategy (SIM A/B)... (budget: {rev_budget:,.0f} SEK)")
+        try:
+            run_us_reversion_v2(feat_data, db.get_open_trades(), todays_actions,
+                                available_cash_sek=rev_budget)
+        except Exception as e:
+            print(f"  [US reversion v2] ERROR: {e}")
 
     # ── 6e. USA Strategy signals (SIM-only, 4 strategies) ─────────
     if US_SIGNALS_ENABLED:
@@ -1447,9 +1485,10 @@ def _log_buy_signal(mkt: str, ticker: str, decision, executed: int, block_reason
 # ATOS_US_MOMENTUM_STATE=data/us_momentum_state_live.json before importing this
 # module, so its rebalance clock / sleeve-cash never touches SIM's file. SIM
 # leaves it unset.
-US_MOMENTUM_STATE = os.environ.get("ATOS_US_MOMENTUM_STATE") or os.path.join(
+US_MOMENTUM_STATE    = os.environ.get("ATOS_US_MOMENTUM_STATE") or os.path.join(
     BASE_DIR, "data", "us_momentum_state.json")
-SCAN_STATE_FILE   = os.path.join(BASE_DIR, "data", "atos_scan_state.json")
+US_BLEND_V2_STATE    = os.path.join(BASE_DIR, "data", "us_blend_v2_state.json")
+SCAN_STATE_FILE      = os.path.join(BASE_DIR, "data", "atos_scan_state.json")
 STATUS_FILE       = os.path.join(BASE_DIR, "data", "atos_status.json")
 
 
@@ -1527,6 +1566,22 @@ def _save_us_state(state: dict):
                  stat.S_IRGRP | stat.S_IWGRP | stat.S_IROTH | stat.S_IWOTH)
     except Exception:
         pass
+
+
+def _load_us_v2_state() -> dict:
+    try:
+        with open(US_BLEND_V2_STATE) as f:
+            return json.load(f)
+    except Exception:
+        return {"last_rebalance": None, "recent_port_rets": []}
+
+
+def _save_us_v2_state(state: dict):
+    os.makedirs(os.path.dirname(US_BLEND_V2_STATE), exist_ok=True)
+    tmp = f"{US_BLEND_V2_STATE}.tmp.{os.getpid()}"
+    with open(tmp, "w") as f:
+        json.dump(state, f, indent=2)
+    os.replace(tmp, US_BLEND_V2_STATE)
 
 
 US_BLEND_STOP_PCT = 0.08   # 8% stop-loss, matching the ETF module's convention
@@ -2817,6 +2872,383 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
                 })
         except Exception as _sig_err:
             print(f"  {tag} signal log failed for {tk}: {_sig_err}")
+
+
+# ── US Reversion V2 — SIM A/B twin ───────────────────────────────────────────
+
+def run_us_momentum_v2(feat_data: dict, open_trades: list, todays_actions: list,
+                       dry_run: bool = False, available_cash_sek: float = 0.0):
+    """US Blend V2 — SIM A/B twin of run_us_momentum().
+
+    Two improvements over V1 (original is unchanged):
+      1. Skip-month momentum: signal measured 6m-to-1m ago, not 6m-to-today.
+      2. Vol-targeting: scales sleeve down when realized portfolio vol > 15%.
+
+    Tracks trades as strategy='US Blend V2' — fully isolated from 'US Blend'
+    in the DB, dashboard, and P&L reporting. SIM-only; never touches LIVE.
+    """
+    from atos import us_blend_v2 as V2
+    from instrument_map import load_instrument_map
+
+    if kill_switch_active():
+        print("  [US Blend V2] STOP_TRADING present — skip"); return
+    try:
+        imap = load_instrument_map()
+    except Exception as e:
+        print(f"  [US Blend V2] instrument_map load failed: {e}"); return
+
+    tag = "[US Blend V2 DRY-RUN]" if dry_run else "[US Blend V2]"
+    _mutate = not dry_run
+
+    us_open = {t["ticker"]: t for t in open_trades if t.get("strategy") == "US Blend V2"}
+    rev_held = {t["ticker"] for t in open_trades if t.get("strategy") == "US Reversion"}
+
+    tgt = V2.compute_targets(feat_data, list(US_TICKERS))
+    print(f"  {tag} risk_off={tgt['risk_off']} | {tgt.get('reason')} | targets={tgt['targets']}")
+    fx_usd = _rate_to_sek("USD")
+
+    def _price(tk, fallback=0):
+        return float(feat_data[tk]["Close"].iloc[-1]) if tk in feat_data else fallback
+
+    def _do(side, tk, shares, price, cur_trade=None):
+        if dry_run:
+            print(f"    {tag} would {side.upper()} {shares} {tk} @ ${price:.2f}  (~{shares*price*fx_usd:,.0f} SEK)")
+            return True
+        return _place_us(side, tk, shares, imap, todays_actions, price=price,
+                         cur_trade=cur_trade, strategy="US Blend V2", account_env="sim")
+
+    def _sell_all():
+        for tk, tr in us_open.items():
+            _do("Sell", tk, tr.get("shares", 0), _price(tk, tr.get("entry_price", 0)), cur_trade=tr)
+
+    state = _load_us_v2_state()
+
+    # Vol-targeting: compute today's sleeve value, derive daily return, update rolling list.
+    us_value = sum((tr.get("shares", 0) or 0) * _price(tk, tr.get("entry_price", 0)) * fx_usd
+                   for tk, tr in us_open.items())
+    sleeve_equity = available_cash_sek if available_cash_sek > 0 else (
+        float(state.get("sleeve_cash", V2.US_SLEEVE_SEK)) + us_value)
+
+    recent_rets = list(state.get("recent_port_rets", []))
+    prev_value  = float(state.get("prev_sleeve_value", 0.0))
+    if prev_value > 0 and sleeve_equity > 0:
+        daily_ret = (sleeve_equity - prev_value) / prev_value
+        recent_rets.append(daily_ret)
+        recent_rets = recent_rets[-30:]   # keep last 30 trading days
+
+    scale = V2.vol_scale(recent_rets)
+    tgt["scale"] = scale
+    if scale < 1.0:
+        print(f"  {tag} vol-targeting scale={scale:.2f} (realized vol > {V2.TARGET_VOL*100:.0f}%)")
+
+    # Risk-off: exit all.
+    if tgt["risk_off"]:
+        if us_open:
+            print(f"  {tag} RISK-OFF — selling all US Blend V2 to cash")
+            _sell_all()
+        if _mutate:
+            state["sleeve_cash"] = sleeve_equity
+            state["prev_sleeve_value"] = sleeve_equity
+            state["recent_port_rets"] = recent_rets
+            _save_us_v2_state(state)
+        return
+
+    # Rebalance clock.
+    last  = state.get("last_rebalance")
+    today = date.today()
+    if last:
+        days_since = (today - date.fromisoformat(last)).days
+        due = days_since >= V2.REBAL_DAYS
+    else:
+        due = True
+
+    if not due:
+        print(f"  {tag} hold — rebalanced {days_since}d ago "
+              f"(next in {V2.REBAL_DAYS - days_since}d); sleeve ~{sleeve_equity:,.0f} SEK")
+        if _mutate:
+            state["prev_sleeve_value"] = sleeve_equity
+            state["recent_port_rets"] = recent_rets
+            _save_us_v2_state(state)
+        return
+
+    mom_names = tgt.get("momentum") or []
+    lv_names  = tgt.get("lowvol") or []
+    corp_skip = corp_avoid(mom_names + lv_names)
+    if corp_skip:
+        print(f"  {tag} skipping {sorted(corp_skip)} — imminent corporate event")
+
+    priority = []
+    for tk in mom_names + lv_names:
+        if tk in corp_skip:
+            continue
+        if tk in rev_held:
+            print(f"  {tag} skipping {tk} — held by US Reversion (no duplicate)")
+            continue
+        if tk not in priority and tk in feat_data and tk in imap and _price(tk) > 0:
+            priority.append(tk)
+
+    current_shares = {tk: int(tr.get("shares", 0) or 0) for tk, tr in us_open.items()}
+    prices_usd = {tk: _price(tk) for tk in set(priority) | set(current_shares)}
+    actions = V2.plan_rebalance(current_shares, priority, scale, prices_usd, sleeve_equity, fx_usd)
+
+    if not actions:
+        print(f"  {tag} REBALANCE (blend_v2) — holdings already match target, no trades needed "
+              f"| sleeve ~{sleeve_equity:,.0f} SEK  scale={scale:.2f}")
+        if _mutate:
+            state["last_rebalance"] = today.isoformat()
+            state["sleeve_cash"] = sleeve_equity - us_value
+            state["prev_sleeve_value"] = sleeve_equity
+            state["recent_port_rets"] = recent_rets
+            _save_us_v2_state(state)
+        return
+
+    for act in actions:
+        tk, side, shares = act["ticker"], act["side"], act["shares"]
+        price = prices_usd.get(tk, 0)
+        if shares <= 0 or price <= 0:
+            continue
+        cur_trade = us_open.get(tk) if side == "Sell" else None
+        _do(side, tk, shares, price, cur_trade=cur_trade)
+
+    if _mutate:
+        state["last_rebalance"] = today.isoformat()
+        state["sleeve_cash"] = sleeve_equity * scale - (
+            sum(int(act["shares"]) * prices_usd.get(act["ticker"], 0) * fx_usd
+                for act in actions if act["side"] == "Buy")
+        )
+        state["prev_sleeve_value"] = sleeve_equity
+        state["recent_port_rets"] = recent_rets
+        _save_us_v2_state(state)
+
+
+def _spy_market_ok(feat_data: dict) -> bool:
+    """Return True if SPY is above its 50-day EMA (bull regime), False in bear regime.
+    Defaults to True when SPY data is unavailable so v2 degrades gracefully."""
+    df = feat_data.get("SPY")
+    if df is None or "Close" not in df:
+        return True
+    close = df["Close"].dropna()
+    if len(close) < 55:
+        return True
+    spy_price = float(close.iloc[-1])
+    ema50 = float(close.ewm(span=50, adjust=False).mean().iloc[-1])
+    ok = spy_price > ema50
+    if not ok:
+        print(f"  [US reversion v2] SPY regime OFF: ${spy_price:.2f} < EMA50 ${ema50:.2f} — no new entries")
+    return ok
+
+
+def run_us_reversion_v2(feat_data: dict, open_trades: list, todays_actions: list,
+                         available_cash_sek: float = 0.0):
+    """US Mean Reversion v2 — SIM A/B twin of run_us_reversion().
+
+    Identical infrastructure but uses atos/us_reversion_v2.py for signal generation:
+      - SPY regime filter (no entries when SPY < EMA50)
+      - EMA200 × 1.02 buffer
+      - Minimum R:R gate (SMA20 target >= 1.5× stop distance)
+      - Volume conviction in ranking score
+
+    Tracks trades as strategy='US Reversion V2' so they are completely isolated
+    from v1 in the DB, dashboard, and P&L reporting.
+    """
+    from atos import us_reversion_v2 as USR2
+    from instrument_map import load_instrument_map
+
+    if kill_switch_active():
+        print("  [US reversion v2] STOP_TRADING present — skip"); return
+    try:
+        imap = load_instrument_map()
+    except Exception as e:
+        print(f"  [US reversion v2] instrument_map load failed: {e}"); return
+
+    tag = "[US reversion v2]"
+    fx_usd = _rate_to_sek("USD")
+
+    market_ok = _spy_market_ok(feat_data)
+
+    rev_open = {t["ticker"]: t for t in open_trades if t.get("strategy") == "US Reversion V2"}
+
+    def _price(tk):
+        return float(feat_data[tk]["Close"].iloc[-1]) if tk in feat_data else 0.0
+
+    def _rsi_sma20(tk):
+        if tk not in feat_data:
+            return None, None
+        c = feat_data[tk]["Close"].dropna()
+        if len(c) < 20:
+            return None, None
+        delta = c.diff()
+        gain  = delta.clip(lower=0).rolling(14).mean()
+        loss  = (-delta.clip(upper=0)).rolling(14).mean()
+        rs    = gain / loss.replace(0, np.nan)
+        rsi   = float((100 - 100 / (1 + rs)).iloc[-1])
+        sma20 = float(c.rolling(20).mean().iloc[-1])
+        return rsi, sma20
+
+    # ── Exit check — uses v2 exit logic (identical to v1) ─────────
+    from datetime import date as _date
+    today = _date.today()
+    for ticker, trade in list(rev_open.items()):
+        cur_price = _price(ticker)
+        if cur_price <= 0:
+            continue
+        cur_rsi, sma20 = _rsi_sma20(ticker)
+        entry_date = _date.fromisoformat(trade.get("entry_date", today.isoformat()))
+        days_held = (today - entry_date).days
+        exit_flag, reason = USR2.should_exit(trade, cur_price, cur_rsi, sma20, days_held)
+        if exit_flag:
+            sh = trade.get("shares", 0) or 0
+            is_paper = bool(trade.get("paper"))
+            print(f"  {tag} EXIT {ticker}: {reason}{' [PAPER]' if is_paper else ''}")
+            uic = imap.get(ticker, {}).get("uic")
+            if (uic and sh > 0) or (is_paper and sh > 0):
+                try:
+                    if not is_paper:
+                        saxo_client.place_market_order(uic, "Stock", "Sell", sh)
+                    comm_exit = commission_sek(sh, sh * cur_price * fx_usd)
+                    pnl_sek = (cur_price - trade.get("entry_price", 0)) * sh * fx_usd - comm_exit
+                    db.close_trade(trade["id"], exit_price=cur_price,
+                                   exit_reason=reason, pnl_sek=pnl_sek,
+                                   commission_sek=comm_exit)
+                    entry_d = trade.get("entry_date", "")
+                    held_d  = (today - _date.fromisoformat(entry_d)).days if entry_d else 0
+                    _append_trade_log(
+                        "US Reversion V2", "SELL", ticker, sh, cur_price,
+                        sh * cur_price * fx_usd, pnl_sek, reason,
+                        entry_date=entry_d, days_held=held_d,
+                    )
+                    todays_actions.append({
+                        "action": "SELL", "ticker": ticker, "market_group": "US Equities",
+                        "strategy": "US Reversion V2", "score": 0, "shares": sh,
+                        "price": cur_price, "reason": f"reversion v2 exit: {reason}",
+                        "pnl_sek": pnl_sek,
+                    })
+                except Exception as e:
+                    print(f"  {tag} sell {ticker} FAILED: {e}")
+
+    # ── Entry scan ─────────────────────────────────────────────────
+    max_positions = CAP.reversion_slots(len(US_TICKERS))
+    rev_open_now = {t["ticker"]: t for t in db.get_open_trades()
+                    if t.get("strategy") == "US Reversion V2"}
+    slots_free = max_positions - len(rev_open_now)
+    if slots_free <= 0:
+        print(f"  {tag} full ({max_positions}/{max_positions} positions)")
+        return
+
+    sleeve_base = available_cash_sek if available_cash_sek > 0 else USR2.REVERSION_SLEEVE_SEK
+    slot_sek    = sleeve_base / max_positions
+
+    open_value_sek = sum(
+        (t.get("shares", 0) or 0) * _price(tk) * fx_usd
+        for tk, t in rev_open_now.items()
+    )
+    open_cost_sek = sum(
+        (t.get("shares", 0) or 0) * (t.get("entry_price", 0) or 0) * fx_usd
+        for t in rev_open_now.values()
+    )
+    sleeve_equity = (sleeve_base - open_cost_sek) + open_value_sek
+    sleeve_dd = (sleeve_base - sleeve_equity) / sleeve_base if sleeve_base > 0 else 0
+    if sleeve_dd >= USR2.SLEEVE_DD_CAP:
+        print(f"  {tag} sleeve DD {sleeve_dd*100:.1f}% >= cap {USR2.SLEEVE_DD_CAP*100:.0f}% — no new entries")
+        return
+
+    blend_held = {t["ticker"] for t in db.get_open_trades() if t.get("strategy") == "US Blend"}
+    v1_held    = {t["ticker"] for t in db.get_open_trades() if t.get("strategy") == "US Reversion"}
+
+    candidates = USR2.scan(feat_data, US_TICKERS, market_ok=market_ok)
+    candidates = [c for c in candidates
+                  if c["ticker"] not in rev_open_now
+                  and c["ticker"] not in blend_held
+                  and c["ticker"] not in v1_held]
+
+    if not candidates:
+        reason_str = "SPY regime filter" if not market_ok else "no signals"
+        print(f"  {tag} no entry signals today ({reason_str})")
+        return
+
+    print(f"  {tag} {len(candidates)} signal(s) | {slots_free} slot(s) free of {max_positions} | "
+          f"slot: {slot_sek:,.0f} SEK each | SPY regime: {'OK' if market_ok else 'OFF'}")
+
+    from datetime import date as _date2
+    today2 = _date2.today()
+
+    for c in candidates[:slots_free]:
+        ticker = c["ticker"]
+        price  = _price(ticker)
+        if price <= 0:
+            continue
+        uic = imap.get(ticker, {}).get("uic")
+        if not uic:
+            print(f"  {tag} SKIP {ticker}: no UIC in instrument_map")
+            continue
+
+        shares    = max(int(slot_sek / (price * fx_usd)), 1)
+        cost_sek  = shares * price * fx_usd
+        stop_p    = price * (1 - USR2.STOP_PCT)
+        comm_sek  = commission_sek(shares, cost_sek)
+
+        print(f"  {tag} BUY {ticker}: RSI={c['rsi']} dip={c['dip_pct']}% "
+              f"vol={c['vol_ratio']}x R:R={c['rr_ratio']} score={c['score']:.4f}")
+        print(f"    {shares}sh @ ${price:.2f} (~{cost_sek:,.0f} SEK) stop=${stop_p:.2f}")
+
+        try:
+            if _stocks_paper_fill_enabled():
+                # SIM paper fill — no real Saxo order
+                entry_oid, fill_ok, fill_price = None, True, price
+            else:
+                from saxo_order import place_with_stop as _pws
+                ak = saxo_client.get_account_key(env=_sx())
+                entry_oid = _pws(
+                    post_fn=lambda path, body: saxo_client.post(path, body, env=_sx()),
+                    account_key=ak, uic=uic, asset_type="Stock",
+                    amount=shares, buy_sell="Buy", stop_price=stop_p,
+                    label=f"US Equities:{ticker}",
+                )
+                fill_ok, fill_price = _confirm_stock_fill(entry_oid, uic)
+
+            if not fill_ok:
+                if _stocks_paper_fill_enabled():
+                    print(f"  {tag} SIM paper fill for {ticker}")
+                    paper_flag = 1
+                else:
+                    print(f"  {tag} {ticker} order not confirmed — skipping")
+                    continue
+            else:
+                paper_flag = 0
+
+            db.insert_trade({
+                "strategy": "US Reversion V2",
+                "market_group": "US Equities",
+                "ticker": ticker,
+                "direction": "BUY",
+                "entry_date": today2.isoformat(),
+                "entry_price": fill_price,
+                "shares": shares,
+                "commission_sek": comm_sek,
+                "entry_score": c["score"],
+                "d1_trend": 0, "d2_momentum": 0, "d3_breakout": 0,
+                "d4_mean_revert": USR2.RSI_ENTRY - c["rsi"],
+                "d5_volume": c["vol_ratio"],
+                "d6_smart_money": 0, "d7_mom_quality": 0, "d8_regime": 0,
+                "stop_price": stop_p,
+                "trailing_stop_high": fill_price,
+                "regime_at_entry": "bull" if market_ok else "bear",
+                "paper": paper_flag,
+            })
+            _append_trade_log(
+                "US Reversion V2", "BUY", ticker, shares, fill_price,
+                shares * fill_price * fx_usd, None, "reversion_v2_entry",
+                entry_date=today2.isoformat(), days_held=0,
+            )
+            todays_actions.append({
+                "action": "BUY", "ticker": ticker, "market_group": "US Equities",
+                "strategy": "US Reversion V2", "score": c["score"],
+                "shares": shares, "price": fill_price,
+                "reason": f"rev_v2 dip={c['dip_pct']}% rsi={c['rsi']}",
+                "pnl_sek": None,
+            })
+        except Exception as e:
+            print(f"  {tag} BUY {ticker} failed: {e}")
 
 
 # ── USA Strategy signals — SIM only ───────────────────────────────────────────
