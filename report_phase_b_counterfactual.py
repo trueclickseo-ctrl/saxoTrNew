@@ -236,7 +236,7 @@ def report(account: str = "sim") -> None:
         print(f"  {DIM}Pending: {syms}{'...' if len(unmatched_entered) > 8 else ''}{X}")
 
     # ── 7. Phase B verdict ────────────────────────────────────────────────
-    print(f"\n{B}{'─'*60}{X}")
+    print(f"\n{B}{'-'*60}{X}")
     MIN_TRADES = 10
     if len(actionable) < MIN_TRADES:
         print(f"{Y}  INSUFFICIENT DATA: {len(actionable)} actionable closed trades "
@@ -244,11 +244,11 @@ def report(account: str = "sim") -> None:
     elif net_delta > 0:
         print(f"{G}  POSITIVE: applying the Copilot would have added "
               f"{net_delta:+.1f} EUR over this window.{X}")
-        print(f"{G}  → Phase B flip candidate. Review the trade-list above before deciding.{X}")
+        print(f"{G}  -> Phase B flip candidate. Review the trade-list above before deciding.{X}")
     else:
         print(f"{R}  NEGATIVE: applying the Copilot would have cost "
               f"{net_delta:+.1f} EUR over this window.{X}")
-        print(f"{R}  → Do NOT flip shadow_mode yet. Investigate top bad blocks above.{X}")
+        print(f"{R}  -> Do NOT flip shadow_mode yet. Investigate top bad blocks above.{X}")
     print()
 
 

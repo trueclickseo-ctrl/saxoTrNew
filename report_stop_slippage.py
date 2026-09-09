@@ -111,7 +111,7 @@ def report(account_filter: str | None = None) -> None:
         print(_fmt_row("R multiples", _stats(all_r), "R"))
     print()
 
-    print("  \033[2mInterpretation: mean slippage_r < -0.05 R → slippage is eating a measurable\033[0m")
+    print("  \033[2mInterpretation: mean slippage_r < -0.05 R -> slippage is eating a measurable\033[0m")
     print("  \033[2mfraction of risk budget; investigate spread/latency at stop execution time.\033[0m")
 
 

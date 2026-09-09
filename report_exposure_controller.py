@@ -99,7 +99,7 @@ def report(account_filter: str | None = None, suggest_tighten: bool = False) -> 
     type_counts = Counter(_reason_type(r["reason"]) for r in rows)
     print(f"\n{B}Blocks by type:{X}")
     for rtype, cnt in type_counts.most_common():
-        bar = "█" * min(cnt, 40)
+        bar = "#" * min(cnt, 40)
         print(f"  {rtype:<20} {cnt:>4}  {C}{bar}{X}")
 
     # ── 2. Top blocked currency clusters ─────────────────────────────────
@@ -134,7 +134,7 @@ def report(account_filter: str | None = None, suggest_tighten: bool = False) -> 
         print(f"\n{B}Book open-risk % of equity (daily avg at block time):{X}")
         for day in sorted(by_day)[-7:]:
             avg = sum(by_day[day]) / len(by_day[day])
-            bar = "█" * int(avg / 2)
+            bar = "#" * int(avg / 2)
             colour = R if avg > 25 else Y if avg > 15 else G
             print(f"  {day}  {colour}{avg:>5.1f}%  {bar}{X}")
 
@@ -167,12 +167,12 @@ def report(account_filter: str | None = None, suggest_tighten: bool = False) -> 
             current_cap = 8  # default; ideally read from config
             if avg_per_day >= 3:
                 print(f"  cluster_cap: {top_cluster} hit {top_cnt}x over {days_active}d "
-                      f"({avg_per_day:.1f}/day) → suggest tightening from {current_cap} to {current_cap - 1}")
+                      f"({avg_per_day:.1f}/day) -> suggest tightening from {current_cap} to {current_cap - 1}")
 
         # Risk cap: if risk_cap blocks are > 10% of total, book is running hot
         if type_counts.get("risk_cap", 0) > 0.10 * n:
             print(f"  risk_cap: {type_counts['risk_cap']} blocks ({100*type_counts['risk_cap']/n:.0f}% of total) "
-                  f"→ consider reducing max_open_risk_pct_equity from 30.0 to 25.0")
+                  f"-> consider reducing max_open_risk_pct_equity from 30.0 to 25.0")
 
         # Pair cap: if a symbol has > 3 blocks and closed P&L is negative,
         # the cap is protecting us → keep or tighten to 1
@@ -186,10 +186,10 @@ def report(account_filter: str | None = None, suggest_tighten: bool = False) -> 
         for sym, cnt, pnl in pair_cap_syms[:3]:
             pnl_col = G if pnl > 0 else R
             print(f"  pair_cap {sym}: {cnt} blocks, closed P&L {pnl_col}{pnl:+.1f} EUR{X} "
-                  f"{'→ cap protecting (keep)' if pnl < 0 else '→ may be too tight (review)'}")
+                  f"{'-> cap protecting (keep)' if pnl < 0 else '-> may be too tight (review)'}")
 
     # ── Summary ───────────────────────────────────────────────────────────
-    print(f"\n{B}{'─'*60}{X}")
+    print(f"\n{B}{'-'*60}{X}")
     days = len(set(r["ts"][:10] for r in rows))
     print(f"  {days} day(s) of data  |  {n} total blocks  |  "
           f"{n / max(days, 1):.1f} blocks/day avg")

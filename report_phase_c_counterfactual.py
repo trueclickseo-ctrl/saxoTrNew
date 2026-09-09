@@ -41,8 +41,8 @@ _MODULE_MAP = {
 
 def _load(account: str) -> list[dict]:
     if not os.path.exists(LOG):
-        print(f"{Y}No exit decisions yet — data/ai_exit_decisions.jsonl missing."
-              f"\nExit Copilot writes on the first ≥1R profitable position evaluated.{X}")
+        print(f"{Y}No exit decisions yet -- data/ai_exit_decisions.jsonl missing."
+              f"\nExit Copilot writes on the first >=1R profitable position evaluated.{X}")
         return []
     rows = []
     with open(LOG, encoding="utf-8") as f:
@@ -152,7 +152,7 @@ def report(account: str = "sim") -> None:
           f"{R}{sum(r['delta'] for r in missed):>+8.1f} EUR{X}")
     pct_good = 100 * len(saved) / len(matched) if matched else 0
     print(f"  Good call rate:  {G if pct_good >= 60 else R}{pct_good:.0f}%{X}"
-          f"  {DIM}(target ≥60% before flipping shadow_mode){X}")
+          f"  {DIM}(target >=60% before flipping shadow_mode){X}")
 
     # ── 3. Per-trade breakdown ────────────────────────────────────────────
     print(f"\n{B}EXIT_NOW trades (sorted by delta):{X}")
@@ -192,14 +192,14 @@ def report(account: str = "sim") -> None:
 
     # ── 7. Phase C verdict ────────────────────────────────────────────────
     MIN_TRADES = 10
-    print(f"\n{B}{'─'*60}{X}")
+    print(f"\n{B}{'-'*60}{X}")
     if len(matched) < MIN_TRADES:
         print(f"{Y}  INSUFFICIENT DATA: {len(matched)} matched EXIT_NOW trades "
               f"(need {MIN_TRADES}+). Re-check after 3 weeks of Phase B.{X}")
     elif net_delta > 0 and pct_good >= 60:
         print(f"{G}  POSITIVE: Exit Copilot would have saved {net_delta:+.1f} EUR "
               f"give-back ({pct_good:.0f}% good-call rate).{X}")
-        print(f"{G}  → Phase C flip candidate. Review premature exits above before deciding.{X}")
+        print(f"{G}  -> Phase C flip candidate. Review premature exits above before deciding.{X}")
     elif net_delta > 0:
         print(f"{Y}  MARGINAL: net positive ({net_delta:+.1f} EUR) but good-call rate "
               f"{pct_good:.0f}% < 60%. More data needed.{X}")
