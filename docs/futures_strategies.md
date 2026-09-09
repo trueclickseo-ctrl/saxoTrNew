@@ -23,7 +23,7 @@ positions pushed real utilization to 98.56%, which would have blocked
 futures (and everything else) from trading regardless of futures' own
 risk numbers looking fine.  
 **Dashboard**: `futures_dashboard.py` — run `python futures_dashboard.py` for a live view; refreshes every 30 s. Shows open positions, per-strategy win rate / realized P&L / profit factor, full closed-trade history, and the P&L ledger breakdown.  
-**Last updated**: 2026-09-05 (dashboard overhauled; schedule corrected)
+**Last updated**: 2026-09-10 (equity cap raised 55,200 → 160,000 EUR; ~9/11 markets now affordable)
 
 ---
 
@@ -115,7 +115,7 @@ plus 4** — trade ES and GC now, and revisit NQ/ZB when either capital or
 | 10 | Equity in EUR, ATR/`contract_size` in instrument currency, no FX conversion | Medium | Open |
 | 11 | Source files contain mojibake (`â€"`) in comments/docstrings | Low | Open |
 | 12 | **Expanding 5 → 13 markets turns every strategy negative** | **Critical** | Open — needs your call |
-| 13 | At correct sizing only 2 of 13 markets are tradeable — capital is too small | **High** | **Resolved 2026-08-24** — `risk_equity_eur` raised 27,800 → 55,200 EUR (Option 2's effect, via capital instead of `RISK_PCT`); ES/GC/DAX/HK50/ZC/YM/NQ now tradeable, ZS/NG/ZB/ZW/CL still excluded (need 66k–453k EUR each) |
+| 13 | At correct sizing only 2 of 13 markets are tradeable — capital is too small | **High** | **Resolved 2026-09-10** — `risk_equity_eur` raised 27,800 → 55,200 (2026-08-24) → 160,000 EUR (2026-09-10); budget now EUR 1,600/trade covering ES/DAX/EU50/CAC/YM/ZC/ZS/NG/ZW (~9 of 11 momentum markets); CL (EUR 5,623/contract) permanently blocked |
 | 14 | `SI` chart fetch returns 400; the market is configured but can never signal | Low | Open |
 
 > **Findings 4 and 6 are now closed.** All 7 strategies are backtested
