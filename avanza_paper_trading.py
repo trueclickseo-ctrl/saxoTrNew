@@ -3,14 +3,15 @@ avanza_paper_trading.py
 -----------------------
 Paper trading dry-run for Avanza mini futures.
   Indices (reversion): DAX, S&P 500
-  Commodities/Stocks (trend): Gold, Apple, Google
+  Commodities/Stocks (trend): Gold, Apple, Google, Investor B
 
 Backtested results (5 years, 5x leverage, 2,000 SEK budget):
-  DAX   reversion : +294%,  82% WR,  0 KOs
-  SP500 reversion : +192%,  81% WR,  0 KOs
-  Gold  trend     : +247%,  33% WR,  0 KOs
-  Apple trend     : +442%,  45% WR,  0 KOs
-  Google trend    : +377%,  45% WR,  0 KOs
+  DAX        reversion : +294%,  82% WR,  0 KOs
+  SP500      reversion : +192%,  81% WR,  0 KOs
+  Gold       trend     : +247%,  33% WR,  0 KOs
+  Apple      trend     : +442%,  45% WR,  0 KOs
+  Google     trend     : +377%,  45% WR,  0 KOs
+  Investor B trend     : +274%,  37% WR,  0 KOs  ← lowest max DD of all (49%)
 
 Instruments use Avanza-issued (AVA) true mini futures — most liquid on Nordic MTF.
 After N_MIN_TRADES paper trades per instrument with positive expectancy,
@@ -114,6 +115,23 @@ INSTRUMENTS = {
         "avanza_id":      "2228507",
         "avanza_name":    "MINI L GOOGLE AVA 63",
         "parity":         10,
+    },
+    "INVESTOR_B": {
+        "yahoo":          "INVE-B.ST",
+        "name":           "Investor B (SE)",
+        "strategy":       "trend",
+        "leverage":       5.0,
+        "budget_sek":     2000.0,
+        "financing_rate": 0.055,
+        "ma_days":        20,
+        "active":         True,
+        # Nordnet-issued, parity 1 (SEK-denominated, no FX conversion)
+        # SE23: barrier 327, Investor B ~408 SEK → KO distance 19.9% → 5.0x
+        # Backtest: +274.8%, 0 KOs, 49% max DD (lowest of all stocks), PF 1.50, TREND
+        # Live fallback: MINI L INVESTOR NORDNET SE25 (ID 2286648, 3.3x, 2.8M SEK/day)
+        "avanza_id":      "2286747",
+        "avanza_name":    "MINI L INVESTOR NORDNET SE23",
+        "parity":         1,
     },
 }
 

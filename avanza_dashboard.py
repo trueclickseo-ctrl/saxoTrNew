@@ -29,11 +29,12 @@ _LOG_FILE   = os.path.join(_ROOT, "data", "avanza_paper_trading.log")
 REFRESH_SECONDS = 30
 
 INSTRUMENTS = {
-    "DAX":    {"name": "DAX (Germany)",  "strategy": "reversion", "leverage": 5.4, "budget_sek": 2000.0, "product": "MINI L DAX AVA 850"},
-    "SP500":  {"name": "S&P 500 (US)",   "strategy": "reversion", "leverage": 5.8, "budget_sek": 2000.0, "product": "MINI L SP500 AVA 339"},
-    "GOLD":   {"name": "Gold",           "strategy": "trend",     "leverage": 5.0, "budget_sek": 2000.0, "product": "MINI L GULD AVA 247"},
-    "APPLE":  {"name": "Apple (AAPL)",   "strategy": "trend",     "leverage": 5.2, "budget_sek": 2000.0, "product": "MINI L APPLE AVA 91"},
-    "GOOGLE": {"name": "Google (GOOGL)", "strategy": "trend",     "leverage": 4.7, "budget_sek": 2000.0, "product": "MINI L GOOGLE AVA 63"},
+    "DAX":        {"name": "DAX (Germany)",   "strategy": "reversion", "leverage": 5.4, "budget_sek": 2000.0, "product": "MINI L DAX AVA 850"},
+    "SP500":      {"name": "S&P 500 (US)",    "strategy": "reversion", "leverage": 5.8, "budget_sek": 2000.0, "product": "MINI L SP500 AVA 339"},
+    "GOLD":       {"name": "Gold",            "strategy": "trend",     "leverage": 5.0, "budget_sek": 2000.0, "product": "MINI L GULD AVA 247"},
+    "APPLE":      {"name": "Apple (AAPL)",    "strategy": "trend",     "leverage": 5.2, "budget_sek": 2000.0, "product": "MINI L APPLE AVA 91"},
+    "GOOGLE":     {"name": "Google (GOOGL)",  "strategy": "trend",     "leverage": 4.7, "budget_sek": 2000.0, "product": "MINI L GOOGLE AVA 63"},
+    "INVESTOR_B": {"name": "Investor B (SE)", "strategy": "trend",     "leverage": 5.0, "budget_sek": 2000.0, "product": "MINI L INVESTOR NORDNET SE23"},
 }
 
 MARKET_OPEN_PKT  = (12, 0)   # 09:00 CET = 12:00 PKT
@@ -102,7 +103,7 @@ def render():
 
     print("=" * W)
     print(f"  AVANZA MINI FUTURES DASHBOARD".center(W))
-    print(f"  {now.strftime('%Y-%m-%d %H:%M')} PKT  |  Avanza market: {mkt}  |  5 instruments".center(W))
+    print(f"  {now.strftime('%Y-%m-%d %H:%M')} PKT  |  Avanza market: {mkt}  |  6 instruments".center(W))
     print("=" * W)
 
     # ── SECTION 1: PAPER TRADING (SIM) ────────────────────────────────────────
