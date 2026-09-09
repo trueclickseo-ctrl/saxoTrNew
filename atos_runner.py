@@ -411,8 +411,9 @@ _rev_signals:  list  = []   # list of candidate dicts from USR.scan()
 
 # ── Dynamic capital allocation — loaded from config/capital.json ──────────
 # Edit config/capital.json to change percentages; no code change needed.
-BLEND_CASH_PCT = CAP.blend_allocation_pct()
-REV_CASH_PCT   = CAP.reversion_allocation_pct()
+BLEND_CASH_PCT    = CAP.blend_allocation_pct()
+BLEND_V2_CASH_PCT = CAP.blend_v2_allocation_pct()
+REV_CASH_PCT      = CAP.reversion_allocation_pct()
 
 STRATEGY_INSTANCE_FOR_MARKET = {
     # "OMX30": S5_MomentumAccel(), "CPH25": S3_MeanReversion(),  # paused: unvalidated
@@ -794,10 +795,11 @@ def run_open_scan(log_fn=None) -> dict:
 
     # ── US Blend V2 (SIM A/B twin — skip-month mom + vol-targeting) ──
     if US_BLEND_V2_ENABLED:
-        _log(f"  US Blend V2 (SIM A/B) — budget: {blend_budget:,.0f} SEK")
+        blend_v2_budget = min(cash_sek * BLEND_V2_CASH_PCT, _max_deploy * BLEND_V2_CASH_PCT)
+        _log(f"  US Blend V2 (SIM A/B) — budget: {blend_v2_budget:,.0f} SEK ({BLEND_V2_CASH_PCT*100:.0f}% of cash, independent of V1)")
         try:
             run_us_momentum_v2(feat_data, db.get_open_trades(), todays_actions,
-                               available_cash_sek=blend_budget)
+                               available_cash_sek=blend_v2_budget)
         except Exception as e:
             _log(f"  [US Blend V2 ERROR] {e}")
 
@@ -1239,10 +1241,11 @@ def run_cycle():
 
     # ── 6c2. US Blend V2 (SIM A/B twin — skip-month mom + vol-targeting) ─
     if US_BLEND_V2_ENABLED:
-        print(f"  Running US Blend V2 strategy (SIM A/B)... (budget: {blend_budget:,.0f} SEK)")
+        blend_v2_budget2 = min(cash_sek * BLEND_V2_CASH_PCT, _max_deploy2 * BLEND_V2_CASH_PCT)
+        print(f"  Running US Blend V2 strategy (SIM A/B)... (budget: {blend_v2_budget2:,.0f} SEK = {BLEND_V2_CASH_PCT*100:.0f}% of capital, independent of V1)")
         try:
             run_us_momentum_v2(feat_data, db.get_open_trades(), todays_actions,
-                               available_cash_sek=blend_budget)
+                               available_cash_sek=blend_v2_budget2)
         except Exception as e:
             print(f"  [US Blend V2] ERROR: {e}")
 

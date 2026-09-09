@@ -1,9 +1,11 @@
 @echo off
-REM IBKR Stocks -- US Blend fortnightly rebalance (dry-run by default).
-REM Strategy: cross-sectional momentum, 8 positions, Yahoo Finance signal.
-REM Run manually when the fortnightly window arrives:
-REM   run_ibkr_blend.bat           -- show plan, place nothing
-REM   run_ibkr_blend.bat --execute -- confirm each trade
+REM IBKR Stocks -- US Blend fortnightly rebalance.
+REM Runs automatically via Task Scheduler: --execute --auto (no prompts).
+REM
+REM Manual dry-run (show plan only):
+REM   python run_ibkr_stocks.py --strategy blend
+REM
+REM Watchdog key: "IBKR Blend Rebalance" -> max_log_age_hours=336 (14 days)
 
 cd /d E:\SaxoTrNew\SaxoTrNew
-python run_ibkr_stocks.py --strategy blend %*
+python run_ibkr_stocks.py --strategy blend --execute --auto %*

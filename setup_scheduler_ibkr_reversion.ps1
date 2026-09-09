@@ -3,15 +3,15 @@
 # Registers two IBKR Reversion tasks in Windows Task Scheduler.
 #
 #  "ATOS IBKR Reversion Entries" -- 16:00 PKT daily (07:00 ET, before US open)
-#    Dry-run scan for RSI < 38 dip setups using yesterday's Yahoo closes.
-#    Review ibkr_reversion_entries.log, then execute manually with --execute.
+#    Auto entry scan for RSI < 38 dip setups. --execute --auto: orders placed
+#    automatically. IB Gateway must be running with paper account funded.
 #
 #  "ATOS IBKR Reversion Exits" -- 09:00 PKT daily (00:00 ET, after US close)
-#    Dry-run exit check for open reversion positions (RSI recovery / SMA target
-#    / time-stop). Review ibkr_reversion_exits.log, then execute with --exits --execute.
+#    Auto exit check for open reversion positions (RSI recovery / SMA target
+#    / time-stop). --execute --auto: exits placed automatically.
 #
 # Both tasks require IB Gateway running and the paper account funded.
-# Protective dry-run only: no orders placed automatically.
+# Runs automatically: --execute --auto (no prompts).
 #
 # RUN ONCE AS ADMINISTRATOR:
 #   powershell -ExecutionPolicy Bypass -File "E:\SaxoTrNew\SaxoTrNew\setup_scheduler_ibkr_reversion.ps1"
@@ -33,7 +33,7 @@ $trigger1   = New-ScheduledTaskTrigger -Daily -At "16:00"
 try {
     Register-ScheduledTask -TaskName "ATOS IBKR Reversion Entries" `
                -Action $action1 -Trigger $trigger1 -Settings $settings `
-               -Description "IBKR: dry-run reversion entry scan (RSI<38 dip). 16:00 PKT / 07:00 ET." `
+               -Description "IBKR: reversion entry scan (RSI<38 dip), auto. 16:00 PKT / 07:00 ET." `
                -RunLevel Highest -Force
     Write-Host "OK  Registered: ATOS IBKR Reversion Entries -> 16:00 PKT"
 } catch {
@@ -49,7 +49,7 @@ $trigger2 = New-ScheduledTaskTrigger -Daily -At "09:00"
 try {
     Register-ScheduledTask -TaskName "ATOS IBKR Reversion Exits" `
                -Action $action2 -Trigger $trigger2 -Settings $settings `
-               -Description "IBKR: dry-run reversion exit check. 09:00 PKT / 00:00 ET (after US close)." `
+               -Description "IBKR: reversion exit check, auto. 09:00 PKT / 00:00 ET (after US close)." `
                -RunLevel Highest -Force
     Write-Host "OK  Registered: ATOS IBKR Reversion Exits -> 09:00 PKT"
 } catch {

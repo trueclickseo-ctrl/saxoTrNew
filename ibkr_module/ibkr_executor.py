@@ -156,9 +156,14 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
         return
 
     if not dry_run and not ibkr_ok:
-        print("\n  [BLOCKED] No IBKR live prices available. "
-              "Cannot execute without live market data.")
-        return
+        is_paper = cfg.get("paper", True)
+        if is_paper:
+            print("  [prices] IBKR has no market data -- falling back to Yahoo delayed prices for sizing.")
+            prices = _yahoo_prices(symbols)
+            ibkr_ok = any(v > 0 for v in prices.values())
+        if not ibkr_ok:
+            print("\n  [BLOCKED] No live prices available (IBKR or Yahoo). Cannot size orders.")
+            return
 
     buys, sells = _compute_plan(
         targets       = targets,
@@ -288,8 +293,14 @@ def run_rebalance_v2(ib, account_id: str, cfg: dict, dry_run: bool = True,
         print("  [blend_v2] BLOCKED — US market is closed.")
         return
     if not dry_run and not ibkr_ok:
-        print("  [blend_v2] BLOCKED — no IBKR live prices.")
-        return
+        is_paper = cfg.get("paper", True)
+        if is_paper:
+            print("  [blend_v2] IBKR has no market data -- falling back to Yahoo delayed prices for sizing.")
+            prices = _yahoo_prices(symbols)
+            ibkr_ok = any(v > 0 for v in prices.values())
+        if not ibkr_ok:
+            print("  [blend_v2] BLOCKED — no prices available (IBKR or Yahoo).")
+            return
 
     buys, sells = _compute_plan(
         targets         = targets,

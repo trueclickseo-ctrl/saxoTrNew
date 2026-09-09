@@ -79,6 +79,11 @@ def blend_defense_slots() -> int:
     return int(_load()["strategies"]["us_blend"].get("defense_slots", 2))
 
 
+def blend_v2_allocation_pct() -> float:
+    """Fraction of live cash given to US Blend V2 each cycle (independent of V1)."""
+    return float(_load()["strategies"]["us_blend_v2"]["allocation_pct"])
+
+
 def blend_total_slots() -> int:
     return blend_offense_slots() + blend_defense_slots()
 
