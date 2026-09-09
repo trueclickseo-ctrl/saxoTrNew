@@ -6,7 +6,7 @@ Thin wrapper around ib_insync for the IBKR stocks sleeve.
 Requires:
     pip install ib_insync
     IB Gateway or TWS running on localhost (paper: port 7497, live: port 7496)
-    API access enabled in TWS: Edit → Global Configuration → API → Settings
+    API access enabled in TWS: Edit -> Global Configuration -> API -> Settings
       ✓ Enable ActiveX and Socket Clients
       Socket port: 7497 (paper) or 7496 (live)
       ✓ Allow connections from localhost only
@@ -33,7 +33,7 @@ def connect(host: str, port: int, client_id: int = 10) -> IB:
     """Connect to IB Gateway / TWS. Returns connected IB instance."""
     import logging
     # Suppress noisy ib_insync warnings before connecting (completed orders timeout,
-    # market-data errors 10089/10168/300, etc.) — expected on paper accounts.
+    # market-data errors 10089/10168/300, etc.) -- expected on paper accounts.
     for _log in ("ib_insync", "ib_insync.ib", "ib_insync.wrapper",
                  "ib_insync.client", "ib_insync.ticker"):
         logging.getLogger(_log).setLevel(logging.CRITICAL)
@@ -179,13 +179,13 @@ def _prices_are_empty(prices: dict[str, float]) -> bool:
 def get_prices(ib: IB, symbols: list[str]) -> dict[str, float]:
     """Batch price fetch for a list of symbols.
 
-    Tries IBKR real-time → delayed (type 3) → delayed frozen (type 4) in order.
+    Tries IBKR real-time -> delayed (type 3) -> delayed frozen (type 4) in order.
     If all IBKR attempts return 0/nan (common on paper accounts without live
     market-data subscriptions), falls back to Yahoo Finance daily close prices
-    via ibkr_signals.yahoo_prices() — uses the 8-hour disk cache when available.
+    via ibkr_signals.yahoo_prices() -- uses the 8-hour disk cache when available.
 
     Error 10168 (no subscription) and Error 300 (cancel-before-subscribe race)
-    are suppressed silently — they are expected on paper accounts and the Yahoo
+    are suppressed silently -- they are expected on paper accounts and the Yahoo
     fallback handles the missing prices.
     """
     import math
@@ -238,7 +238,7 @@ def get_prices(ib: IB, symbols: list[str]) -> dict[str, float]:
             result = _fetch(4)  # delayed frozen
 
         if _prices_are_empty(result):
-            print("  [prices] IBKR returned no market data — using Yahoo fallback.")
+            print("  [prices] IBKR returned no market data -- using Yahoo fallback.")
 
         return result
 
@@ -250,19 +250,19 @@ def get_prices(ib: IB, symbols: list[str]) -> dict[str, float]:
 
 
 def abs_price(price: float) -> float:
-    """Return the price as-is (compatibility shim — Yahoo fallback removed)."""
+    """Return the price as-is (compatibility shim -- Yahoo fallback removed)."""
     return float(price) if price else 0.0
 
 
 def is_market_open() -> bool:
-    """Return True if the US stock market is currently open (09:30–16:00 ET)."""
+    """Return True if the US stock market is currently open (09:30-16:00 ET)."""
     import datetime as _dt
     try:
         import zoneinfo
         et = zoneinfo.ZoneInfo("America/New_York")
     except ImportError:
         import datetime
-        # UTC-4 (EDT) / UTC-5 (EST) — approximate with fixed -4 offset
+        # UTC-4 (EDT) / UTC-5 (EST) -- approximate with fixed -4 offset
         et = _dt.timezone(_dt.timedelta(hours=-4))
     now_et = _dt.datetime.now(tz=et)
     if now_et.weekday() >= 5:   # Saturday / Sunday

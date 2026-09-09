@@ -1,15 +1,15 @@
 """
 run_ibkr_stocks.py
 ------------------
-IBKR stocks sleeve — all ATOS strategies via IB Gateway.
+IBKR stocks sleeve -- all ATOS strategies via IB Gateway.
 
-Strategies (signal generation from Yahoo Finance — no Saxo):
+Strategies (signal generation from Yahoo Finance -- no Saxo):
   blend      US cross-sectional momentum, fortnightly rebalance ($50k, 10 slots)
   reversion  US mean reversion, entries + exits ($50k, 10 slots)
   intraday   Intraday reversion variant (US market hours only)
   signals    4 US Signals strategies: SMA Crossover, RSI Reversal, Momentum,
-             Ensemble — $2k/slot, max 7 slots each (28 slots across 4 strategies)
-  scorer     ATOS US 500 Scoring Engine — scores 491 stocks, buys top-ranked
+             Ensemble -- $2k/slot, max 7 slots each (28 slots across 4 strategies)
+  scorer     ATOS US 500 Scoring Engine -- scores 491 stocks, buys top-ranked
              candidates split by type: swing ($20k, 8 slots, 6% stop) and
              portfolio ($30k, 10 slots, 8% stop).  --exits closes positions
              whose score dropped below the minimum on rescan.
@@ -147,7 +147,7 @@ def main() -> None:
     _load_env()
     cfg = _load_config()
 
-    parser = argparse.ArgumentParser(description="IBKR stocks sleeve — all ATOS strategies")
+    parser = argparse.ArgumentParser(description="IBKR stocks sleeve -- all ATOS strategies")
     parser.add_argument("--strategy",
                         choices=["blend", "reversion", "intraday", "signals", "scorer", "all"],
                         default="blend",
@@ -233,7 +233,7 @@ def main() -> None:
                           f"{len(open_syms)} open position(s)...")
                     pre_indicators = sig.reversion_exit_indicators(open_syms)
                 else:
-                    print("\n  No open reversion positions — skipping exit fetch.")
+                    print("\n  No open reversion positions -- skipping exit fetch.")
             else:
                 print("\n  Pre-generating US Reversion candidates (Yahoo Finance)...")
                 pre_candidates = sig.reversion_candidates()
@@ -253,7 +253,7 @@ def main() -> None:
                           f"{len(open_syms)} position(s)...")
                     pre_feat_data = sig.us_signals_exit_data(open_syms)
                 else:
-                    print("\n  No open us_signals positions — skipping exit fetch.")
+                    print("\n  No open us_signals positions -- skipping exit fetch.")
             else:
                 print("\n  Pre-generating US Signals data (Yahoo Finance)...")
                 pre_feat_data = sig.us_signals_data()
@@ -342,7 +342,7 @@ def main() -> None:
         elif args.strategy == "blend":
             dry_run = not args.execute
             if dry_run:
-                print("  [DRY RUN] Showing blend plan — pass --execute to place orders.\n")
+                print("  [DRY RUN] Showing blend plan -- pass --execute to place orders.\n")
             ex.run_rebalance(ib, account_id, cfg, dry_run=dry_run, signal=pre_signal)
 
         elif args.strategy == "reversion":

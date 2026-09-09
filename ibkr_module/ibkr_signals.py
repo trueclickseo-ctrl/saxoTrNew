@@ -73,7 +73,7 @@ def _download(tickers: list[str], lookback_days: int = 260) -> dict[str, pd.Data
         cached = _load_cache(lookback_days)
         if cached is not None:
             subset = {t: cached[t] for t in tickers if t in cached}
-            print(f"  [signals] cache hit — {len(subset)} tickers (age < {_CACHE_MAX_AGE_HOURS}h)")
+            print(f"  [signals] cache hit -- {len(subset)} tickers (age < {_CACHE_MAX_AGE_HOURS}h)")
             return subset
 
     import yfinance as yf
@@ -135,7 +135,7 @@ def reversion_candidates(lookback_days: int = 260) -> list[dict]:
 
 def intraday_candidates(lookback_days: int = 260) -> list[dict]:
     """Intraday reversion scan (5-min bars + daily history).
-    Only meaningful during US market hours (09:30–16:00 ET = 18:30–01:00 PKT).
+    Only meaningful during US market hours (09:30-16:00 ET = 18:30-01:00 PKT).
     Returns same format as reversion_candidates().
     """
     from atos.intraday_reversion import intraday_scan, fetch_intraday

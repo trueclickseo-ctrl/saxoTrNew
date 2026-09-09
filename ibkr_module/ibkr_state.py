@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS trades (
 
 
 def _migrate(con: sqlite3.Connection) -> None:
-    """Add columns introduced after the initial schema — safe to re-run."""
+    """Add columns introduced after the initial schema -- safe to re-run."""
     try:
         con.execute("ALTER TABLE trades ADD COLUMN strategy TEXT DEFAULT 'blend'")
     except sqlite3.OperationalError:
