@@ -67,14 +67,15 @@
       "2026-08-24: raised to 55200 (explicit request) so DAX/HK50/YM/NQ/ZC clear",
       "MAX_RISK_OVERSHOOT (1.5x) at RISK_PCT=1% -- see docs/futures_strategies.md's",
       "'only 2/13 markets tradeable' finding for the per-market numbers this solves.",
-      "2026-09-10: raised to 90000 so ZC/ZS/ZW clear the 1% budget at current ATR",
-      "(ZC was skipping: 1 contract = 844 EUR risk vs 552 EUR budget at 55200 cap).",
-      "1% of 90000 = 900 EUR/trade. CL (5047 EUR/contract) and other large contracts",
-      "remain permanently blocked. Real account is ~700k EUR so 90k = 12.9% of real."
+      "2026-09-10: raised to 90000 so ZC cleared the 1% budget at current ATR.",
+      "2026-09-10: raised again to 160000 (budget EUR 1600/trade) to cover ZS/NG/ZW",
+      "and likely NK225 -- targeting ~9 of 11 momentum-passing markets affordable so",
+      "5 simultaneous positions are achievable. CL (EUR 5623/contract) stays blocked.",
+      "5 positions x EUR 1600 = EUR 8000 max exposure = 1.1% of real EUR 700k equity."
     ],
     "futures": {
       "enabled": true,
-      "risk_equity_eur": 90000
+      "risk_equity_eur": 160000
     },
 
     "_forex_comment": [
