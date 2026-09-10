@@ -36,7 +36,32 @@ _SIGNAL_FILES = [
 # ── Signal reading ────────────────────────────────────────────────────────────
 
 def _load_signal() -> dict:
-    """Return {tickers: [str], source: str, timestamp: str, risk_off: bool}."""
+    """Return {tickers: [str], source: str, timestamp: str, risk_off: bool}.
+
+    Priority:
+      1. ibkr_signals.blend_targets() — always fresh (Yahoo Finance, <30s)
+      2. data/stocks_live_status.json  — Saxo live status file (may be stale)
+      3. data/backtest_us_signals_latest.json — last-resort fallback
+    """
+    # ── 1. Fresh signal from ibkr_signals (same source as IBKR module) ─────────
+    try:
+        import sys as _sys
+        _sys.path.insert(0, _ROOT)
+        from ibkr_module import ibkr_signals as _sig
+        result = _sig.blend_targets()
+        tickers = result.get("targets", [])
+        if tickers:
+            return {
+                "tickers":   tickers,
+                "source":    "ibkr_signals.blend_targets() [live]",
+                "timestamp": datetime.now().isoformat(),
+                "risk_off":  result.get("risk_off", False),
+                "reason":    result.get("reason", ""),
+            }
+    except Exception as _exc:
+        print(f"  [signal] ibkr_signals fallback: {_exc}")
+
+    # ── 2–3. File-based fallbacks ───────────────────────────────────────────────
     for path in _SIGNAL_FILES:
         if not os.path.exists(path):
             continue
@@ -116,9 +141,12 @@ def compute_actions(target_tickers: list[str],
     # ── BUYs: in target but not held ─────────────────────────────────────────
     buy_count = len(target_set) - len([t for t in target_set if t in held])
     if buy_count > 0 and budget_sek > 0:
-        per_pos_sek = budget_sek / max(len(target_set), 1)
+        # Use full budget per slot so small budgets can still fill 1 position.
+        # Iterate ALL targets (not just [:max_positions]) so higher-ranked but
+        # unaffordable stocks don't block lower-ranked affordable ones.
+        per_pos_sek = budget_sek
 
-        for ticker in target_tickers[:max_positions]:
+        for ticker in target_tickers:
             tu = ticker.upper()
             if tu in held:
                 continue  # already held — HOLD, no BUY needed
@@ -146,16 +174,27 @@ def compute_actions(target_tickers: list[str],
                 })
                 continue
 
-            # Sizing: per_pos_sek / price (if currency is SEK; if USD, convert approx)
+            # Sizing: full budget / share price. Never force qty=1 — if budget
+            # can't cover 1 share, skip (don't over-spend).
+            try:
+                sek_per_usd = float(os.environ.get("AVANZA_SEK_USD_RATE", "10.5"))
+            except ValueError:
+                sek_per_usd = 10.5
+
             if currency == "USD":
-                # Avanza ISK: orders placed in USD; sizing in SEK converted at ~10.5
-                try:
-                    sek_per_usd = float(os.environ.get("AVANZA_SEK_USD_RATE", "10.5"))
-                except ValueError:
-                    sek_per_usd = 10.5
-                qty = max(1, int(per_pos_sek / (price * sek_per_usd)))
+                qty = int(per_pos_sek / (price * sek_per_usd))
             else:
-                qty = max(1, int(per_pos_sek / price))
+                qty = int(per_pos_sek / price)
+
+            if qty < 1:
+                print(f"  [avanza] {ticker}: ${price:.2f} too expensive for "
+                      f"{per_pos_sek:,.0f} SEK budget — skipping")
+                actions.append({
+                    "action": "SKIP", "ticker": ticker,
+                    "order_book_id": ob_id, "qty": 0, "price": price,
+                    "value_sek": 0, "reason": f"too expensive ({price:.2f} {currency})",
+                })
+                continue
 
             value_sek = round(qty * price * (sek_per_usd if currency == "USD" else 1), 0)
 
@@ -265,7 +304,7 @@ def run_rebalance(client: "Avanza", account_id: str,
         if not signal["tickers"]:
             print(f"  --only {only_ticker}: ticker not in signal basket — nothing to do.")
             return {"buys": 0, "sells": 0, "skips": 0, "signal": signal}
-        print(f"  --only {only_ticker}: restricting to this ticker only.")
+        print(f"  --only {only_ticker}: BUY-only mode — existing positions will not be sold.")
 
     print(f"  Target basket ({len(signal['tickers'])} tickers): {', '.join(signal['tickers'][:max_positions])}")
 
@@ -287,6 +326,11 @@ def run_rebalance(client: "Avanza", account_id: str,
     )
 
     ic.save_cache(cache)
+
+    # --only mode: suppress SELLs — we only want to add this one ticker,
+    # not disturb any other positions.
+    if only_ticker:
+        actions = [a for a in actions if a["action"] != "SELL"]
 
     _print_action_table(actions)
 

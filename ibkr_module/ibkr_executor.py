@@ -28,32 +28,6 @@ _ROOT = Path(__file__).parent.parent
 # AI observation layer removed 2026-09-09 -- Saxo only for AI data pipeline.
 
 
-def _yahoo_prices(symbols: list[str]) -> dict[str, float]:
-    """Fetch latest close prices from Yahoo Finance for a list of symbols.
-
-    Used as fallback on paper accounts when IBKR has no market data.
-    The market order itself fills at IBKR's real bid/ask regardless.
-    """
-    import yfinance as yf
-    try:
-        raw = yf.download(symbols, period="5d", interval="1d",
-                          auto_adjust=True, progress=False, threads=True)
-        if raw.empty:
-            return {s: 0.0 for s in symbols}
-        closes = raw["Close"] if "Close" in raw.columns else raw.xs("Close", axis=1, level=0)
-        out = {}
-        for s in symbols:
-            try:
-                col = closes[s] if s in closes.columns else closes
-                last = float(col.dropna().iloc[-1])
-                out[s] = last if last > 0 else 0.0
-            except Exception:
-                out[s] = 0.0
-        return out
-    except Exception as e:
-        print(f"  [prices] Yahoo fallback failed: {e}")
-        return {s: 0.0 for s in symbols}
-
 
 def _compute_plan(
     targets: list[str],
@@ -63,14 +37,19 @@ def _compute_plan(
     max_positions: int,
     min_trade_usd: float,
     cash_buffer_pct: float,
+    fractional: bool = False,
+    slot_weights: dict | None = None,
 ) -> tuple[list[dict], list[dict]]:
-    """Return (buys, sells) action lists."""
+    """Return (buys, sells) action lists.
+    fractional=True : buy exact dollar-value slices (4 decimal places).
+    fractional=False: whole shares only, skip if price > slot budget.
+    slot_weights    : {ticker: weight} override (e.g. {"HPE":0.70,"STT":0.30}).
+                      Weights are normalised to sum=1 over the active buy set.
+                      When absent, equal weight per slot is used.
+    """
     held_symbols = {p["symbol"] for p in held}
     target_set   = set(targets[:max_positions])
-
-    # Available cash after buffer
     usable = budget_usd * (1 - cash_buffer_pct)
-    per_slot = usable / max_positions
 
     sells = []
     for p in held:
@@ -85,15 +64,29 @@ def _compute_plan(
                 "value":  round(price * p["qty"], 2),
             })
 
+    # Determine which targets need buying
+    to_buy = [s for s in targets[:max_positions] if s not in held_symbols]
+
+    # Resolve per-symbol budget using slot_weights when provided
+    if slot_weights and to_buy:
+        total_w = sum(slot_weights.get(s, 1.0 / len(to_buy)) for s in to_buy)
+        sym_budget = {s: usable * slot_weights.get(s, 1.0 / len(to_buy)) / total_w
+                      for s in to_buy}
+    else:
+        per_slot   = usable / max_positions
+        sym_budget = {s: per_slot for s in to_buy}
+
     buys = []
-    for sym in targets[:max_positions]:
-        if sym in held_symbols:
-            continue
+    for sym in to_buy:
         price = prices.get(sym, 0.0)
         if not price or math.isnan(price) or price <= 0:
             continue
-        qty = math.floor(per_slot / price)
-        if qty < 1:
+        budget = sym_budget[sym]
+        if fractional:
+            qty = round(budget / price, 4)
+        else:
+            qty = math.floor(budget / price)
+        if qty <= 0:
             continue
         notional = round(price * qty, 2)
         if notional < min_trade_usd:
@@ -125,6 +118,8 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
     min_usd     = blend_cfg.get("min_trade_usd", cfg["capital"]["min_trade_usd"])
     buf_pct     = cfg["capital"]["cash_buffer_pct"]
     stop_pct    = blend_cfg.get("stop_pct", cfg["risk"]["stop_pct"])
+    fractional   = blend_cfg.get("fractional", False)
+    slot_weights = blend_cfg.get("slot_weights", None)
 
     if signal is None:
         print("\n  Generating US Blend signal (Yahoo Finance)...")
@@ -134,11 +129,17 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
         print(f"  No targets in signal ({signal.get('reason', '')}). Nothing to do.")
         return
 
+    # force_targets: override signal picks for live (e.g. skip stocks held elsewhere)
+    force_targets = blend_cfg.get("force_targets", None)
+    if force_targets:
+        targets = force_targets
+        print(f"  [config] force_targets override: {targets}")
+
     print(f"  Signal targets ({len(targets)}): {', '.join(targets)}")
     if signal.get("risk_off"):
         print("  [RISK OFF] Signal is in defensive mode.")
 
-    # TRADING RULE: execution uses IBKR live prices only -- never Yahoo Finance.
+    # TRADING RULE: IBKR live prices only. No Yahoo fallback ever.
     # Held positions come from the local DB (blend-only) so the rebalancer never
     # sells positions that belong to another strategy (scorer, reversion, etc.).
     held    = st.get_open_positions(strategy="blend")
@@ -147,8 +148,12 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
     ibkr_ok = not all(v == 0.0 for v in prices.values())
     cash    = ic.get_cash_balance(ib, account_id)
     print(f"  Cash available: ${cash:,.2f}")
+
+    zero_syms = [s for s in symbols if prices.get(s, 0) == 0]
+    if zero_syms:
+        print(f"  [WARNING] IBKR returned $0 for: {zero_syms} -- those will be skipped.")
     if not ibkr_ok:
-        print("  [WARNING] IBKR returned no prices -- plan shown as Yahoo estimates, not for execution.")
+        print("  [BLOCKED] IBKR returned no prices at all -- cannot size orders.")
 
     if not dry_run and not ic.is_market_open():
         print("\n  [BLOCKED] US market is closed. Orders can only be placed "
@@ -156,14 +161,8 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
         return
 
     if not dry_run and not ibkr_ok:
-        is_paper = cfg.get("paper", True)
-        if is_paper:
-            print("  [prices] IBKR has no market data -- falling back to Yahoo delayed prices for sizing.")
-            prices = _yahoo_prices(symbols)
-            ibkr_ok = any(v > 0 for v in prices.values())
-        if not ibkr_ok:
-            print("\n  [BLOCKED] No live prices available (IBKR or Yahoo). Cannot size orders.")
-            return
+        print("\n  [BLOCKED] No live IBKR prices available. Cannot size orders.")
+        return
 
     buys, sells = _compute_plan(
         targets       = targets,
@@ -173,6 +172,8 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
         max_positions = max_pos,
         min_trade_usd = min_usd,
         cash_buffer_pct = buf_pct,
+        fractional    = fractional,
+        slot_weights  = slot_weights,
     )
 
     print(f"\n  HOLD  ({len(held) - len(sells)}): "
@@ -293,14 +294,8 @@ def run_rebalance_v2(ib, account_id: str, cfg: dict, dry_run: bool = True,
         print("  [blend_v2] BLOCKED — US market is closed.")
         return
     if not dry_run and not ibkr_ok:
-        is_paper = cfg.get("paper", True)
-        if is_paper:
-            print("  [blend_v2] IBKR has no market data -- falling back to Yahoo delayed prices for sizing.")
-            prices = _yahoo_prices(symbols)
-            ibkr_ok = any(v > 0 for v in prices.values())
-        if not ibkr_ok:
-            print("  [blend_v2] BLOCKED — no prices available (IBKR or Yahoo).")
-            return
+        print("  [blend_v2] BLOCKED — no IBKR live prices available.")
+        return
 
     buys, sells = _compute_plan(
         targets         = targets,
@@ -494,21 +489,13 @@ def run_reversion_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
 
     for c in new_cands[:slots_free]:
         ibkr_price  = live_prices.get(c["ticker"], 0.0)
-        yahoo_price = c["price"]   # daily close from scan signal -- display only
         ibkr_ok     = bool(ibkr_price and ibkr_price > 0)
 
-        # Dry-run: show estimate even without live price (clearly labeled)
-        if dry_run:
-            price     = ibkr_price if ibkr_ok else yahoo_price
-            price_src = "IBKR" if ibkr_ok else "Yahoo est. (IBKR unavailable -- not for execution)"
-        else:
-            # Execute: IBKR price required
-            if not ibkr_ok:
-                print(f"\n  [BLOCKED] {c['ticker']}: no IBKR live price. "
-                      f"Cannot size order. Run during market hours with IBKR market data.")
-                continue
-            price     = ibkr_price
-            price_src = "IBKR live"
+        if not ibkr_ok:
+            print(f"\n  [BLOCKED] {c['ticker']}: no IBKR live price -- skip")
+            continue
+        price     = ibkr_price
+        price_src = "IBKR live"
 
         if not price or price <= 0:
             continue
@@ -688,18 +675,13 @@ def run_reversion_v2_entries(ib, account_id: str, cfg: dict, dry_run: bool = Tru
 
     for c in new_cands[:slots_free]:
         ibkr_price  = live_prices.get(c["ticker"], 0.0)
-        yahoo_price = c["price"]
         ibkr_ok     = bool(ibkr_price and ibkr_price > 0)
 
-        if dry_run:
-            price     = ibkr_price if ibkr_ok else yahoo_price
-            price_src = "IBKR" if ibkr_ok else "Yahoo est. (IBKR unavailable -- not for execution)"
-        else:
-            if not ibkr_ok:
-                print(f"\n  [BLOCKED] {c['ticker']}: no IBKR live price.")
-                continue
-            price     = ibkr_price
-            price_src = "IBKR live"
+        if not ibkr_ok:
+            print(f"\n  [BLOCKED] {c['ticker']}: no IBKR live price -- skip")
+            continue
+        price     = ibkr_price
+        price_src = "IBKR live"
 
         if not price or price <= 0:
             continue
@@ -916,17 +898,12 @@ def run_us_signals_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
 
         ibkr_price  = live_prices.get(ticker, 0.0)
         ibkr_ok     = bool(ibkr_price and ibkr_price > 0)
-        yahoo_price = float(df["Close"].dropna().iloc[-1]) if "Close" in df.columns else 0.0
 
-        if dry_run:
-            price     = ibkr_price if ibkr_ok else yahoo_price
-            price_src = "IBKR" if ibkr_ok else "Yahoo est. (not for execution)"
-        else:
-            if not ibkr_ok:
-                print(f"  [BLOCKED] {ticker} ({strat}): no IBKR live price -- skip")
-                continue
-            price     = ibkr_price
-            price_src = "IBKR live"
+        if not ibkr_ok:
+            print(f"  [BLOCKED] {ticker} ({strat}): no IBKR live price -- skip")
+            continue
+        price     = ibkr_price
+        price_src = "IBKR live"
 
         if not price or price <= 0:
             continue
@@ -1153,30 +1130,8 @@ def run_scorer_entries(
         return
 
     if not dry_run and not ibkr_any_ok:
-        is_paper = cfg.get("paper", True)
-        if is_paper:
-            # Paper account: IBKR often returns no market data without a
-            # data subscription. Fall back to Yahoo delayed prices for sizing
-            # only -- the actual market order fills at IBKR's real price.
-            print("  [prices] Paper account -- falling back to Yahoo prices for sizing.")
-            all_scored = (scorer_results or {}).get("all_scored", pd.DataFrame())
-            if not all_scored.empty and "ticker" in all_scored.columns:
-                for t in all_new_tickers:
-                    row = all_scored[all_scored["ticker"] == t]
-                    if not row.empty:
-                        px = float(row.iloc[0].get("price", 0))
-                        if px > 0:
-                            live_prices[t] = px
-            ibkr_any_ok = any(v and v > 0 for v in live_prices.values())
-            if ibkr_any_ok:
-                print("  [prices] Yahoo fallback prices loaded for paper sizing.")
-            else:
-                print("\n  [BLOCKED] No prices available (IBKR or Yahoo). Cannot size orders.")
-                return
-        else:
-            print("\n  [BLOCKED] IBKR returned no live prices. "
-                  "Cannot size orders without market data.")
-            return
+        print("\n  [BLOCKED] IBKR returned no live prices. Cannot size orders without market data.")
+        return
 
     is_paper = cfg.get("paper", True)
     if auto and not is_paper:
@@ -1202,19 +1157,13 @@ def run_scorer_entries(
             score     = float(row.get(score_col, 0))
             setup     = str(row.get("setup", ""))
             ibkr_px   = live_prices.get(ticker, 0.0)
-            yahoo_px  = float(row.get("price", 0.0))
             ibkr_ok   = bool(ibkr_px and ibkr_px > 0)
 
-            is_paper = cfg.get("paper", True)
-            if dry_run or (not ibkr_ok and is_paper):
-                price     = ibkr_px if ibkr_ok else yahoo_px
-                price_src = "IBKR" if ibkr_ok else "Yahoo delayed (paper sizing)"
-            else:
-                if not ibkr_ok:
-                    print(f"\n  [scorer/{label}] {ticker}: no IBKR price -- skip")
-                    continue
-                price     = ibkr_px
-                price_src = "IBKR live"
+            if not ibkr_ok:
+                print(f"\n  [scorer/{label}] {ticker}: no IBKR live price -- skip")
+                continue
+            price     = ibkr_px
+            price_src = "IBKR live"
 
             if not price or price <= 0:
                 continue

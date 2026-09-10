@@ -90,6 +90,68 @@ def main() -> None:
         result["value_sek"] = 0
         result["buying_power_sek"] = 0
 
+    # ── Ledger positions with days held ──────────────────────────────────────
+    try:
+        import sqlite3 as _sqlite3
+        from datetime import date as _date
+        _db = os.path.join(_ROOT, "data", "avanza_trades.db")
+        _con = _sqlite3.connect(_db)
+        _con.row_factory = _sqlite3.Row
+        _rows = _con.execute(
+            "SELECT ticker, qty, entry_price, entry_date, stop_price, "
+            "trailing_stop_high, stop_order_id FROM trades "
+            "WHERE status='FILLED' AND side='BUY' ORDER BY entry_date"
+        ).fetchall()
+        _con.close()
+
+        today = _date.today()
+        ledger = []
+        for _r in _rows:
+            d = dict(_r)
+            try:
+                buy_date = _date.fromisoformat(str(d["entry_date"])[:10])
+                days_held = (today - buy_date).days
+            except Exception:
+                buy_date = None
+                days_held = None
+            stop = d.get("stop_price") or 0.0
+            entry = d.get("entry_price") or 0.0
+            stop_pct = round((entry - stop) / entry * 100, 1) if entry else None
+            ledger.append({
+                "ticker":       d["ticker"],
+                "qty":          d["qty"],
+                "entry_price":  entry,
+                "entry_date":   str(d["entry_date"])[:10] if d["entry_date"] else None,
+                "days_held":    days_held,
+                "stop_price":   stop,
+                "stop_pct":     stop_pct,
+                "trail_high":   d.get("trailing_stop_high") or entry,
+            })
+
+        # Next rebalance check = 14 days from oldest open position's buy date
+        from datetime import timedelta as _td
+        buy_dates = [
+            _date.fromisoformat(h["entry_date"])
+            for h in ledger if h.get("entry_date")
+        ]
+        if buy_dates:
+            oldest_buy = min(buy_dates)
+            next_rebalance_dt = oldest_buy + _td(days=14)
+            days_to_rebalance = (next_rebalance_dt - today).days
+            next_rebalance = next_rebalance_dt.isoformat()
+        else:
+            next_rebalance = None
+            days_to_rebalance = None
+
+        result["ledger_positions"]  = ledger
+        result["next_rebalance"]    = next_rebalance
+        result["days_to_rebalance"] = days_to_rebalance
+    except Exception as exc:
+        result["ledger_positions"]  = []
+        result["next_rebalance"]    = None
+        result["days_to_rebalance"] = None
+        result["ledger_err"]        = str(exc)
+
     print(json.dumps(result, default=str, ensure_ascii=False))
 
 

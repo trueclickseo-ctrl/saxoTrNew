@@ -14,7 +14,7 @@ import json
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     try:
@@ -29,12 +29,12 @@ _LOG_FILE   = os.path.join(_ROOT, "data", "avanza_paper_trading.log")
 REFRESH_SECONDS = 30
 
 INSTRUMENTS = {
-    "DAX":        {"name": "DAX (Germany)",   "strategy": "reversion", "leverage": 5.4, "budget_sek": 2000.0, "product": "MINI L DAX AVA 850"},
-    "SP500":      {"name": "S&P 500 (US)",    "strategy": "reversion", "leverage": 5.8, "budget_sek": 2000.0, "product": "MINI L SP500 AVA 339"},
-    "GOLD":       {"name": "Gold",            "strategy": "trend",     "leverage": 5.0, "budget_sek": 2000.0, "product": "MINI L GULD AVA 247"},
-    "APPLE":      {"name": "Apple (AAPL)",    "strategy": "trend",     "leverage": 5.2, "budget_sek": 2000.0, "product": "MINI L APPLE AVA 91"},
-    "GOOGLE":     {"name": "Google (GOOGL)",  "strategy": "trend",     "leverage": 4.7, "budget_sek": 2000.0, "product": "MINI L GOOGLE AVA 63"},
-    "INVESTOR_B": {"name": "Investor B (SE)", "strategy": "trend",     "leverage": 5.0, "budget_sek": 2000.0, "product": "MINI L INVESTOR NORDNET SE23"},
+    "DAX":        {"name": "DAX (Germany)",   "strategy": "reversion", "leverage": 5.4, "budget_sek": 2000.0, "product": "MINI L DAX AVA 850",            "yahoo": "^GDAXI"},
+    "SP500":      {"name": "S&P 500 (US)",    "strategy": "reversion", "leverage": 5.8, "budget_sek": 2000.0, "product": "MINI L SP500 AVA 339",           "yahoo": "^GSPC"},
+    "GOLD":       {"name": "Gold",            "strategy": "trend",     "leverage": 5.0, "budget_sek": 2000.0, "product": "MINI L GULD AVA 247",            "yahoo": "GC=F"},
+    "APPLE":      {"name": "Apple (AAPL)",    "strategy": "trend",     "leverage": 5.2, "budget_sek": 2000.0, "product": "MINI L APPLE AVA 91",            "yahoo": "AAPL"},
+    "GOOGLE":     {"name": "Google (GOOGL)",  "strategy": "trend",     "leverage": 4.7, "budget_sek": 2000.0, "product": "MINI L GOOGLE AVA 63",           "yahoo": "GOOGL"},
+    "INVESTOR_B": {"name": "Investor B (SE)", "strategy": "trend",     "leverage": 5.0, "budget_sek": 2000.0, "product": "MINI L INVESTOR NORDNET SE23",   "yahoo": "INVE-B.ST"},
 }
 
 MARKET_OPEN_PKT  = (12, 0)   # 09:00 CET = 12:00 PKT
@@ -92,6 +92,53 @@ def _fmt_ts(ts: str | None) -> str:
     except Exception:
         return ts[:16] if ts else "—"
 
+# ── live prices ────────────────────────────────────────────────────────────────
+
+_price_cache: dict[str, tuple[float, datetime]] = {}
+_CACHE_TTL_S = 60
+
+def _fetch_price(yahoo: str) -> float | None:
+    """Return latest close/price from Yahoo Finance, cached 60s."""
+    now = datetime.now()
+    cached = _price_cache.get(yahoo)
+    if cached and (now - cached[1]).total_seconds() < _CACHE_TTL_S:
+        return cached[0]
+    try:
+        import yfinance as yf
+        df = yf.download(yahoo, period="2d", auto_adjust=True, progress=False)
+        if df.empty:
+            return None
+        closes = df["Close"]
+        if hasattr(closes, "squeeze"):
+            closes = closes.squeeze()
+        price = float(closes.dropna().iloc[-1])
+        _price_cache[yahoo] = (price, now)
+        return price
+    except Exception:
+        return None
+
+
+def _current_pnl(pos: dict, current_price: float) -> tuple[float, float, bool]:
+    """Returns (pnl_sek, pnl_pct, is_ko) — mirrors avanza_paper_trading._current_pnl."""
+    entry_price     = pos["entry_price"]
+    financing_entry = pos["financing_entry"]
+    budget          = pos["budget_sek"]
+    rate            = pos.get("financing_rate", 0.055)
+    try:
+        entry_dt  = datetime.fromisoformat(str(pos["entry_date"]))
+        elapsed   = (datetime.now() - entry_dt).days
+    except Exception:
+        elapsed = 0
+    daily_rate    = rate / 252
+    financing_now = financing_entry * ((1 + daily_rate) ** elapsed)
+    is_ko = current_price <= financing_now
+    if is_ko:
+        return -budget, -1.0, True
+    pos_return = (current_price - financing_now) / (entry_price - financing_entry) - 1.0
+    pnl_sek    = round(budget * pos_return, 2)
+    return pnl_sek, pos_return, False
+
+
 # ── render ─────────────────────────────────────────────────────────────────────
 
 def render():
@@ -114,8 +161,8 @@ def render():
     print()
 
     # header
-    print(f"  {'Instrument':<14} {'Strategy':<10} {'Lev':>5}  {'Position':<10} {'Entry':>8}  {'Entry Date':<17} {'Budget':>8}  {'Open P&L':>10}")
-    print(f"  {'-' * (W - 4)}")
+    print(f"  {'Instrument':<14} {'Strategy':<10} {'Lev':>5}  {'Position':<10} {'Entry':>8}  {'Now':>8}  {'Entry Date':<12} {'Budget':>8}  {'Open P&L':>12}")
+    print(f"  {'-' * (W + 6)}")
 
     total_open_pnl   = 0.0
     total_closed_pnl = 0.0
@@ -127,17 +174,26 @@ def render():
         in_pos   = bool(p.get("entry_price"))
         entry_px = p.get("entry_price", 0.0)
         entry_dt = _fmt_ts(p.get("entry_date"))
-        direction = p.get("direction", "LONG") if in_pos else "—"
+        direction = p.get("direction", "LONG") if in_pos else "-"
 
-        # open P&L: paper tracking uses Yahoo close prices — we show "live ~" note
-        open_pnl_str = "—"
+        open_pnl_str = "-"
+        now_px_str   = "-"
         if in_pos and entry_px:
-            open_pnl_str = "tracking..."
+            cur = _fetch_price(cfg["yahoo"])
+            if cur is not None:
+                now_px_str = f"{cur:>8.2f}"
+                pnl_sek, pnl_pct, is_ko = _current_pnl(p, cur)
+                total_open_pnl += pnl_sek
+                sign = "+" if pnl_sek >= 0 else ""
+                ko_tag = " KO!" if is_ko else ""
+                open_pnl_str = f"{sign}{pnl_sek:,.0f} SEK ({sign}{pnl_pct*100:.1f}%){ko_tag}"
+            else:
+                open_pnl_str = "no data"
 
-        pos_str = f"{direction}" if in_pos else "FLAT"
-
+        pos_str   = f"{direction}" if in_pos else "FLAT"
         entry_str = f"{entry_px:>8.2f}" if in_pos else f"{'':>8}"
-        print(f"  {cfg['name']:<14} {cfg['strategy']:<10} {cfg['leverage']:>4.1f}x  {pos_str:<10} {entry_str}  {entry_dt if in_pos else '—':<17} {cfg['budget_sek']:>7.0f}s  {open_pnl_str:>10}")
+        date_str  = entry_dt[:10] if in_pos else "-"
+        print(f"  {cfg['name']:<14} {cfg['strategy']:<10} {cfg['leverage']:>4.1f}x  {pos_str:<10} {entry_str}  {now_px_str:>8}  {date_str:<12} {cfg['budget_sek']:>7.0f}s  {open_pnl_str:>12}")
 
     # closed trades per instrument
     print()
@@ -165,6 +221,9 @@ def render():
     total_wr = (total_wins / total_n * 100) if total_n else 0.0
     print(f"  {'-' * (W - 4)}")
     print(f"  {'TOTAL':<14} {total_n:>7} {total_wins:>5} {total_losses:>7} {total_wr:>5.0f}%  {_pnl_color(total_closed_pnl) + ' SEK':>12}")
+    if total_open_pnl != 0.0:
+        sign = "+" if total_open_pnl >= 0 else ""
+        print(f"  Open P&L (live) : {sign}{total_open_pnl:,.0f} SEK")
 
     # ── SEPARATOR ─────────────────────────────────────────────────────────────
     print()

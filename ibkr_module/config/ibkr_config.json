@@ -4,7 +4,7 @@
   "live_account_id": "U28013794",
   "host": "127.0.0.1",
   "port_paper": 4002,
-  "port_live": 4001,
+  "port_live": 4002,
   "client_id": 10,
   "client_ids": {
     "blend":        10,
@@ -29,9 +29,12 @@
   },
   "strategies": {
     "live_blend": {
-      "budget_usd": 1260,
-      "_budget_sek": 13000,
-      "max_positions": 4,
+      "budget_usd": 1427,
+      "_budget_sek": 13684,
+      "max_positions": 2,
+      "fractional": false,
+      "force_targets": ["HPE", "STT"],
+      "slot_weights": {"HPE": 0.70, "STT": 0.30},
       "stop_pct": 0.08,
       "rebal_days": 14,
       "min_trade_usd": 50

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Avanza ISK sleeve dashboard — read-only monitor.
+    Avanza ISK sleeve dashboard - read-only monitor.
 
 .DESCRIPTION
     Calls avanza_module/avanza_dashboard_helper.py to gather account state
@@ -55,7 +55,7 @@ function Draw-Dashboard {
 
     # ── Header ────────────────────────────────────────────────────────────────
     NL
-    Write-Host ("  AVANZA ISK — US Blend Mirror{0,40}" -f $now) -ForegroundColor Cyan
+    Write-Host ("  AVANZA ISK - US Blend Mirror{0,40}" -f $now) -ForegroundColor Cyan
     Write-Host "  $line" -ForegroundColor DarkGray
     if ($Watch) {
         Write-Host "  Auto-refresh every 60s  |  Ctrl+C to exit" -ForegroundColor DarkGray
@@ -94,6 +94,38 @@ function Draw-Dashboard {
     }
     NL
 
+    # ── Holdings ledger (days held + rebalance tracker) ──────────────────────
+    $ledger = @($d.ledger_positions)
+    if ($ledger.Count -gt 0) {
+        Write-Host "  HOLDINGS LEDGER" -ForegroundColor Cyan
+        Write-Host "  $("-" * 68)" -ForegroundColor DarkGray
+        Write-Host ("  {0,-6} {1,4} {2,10} {3,11} {4,9} {5,8} {6,8}" -f `
+            "Ticker", "Qty", "Entry$", "Entry Date", "Days Held", "Stop$", "Stop%") `
+            -ForegroundColor DarkGray
+        Write-Host "  $("-" * 68)" -ForegroundColor DarkGray
+        foreach ($h in $ledger) {
+            $daysStr  = if ($null -ne $h.days_held) { "$($h.days_held)d" } else { "--" }
+            $stopPct  = if ($null -ne $h.stop_pct)  { "-$($h.stop_pct)%" } else { "--" }
+            Write-Host ("  {0,-6} {1,4} {2,10} {3,11} {4,9} {5,8} {6,8}" -f `
+                $h.ticker,
+                $h.qty,
+                ("{0:N2}" -f $h.entry_price),
+                $h.entry_date,
+                $daysStr,
+                ("{0:N2}" -f $h.stop_price),
+                $stopPct) -ForegroundColor White
+        }
+
+        # Rebalance check reminder
+        NL
+        $rebDate = if ($d.next_rebalance) { $d.next_rebalance } else { "--" }
+        $rebDays = if ($null -ne $d.days_to_rebalance) { "($($d.days_to_rebalance) days)" } else { "" }
+        Write-Host ("  Next rebalance check : {0}  {1}" -f $rebDate, $rebDays) -ForegroundColor Yellow
+        Write-Host "  Run: python run_avanza.py --dry-run   (review signal before --execute)" `
+            -ForegroundColor DarkGray
+        NL
+    }
+
     # ── Account summary ───────────────────────────────────────────────────────
     Write-Host "  ACCOUNT" -ForegroundColor Cyan
     Write-Host "  $("-" * 40)" -ForegroundColor DarkGray
@@ -106,7 +138,7 @@ function Draw-Dashboard {
         $gAcctClr = if ($gAcct -ge 0) { "Green" } else { "Red" }
         Write-Host ("  Total profit : {0,16}" -f (Fmt-Pct $gAcct)) -ForegroundColor $gAcctClr
     } else {
-        Write-Host "  (unavailable — connection failed)" -ForegroundColor DarkGray
+        Write-Host "  (unavailable - connection failed)" -ForegroundColor DarkGray
     }
 
     $pnl = if ($null -ne $d.today_pnl_sek) { [double]$d.today_pnl_sek } else { 0.0 }

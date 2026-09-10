@@ -154,6 +154,16 @@ def get_positions(client: Avanza, account_id: str | None = None) -> list[dict]:
         if not ob_id:
             continue
 
+        # Skip mini futures / warrants — only track plain stocks.
+        # Avanza returns instrumentType "EQUITY" for stocks; warrants have
+        # names starting with "MINI L" / "MINI S" and no plain tickerSymbol.
+        instr_type = (instr.get("instrumentType") or instr.get("type") or "").upper()
+        if instr_type and instr_type not in ("EQUITY", "STOCK", ""):
+            continue
+        instr_name = (instr.get("name") or ob.get("name") or "").upper()
+        if instr_name.startswith(("MINI L", "MINI S", "BULL ", "BEAR ")):
+            continue
+
         qty          = _mv(item.get("volume"), 0.0)
         avg_price    = _mv(item.get("averageAcquiredPrice"))
         cur_price    = _mv((quote.get("latest") or quote.get("highest")))

@@ -36,7 +36,10 @@ function Invoke-PythonHelper {
     $raw = & $Python $HelperScript 2>$null
     if ($LASTEXITCODE -ne 0 -or -not $raw) { return $null }
     try {
-        $jsonStr = ($raw -join "`n").TrimStart([char]0xFEFF)
+        # pick the last line that starts with '{' — ignores library warning messages
+        $jsonLine = ($raw | Where-Object { $_.TrimStart().StartsWith('{') }) | Select-Object -Last 1
+        if (-not $jsonLine) { return $null }
+        $jsonStr = $jsonLine.TrimStart([char]0xFEFF)
         return $jsonStr | ConvertFrom-Json
     } catch {
         return $null

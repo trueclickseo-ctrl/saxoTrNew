@@ -279,8 +279,9 @@ def _stock_contract(symbol: str) -> Stock:
 
 
 def place_market_order(ib: IB, account_id: str, symbol: str,
-                       action: str, qty: int) -> Any:
-    """Place a market order. Returns the Trade object."""
+                       action: str, qty: float) -> Any:
+    """Place a market order. qty may be fractional (e.g. 0.5826) when the
+    account has IBKR fractional-shares permission enabled. Returns the Trade object."""
     contract = _stock_contract(symbol)
     ib.qualifyContracts(contract)
     order = MarketOrder(action, qty, tif="DAY", account=account_id)

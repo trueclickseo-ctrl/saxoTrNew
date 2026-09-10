@@ -26,7 +26,7 @@ _ROOT = Path(__file__).parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from atos.universe import US_TICKERS
+from atos.universe import US_TICKERS, LIVE_TICKERS
 from atos import us_momentum as _mom
 from atos import us_blend_v2 as _momv2
 from atos import us_reversion as _rev
@@ -113,13 +113,15 @@ def _download(tickers: list[str], lookback_days: int = 260) -> dict[str, pd.Data
     return result
 
 
-def blend_targets(lookback_days: int = 252) -> dict:
+def blend_targets(lookback_days: int = 252, tickers: list | None = None) -> dict:
     """US Blend cross-sectional momentum signal.
     Returns {risk_off: bool, targets: list[str], reason: str, detail: dict}.
+    tickers: override universe (pass LIVE_TICKERS for live trading, default US_TICKERS for SIM).
     """
-    feat_data = _download(US_TICKERS, lookback_days=lookback_days)
-    print(f"  [blend] {len(feat_data)}/{len(US_TICKERS)} tickers with sufficient history")
-    result = _mom.compute_targets(feat_data, US_TICKERS)
+    tks = tickers if tickers is not None else US_TICKERS
+    feat_data = _download(tks, lookback_days=lookback_days)
+    print(f"  [blend] {len(feat_data)}/{len(tks)} tickers with sufficient history")
+    result = _mom.compute_targets(feat_data, tks)
     print(f"  [blend] risk_off={result['risk_off']}  targets={result.get('targets', [])}")
     return result
 

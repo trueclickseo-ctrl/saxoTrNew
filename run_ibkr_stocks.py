@@ -184,17 +184,12 @@ def main() -> None:
         is_paper  = True
 
     # ── Live mode safety gate ─────────────────────────────────────────────────
-    # Read-only diagnostics (--info, --positions, --dashboard) are exempt from
-    # the confirmation gate -- they cannot place orders and are safe to run any time.
-    _live_readonly = not is_paper and (args.info or args.positions or args.dashboard)
+    # Structural checks (strategy + budget) apply to all live strategy runs,
+    # including dry-runs, so the plan is shown using the live budget/slots.
+    # IBKR_LIVE_CONFIRMED gate only fires when --execute is also passed.
+    _live_info_only = not is_paper and (args.info or args.positions or args.dashboard)
 
-    if not is_paper and not _live_readonly:
-        if os.environ.get("IBKR_LIVE_CONFIRMED", "0").strip() != "1":
-            print("ERROR: IBKR live mode requires IBKR_LIVE_CONFIRMED=1 in environment.")
-            print("  Run:  setx IBKR_LIVE_CONFIRMED 1")
-            print("  Then restart the terminal or Task Scheduler service.")
-            sys.exit(1)
-
+    if not is_paper and not _live_info_only:
         if not args.trail_stops and args.strategy not in ("blend",):
             print(f"ERROR: --live only supports --strategy blend or --trail-stops.")
             print(f"  Got: --strategy {args.strategy}.")
@@ -213,12 +208,25 @@ def main() -> None:
         cfg["strategies"]["blend"] = live_blend_cfg
         cfg["paper"] = False
 
+        # Confirmed gate: only required when actually placing orders
+        if args.execute:
+            if os.environ.get("IBKR_LIVE_CONFIRMED", "0").strip() != "1":
+                print("ERROR: IBKR live mode requires IBKR_LIVE_CONFIRMED=1 in environment.")
+                print("  Run:  setx IBKR_LIVE_CONFIRMED 1")
+                print("  Then restart the terminal or Task Scheduler service.")
+                sys.exit(1)
+
     if not is_paper:
         # Auto-set account from config when not overridden in env (all live ops)
         if not os.environ.get("IBKR_ACCOUNT_ID"):
             _live_acct = cfg.get("live_account_id", "")
             if _live_acct:
                 os.environ["IBKR_ACCOUNT_ID"] = _live_acct
+        # Live uses its own DB -- never share state with paper trading
+        os.environ["IBKR_DB_PATH"] = os.path.join(_ROOT, "data", "ibkr_live_stocks.db")
+        print(f"  [live] State DB -> data/ibkr_live_stocks.db (separate from paper)")
+    else:
+        os.environ.setdefault("IBKR_DB_PATH", os.path.join(_ROOT, "data", "ibkr_stocks.db"))
 
     host = cfg["host"]
 
@@ -260,7 +268,12 @@ def main() -> None:
     if needs_signal:
         if args.strategy in ("blend", "all"):
             print("\n  Pre-generating US Blend signal (Yahoo Finance)...")
-            pre_signal = sig.blend_targets()
+            if not is_paper:
+                from atos.universe import LIVE_TICKERS as _live_tks
+                print(f"  [live] Using LIVE_TICKERS ({len(_live_tks)} names, solid only)")
+                pre_signal = sig.blend_targets(tickers=_live_tks)
+            else:
+                pre_signal = sig.blend_targets()
 
         if args.strategy in ("blend_v2",):
             print("\n  Pre-generating US Blend V2 signal (Yahoo Finance)...")
