@@ -50,19 +50,20 @@ sizing overrides above all live in forex/runner.py, not here.
 import numpy as np
 import pandas as pd
 
-RSI_PERIOD     = 2
-RSI_OVERSOLD   = 10
-RSI_OVERBOUGHT = 90
-RSI_EXIT_LONG  = 55
-RSI_EXIT_SHORT = 45
-TREND_EMA      = 200
-ATR_PERIOD     = 14
-ATR_STOP_MULT  = 1.5
-RISK_PCT       = 0.0025  # was 0.01->0.005 on 2026-08-22, cut again 2026-08-24 -- see strategy.py's RISK_PCT comment
-MAX_POSITIONS  = 4
-TIME_STOP_DAYS = 12
-LOT_ROUND      = 1_000
-MIN_BARS       = TREND_EMA + RSI_PERIOD + 5
+RSI_PERIOD      = 2
+RSI_OVERSOLD    = 10
+RSI_OVERBOUGHT  = 90
+RSI_EXIT_LONG   = 55
+RSI_EXIT_SHORT  = 45
+TREND_EMA       = 200
+ATR_PERIOD      = 14
+ATR_STOP_MULT   = 1.5
+RISK_PCT        = 0.0025  # was 0.01->0.005 on 2026-08-22, cut again 2026-08-24 -- see strategy.py's RISK_PCT comment
+MAX_POSITIONS   = 4
+TIME_STOP_DAYS  = 12
+LOT_ROUND       = 1_000
+MIN_BARS        = TREND_EMA + RSI_PERIOD + 5
+PROFIT_TARGET_R = 1.0  # close immediately when profit reaches this R multiple (before RSI recovers)
 
 
 def _rsi(closes: pd.Series, period: int = RSI_PERIOD) -> pd.Series:
@@ -158,11 +159,24 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
     cur_rsi   = float(_rsi(c).iloc[-1])
     cur_high  = float(h.iloc[-1])
     cur_low   = float(l.iloc[-1])
+    cur_close = float(c.iloc[-1])
     direction = position["direction"]
     stop_px   = position["stop_price"]
 
     if calendar_days_held >= TIME_STOP_DAYS:
         return True, f"time_stop ({calendar_days_held}d)"
+
+    # Profit-target exit: close as soon as we've banked PROFIT_TARGET_R.
+    # Uses initial_stop_price (frozen at entry) so the R reference doesn't
+    # shrink as the ladder ratchets the live stop upward.
+    entry = float(position.get("entry_price", 0))
+    initial_stop = float(position.get("initial_stop_price") or stop_px)
+    R = abs(entry - initial_stop)
+    if R > 0:
+        profit = (cur_close - entry) if direction == "Buy" else (entry - cur_close)
+        profit_r = profit / R
+        if profit_r >= PROFIT_TARGET_R:
+            return True, f"profit_target ({profit_r:.2f}R >= {PROFIT_TARGET_R}R)"
 
     if direction == "Buy":
         if cur_rsi >= RSI_EXIT_LONG:
