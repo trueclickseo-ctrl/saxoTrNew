@@ -25,7 +25,8 @@ ADX_MIN = 25
 ATR_PERIOD = 14
 ATR_STOP_MULT = 1.5
 RISK_PCT = 0.0025
-TIME_STOP_DAYS = 25
+TIME_STOP_DAYS  = 25
+PROFIT_TARGET_R = 2.0
 LOT_ROUND = 1_000
 PULLBACK_LOOKBACK = 3
 
@@ -152,6 +153,15 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
     h, l, c = df["High"], df["Low"], df["Close"]
     e50 = _ema(c, TREND_EMA)
     direction, stop = position["direction"], float(position.get("stop_price", 0))
+
+    entry        = float(position.get("entry_price", 0))
+    initial_stop = float(position.get("initial_stop_price") or stop)
+    R = abs(entry - initial_stop)
+    if R > 0:
+        cur_close = float(c.iloc[-1])
+        profit = (cur_close - entry) if direction == "Buy" else (entry - cur_close)
+        if profit / R >= PROFIT_TARGET_R:
+            return True, f"profit_target ({profit / R:.2f}R >= {PROFIT_TARGET_R}R)"
 
     if direction == "Buy":
         if c.iloc[-1] < e50.iloc[-1]:

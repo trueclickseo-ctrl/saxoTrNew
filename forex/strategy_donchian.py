@@ -35,6 +35,7 @@ ATR_STOP_MULT   = 2.0
 RISK_PCT        = 0.0025  # was 0.01->0.005 on 2026-08-22, cut again 2026-08-24 -- see strategy.py's RISK_PCT comment
 MAX_POSITIONS   = 4
 TIME_STOP_DAYS  = 30
+PROFIT_TARGET_R = 2.0
 LOT_ROUND       = 1_000
 MIN_BARS        = EMA_TREND + ATR_PERIOD + 5
 
@@ -134,6 +135,14 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
 
     if calendar_days_held >= TIME_STOP_DAYS:
         return True, f"time_stop ({calendar_days_held}d)"
+
+    entry        = float(position.get("entry_price", 0))
+    initial_stop = float(position.get("initial_stop_price") or stop_px)
+    R = abs(entry - initial_stop)
+    if R > 0:
+        profit = (today - entry) if direction == "Buy" else (entry - today)
+        if profit / R >= PROFIT_TARGET_R:
+            return True, f"profit_target ({profit / R:.2f}R >= {PROFIT_TARGET_R}R)"
 
     if direction == "Buy":
         if stop_px > 0 and float(l.iloc[-1]) <= stop_px:

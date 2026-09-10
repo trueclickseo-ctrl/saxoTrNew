@@ -53,7 +53,8 @@ VOL_PCT_MAX = 0.90
 ATR_STOP_MULT = 1.5
 RISK_PCT = 0.0025
 MAX_POSITIONS = 4
-TIME_STOP_DAYS = 10
+TIME_STOP_DAYS  = 10
+PROFIT_TARGET_R = 1.0
 LOT_ROUND = 1_000
 
 # Enough history for EMA regime and volatility percentile.
@@ -241,6 +242,15 @@ def should_exit(position: dict, df: pd.DataFrame,
 
     if calendar_days_held >= TIME_STOP_DAYS:
         return True, f"time_stop ({calendar_days_held}d)"
+
+    entry        = float(position.get("entry_price", 0))
+    initial_stop = float(position.get("initial_stop_price") or stop_px)
+    R = abs(entry - initial_stop)
+    if R > 0:
+        cur_close = float(c.iloc[-1])
+        profit = (cur_close - entry) if direction == "Buy" else (entry - cur_close)
+        if profit / R >= PROFIT_TARGET_R:
+            return True, f"profit_target ({profit / R:.2f}R >= {PROFIT_TARGET_R}R)"
 
     # Stop check before indicator exit: conservative when OHLC can imply both.
     if direction == "Buy":

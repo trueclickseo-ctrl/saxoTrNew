@@ -54,6 +54,7 @@ ATR_PERIOD           = 14
 ATR_STOP_MULT        = 2.5
 RISK_PCT             = 0.0025  # was 0.01->0.005 on 2026-08-22, cut again 2026-08-24 -- see strategy.py's RISK_PCT comment
 TIME_STOP_DAYS       = 15
+PROFIT_TARGET_R      = 2.0
 LOT_ROUND            = 1_000
 
 # Need 200 EMA warmup + SEQ_LEN lookback + ADX warmup
@@ -239,6 +240,15 @@ def should_exit(position: dict, df: pd.DataFrame,
     is_long  = position.get("direction") == "Buy"
     high_now = float(h.iloc[-1])
     low_now  = float(l.iloc[-1])
+
+    entry        = float(position.get("entry_price", 0))
+    initial_stop = float(position.get("initial_stop_price") or stop_px)
+    R = abs(entry - initial_stop)
+    if R > 0:
+        cur_close = float(c.iloc[-1])
+        profit = (cur_close - entry) if is_long else (entry - cur_close)
+        if profit / R >= PROFIT_TARGET_R:
+            return True, f"profit_target ({profit / R:.2f}R >= {PROFIT_TARGET_R}R)"
 
     # B. ATR hard stop
     if is_long and stop_px > 0 and low_now <= stop_px:

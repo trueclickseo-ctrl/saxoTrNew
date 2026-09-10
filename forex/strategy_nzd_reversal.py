@@ -55,7 +55,8 @@ ATR_PERIOD     = 14
 ATR_STOP_MULT  = 1.5
 RISK_PCT       = 0.0025
 MAX_POSITIONS  = 20
-TIME_STOP_DAYS = 12
+TIME_STOP_DAYS  = 12
+PROFIT_TARGET_R = 1.0
 LOT_ROUND      = 1_000
 MIN_BARS       = TREND_EMA + RSI_PERIOD + 5
 
@@ -166,6 +167,15 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
 
     if calendar_days_held >= TIME_STOP_DAYS:
         return True, f"time_stop ({calendar_days_held}d)"
+
+    entry        = float(position.get("entry_price", 0))
+    initial_stop = float(position.get("initial_stop_price") or stop_px)
+    R = abs(entry - initial_stop)
+    if R > 0:
+        cur_close = float(c.iloc[-1])
+        profit = (cur_close - entry) if direction == "Buy" else (entry - cur_close)
+        if profit / R >= PROFIT_TARGET_R:
+            return True, f"profit_target ({profit / R:.2f}R >= {PROFIT_TARGET_R}R)"
 
     if direction == "Sell":
         # Reversed-Sell: exit when RSI rises back to 55 (short squeeze ending)

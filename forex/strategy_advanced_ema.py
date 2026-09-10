@@ -42,7 +42,8 @@ ATR_PERIOD = 14
 ATR_STOP_MULT = 1.5
 
 RISK_PCT = 0.0025
-TIME_STOP_DAYS = 45
+TIME_STOP_DAYS  = 45
+PROFIT_TARGET_R = 2.0
 SIGNAL_LOOKBACK = 10
 LOT_ROUND = 1_000
 
@@ -188,6 +189,15 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
     fast, slow = _ema(c, FAST_EMA), _ema(c, SLOW_EMA)
     direction = position["direction"]
     stop = float(position.get("stop_price", 0))
+
+    entry        = float(position.get("entry_price", 0))
+    initial_stop = float(position.get("initial_stop_price") or stop)
+    R = abs(entry - initial_stop)
+    if R > 0:
+        cur_close = float(c.iloc[-1])
+        profit = (cur_close - entry) if direction == "Buy" else (entry - cur_close)
+        if profit / R >= PROFIT_TARGET_R:
+            return True, f"profit_target ({profit / R:.2f}R >= {PROFIT_TARGET_R}R)"
 
     if direction == "Buy":
         if fast.iloc[-2] >= slow.iloc[-2] and fast.iloc[-1] < slow.iloc[-1]:

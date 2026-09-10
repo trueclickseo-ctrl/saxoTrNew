@@ -51,7 +51,8 @@ TRAIL_TRIGGER_ATR = 2.0
 TRAIL_ATR_MULT = 2.0
 
 RISK_PCT = 0.0025
-TIME_STOP_DAYS = 20
+TIME_STOP_DAYS  = 20
+PROFIT_TARGET_R = 2.0
 LOT_ROUND = 1_000
 MIN_BARS = EMA_TREND + LOOKBACK + 40
 
@@ -291,6 +292,15 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
 
     high_now = float(h.iloc[-1])
     low_now = float(l.iloc[-1])
+
+    entry        = float(position.get("entry_price", 0))
+    initial_stop = float(position.get("initial_stop_price") or stop_px)
+    R = abs(entry - initial_stop)
+    if R > 0:
+        cur_close = float(c.iloc[-1])
+        profit = (cur_close - entry) if is_long else (entry - cur_close)
+        if profit / R >= PROFIT_TARGET_R:
+            return True, f"profit_target ({profit / R:.2f}R >= {PROFIT_TARGET_R}R)"
 
     if stop_px > 0:
         if is_long and low_now <= stop_px:

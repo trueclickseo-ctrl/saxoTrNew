@@ -48,7 +48,8 @@ EMA_SLOW = 50
 ATR_PERIOD = 14
 ATR_STOP_MULT = 2.5
 RISK_PCT = 0.0025
-TIME_STOP_DAYS = 15
+TIME_STOP_DAYS  = 15
+PROFIT_TARGET_R = 2.0
 LOT_ROUND = 1_000
 
 # Reject unusually quiet / extreme volatility regimes
@@ -223,6 +224,15 @@ def should_exit(position: dict, df: pd.DataFrame,
     h, l, c = df["High"], df["Low"], df["Close"]
     stop = float(position.get("stop_price", 0))
     is_long = position.get("direction") == "Buy"
+
+    entry        = float(position.get("entry_price", 0))
+    initial_stop = float(position.get("initial_stop_price") or stop)
+    R = abs(entry - initial_stop)
+    if R > 0:
+        cur_close = float(c.iloc[-1])
+        profit = (cur_close - entry) if is_long else (entry - cur_close)
+        if profit / R >= PROFIT_TARGET_R:
+            return True, f"profit_target ({profit / R:.2f}R >= {PROFIT_TARGET_R}R)"
 
     if is_long and stop > 0 and float(l.iloc[-1]) <= stop:
         return True, f"hard_stop ({stop:.5f})"
