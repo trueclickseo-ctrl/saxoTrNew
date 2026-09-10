@@ -938,11 +938,16 @@ PROFIT_LADDER_ACCOUNTS: set[str] = {"sim", "live", "live_eur"}
 # ladder-vs-no-ladder control.
 PROFIT_LADDER_STRATEGIES         = {"rsi", "rsi_trend", "rsi_atr"}
 PROFIT_LADDER_BREAKEVEN_R        = 0.75
-PROFIT_LADDER_COST_BUFFER_R      = 0.10
+PROFIT_LADDER_COST_BUFFER_R      = 0.10   # at 0.75R: stop -> entry + 0.10R (cost buffer)
 PROFIT_LADDER_LOCK_ACTIVATE_R    = 1.00
-PROFIT_LADDER_LOCK_R             = 0.50
+PROFIT_LADDER_LOCK_R             = 0.75   # 2026-09-10: 0.50->0.75: at 1R peak lock 75% of gain
+                                           # (data: 108 trades, 46% hit 1R, avg give-back 2.34R;
+                                           # 67% that hit 1R continue to 1.25R so don't close --
+                                           # lock tightly and let it run instead)
 PROFIT_LADDER_TRAIL_ACTIVATE_R   = 1.25
-PROFIT_LADDER_TRAIL_ATR_MULT     = 1.00
+PROFIT_LADDER_TRAIL_ATR_MULT     = 0.35   # 2026-09-10: 1.00->0.35: trail at 0.35xATR past 1.25R
+                                           # (current 1.0xATR lets 2.34R avg give-back happen;
+                                           # tight trail fires within 1-2 bars of peak reversal)
 
 # ── Exit advisor — the "AI profit scan" for open positions ───────────────────
 # Stage A (2026-08-31): forex/exit_advisor.py is a deterministic give-back-

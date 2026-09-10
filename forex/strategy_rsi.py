@@ -34,10 +34,11 @@ EXIT (first hit), as enforced by should_exit():
       PROFIT_LADDER_ACCOUNTS — ON for sim + both LIVE books since
       2026-08-31, at the user's explicit request). When active it OWNS
       this position's stop and REPLACES both trailing_stop_update and the
-      one-shot breakeven stop: entry+0.10R at >=0.75R, entry+0.50R at
-      >=1.0R, max(that, close - 1×ATR) at >=1.25R. Ratchet only.
-  The primary exit (A / the 2R broker take-profit / C) is unchanged by
-  either mechanism.
+      one-shot breakeven stop. 2026-09-10 tightened (108 closed trades;
+      avg give-back 2.34R; 67% that hit 1R continue to 1.25R so lock,
+      don't close): entry+0.10R at >=0.75R, entry+0.75R at >=1.0R,
+      max(that, close - 0.35×ATR) at >=1.25R. Ratchet only.
+  The primary exit (A / the 2R profit-target / C) is unchanged.
 
 SIZING: this module's size_position() risks RISK_PCT of equity per trade,
   ATR-based. The LIVE books override it with a fixed ~€45 per-trade risk
@@ -63,7 +64,7 @@ MAX_POSITIONS   = 4
 TIME_STOP_DAYS  = 12
 LOT_ROUND       = 1_000
 MIN_BARS        = TREND_EMA + RSI_PERIOD + 5
-PROFIT_TARGET_R = 1.0  # close immediately when profit reaches this R multiple (before RSI recovers)
+PROFIT_TARGET_R = 2.0  # hard close at 2R; ladder manages 0.75-2R with tight trailing (see runner.py)
 
 
 def _rsi(closes: pd.Series, period: int = RSI_PERIOD) -> pd.Series:
