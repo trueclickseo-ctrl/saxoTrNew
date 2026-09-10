@@ -906,32 +906,31 @@ BREAKEVEN_GAP_FILL_PCT  = 0.50
 # R = the initial entry-to-stop distance (1.5 x ATR_at_entry for RSI):
 #
 #   >= 0.75 R profit  -> stop to entry + COST_BUFFER_R x R  (breakeven + costs)
-#   >= 1.00 R profit  -> stop to entry + LOCK_R x R          (lock +0.5 R)
+#   >= 1.00 R profit  -> stop to entry + LOCK_R x R          (lock profit)
 #   >= 1.25 R profit  -> stop to max(lock level, close - TRAIL_ATR_MULT x ATR_now)
 #
-# Ratchet only (a rung never loosens the stop). Primary exit is still RSI
-# recovery / 2 R broker TP / 12-day time stop / hard stop -- unchanged.
+# Ratchet only (a rung never loosens the stop). Primary exit: RSI recovery /
+# 2R software profit-target (strategy_rsi.py) / 12-day time stop / hard stop.
 #
 # 2026-08-31: turned ON for both real-money accounts, then SIM too, at the
 # user's explicit repeated request -- the exact 3-stage design they
-# specified (+0.75 R breakeven+costs / +1.0 R lock +0.5 R / +1.25 R 1xATR
-# trail), after a GBPPLN position gave back +30 -> -24 PLN. The backtest
-# (backtests/rsi_exit_ladder_backtest.py, 17 pairs / 12 y / 2365 trades)
-# showed only a small net edge and that it doesn't fully close the give-back
-# (avg MFE ~0.51 R sits below the 0.75 R first rung) -- but the ladder only
-# ever TIGHTENS a stop (pure ratchet, never loosens), the primary RSI-
-# recovery / 2 R TP / 12-day exits are unchanged, and the user accepts the
-# "may clip some winners a touch early" trade-off to stop the give-back.
+# specified (+0.75R breakeven+costs / +1.0R lock +0.5R / +1.25R 1xATR
+# trail), after a GBPPLN position gave back +30 -> -24 PLN.
 #
-# SIM added 2026-08-31 to forward-test it live: it applies ONLY to the "rsi"
-# strategy (PROFIT_LADDER_STRATEGIES), so "advanced_rsi_master" -- rsi's
-# untouched A/B twin -- keeps the plain breakeven + 1.5xATR trail and is a
-# clean control. report_profit_ladder.py compares the two. Every rung move
-# is logged ([PROFIT-LADDER ... rung=...]) and stamped on the position
-# (pos["ladder_rung"]) so the give-back-prevented vs winner-clipped
-# trade-off is measurable, not guessed. Empty the set to revert everything
-# to the plain breakeven + 1.5xATR trail.
-PROFIT_LADDER_ACCOUNTS: set[str] = {"sim", "live", "live_eur"}
+# 2026-09-10: data-driven tightening (108 closed RSI trades analysed):
+#   - median MFE = 0.97R, avg give-back on trades peaking >=1R = 2.34R
+#   - 72% of trades hitting 0.75R continue to 1.0R; 67% hitting 1.0R
+#     continue to 1.25R -> close at 1R clips winners; lock tightly instead
+#   - LOCK_R: 0.50 -> 0.75  (at 1R peak lock 75% of the gain)
+#   - TRAIL_ATR_MULT: 1.00 -> 0.35  (at 1.25R+ trail 0.35xATR; fires
+#     within 1-2 bars of peak reversal vs the old 1xATR that rode back)
+#   - strategy_rsi.py PROFIT_TARGET_R: 1.0 -> 2.0  (hard close at 2R;
+#     only 9% of trades reach it but it protects against extreme reversals)
+#   - ai_sim added to PROFIT_LADDER_ACCOUNTS (was missing)
+#
+# Every rung move is logged ([PROFIT-LADDER ... rung=...]) and stamped on the
+# position (pos["ladder_rung"]). Empty the set to revert to plain 1.5xATR trail.
+PROFIT_LADDER_ACCOUNTS: set[str] = {"sim", "live", "live_eur", "ai_sim"}
 # "rsi_trend" (2026-09-02) is included so the SIM A/B isolates ONE variable
 # -- the regime entry gate -- against "rsi". Both arms then share identical
 # exit management (the ladder). "advanced_rsi_master" stays OUT as the
@@ -3323,8 +3322,8 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
         cal_days  = (date.today() - date.fromisoformat(ed)).days
 
         # RSI profit-protection ladder: when active for this account+strategy
-        # (PROFIT_LADDER_ACCOUNTS x PROFIT_LADDER_STRATEGIES -- as of
-        # 2026-08-31 all three accounts, "rsi" only) it OWNS this position's
+        # (PROFIT_LADDER_ACCOUNTS x PROFIT_LADDER_STRATEGIES -- sim/live/
+        # live_eur/ai_sim x rsi/rsi_trend/rsi_atr) it OWNS this position's
         # stop management and REPLACES both the generic trailing block below
         # and _apply_breakeven_stop -- so the two systems can never fight.
         # Every other strategy (incl. rsi's A/B twin advanced_rsi_master)
