@@ -151,7 +151,7 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
         return True, f"time_stop ({calendar_days_held}d)"
 
     entry        = float(position.get("entry_price", 0))
-    initial_stop = float(position.get("initial_stop_price") or stop_px)
+    initial_stop = float(position.get("initial_stop_price") or 0)
     R = abs(entry - initial_stop)
     if R > 0:
         profit = (cur_close - entry) if direction == "Buy" else (entry - cur_close)

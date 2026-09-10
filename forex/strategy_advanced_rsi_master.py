@@ -244,7 +244,7 @@ def should_exit(position: dict, df: pd.DataFrame,
         return True, f"time_stop ({calendar_days_held}d)"
 
     entry        = float(position.get("entry_price", 0))
-    initial_stop = float(position.get("initial_stop_price") or stop_px)
+    initial_stop = float(position.get("initial_stop_price") or 0)
     R = abs(entry - initial_stop)
     if R > 0:
         cur_close = float(c.iloc[-1])
