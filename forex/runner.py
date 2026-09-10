@@ -2583,6 +2583,44 @@ def _mark_lbo_v2_session_traded(session_key: str) -> None:
         logger.warning(f"lbo_v2_session_cooldown: could not write {LBO_V2_SESSION_COOLDOWN_FILE}: {e}")
 
 
+# Donchian same-day re-entry cooldown (2026-09-10).
+# Donchian is a daily-bar strategy (30-day channel close). The live runner
+# cycles multiple times per day, so after a hard_stop the same breakout
+# condition is still true and the pair re-enters within minutes, racking up
+# a chain of small losses on a single daily signal. Block hard-stopped pairs
+# for the rest of the UTC calendar day, resetting at midnight.
+DONCHIAN_COOLDOWN_FILE = os.path.join(DATA_DIR, "donchian_cooldown.json")
+_DONCHIAN_STRATS = ("donchian", "donchian_ai", "donchian_quality")
+
+
+def _load_donchian_cooldown() -> set:
+    """Return symbols hard-stopped today (UTC) across all donchian strategies."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if not os.path.exists(DONCHIAN_COOLDOWN_FILE):
+        return set()
+    try:
+        with open(DONCHIAN_COOLDOWN_FILE) as f:
+            data = json.load(f)
+        if data.get("date") == today:
+            return set(data.get("cooled", []))
+    except Exception:
+        pass
+    return set()
+
+
+def _mark_donchian_cooled(sym: str) -> None:
+    """Suppress sym for the rest of today (UTC) after a donchian hard_stop."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    cooled = _load_donchian_cooldown()
+    cooled.add(sym)
+    os.makedirs(DATA_DIR, exist_ok=True)
+    try:
+        with open(DONCHIAN_COOLDOWN_FILE, "w") as f:
+            json.dump({"date": today, "cooled": sorted(cooled)}, f, indent=2)
+    except Exception as e:
+        logger.warning(f"donchian_cooldown: could not write {DONCHIAN_COOLDOWN_FILE}: {e}")
+
+
 def _log_order(entry: dict) -> None:
     os.makedirs(DATA_DIR, exist_ok=True)
     orders = []
@@ -3635,6 +3673,9 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
                                   gross_pnl_base_override=saxo_pnl_eur)
             if strat_name in ("gap", "gap_weekend"):
                 _mark_gap_exhausted(sym, strat_name)
+            if strat_name in _DONCHIAN_STRATS and "hard_stop" in reason:
+                _mark_donchian_cooled(sym)
+                logger.info(f"  [{strat_name}] donchian cooldown: {sym} suppressed for rest of day after hard_stop")
             # Label the signal-log outcome for ML training data — prefer the
             # true net (price + broker cost) figure when we have it, so a
             # signal that "won" on raw price but lost to cost isn't labeled
@@ -3911,6 +3952,15 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         signals = strat_mod.generate_signals(market_data, **kw)
     else:
         signals = strat_mod.generate_signals(market_data, open_symbols=open_syms)
+        if strat_name in _DONCHIAN_STRATS:
+            _dc_cooled = _load_donchian_cooldown()
+            if _dc_cooled:
+                before = len(signals)
+                signals = [s for s in signals if s["symbol"] not in _dc_cooled]
+                if before != len(signals):
+                    logger.info(f"  [{strat_name}] donchian cooldown: suppressed "
+                                f"{before - len(signals)} pair(s) hard-stopped today "
+                                f"({sorted(_dc_cooled)})")
 
     # Weekend on a real-money account: signals are generated (above) so they
     # can be surfaced, but no entry is placed -- they'd only rest as stale
