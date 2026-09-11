@@ -1,54 +1,26 @@
-# AI-WRITTEN Phase 2+3 2026-09-11 by claude-sonnet-5
-# Entry filter: Block new signals on exotic/thin-liquidity currency crosses (NOK, SEK, DKK, PLN, CZK, TRY, THB, HKD, MXN)
-# Exit filter: Require 2 consecutive daily closes beyond the hard-stop level before confirming a hard-stop exit, to avoid single-bar wick stop-outs on mean-reverting gap-fade trades
+# AI-WRITTEN Phase 3 only 2026-09-11 by claude-sonnet-5
+# Entry filter: none (pass-through) — Phase 2 blacklist (NOK/SEK/DKK/PLN/CZK)
+#   removed: Nordic/Scandi crosses are profitable gap pairs (DKKHUF +779,
+#   PLNSEK +407, GBPSEK +78). Need more London/Tokyo data before filtering.
+# Exit filter: Require 2 consecutive daily closes beyond the hard-stop level
+#   before confirming a hard-stop exit, to avoid single-bar wick stop-outs.
 
 import pandas as pd
 from forex.strategy_gap import generate_signals as _orig_generate_signals
 from forex.strategy_gap import should_exit as _orig_should_exit
 
-# Currency codes identified in the closed-trade ledger as consistent large
-# losers for the gap strategy (wide spread / thin liquidity crosses).
-EXOTIC_CCY_BLACKLIST = {
-    "NOK", "SEK", "DKK", "PLN", "CZK", "TRY", "THB", "HKD", "MXN",
-}
-
-
-def _is_blacklisted(symbol: str) -> bool:
-    if not symbol:
-        return False
-    sym = symbol.upper()
-    for ccy in EXOTIC_CCY_BLACKLIST:
-        if ccy in sym:
-            return True
-    return False
-
 
 def generate_signals(market_data: dict, open_symbols: set = None,
-                      live_prices: dict = None,
-                      exhausted_symbols: set = None, **kwargs) -> list:
-    """Wraps strategy_gap.generate_signals, filtering out signals on
-    exotic/thin-liquidity currency crosses that have shown consistently
-    poor performance in the closed trade ledger.
-    """
-    signals = _orig_generate_signals(
+                     live_prices: dict = None,
+                     exhausted_symbols: set = None, **kwargs) -> list:
+    """Pass-through — no entry filter applied yet (insufficient data)."""
+    return _orig_generate_signals(
         market_data,
         open_symbols=open_symbols,
         live_prices=live_prices,
         exhausted_symbols=exhausted_symbols,
         **kwargs,
     )
-
-    if not signals:
-        return signals
-
-    filtered = []
-    for sig in signals:
-        sym = sig.get("symbol") if isinstance(sig, dict) else None
-        if _is_blacklisted(sym):
-            continue
-        filtered.append(sig)
-
-    return filtered
 
 
 def _is_hard_stop_reason(reason: str) -> bool:
