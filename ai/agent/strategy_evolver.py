@@ -410,6 +410,11 @@ _FOREX_STRATEGY_SOURCES = {
     ]
     if os.path.exists(os.path.join(BASE, "forex", f"strategy_{s}.py"))
 }
+# "ema" lives at forex/strategy.py (not strategy_ema.py — legacy naming).
+# Add it manually so the evolver can process it.
+_ema_src = os.path.join(BASE, "forex", "strategy.py")
+if os.path.exists(_ema_src):
+    _FOREX_STRATEGY_SOURCES["ema"] = _ema_src
 _FOREX_OVERRIDE_FILES = {
     s: os.path.join(_FOREX_VARIANTS_DIR, f"strategy_{s}_override.py")
     for s in _FOREX_STRATEGY_SOURCES
