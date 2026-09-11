@@ -44,6 +44,23 @@ from avanza_mini_futures_backtest import _download, _moving_average, _simulate, 
 CANDIDATES: list[tuple[str, str, str, float, str, int]] = [
     # label           ticker    direction   leverage  strategy     ma_days
 
+    # ── Russell 2000 (MINI L RUSSELL2000 NDA S85 ≈ 6.83x) ────────────────────
+    ("MINI L RUT",    "^RUT",   "LONG",        5.0, "reversion",  20),
+    ("MINI L RUT",    "^RUT",   "LONG",        7.0, "reversion",  20),
+    ("MINI L RUT",    "^RUT",   "LONG",       10.0, "reversion",  20),
+    ("MINI L RUT",    "^RUT",   "LONG",        5.0, "trend",      20),
+    ("MINI L RUT",    "^RUT",   "LONG",        7.0, "trend",      20),
+    ("MINI L RUT",    "^RUT",   "LONG",       10.0, "trend",      20),
+    ("MINI S RUT",    "^RUT",   "SHORT",       5.0, "reversion",  20),
+    ("MINI S RUT",    "^RUT",   "SHORT",       7.0, "reversion",  20),
+
+    # ── Oracle (MINI L ORACLE NORDNET SE26 ≈ 3.98x) ──────────────────────────
+    ("MINI L ORCL",   "ORCL",   "LONG",        4.0, "trend",      20),
+    ("MINI L ORCL",   "ORCL",   "LONG",        5.0, "trend",      20),
+    ("MINI L ORCL",   "ORCL",   "LONG",       10.0, "trend",      20),
+    ("MINI L ORCL",   "ORCL",   "LONG",        4.0, "reversion",  20),
+    ("MINI L ORCL",   "ORCL",   "LONG",        5.0, "reversion",  20),
+
     # ── OMX Stockholm 30 ─────────────────────────────────────────────────────
     ("MINI L OMX",    "^OMX",   "LONG",        5.0, "reversion",  20),
     ("MINI L OMX",    "^OMX",   "LONG",       10.0, "reversion",  20),
