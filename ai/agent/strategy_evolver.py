@@ -890,11 +890,12 @@ def _call_claude(prompt_user: str, system: str = _SYSTEM) -> dict | None:
                 break
         # Strip markdown fences if model wrapped the JSON (```json ... ```)
         if text.startswith("```"):
-            text = text.split("```", 2)[-1] if text.count("```") >= 2 else text
-            # remove optional language tag on first line
+            # split("```", 2) -> ['', 'json\n{...}\n', ''] — take [1], not [-1]
+            text = text.split("```", 2)[1] if text.count("```") >= 2 else text.lstrip("`")
+            # remove optional language tag on first line (e.g. "json\n")
             if text.startswith("json"):
                 text = text[4:]
-            text = text.rstrip("`").strip()
+            text = text.strip()
         parsed = json.loads(text)
         parsed["_meta"] = {"ok": True, "latency_ms": latency_ms, "model": "claude-sonnet-5"}
         return parsed
