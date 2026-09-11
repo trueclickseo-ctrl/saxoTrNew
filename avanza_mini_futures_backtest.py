@@ -45,8 +45,12 @@ UNDERLYINGS = {
     "^GDAXI": {"name": "DAX",        "ccy": "EUR"},
     "GC=F":   {"name": "Gold",       "ccy": "USD"},
     "CL=F":   {"name": "Crude Oil",  "ccy": "USD"},
-    "^RUT":   {"name": "Russell 2000","ccy": "USD"},
-    "ORCL":   {"name": "Oracle",     "ccy": "USD"},
+    "^RUT":     {"name": "Russell 2000",  "ccy": "USD"},
+    "ORCL":     {"name": "Oracle",       "ccy": "USD"},
+    "AZN":      {"name": "AstraZeneca",  "ccy": "USD"},
+    "NVO":      {"name": "Novo Nordisk", "ccy": "USD"},
+    "MC.PA":    {"name": "LVMH",         "ccy": "EUR"},
+    "HEXA-B.ST":{"name": "Hexagon B",    "ccy": "SEK"},
 }
 
 # Approximate long-run average SEK/foreign rates (for display only).

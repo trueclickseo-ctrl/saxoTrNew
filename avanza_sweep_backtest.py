@@ -61,6 +61,50 @@ CANDIDATES: list[tuple[str, str, str, float, str, int]] = [
     ("MINI L ORCL",   "ORCL",   "LONG",        4.0, "reversion",  20),
     ("MINI L ORCL",   "ORCL",   "LONG",        5.0, "reversion",  20),
 
+    # ── AstraZeneca (MINI L ASTRAZENECA AVA 29 ≈ 2.43x) ──────────────────────
+    # US ADR (AZN) gives clean daily data; same % returns as London listing
+    ("MINI L AZN",    "AZN",    "LONG",        2.0, "trend",      20),
+    ("MINI L AZN",    "AZN",    "LONG",        3.0, "trend",      20),
+    ("MINI L AZN",    "AZN",    "LONG",        5.0, "trend",      20),
+    ("MINI L AZN",    "AZN",    "LONG",        2.0, "reversion",  20),
+    ("MINI L AZN",    "AZN",    "LONG",        3.0, "reversion",  20),
+
+    # ── Novo Nordisk (MINI L NOVO AVA 16 ≈ 2.43x) ────────────────────────────
+    # NVO = US ADR; Novo surged ~4x 2021-2024 on Ozempic/GLP-1 then corrected
+    ("MINI L NVO",    "NVO",    "LONG",        2.0, "trend",      20),
+    ("MINI L NVO",    "NVO",    "LONG",        3.0, "trend",      20),
+    ("MINI L NVO",    "NVO",    "LONG",        5.0, "trend",      20),
+    ("MINI L NVO",    "NVO",    "LONG",        2.0, "reversion",  20),
+    ("MINI L NVO",    "NVO",    "LONG",        3.0, "reversion",  20),
+
+    # ── LVMH (MINI L LVMH AVA 001 ≈ 1.79x) ───────────────────────────────────
+    # MC.PA = Paris listing in EUR; most liquid European luxury stock
+    ("MINI L LVMH",   "MC.PA",  "LONG",        2.0, "trend",      20),
+    ("MINI L LVMH",   "MC.PA",  "LONG",        3.0, "trend",      20),
+    ("MINI L LVMH",   "MC.PA",  "LONG",        5.0, "trend",      20),
+    ("MINI L LVMH",   "MC.PA",  "LONG",        2.0, "reversion",  20),
+    ("MINI L LVMH",   "MC.PA",  "LONG",        3.0, "reversion",  20),
+
+    # ── Hexagon B (MINI S HEXAGON AVA 42 ≈ 2.78x SHORT) ──────────────────────
+    ("MINI S HEXA",   "HEXA-B.ST","SHORT",     3.0, "trend",      20),
+    ("MINI S HEXA",   "HEXA-B.ST","SHORT",     5.0, "trend",      20),
+    ("MINI S HEXA",   "HEXA-B.ST","SHORT",     3.0, "reversion",  20),
+    # Also test LONG (Hexagon B had strong multi-year trend upward)
+    ("MINI L HEXA",   "HEXA-B.ST","LONG",      3.0, "trend",      20),
+    ("MINI L HEXA",   "HEXA-B.ST","LONG",      5.0, "trend",      20),
+
+    # ── Low-leverage re-tests: existing underlyings that failed at 5-10x ──────
+    # DAX 3.5x (MINI L DAX AVA 580/642) — very low leverage reduces KO risk
+    ("MINI L DAX 3x", "^GDAXI", "LONG",        3.5, "reversion",  20),
+    ("MINI L DAX 3x", "^GDAXI", "LONG",        3.5, "trend",      20),
+    # OMX 1.3x (MINI L OMX AVA 5) — almost unleveraged
+    ("MINI L OMX 1x", "^OMX",   "LONG",        1.3, "trend",      20),
+    ("MINI L OMX 1x", "^OMX",   "LONG",        1.3, "reversion",  20),
+    # Oil 2.8x (MINI S OLJA AVA 699 SHORT) — ultra-low leverage
+    ("MINI S OIL 3x", "CL=F",   "SHORT",       2.8, "trend",      20),
+    ("MINI L OIL 3x", "CL=F",   "LONG",        2.8, "trend",      20),
+    ("MINI L OIL 3x", "CL=F",   "LONG",        3.0, "reversion",  20),
+
     # ── OMX Stockholm 30 ─────────────────────────────────────────────────────
     ("MINI L OMX",    "^OMX",   "LONG",        5.0, "reversion",  20),
     ("MINI L OMX",    "^OMX",   "LONG",       10.0, "reversion",  20),
