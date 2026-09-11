@@ -576,11 +576,13 @@ def run_reversion_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
         stop_oid  = pos.get("stop_order_id")
         qty       = int(pos["qty"])
 
-        # Use live IBKR price if available, fall back to Yahoo daily close
+        # IBKR live price only -- no Yahoo fallback per trading rules.
         cur_price = ibkr_prices.get(sym, 0.0)
         ind       = indicators.get(sym, {})
+
         if not cur_price or cur_price <= 0:
-            cur_price = ind.get("price", 0.0)
+            print(f"  {sym:<8}  [BLOCKED] no IBKR live price -- skipped")
+            continue
 
         filled_at_str = pos.get("filled_at") or pos.get("created_at", "")
         filled_date   = datetime.date.fromisoformat(filled_at_str[:10])
@@ -884,8 +886,7 @@ def run_us_signals_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
     live_prices  = ic.get_prices(ib, sig_tickers)
     ibkr_any_ok  = any(v and v > 0 for v in live_prices.values())
     if not ibkr_any_ok:
-        print("  [WARNING] IBKR returned no live prices. "
-              "Dry-run shows Yahoo estimates; execute is blocked.")
+        print("  [WARNING] IBKR returned no live prices. All tickers will be [BLOCKED].")
 
     if not dry_run and not ibkr_any_ok:
         print("\n  [BLOCKED] No IBKR live prices. Cannot execute without market data.")
