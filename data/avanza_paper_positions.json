@@ -1,0 +1,44 @@
+{
+  "positions": {
+    "SP500": {
+      "status": "OPEN",
+      "entry_date": "2026-09-08",
+      "entry_price": 7673.52001953125,
+      "financing_entry": 6350.4993265086205,
+      "budget_sek": 2000.0,
+      "leverage": 5.8,
+      "financing_rate": 0.055,
+      "strategy": "reversion",
+      "ma_at_entry": 7704.720532226563,
+      "entry_sek": 153.9,
+      "qty": 1
+    },
+    "DAX": {
+      "status": "OPEN",
+      "entry_date": "2026-09-11",
+      "entry_price": 25528.23046875,
+      "financing_entry": 20800.780381944445,
+      "budget_sek": 2000.0,
+      "leverage": 5.4,
+      "financing_rate": 0.055,
+      "strategy": "reversion",
+      "ma_at_entry": 26043.5544921875,
+      "entry_sek": 53.64,
+      "qty": 37
+    },
+    "APPLE": {
+      "status": "OPEN",
+      "entry_date": "2026-09-10",
+      "entry_price": 326.57000732421875,
+      "financing_entry": 263.76808283879205,
+      "budget_sek": 2000.0,
+      "leverage": 5.2,
+      "financing_rate": 0.055,
+      "strategy": "trend",
+      "ma_at_entry": 315.27549896240237,
+      "entry_sek": 79.33,
+      "qty": 25
+    }
+  },
+  "trades": []
+}

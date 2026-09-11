@@ -39,99 +39,105 @@ _STATE_FILE = os.path.join(_ROOT, "data", "avanza_paper_positions.json")
 
 INSTRUMENTS = {
     "DAX": {
-        "yahoo":          "^GDAXI",
-        "name":           "DAX (Germany)",
-        "strategy":       "reversion",
-        "leverage":       5.4,
-        "budget_sek":     2000.0,
-        "financing_rate": 0.055,
-        "ma_days":        20,
-        "active":         True,
+        "yahoo":           "^GDAXI",
+        "name":            "DAX (Germany)",
+        "strategy":        "reversion",
+        "leverage":        5.4,
+        "budget_sek":      2000.0,
+        "financing_rate":  0.055,
+        "ma_days":         20,
+        "active":          True,
+        "commission_sek":  0.0,  # AVA-branded, 0 brokerage on Avanza
         # AVA mini future (Avanza-issued, most liquid): parity 1000
         # barrier 21,163, fin 20,748, DAX ~26,007 → KO distance 18.6% → 5.4x
-        "avanza_id":      "2037484",
-        "avanza_name":    "MINI L DAX AVA 850",
-        "parity":         1000,
+        "avanza_id":       "2037484",
+        "avanza_name":     "MINI L DAX AVA 850",
+        "parity":          1000,
     },
     "SP500": {
-        "yahoo":          "^GSPC",
-        "name":           "S&P 500 (US)",
-        "strategy":       "reversion",
-        "leverage":       5.8,
-        "budget_sek":     2000.0,
-        "financing_rate": 0.055,
-        "ma_days":        20,
-        "active":         True,
+        "yahoo":           "^GSPC",
+        "name":            "S&P 500 (US)",
+        "strategy":        "reversion",
+        "leverage":        5.8,
+        "budget_sek":      2000.0,
+        "financing_rate":  0.055,
+        "ma_days":         20,
+        "active":          True,
+        "commission_sek":  0.0,
         # AVA mini future (Avanza-issued): parity 100
         # barrier 6,400, fin 6,274, SPX ~7,718 → KO distance 17.1% → 5.8x
-        "avanza_id":      "2094745",
-        "avanza_name":    "MINI L SP500 AVA 339",
-        "parity":         100,
+        "avanza_id":       "2094745",
+        "avanza_name":     "MINI L SP500 AVA 339",
+        "parity":          100,
     },
     "GOLD": {
-        "yahoo":          "GC=F",
-        "name":           "Gold",
-        "strategy":       "trend",
-        "leverage":       5.0,
-        "budget_sek":     2000.0,
-        "financing_rate": 0.055,
-        "ma_days":        20,
-        "active":         True,
+        "yahoo":           "GC=F",
+        "name":            "Gold",
+        "strategy":        "trend",
+        "leverage":        5.0,
+        "budget_sek":      2000.0,
+        "financing_rate":  0.055,
+        "ma_days":         20,
+        "active":          True,
+        "commission_sek":  0.0,
         # AVA mini future (Avanza-issued, 1.5M SEK daily turnover): parity 100
         # barrier 3,477, fin 3,397, Gold ~4,355 → KO distance 20.2% → 5.0x
         # Backtest: +247%, 0 KOs, 5-year trend strategy
-        "avanza_id":      "2039813",
-        "avanza_name":    "MINI L GULD AVA 247",
-        "parity":         100,
+        "avanza_id":       "2039813",
+        "avanza_name":     "MINI L GULD AVA 247",
+        "parity":          100,
     },
     "APPLE": {
-        "yahoo":          "AAPL",
-        "name":           "Apple (AAPL)",
-        "strategy":       "trend",
-        "leverage":       5.2,
-        "budget_sek":     2000.0,
-        "financing_rate": 0.055,
-        "ma_days":        20,
-        "active":         True,
+        "yahoo":           "AAPL",
+        "name":            "Apple (AAPL)",
+        "strategy":        "trend",
+        "leverage":        5.2,
+        "budget_sek":      2000.0,
+        "financing_rate":  0.055,
+        "ma_days":         20,
+        "active":          True,
+        "commission_sek":  0.0,
         # AVA mini future (Avanza-issued, ~112K SEK daily turnover): parity 10
         # barrier 255.9, AAPL ~316.3 → KO distance 19.1% → 5.2x
         # Backtest: +442%, 0 KOs, 74% max DD, PF 1.44, 5-year TREND strategy
-        "avanza_id":      "2474069",
-        "avanza_name":    "MINI L APPLE AVA 91",
+        "avanza_id":       "2474069",
+        "avanza_name":     "MINI L APPLE AVA 91",
         "parity":         10,
     },
     "GOOGLE": {
-        "yahoo":          "GOOGL",
-        "name":           "Google (GOOGL)",
-        "strategy":       "trend",
-        "leverage":       4.7,
-        "budget_sek":     2000.0,
-        "financing_rate": 0.055,
-        "ma_days":        20,
-        "active":         True,
+        "yahoo":           "GOOGL",
+        "name":            "Google (GOOGL)",
+        "strategy":        "trend",
+        "leverage":        4.7,
+        "budget_sek":      2000.0,
+        "financing_rate":  0.055,
+        "ma_days":         20,
+        "active":          True,
+        "commission_sek":  0.0,
         # AVA mini future (Avanza-issued, ~50K SEK daily turnover): parity 10
         # MINI L GOOGLE AVA 63 → 4.7x, closest to 5x available
         # Backtest: +377%, 0 KOs, 73% max DD, PF 1.71, 5-year TREND strategy
-        "avanza_id":      "2228507",
-        "avanza_name":    "MINI L GOOGLE AVA 63",
-        "parity":         10,
+        "avanza_id":       "2228507",
+        "avanza_name":     "MINI L GOOGLE AVA 63",
+        "parity":          10,
     },
     "INVESTOR_B": {
-        "yahoo":          "INVE-B.ST",
-        "name":           "Investor B (SE)",
-        "strategy":       "trend",
-        "leverage":       5.0,
-        "budget_sek":     2000.0,
-        "financing_rate": 0.055,
-        "ma_days":        20,
-        "active":         True,
+        "yahoo":           "INVE-B.ST",
+        "name":            "Investor B (SE)",
+        "strategy":        "trend",
+        "leverage":        5.0,
+        "budget_sek":      2000.0,
+        "financing_rate":  0.055,
+        "ma_days":         20,
+        "active":          True,
+        "commission_sek":  0.0,
         # Nordnet-issued, parity 1 (SEK-denominated, no FX conversion)
         # SE23: barrier 327, Investor B ~408 SEK → KO distance 19.9% → 5.0x
         # Backtest: +274.8%, 0 KOs, 49% max DD (lowest of all stocks), PF 1.50, TREND
         # Live fallback: MINI L INVESTOR NORDNET SE25 (ID 2286648, 3.3x, 2.8M SEK/day)
-        "avanza_id":      "2286747",
-        "avanza_name":    "MINI L INVESTOR NORDNET SE23",
-        "parity":         1,
+        "avanza_id":       "2286747",
+        "avanza_name":     "MINI L INVESTOR NORDNET SE23",
+        "parity":          1,
     },
 }
 
@@ -325,8 +331,24 @@ def run_update(state: dict, dry_run: bool = False, force_entry: bool = False) ->
                   f"({ko_dist:.1f}% below current price)")
             print(f"       Budget: {cfg['budget_sek']:,.0f} SEK  |  Leverage: {lever}x")
 
+            # Try to fetch current mini futures SEK price for Avanza-style display
+            entry_sek: float | None = None
+            qty_units: int = 0
+            try:
+                from avanza_module import avanza_client as ac
+                _cli = ac.get_client()
+                _info = ac.get_stock_price(_cli, avanza_id)
+                _sek = _info.get("price", 0.0)
+                if _sek and _sek > 0:
+                    import math as _math
+                    entry_sek = round(float(_sek), 2)
+                    qty_units = _math.floor(cfg["budget_sek"] / entry_sek)
+                    print(f"       Avanza price : {entry_sek:.2f} SEK  |  Units: {qty_units}")
+            except Exception as _e:
+                print(f"       [avanza price] {_e}")
+
             if not dry_run:
-                state["positions"][key] = {
+                _new_pos = {
                     "status":          "OPEN",
                     "entry_date":      sig_date,
                     "entry_price":     price,
@@ -337,6 +359,10 @@ def run_update(state: dict, dry_run: bool = False, force_entry: bool = False) ->
                     "strategy":        cfg["strategy"],
                     "ma_at_entry":     ma_val,
                 }
+                if entry_sek is not None:
+                    _new_pos["entry_sek"] = entry_sek
+                    _new_pos["qty"]       = qty_units
+                state["positions"][key] = _new_pos
                 print(f"       Paper position recorded.")
             else:
                 print(f"       [dry-run] not recorded.")
@@ -364,17 +390,22 @@ def run_update(state: dict, dry_run: bool = False, force_entry: bool = False) ->
 
             if not dry_run:
                 trade = {
-                    "instrument":  key,
-                    "entry_date":  pos["entry_date"],
-                    "exit_date":   sig_date,
-                    "entry_price": pos["entry_price"],
-                    "exit_price":  price,
-                    "pnl_sek":     pnl_sek,
-                    "pnl_pct":     round(pnl_pct * 100, 2),
-                    "leverage":    pos["leverage"],
-                    "ko":          is_ko,
-                    "strategy":    pos["strategy"],
+                    "instrument":     key,
+                    "entry_date":     pos["entry_date"],
+                    "exit_date":      sig_date,
+                    "entry_price":    pos["entry_price"],
+                    "exit_price":     price,
+                    "pnl_sek":        pnl_sek,
+                    "pnl_pct":        round(pnl_pct * 100, 2),
+                    "leverage":       pos["leverage"],
+                    "ko":             is_ko,
+                    "strategy":       pos["strategy"],
+                    "commission_sek": cfg.get("commission_sek", 0.0),
+                    "budget_sek":     cfg["budget_sek"],
                 }
+                if pos.get("entry_sek"):
+                    trade["entry_sek"] = pos["entry_sek"]
+                    trade["qty"]       = pos.get("qty", 0)
                 state["trades"].append(trade)
                 state["positions"][key] = {"status": "FLAT"}
                 print(f"       Paper position closed and recorded.")

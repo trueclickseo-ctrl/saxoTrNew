@@ -29,12 +29,12 @@ _LOG_FILE   = os.path.join(_ROOT, "data", "avanza_paper_trading.log")
 REFRESH_SECONDS = 30
 
 INSTRUMENTS = {
-    "DAX":        {"name": "DAX (Germany)",   "strategy": "reversion", "leverage": 5.4, "budget_sek": 2000.0, "product": "MINI L DAX AVA 850",            "yahoo": "^GDAXI"},
-    "SP500":      {"name": "S&P 500 (US)",    "strategy": "reversion", "leverage": 5.8, "budget_sek": 2000.0, "product": "MINI L SP500 AVA 339",           "yahoo": "^GSPC"},
-    "GOLD":       {"name": "Gold",            "strategy": "trend",     "leverage": 5.0, "budget_sek": 2000.0, "product": "MINI L GULD AVA 247",            "yahoo": "GC=F"},
-    "APPLE":      {"name": "Apple (AAPL)",    "strategy": "trend",     "leverage": 5.2, "budget_sek": 2000.0, "product": "MINI L APPLE AVA 91",            "yahoo": "AAPL"},
-    "GOOGLE":     {"name": "Google (GOOGL)",  "strategy": "trend",     "leverage": 4.7, "budget_sek": 2000.0, "product": "MINI L GOOGLE AVA 63",           "yahoo": "GOOGL"},
-    "INVESTOR_B": {"name": "Investor B (SE)", "strategy": "trend",     "leverage": 5.0, "budget_sek": 2000.0, "product": "MINI L INVESTOR NORDNET SE23",   "yahoo": "INVE-B.ST"},
+    "DAX":        {"name": "DAX (Germany)",   "strategy": "reversion", "leverage": 5.4, "budget_sek": 2000.0, "product": "MINI L DAX AVA 850",            "yahoo": "^GDAXI",   "avanza_id": "2037484",  "commission_sek": 0.0},
+    "SP500":      {"name": "S&P 500 (US)",    "strategy": "reversion", "leverage": 5.8, "budget_sek": 2000.0, "product": "MINI L SP500 AVA 339",           "yahoo": "^GSPC",    "avanza_id": "2094745",  "commission_sek": 0.0},
+    "GOLD":       {"name": "Gold",            "strategy": "trend",     "leverage": 5.0, "budget_sek": 2000.0, "product": "MINI L GULD AVA 247",            "yahoo": "GC=F",     "avanza_id": "2039813",  "commission_sek": 0.0},
+    "APPLE":      {"name": "Apple (AAPL)",    "strategy": "trend",     "leverage": 5.2, "budget_sek": 2000.0, "product": "MINI L APPLE AVA 91",            "yahoo": "AAPL",     "avanza_id": "2474069",  "commission_sek": 0.0},
+    "GOOGLE":     {"name": "Google (GOOGL)",  "strategy": "trend",     "leverage": 4.7, "budget_sek": 2000.0, "product": "MINI L GOOGLE AVA 63",           "yahoo": "GOOGL",    "avanza_id": "2228507",  "commission_sek": 0.0},
+    "INVESTOR_B": {"name": "Investor B (SE)", "strategy": "trend",     "leverage": 5.0, "budget_sek": 2000.0, "product": "MINI L INVESTOR NORDNET SE23",   "yahoo": "INVE-B.ST","avanza_id": "2286747",  "commission_sek": 0.0},
 }
 
 MARKET_OPEN_PKT  = (12, 0)   # 09:00 CET = 12:00 PKT
@@ -118,6 +118,45 @@ def _fetch_price(yahoo: str) -> float | None:
         return None
 
 
+_avanza_sek_cache: dict[str, tuple[float, datetime]] = {}
+
+def _load_avanza_env() -> None:
+    env_file = os.path.join(_ROOT, ".env.avanza")
+    if os.path.exists(env_file):
+        with open(env_file) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    k, _, v = line.partition('=')
+                    os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+_avanza_client_cache: list = []  # holds [client] once loaded
+
+
+def _fetch_avanza_sek(avanza_id: str) -> float | None:
+    """Return current mini futures price in SEK from Avanza, cached 60s."""
+    now = datetime.now()
+    cached = _avanza_sek_cache.get(avanza_id)
+    if cached and (now - cached[1]).total_seconds() < _CACHE_TTL_S:
+        return cached[0]
+    try:
+        _load_avanza_env()
+        sys.path.insert(0, _ROOT)
+        from avanza_module import avanza_client as ac
+        if not _avanza_client_cache:
+            _avanza_client_cache.append(ac.get_client())
+        client = _avanza_client_cache[0]
+        info = ac.get_stock_price(client, avanza_id)
+        price = info.get("price", 0.0)
+        if price and price > 0:
+            _avanza_sek_cache[avanza_id] = (float(price), now)
+            return float(price)
+    except Exception:
+        pass
+    return None
+
+
 def _current_pnl(pos: dict, current_price: float) -> tuple[float, float, bool]:
     """Returns (pnl_sek, pnl_pct, is_ko) — mirrors avanza_paper_trading._current_pnl."""
     entry_price     = pos["entry_price"]
@@ -195,14 +234,49 @@ def render():
         date_str  = entry_dt[:10] if in_pos else "-"
         print(f"  {cfg['name']:<14} {cfg['strategy']:<10} {cfg['leverage']:>4.1f}x  {pos_str:<10} {entry_str}  {now_px_str:>8}  {date_str:<12} {cfg['budget_sek']:>7.0f}s  {open_pnl_str:>12}")
 
+    # ── AVANZA WARRANTER VIEW ─────────────────────────────────────────────────
+    open_positions = {k: v for k, v in pos.items() if v.get("status") == "OPEN" and v.get("entry_sek")}
+    if open_positions:
+        print()
+        print(f"  {'AVANZA WARRANTER VIEW':^{W}}")
+        print(f"  {'-' * (W - 2)}")
+        hdr = f"  {'Namn':<26} {'Antal':>5}  {'Senast':>7}  {'Inkopskurs':>10}  {'Sedan kop':>14}  {'Varde':>8}  {'Comm':>5}"
+        print(hdr)
+        print(f"  {'-' * (W + 10)}")
+        for key, p in open_positions.items():
+            cfg        = INSTRUMENTS.get(key, {})
+            namn       = cfg.get("product", key)[:25]
+            qty        = p.get("qty", 0)
+            entry_sek  = p.get("entry_sek", 0.0)
+            comm_sek   = cfg.get("commission_sek", 0.0)
+            # Try live Avanza SEK price
+            avanza_id  = cfg.get("avanza_id", "")
+            senast     = _fetch_avanza_sek(avanza_id) if avanza_id else None
+            if senast and senast > 0:
+                sedan_sek  = (senast - entry_sek) * qty
+                sedan_pct  = (senast - entry_sek) / entry_sek * 100 if entry_sek else 0.0
+                varde      = senast * qty
+                sign       = "+" if sedan_sek >= 0 else ""
+                sedan_str  = f"{sign}{sedan_sek:,.0f} kr ({sign}{sedan_pct:.1f}%)"
+                senast_str = f"{senast:.2f}"
+                varde_str  = f"{varde:,.0f} kr"
+            else:
+                sedan_str  = "N/A"
+                senast_str = "N/A"
+                varde_str  = "N/A"
+            comm_str = f"{comm_sek:.0f} kr"
+            print(f"  {namn:<26} {qty:>5}  {senast_str:>7}  {entry_sek:>10.2f}  {sedan_str:>14}  {varde_str:>8}  {comm_str:>5}")
+        print(f"  Note: AVA-branded mini futures — 0 SEK brokerage (financing cost is implicit)")
+
     # closed trades per instrument
     print()
-    print(f"  {'Instrument':<14} {'Trades':>7} {'Wins':>5} {'Losses':>7} {'WR':>6} {'PF':>6} {'Closed P&L':>12}  {'Gate':>18}")
+    print(f"  {'Instrument':<14} {'Trades':>7} {'Wins':>5} {'Losses':>7} {'WR':>6} {'PF':>6} {'Closed P&L':>12} {'Comm':>6}  {'Gate':>18}")
     print(f"  {'-' * (W + 4)}")
 
     N_GATE = 5
     total_gross_win = 0.0
     total_gross_loss = 0.0
+    total_comm = 0.0
     for key, cfg in INSTRUMENTS.items():
         inst_trades = [t for t in trades if t.get("instrument") == key]
         n      = len(inst_trades)
@@ -210,6 +284,7 @@ def render():
         losses = n - wins
         wr     = (wins / n * 100) if n else 0.0
         pnl    = sum(t.get("pnl_sek", t.get("pnl", 0)) for t in inst_trades)
+        comm   = sum(t.get("commission_sek", cfg.get("commission_sek", 0.0)) for t in inst_trades)
         gross_win  = sum(t.get("pnl_sek", t.get("pnl", 0)) for t in inst_trades if t.get("pnl_sek", t.get("pnl", 0)) > 0)
         gross_loss = abs(sum(t.get("pnl_sek", t.get("pnl", 0)) for t in inst_trades if t.get("pnl_sek", t.get("pnl", 0)) <= 0))
         pf     = (gross_win / gross_loss) if gross_loss > 0 else (float("inf") if gross_win > 0 else 0.0)
@@ -222,16 +297,18 @@ def render():
         total_losses      += losses
         total_gross_win   += gross_win
         total_gross_loss  += gross_loss
+        total_comm        += comm
 
-        pnl_str = _pnl_color(pnl) + " SEK"
-        print(f"  {cfg['name']:<14} {n:>7} {wins:>5} {losses:>7} {wr:>5.0f}%  {pf_str:>6}  {pnl_str:>12}  {gate_str:>18}")
+        pnl_str  = _pnl_color(pnl) + " SEK"
+        comm_str = f"{comm:.0f} kr"
+        print(f"  {cfg['name']:<14} {n:>7} {wins:>5} {losses:>7} {wr:>5.0f}%  {pf_str:>6}  {pnl_str:>12} {comm_str:>6}  {gate_str:>18}")
 
     total_n  = total_wins + total_losses
     total_wr = (total_wins / total_n * 100) if total_n else 0.0
     total_pf = (total_gross_win / total_gross_loss) if total_gross_loss > 0 else (float("inf") if total_gross_win > 0 else 0.0)
     total_pf_str = f"{total_pf:.2f}" if total_pf != float("inf") else "inf"
     print(f"  {'-' * (W + 4)}")
-    print(f"  {'TOTAL':<14} {total_n:>7} {total_wins:>5} {total_losses:>7} {total_wr:>5.0f}%  {total_pf_str:>6}  {_pnl_color(total_closed_pnl) + ' SEK':>12}")
+    print(f"  {'TOTAL':<14} {total_n:>7} {total_wins:>5} {total_losses:>7} {total_wr:>5.0f}%  {total_pf_str:>6}  {_pnl_color(total_closed_pnl) + ' SEK':>12} {total_comm:.0f} kr")
     if total_open_pnl != 0.0:
         sign = "+" if total_open_pnl >= 0 else ""
         print(f"  Open P&L (live) : {sign}{total_open_pnl:,.0f} SEK")
