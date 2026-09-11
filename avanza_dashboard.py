@@ -197,30 +197,41 @@ def render():
 
     # closed trades per instrument
     print()
-    print(f"  {'Instrument':<14} {'Trades':>7} {'Wins':>5} {'Losses':>7} {'WR':>6} {'Closed P&L':>12}  {'Gate':>18}")
-    print(f"  {'-' * (W - 4)}")
+    print(f"  {'Instrument':<14} {'Trades':>7} {'Wins':>5} {'Losses':>7} {'WR':>6} {'PF':>6} {'Closed P&L':>12}  {'Gate':>18}")
+    print(f"  {'-' * (W + 4)}")
 
     N_GATE = 5
+    total_gross_win = 0.0
+    total_gross_loss = 0.0
     for key, cfg in INSTRUMENTS.items():
         inst_trades = [t for t in trades if t.get("instrument") == key]
         n      = len(inst_trades)
-        wins   = sum(1 for t in inst_trades if t.get("pnl", 0) > 0)
+        wins   = sum(1 for t in inst_trades if t.get("pnl_sek", t.get("pnl", 0)) > 0)
         losses = n - wins
         wr     = (wins / n * 100) if n else 0.0
-        pnl    = sum(t.get("pnl", 0) for t in inst_trades)
+        pnl    = sum(t.get("pnl_sek", t.get("pnl", 0)) for t in inst_trades)
+        gross_win  = sum(t.get("pnl_sek", t.get("pnl", 0)) for t in inst_trades if t.get("pnl_sek", t.get("pnl", 0)) > 0)
+        gross_loss = abs(sum(t.get("pnl_sek", t.get("pnl", 0)) for t in inst_trades if t.get("pnl_sek", t.get("pnl", 0)) <= 0))
+        pf     = (gross_win / gross_loss) if gross_loss > 0 else (float("inf") if gross_win > 0 else 0.0)
+        pf_str = f"{pf:.2f}" if pf != float("inf") else "inf"
+
         remaining = max(0, N_GATE - n)
-        gate_str  = f"{remaining} more to review" if remaining else "READY FOR LIVE REVIEW"
-        total_closed_pnl += pnl
-        total_wins       += wins
-        total_losses     += losses
+        gate_str  = f"{remaining} more" if remaining else "READY"
+        total_closed_pnl  += pnl
+        total_wins        += wins
+        total_losses      += losses
+        total_gross_win   += gross_win
+        total_gross_loss  += gross_loss
 
         pnl_str = _pnl_color(pnl) + " SEK"
-        print(f"  {cfg['name']:<14} {n:>7} {wins:>5} {losses:>7} {wr:>5.0f}%  {pnl_str:>12}  {gate_str:>18}")
+        print(f"  {cfg['name']:<14} {n:>7} {wins:>5} {losses:>7} {wr:>5.0f}%  {pf_str:>6}  {pnl_str:>12}  {gate_str:>18}")
 
     total_n  = total_wins + total_losses
     total_wr = (total_wins / total_n * 100) if total_n else 0.0
-    print(f"  {'-' * (W - 4)}")
-    print(f"  {'TOTAL':<14} {total_n:>7} {total_wins:>5} {total_losses:>7} {total_wr:>5.0f}%  {_pnl_color(total_closed_pnl) + ' SEK':>12}")
+    total_pf = (total_gross_win / total_gross_loss) if total_gross_loss > 0 else (float("inf") if total_gross_win > 0 else 0.0)
+    total_pf_str = f"{total_pf:.2f}" if total_pf != float("inf") else "inf"
+    print(f"  {'-' * (W + 4)}")
+    print(f"  {'TOTAL':<14} {total_n:>7} {total_wins:>5} {total_losses:>7} {total_wr:>5.0f}%  {total_pf_str:>6}  {_pnl_color(total_closed_pnl) + ' SEK':>12}")
     if total_open_pnl != 0.0:
         sign = "+" if total_open_pnl >= 0 else ""
         print(f"  Open P&L (live) : {sign}{total_open_pnl:,.0f} SEK")

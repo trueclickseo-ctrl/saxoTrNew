@@ -269,7 +269,7 @@ def _current_pnl(pos: dict, current_price: float) -> tuple[float, float, bool]:
 
 # ── Core update ───────────────────────────────────────────────────────────────
 
-def run_update(state: dict, dry_run: bool = False) -> None:
+def run_update(state: dict, dry_run: bool = False, force_entry: bool = False) -> None:
     print(f"\n  {'='*62}")
     print(f"  AVANZA PAPER TRADING  —  {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print(f"  {'='*62}")
@@ -309,14 +309,17 @@ def run_update(state: dict, dry_run: bool = False) -> None:
         print(f"    {signal_labels.get(signal, signal)}")
 
         # ── Entry ─────────────────────────────────────────────────────────
-        if signal == "ENTRY" and not in_market:
+        # force_entry: treat HOLD_IN (already in signal zone) same as fresh ENTRY
+        effective_entry = (signal == "ENTRY") or (force_entry and signal == "HOLD_IN")
+        if effective_entry and not in_market:
             lever    = cfg["leverage"]
             fin_lvl  = price * (1.0 - 1.0 / lever)
             ko_dist  = (price - fin_lvl) / price * 100
 
             avanza_name = cfg.get("avanza_name", "")
             avanza_id   = cfg.get("avanza_id", "")
-            print(f"\n    >> PAPER ENTRY at {price:,.2f}")
+            entry_label = "PAPER ENTRY (force)" if force_entry and signal == "HOLD_IN" else "PAPER ENTRY"
+            print(f"\n    >> {entry_label} at {price:,.2f}")
             print(f"       Avanza instrument: {avanza_name}  (id={avanza_id})")
             print(f"       Financing level (KO barrier): {fin_lvl:,.2f}  "
                   f"({ko_dist:.1f}% below current price)")
@@ -343,7 +346,7 @@ def run_update(state: dict, dry_run: bool = False) -> None:
                 from atos.notifier import notify_avanza_mini_signal
                 notify_avanza_mini_signal(
                     signal_type="ENTRY", key=key, name=cfg["name"],
-                    strategy=cfg["strategy"], product=cfg["product"],
+                    strategy=cfg["strategy"], product=cfg.get("avanza_name", cfg.get("product", "")),
                     price=price, ma_val=ma_val, leverage=lever,
                     budget_sek=cfg["budget_sek"], financing_level=fin_lvl,
                 )
@@ -381,7 +384,7 @@ def run_update(state: dict, dry_run: bool = False) -> None:
                 from atos.notifier import notify_avanza_mini_signal
                 notify_avanza_mini_signal(
                     signal_type="EXIT", key=key, name=cfg["name"],
-                    strategy=cfg["strategy"], product=cfg["product"],
+                    strategy=cfg["strategy"], product=cfg.get("avanza_name", cfg.get("product", "")),
                     price=price, ma_val=ma_val, leverage=cfg["leverage"],
                     budget_sek=cfg["budget_sek"],
                     pnl_sek=pnl_sek, entry_price=pos["entry_price"],
@@ -472,7 +475,9 @@ def main() -> None:
     p.add_argument("--status",    action="store_true", help="Show status only, no update")
     p.add_argument("--history",   action="store_true", help="Show full trade history")
     p.add_argument("--reset",     action="store_true", help="Clear all paper positions")
-    p.add_argument("--dry-run",   action="store_true", help="Detect signals but don't record")
+    p.add_argument("--dry-run",     action="store_true", help="Detect signals but don't record")
+    p.add_argument("--force-entry", action="store_true",
+                   help="Enter paper positions for all instruments currently in valid signal zone")
     args = p.parse_args()
 
     state = _load()
@@ -494,7 +499,7 @@ def main() -> None:
         return
 
     # Default: run signal check + update
-    run_update(state, dry_run=args.dry_run)
+    run_update(state, dry_run=args.dry_run, force_entry=getattr(args, "force_entry", False))
 
     if not args.dry_run:
         _save(state)
