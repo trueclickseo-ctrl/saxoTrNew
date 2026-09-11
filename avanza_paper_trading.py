@@ -3,7 +3,7 @@ avanza_paper_trading.py
 -----------------------
 Paper trading dry-run for Avanza mini futures.
   Indices  (reversion): DAX, S&P 500, AstraZeneca, OMX Stockholm 30
-  Stocks   (trend):     Gold, Apple, Google, Investor B, Oracle
+  Stocks   (trend):     Gold, Apple, Google, Oracle
 
 Backtested results (5 years, 2,000 SEK budget):
   DAX        5.4x  reversion : +294%,  82% WR,  0 KOs
@@ -11,7 +11,6 @@ Backtested results (5 years, 2,000 SEK budget):
   Gold       5.0x  trend     : +247%,  33% WR,  0 KOs
   Apple      5.2x  trend     : +442%,  45% WR,  0 KOs
   Google     4.7x  trend     : +377%,  45% WR,  0 KOs
-  Investor B 5.0x  trend     : +274%,  37% WR,  0 KOs  ← lowest max DD (49%)
   Oracle     4.0x  trend     : +229%,  30% WR,  0 KOs  PF 1.19
   AstraZeneca 2.0x reversion :  +52%,  78% WR,  0 KOs  PF 1.21  MaxDD 39%
   OMX        1.3x  reversion :  +33%,  77% WR,  0 KOs  PF 1.58  MaxDD 15%  ← safest
@@ -124,24 +123,7 @@ INSTRUMENTS = {
         "avanza_name":     "MINI L GOOGLE AVA 63",
         "parity":          10,
     },
-    "INVESTOR_B": {
-        "yahoo":           "INVE-B.ST",
-        "name":            "Investor B (SE)",
-        "strategy":        "trend",
-        "leverage":        5.0,
-        "budget_sek":      2000.0,
-        "financing_rate":  0.055,
-        "ma_days":         20,
-        "active":          True,
-        "commission_sek":  0.0,
-        # Nordnet-issued, parity 1 (SEK-denominated, no FX conversion)
-        # SE23: barrier 327, Investor B ~408 SEK → KO distance 19.9% → 5.0x
-        # Backtest: +274.8%, 0 KOs, 49% max DD (lowest of all stocks), PF 1.50, TREND
-        # Live fallback: MINI L INVESTOR NORDNET SE25 (ID 2286648, 3.3x, 2.8M SEK/day)
-        "avanza_id":       "2286747",
-        "avanza_name":     "MINI L INVESTOR NORDNET SE23",
-        "parity":          1,
-    },
+
     "ORACLE": {
         "yahoo":           "ORCL",
         "name":            "Oracle (ORCL)",
