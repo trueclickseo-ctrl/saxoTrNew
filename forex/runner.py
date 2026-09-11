@@ -342,6 +342,8 @@ SIM_ACTIVE_STRATEGIES: list[str] = [
     "advanced_rsi_master", "advanced_cnn_lstm_master",
     # Gap strategies: session-time-gated internally — no-op when not in session.
     "gap", "gap_weekend",
+    # Day-trade strategies: session-gated internally, run via main roster for AI data.
+    "london_breakout", "london_breakout_v2",
 ]
 _ACTIVE_STRATEGIES = [k for k in SIM_ACTIVE_STRATEGIES if k in STRATEGIES]
 
