@@ -346,18 +346,13 @@ SIM_ACTIVE_STRATEGIES: list[str] = [
 _ACTIVE_STRATEGIES = [k for k in SIM_ACTIVE_STRATEGIES if k in STRATEGIES]
 
 # ── Disabled `gap` session legs (2026-09-02) ────────────────────────────────
-# A ~2.8y / H1-bar decomposition (docs/strategy_decomposition_2026-09-02.md)
-# of every reconstructed London / NY session gap:
-#   newyork  +0.090 R/trade, PF 1.33, stable both halves          -> KEEP
-#   london   -0.008 R/trade, PF 0.98, 2nd half negative           -> disable
-#   tokyo    untestable (thin yfinance H1 at 23-00 UTC), ~0 ledger -> disable
-# `weekly` (+0.10 R on the 12y ledger) is unaffected. Open london/tokyo
-# positions still exit-manage. Reversible: empty the set.
-DISABLED_GAP_SESSIONS: set[str] = {"london", "tokyo"}
-# Within the surviving `newyork` leg the edge is concentrated in RANGING /
-# TRENDING regimes -- HIGH_VOLATILITY newyork gaps ran -0.357 R at a 43% win
-# rate. Drop those.
-GAP_NEWYORK_SKIP_REGIMES: set[str] = {"HIGH_VOLATILITY"}
+# 2026-09-02: london/tokyo disabled + HIGH_VOL NY skipped after edge decomp.
+# 2026-09-11: re-enabled all sessions for SIM/AI data accumulation — gap is
+# SIM-only (not in LIVE_ALLOWED_STRATEGIES) so broader coverage = more AI
+# training samples. The AI override can filter bad sessions once data lands.
+# To re-disable: DISABLED_GAP_SESSIONS = {"london", "tokyo"}
+DISABLED_GAP_SESSIONS: set[str] = set()
+GAP_NEWYORK_SKIP_REGIMES: set[str] = set()
 
 _SWING_SLOTS = len(PAIRS)   # 2026-08-28 fix: was hardcoded 117 (stale since the
                             # SCANDI tier alone brought the real universe to 149,
