@@ -11,7 +11,7 @@
   "enabled_live_shadow": true,
 
   "_shadow_mode_comment": "SIM only. true = every AI hook still only OBSERVES and LOGS. A later sprint flips this to false (SIM sizing), gated on its own shadow-evidence review. Has no effect on LIVE (LIVE is always shadow).",
-  "shadow_mode": true,
+  "shadow_mode": false,
 
   "_agent_comment": "enabled_sim / enabled_live_shadow alone just LOG trade proposals (free). agent_enabled=true additionally calls the LLM (agent_model) to evaluate each proposal -- costs money per signal, needs ANTHROPIC_API_KEY. The decision is still only LOGGED until Sprint 4 (SIM only).",
   "agent_enabled": true,
@@ -81,8 +81,8 @@
   "_exposure_controller_comment": "Phase A — portfolio-level exposure controller (ai/portfolio/exposure_controller.py). Runs BEFORE the Trading Copilot on every entry signal; blocks trades that breach the cluster/pair/risk-pct caps and logs to data/exposure_controller.jsonl. Defaults are permissive for the first week of observation — tighten after the gate passes (see docs/atos_ai_tracker.md Phase A gate). max_currency_cluster_positions: max open positions net-long or net-short any one currency. max_open_risk_pct_equity: total open risk (sum of risk_eur_at_entry) as % of account equity. max_same_pair_positions: max open positions for the same 6-char symbol across all strategies.",
   "exposure_controller": {
     "enabled": true,
-    "max_currency_cluster_positions": 8,
-    "max_open_risk_pct_equity": 30.0,
-    "max_same_pair_positions": 2
+    "max_currency_cluster_positions": 6,
+    "max_open_risk_pct_equity": 20.0,
+    "max_same_pair_positions": 1
   }
 }
