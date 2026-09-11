@@ -23,6 +23,10 @@ from ibkr_module import ibkr_client as ic
 from ibkr_module import ibkr_state as st
 from ibkr_module import ibkr_signals as sig
 
+# SIM A/B: ATR Chandelier exit for blend strategies (mirrors atos_runner.py)
+IBKR_ATR_MULTIPLIER = 2.5   # stop = trail_high - 2.5 × ATR(14)
+IBKR_ATR_PERIOD     = 14
+
 _ROOT = Path(__file__).parent.parent
 
 # AI observation layer removed 2026-09-09 -- Saxo only for AI data pipeline.
@@ -363,17 +367,38 @@ def run_rebalance_v2(ib, account_id: str, cfg: dict, dry_run: bool = True,
     print("\n  [blend_v2] Rebalance complete.")
 
 
+def _ibkr_atr(symbol: str, period: int = IBKR_ATR_PERIOD) -> float | None:
+    """ATR(period) via yfinance OHLC history — used for stop calculation only, not execution."""
+    try:
+        import yfinance as yf
+        import numpy as _np
+        bars = yf.download(symbol, period=f"{period + 5}d", interval="1d",
+                           progress=False, auto_adjust=True)
+        if bars is None or len(bars) < period + 1:
+            return None
+        h = bars["High"].values
+        l = bars["Low"].values
+        c = bars["Close"].values
+        tr = _np.maximum.reduce([h[1:] - l[1:], _np.abs(h[1:] - c[:-1]), _np.abs(l[1:] - c[:-1])])
+        return float(tr[-period:].mean())
+    except Exception:
+        return None
+
+
 # â"€â"€ Trail stops â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 def trail_stops(ib, account_id: str, cfg: dict, dry_run: bool = True,
                 strategy: str | None = None,
-                min_move_usd: float = 1.0) -> None:
+                min_move_usd: float = 1.0,
+                atr_strategies: list[str] | None = None) -> None:
     """Ratchet GTC stop-loss orders upward for open positions.
 
     strategy: if given, only trail positions for that strategy (e.g. "blend").
     min_move_usd: minimum stop improvement in USD before submitting a new order
         (avoids order churn on tiny price moves). Default $1.00 matches the
         Saxo live-stocks implementation.
+    atr_strategies: list of strategy names that use ATR Chandelier stops instead
+        of fixed stop_pct (e.g. ["blend", "blend_v2"]). Others keep fixed stop_pct.
     """
     stop_pct  = cfg["risk"]["stop_pct"]
     positions = st.get_open_positions(strategy=strategy) if strategy else st.get_open_positions()
@@ -401,7 +426,18 @@ def trail_stops(ib, account_id: str, cfg: dict, dry_run: bool = True,
             continue
 
         new_high = max(trail_high, cur_price)
-        new_stop = round(new_high * (1 - stop_pct), 2)
+
+        use_atr = bool(atr_strategies and pos.get("strategy") in atr_strategies)
+        if use_atr:
+            _atr = _ibkr_atr(sym)
+            if _atr:
+                new_stop = round(new_high - IBKR_ATR_MULTIPLIER * _atr, 2)
+            else:
+                new_stop = round(new_high * (1 - stop_pct), 2)
+                print(f"  {sym:<8}  ATR unavailable, falling back to fixed {stop_pct*100:.0f}%")
+                use_atr = False
+        else:
+            new_stop = round(new_high * (1 - stop_pct), 2)
 
         # Only ratchet if improvement exceeds min_move_usd to avoid order churn
         if new_stop <= cur_stop + min_move_usd:
@@ -411,7 +447,7 @@ def trail_stops(ib, account_id: str, cfg: dict, dry_run: bool = True,
             continue
 
         print(f"  {sym:<8}  price=${cur_price:.2f}  stop ${cur_stop:.2f} -> ${new_stop:.2f}  "
-              f"high=${new_high:.2f}")
+              f"high=${new_high:.2f}{'  [ATR-2.5x]' if use_atr else f'  [{stop_pct*100:.0f}%]'}")
 
         if dry_run:
             print(f"           [DRY RUN] would ratchet stop to ${new_stop:.2f}")

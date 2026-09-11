@@ -406,7 +406,8 @@ def main() -> None:
             cmd_dashboard(ib, account_id, args.interval)
 
         elif args.trail_stops:
-            ex.trail_stops(ib, account_id, cfg, dry_run=not args.execute)
+            ex.trail_stops(ib, account_id, cfg, dry_run=not args.execute,
+                           atr_strategies=["blend", "blend_v2"])
 
         elif args.strategy == "blend":
             dry_run = not args.execute
