@@ -2367,6 +2367,22 @@ def trail_us_blend_stops(feat_data: dict) -> None:
                 if new_oid:
                     stop_oid = new_oid
                     saxo_ok  = True
+                elif not cleared:
+                    # No conflicting sell orders and still can't place a stop →
+                    # the position was closed in Saxo (stop triggered). Record the exit.
+                    try:
+                        positions = saxo_client.get_positions(env=_sx())
+                        held_uics = {p.get("Uic") for p in positions.get("Data", [])}
+                        if uic not in held_uics:
+                            exit_price = cur_price or 0.0
+                            rate = _sek_per_eur()
+                            entry_sek = float(trade.get("entry_price", exit_price)) * rate
+                            pnl = shares * (exit_price * rate - entry_sek) - commission_sek(shares, exit_price * rate)
+                            db.close_trade(trade_id, exit_price, "stop_triggered_saxo", pnl, commission_sek(shares, exit_price * rate))
+                            print(f"  {tag} {ticker}: stop triggered in Saxo — position gone, closed DB id={trade_id} @ ${exit_price:.2f} (pnl {pnl:+,.0f} SEK)")
+                            continue
+                    except Exception as _ce:
+                        print(f"  {tag} {ticker}: could not verify position status: {_ce}")
 
         if saxo_ok:
             db.update_stop_trailing(trade_id, new_trail, new_stop,
