@@ -1587,8 +1587,10 @@ def _save_us_v2_state(state: dict):
     os.replace(tmp, US_BLEND_V2_STATE)
 
 
-US_BLEND_STOP_PCT = 0.08   # 8% stop-loss, matching the ETF module's convention
-US_BLEND_TP_PCT   = 0.20   # 20% take-profit, matching the ETF module's convention
+US_BLEND_STOP_PCT       = 0.08   # 8% stop-loss, matching the ETF module's convention
+US_BLEND_TP_PCT         = 0.20   # 20% take-profit, matching the ETF module's convention
+US_BLEND_ATR_MULTIPLIER = 2.5    # SIM A/B: Chandelier exit — stop = peak - 2.5×ATR(14)
+US_BLEND_ATR_PERIOD     = 14
 
 
 def _blend_book_state() -> dict:
@@ -1643,7 +1645,8 @@ def _blend_book_state() -> dict:
 
 def _place_us(side: str, ticker: str, shares: int, imap: dict,
               todays_actions: list, price: float, cur_trade: dict = None,
-              strategy: str = "US Blend", account_env: str = "sim") -> bool:
+              strategy: str = "US Blend", account_env: str = "sim",
+              stop_policy: str = "fixed_8pct", atr_stop_price: float | None = None) -> bool:
     """Place ONE US market order and update DB + local cash on success.
     Routes to _sx() -- "sim" for atos_runner.run_cycle, "live" only when
     atos_live_stocks.py has set it.
@@ -1783,6 +1786,10 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
     comm = (stocks_live_commission_sek(shares, price, rate) if _sx() == "live"
             else commission_sek(shares, price_sek))
     if side == "Buy":
+        _effective_stop_pol = stop_policy if _sx() != "live" else "fixed_8pct"
+        _initial_stop = (atr_stop_price
+                         if _effective_stop_pol == "atr_2.5x" and atr_stop_price is not None
+                         else round(price * (1 - US_BLEND_STOP_PCT), 2))
         db.insert_trade({
             "strategy": "US Blend", "market_group": "US Equities", "ticker": ticker,
             "direction": "BUY", "entry_date": date.today().isoformat(),
@@ -1790,10 +1797,11 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
             "entry_score": 0, "d1_trend": 0, "d2_momentum": 0, "d3_breakout": 0,
             "d4_mean_revert": 0, "d5_volume": 0, "d6_smart_money": 0,
             "d7_mom_quality": 0, "d8_regime": 0,
-            "stop_price": round(price * (1 - US_BLEND_STOP_PCT), 2),
+            "stop_price": _initial_stop,
             "trailing_stop_high": price, "regime_at_entry": "momentum",
             "paper": paper,
             "stop_order_id": (stop_oid if not paper else None),
+            "stop_policy": _effective_stop_pol,
         })
         record_fill(-(shares * price_sek + comm))
         _append_trade_log("US Blend", "BUY", ticker, shares, price,
@@ -1802,7 +1810,7 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
         if (ai_config is not None and ai_config.stocks_enabled(_ae)
                 and ai_stock_cards is not None):
             try:
-                _blend_stop = round(price * (1 - US_BLEND_STOP_PCT), 2)
+                _blend_stop = _initial_stop
                 ai_stock_cards.log_stock_entry_card(
                     strategy="us_blend", ticker=ticker, direction="Buy",
                     entry_price=price, shares=shares, stop_price=_blend_stop,
@@ -2064,8 +2072,17 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
             return True
         if observe:
             return _observe_order(side, tk, shares, price, cur_trade=cur_trade)
+        _stop_pol = "fixed_8pct"
+        _atr_stop = None
+        if side == "Buy" and account_env == "sim":
+            _atr = _compute_atr(tk, feat_data)
+            if _atr is not None:
+                _atr_stop = round(price - US_BLEND_ATR_MULTIPLIER * _atr, 2)
+                _stop_pol = "atr_2.5x"
+                print(f"    {tag} {tk}: ATR={_atr:.2f} -> initial stop ${_atr_stop:.2f} (vs fixed ${price*(1-US_BLEND_STOP_PCT):.2f})")
         return _place_us(side, tk, shares, imap, todays_actions, price=price,
-                         cur_trade=cur_trade, strategy="US Blend", account_env=account_env)
+                         cur_trade=cur_trade, strategy="US Blend", account_env=account_env,
+                         stop_policy=_stop_pol, atr_stop_price=_atr_stop)
 
     def _sell_all_us():
         for tk, tr in us_open.items():
@@ -2266,6 +2283,22 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
                 pass
 
 
+def _compute_atr(ticker: str, feat_data: dict, period: int = 14) -> float | None:
+    """ATR(period) from True Range for ticker. Returns None if data is missing or too short."""
+    bars = feat_data.get(ticker)
+    if bars is None or len(bars) < period + 1:
+        return None
+    try:
+        import numpy as _np
+        h = bars["High"].values
+        l = bars["Low"].values
+        c = bars["Close"].values
+        tr = _np.maximum.reduce([h[1:] - l[1:], _np.abs(h[1:] - c[:-1]), _np.abs(l[1:] - c[:-1])])
+        return float(tr[-period:].mean())
+    except Exception:
+        return None
+
+
 def trail_us_blend_stops(feat_data: dict) -> None:
     """Trail stop-loss orders for all open US Blend positions on both SIM and LIVE.
 
@@ -2320,8 +2353,18 @@ def trail_us_blend_stops(feat_data: dict) -> None:
 
         trail_high = float(trade.get("trailing_stop_high") or trade.get("entry_price") or cur_price)
         new_trail  = max(trail_high, cur_price)
-        new_stop   = round(new_trail * (1 - US_BLEND_STOP_PCT), 2)
         cur_stop   = float(trade.get("stop_price") or 0)
+
+        stop_pol = trade.get("stop_policy") or "fixed_8pct"
+        if stop_pol == "atr_2.5x":
+            _atr = _compute_atr(ticker, feat_data, period=US_BLEND_ATR_PERIOD)
+            if _atr:
+                new_stop = round(new_trail - US_BLEND_ATR_MULTIPLIER * _atr, 2)
+            else:
+                new_stop = round(new_trail * (1 - US_BLEND_STOP_PCT), 2)
+                print(f"  {tag} {ticker}: ATR unavailable, falling back to fixed 8%")
+        else:
+            new_stop = round(new_trail * (1 - US_BLEND_STOP_PCT), 2)
 
         # Skip Saxo if stop hasn't moved enough; still update trail_high in DB on a new high.
         # Guard is cur_stop > 0 only — a zero stop_price (never stored) always falls through.

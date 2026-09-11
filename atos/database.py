@@ -158,6 +158,11 @@ def migrate_schema():
         # NULL on an open non-paper row -> atos_runner._heal_missing_stock_stops
         # re-attempts it each cycle.
         "ALTER TABLE trades ADD COLUMN stop_order_id TEXT",
+        # 2026-09-11: SIM A/B trailing-stop experiment.
+        # 'fixed_8pct' = original fixed 8% trailing stop (default, all existing rows).
+        # 'atr_2.5x'  = Chandelier exit: stop = trail_high - 2.5 * ATR(14).
+        # LIVE account rows always use 'fixed_8pct'.
+        "ALTER TABLE trades ADD COLUMN stop_policy TEXT DEFAULT 'fixed_8pct'",
     ]
     with _conn() as conn:
         for sql in migrations:
@@ -174,19 +179,22 @@ def insert_trade(data: dict) -> int:
     rejected the real order (see migrate_schema).
     `stop_order_id` (default None): the broker stop's order id, or None if
     it wasn't placed -- _heal_missing_stock_stops re-attempts a None one."""
-    data = {"strategy": "ATOS_v1", "paper": 0, "stop_order_id": None, **data}
+    data = {"strategy": "ATOS_v1", "paper": 0, "stop_order_id": None,
+            "stop_policy": "fixed_8pct", **data}
     with _conn() as conn:
         cur = conn.execute("""
             INSERT INTO trades
               (strategy, market_group, ticker, direction, entry_date, entry_price, shares,
                commission_sek, entry_score, d1_trend, d2_momentum, d3_breakout,
                d4_mean_revert, d5_volume, d6_smart_money, d7_mom_quality, d8_regime,
-               trailing_stop_high, regime_at_entry, stop_price, paper, stop_order_id)
+               trailing_stop_high, regime_at_entry, stop_price, paper, stop_order_id,
+               stop_policy)
             VALUES
               (:strategy, :market_group, :ticker, :direction, :entry_date, :entry_price, :shares,
                :commission_sek, :entry_score, :d1_trend, :d2_momentum, :d3_breakout,
                :d4_mean_revert, :d5_volume, :d6_smart_money, :d7_mom_quality, :d8_regime,
-               :trailing_stop_high, :regime_at_entry, :stop_price, :paper, :stop_order_id)
+               :trailing_stop_high, :regime_at_entry, :stop_price, :paper, :stop_order_id,
+               :stop_policy)
         """, data)
         return cur.lastrowid
 
