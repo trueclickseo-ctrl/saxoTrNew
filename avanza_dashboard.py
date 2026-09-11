@@ -34,7 +34,10 @@ INSTRUMENTS = {
     "GOLD":       {"name": "Gold",            "strategy": "trend",     "leverage": 5.0, "budget_sek": 2000.0, "product": "MINI L GULD AVA 247",            "yahoo": "GC=F",      "avanza_id": "2039813",  "commission_sek": 0.0},
     "APPLE":      {"name": "Apple (AAPL)",    "strategy": "trend",     "leverage": 5.2, "budget_sek": 2000.0, "product": "MINI L APPLE AVA 91",            "yahoo": "AAPL",      "avanza_id": "2474069",  "commission_sek": 0.0},
     "GOOGLE":     {"name": "Google (GOOGL)",  "strategy": "trend",     "leverage": 4.7, "budget_sek": 2000.0, "product": "MINI L GOOGLE AVA 63",           "yahoo": "GOOGL",     "avanza_id": "2228507",  "commission_sek": 0.0},
-    "INVESTOR_B": {"name": "Investor B (SE)", "strategy": "trend",     "leverage": 5.0, "budget_sek": 2000.0, "product": "MINI L INVESTOR NORDNET SE23",   "yahoo": "INVE-B.ST", "avanza_id": "2286747",  "commission_sek": 0.0},
+    "INVESTOR_B":   {"name": "Investor B (SE)",     "strategy": "trend",     "leverage": 5.0, "budget_sek": 2000.0, "product": "MINI L INVESTOR NORDNET SE23",  "yahoo": "INVE-B.ST", "avanza_id": "2286747",  "commission_sek": 0.0},
+    "ORACLE":       {"name": "Oracle (ORCL)",       "strategy": "trend",     "leverage": 4.0, "budget_sek": 2000.0, "product": "MINI L ORACLE NORDNET SE26",    "yahoo": "ORCL",      "avanza_id": "2576010",  "commission_sek": 0.0},
+    "ASTRAZENECA":  {"name": "AstraZeneca (AZN)",   "strategy": "reversion", "leverage": 2.0, "budget_sek": 2000.0, "product": "MINI L ASTRAZENECA AVA 29",    "yahoo": "AZN",       "avanza_id": "1251802",  "commission_sek": 0.0},
+    "OMX":          {"name": "OMX Stockholm 30",    "strategy": "reversion", "leverage": 1.3, "budget_sek": 2000.0, "product": "MINI L OMX AVA 5",             "yahoo": "^OMX",      "avanza_id": "564078",   "commission_sek": 0.0},
 }
 
 MARKET_OPEN_PKT  = (12, 0)   # 09:00 CET = 12:00 PKT

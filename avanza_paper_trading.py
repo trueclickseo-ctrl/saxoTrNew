@@ -2,16 +2,19 @@
 avanza_paper_trading.py
 -----------------------
 Paper trading dry-run for Avanza mini futures.
-  Indices (reversion): DAX, S&P 500
-  Commodities/Stocks (trend): Gold, Apple, Google, Investor B
+  Indices  (reversion): DAX, S&P 500, AstraZeneca, OMX Stockholm 30
+  Stocks   (trend):     Gold, Apple, Google, Investor B, Oracle
 
-Backtested results (5 years, 5x leverage, 2,000 SEK budget):
-  DAX        reversion : +294%,  82% WR,  0 KOs
-  SP500      reversion : +192%,  81% WR,  0 KOs
-  Gold       trend     : +247%,  33% WR,  0 KOs
-  Apple      trend     : +442%,  45% WR,  0 KOs
-  Google     trend     : +377%,  45% WR,  0 KOs
-  Investor B trend     : +274%,  37% WR,  0 KOs  ← lowest max DD of all (49%)
+Backtested results (5 years, 2,000 SEK budget):
+  DAX        5.4x  reversion : +294%,  82% WR,  0 KOs
+  SP500      5.8x  reversion : +192%,  81% WR,  0 KOs
+  Gold       5.0x  trend     : +247%,  33% WR,  0 KOs
+  Apple      5.2x  trend     : +442%,  45% WR,  0 KOs
+  Google     4.7x  trend     : +377%,  45% WR,  0 KOs
+  Investor B 5.0x  trend     : +274%,  37% WR,  0 KOs  ← lowest max DD (49%)
+  Oracle     4.0x  trend     : +229%,  30% WR,  0 KOs  PF 1.19
+  AstraZeneca 2.0x reversion :  +52%,  78% WR,  0 KOs  PF 1.21  MaxDD 39%
+  OMX        1.3x  reversion :  +33%,  77% WR,  0 KOs  PF 1.58  MaxDD 15%  ← safest
 
 Instruments use Avanza-issued (AVA) true mini futures — most liquid on Nordic MTF.
 After N_MIN_TRADES paper trades per instrument with positive expectancy,
@@ -137,6 +140,57 @@ INSTRUMENTS = {
         # Live fallback: MINI L INVESTOR NORDNET SE25 (ID 2286648, 3.3x, 2.8M SEK/day)
         "avanza_id":       "2286747",
         "avanza_name":     "MINI L INVESTOR NORDNET SE23",
+        "parity":          1,
+    },
+    "ORACLE": {
+        "yahoo":           "ORCL",
+        "name":            "Oracle (ORCL)",
+        "strategy":        "trend",
+        "leverage":        4.0,
+        "budget_sek":      2000.0,
+        "financing_rate":  0.055,
+        "ma_days":         20,
+        "active":          True,
+        "commission_sek":  0.0,
+        # Nordnet-issued, MINI L ORACLE NORDNET SE26 ≈ 4x leverage
+        # Backtest: +229% (4x), 0 KOs, 79% max DD, PF 1.19, 5-year TREND
+        # KO distance ≈ 25% at 4x — safe for a US tech stock
+        "avanza_id":       "2576010",
+        "avanza_name":     "MINI L ORACLE NORDNET SE26",
+        "parity":          1,
+    },
+    "ASTRAZENECA": {
+        "yahoo":           "AZN",
+        "name":            "AstraZeneca (AZN)",
+        "strategy":        "reversion",
+        "leverage":        2.0,
+        "budget_sek":      2000.0,
+        "financing_rate":  0.055,
+        "ma_days":         20,
+        "active":          True,
+        "commission_sek":  0.0,
+        # AVA-branded, MINI L ASTRAZENECA AVA 29 ≈ 2.43x leverage
+        # Backtest: +52% (2x), WR 77.5%, PF 1.21, MaxDD 39%, 0 KOs, REVERSION
+        # KO distance ≈ 50% at 2x — essentially no KO risk
+        "avanza_id":       "1251802",
+        "avanza_name":     "MINI L ASTRAZENECA AVA 29",
+        "parity":          1,
+    },
+    "OMX": {
+        "yahoo":           "^OMX",
+        "name":            "OMX Stockholm 30",
+        "strategy":        "reversion",
+        "leverage":        1.3,
+        "budget_sek":      2000.0,
+        "financing_rate":  0.055,
+        "ma_days":         20,
+        "active":          True,
+        "commission_sek":  0.0,
+        # AVA-branded, MINI L OMX AVA 5 ≈ 1.28x leverage (barrier ~720, OMX ~2,900)
+        # Backtest: +33%, WR 77%, PF 1.58 (best of all), MaxDD only 15%, 0 KOs, REVERSION
+        # KO distance ≈ 77% at 1.3x — essentially unleveraged, minimal KO risk
+        "avanza_id":       "564078",
+        "avanza_name":     "MINI L OMX AVA 5",
         "parity":          1,
     },
 }
