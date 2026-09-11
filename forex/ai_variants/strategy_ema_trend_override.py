@@ -45,25 +45,27 @@ def generate_signals(market_data: dict, open_symbols: set | None = None, **kwarg
 def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tuple:
     """Pass-through to the underlying should_exit, unchanged.
 
-    Exit-reason breakdown from the 61-trade SIM ledger:
+    Exit-reason breakdown from the 61-trade SIM ledger (re-checked at
+    Phase 3, identical to the Phase 2 snapshot):
         hard_stop            n=60  win_rate=28.3%  avg_pnl=-2.20
         roster_flatten_...   n=1   win_rate=0.0%   avg_pnl=-5.02
 
-    98% of exits share a single exit_reason (hard_stop) with only one
-    outlier (a roster flatten event, n=1). There is no second
-    meaningfully-sized exit-reason population to compare against, so there
-    is no ledger-backed way to distinguish 'stop fired on a single noisy
-    wick that would have reversed' from 'stop correctly capped a genuinely
-    bad entry'. The low 28.3% win rate mirrors the poor entry quality
-    already addressed by the Phase 2 DKK/HKD currency-block filter rather
-    than a flaw in the exit trigger itself; an average loss of ~2.2
-    (currency units) per hard_stop is consistent with the stop simply
-    doing its job on a currently low-hit-rate entry signal. Adding a
-    confirmation-bar delay or breakeven trail here would let losers run
-    further with zero ledger evidence it would flip net losers into net
-    winners -- so per governance rule 7, the underlying exit logic is left
-    unchanged rather than introduce an unfounded change, while the code
-    path is still written so Phase 2's entry filter remains active.
+    98.4% of exits share a single exit_reason (hard_stop); the sole
+    alternative reason (a roster flatten event) is n=1 and cannot support
+    any statistically-grounded rule. There is no second meaningfully-sized
+    exit-reason population to compare against, so there is no ledger
+    evidence to distinguish 'stop fired on a single noisy wick that would
+    have reversed' from 'stop correctly capped a genuinely bad entry'.
+    The low 28.3% win rate on hard_stop mirrors poor entry quality already
+    addressed by the Phase 2 DKK/HKD currency-block filter, not a flaw in
+    the stop-trigger mechanics; the average loss of ~2.2 per hard_stop is
+    consistent with the stop simply doing its job. Introducing a
+    confirmation-bar delay or a breakeven-trail block here would let
+    losers run further on zero ledger evidence that doing so would flip
+    net losers into net winners -- per governance rule 7, the underlying
+    exit logic is left unchanged, while this code path still exists so
+    Phase 2's entry filter remains active alongside a Phase-3-shaped
+    module.
     """
     exit_flag, reason = _orig_should_exit(position, df, calendar_days_held)
     return exit_flag, reason
