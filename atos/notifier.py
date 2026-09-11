@@ -486,6 +486,107 @@ def notify_weekly_report(
     _send(subject, _wrap("Weekly Performance Report", body))
 
 
+# ── Avanza mini futures signals ───────────────────────────────────────────────
+
+_sent_mini_keys: set = set()   # dedup: (date, key, signal_type)
+
+
+def notify_avanza_mini_signal(
+    signal_type: str,       # "ENTRY" or "EXIT"
+    key: str,               # e.g. "SP500"
+    name: str,              # e.g. "S&P 500 (US)"
+    strategy: str,          # "reversion" or "trend"
+    product: str,           # e.g. "MINI L SP500 AVA 339"
+    price: float,
+    ma_val: float,
+    leverage: float,
+    budget_sek: float,
+    financing_level: float = 0.0,
+    pnl_sek: float = 0.0,
+    entry_price: float = 0.0,
+) -> None:
+    """Email when an Avanza mini futures paper entry or exit signal fires."""
+    today = date.today().isoformat()
+    dedup_key = (today, key, signal_type)
+    if dedup_key in _sent_mini_keys:
+        return
+    _sent_mini_keys.add(dedup_key)
+
+    diff_pct = (price - ma_val) / ma_val * 100 if ma_val else 0
+    above    = "above" if price > ma_val else "below"
+
+    if signal_type == "ENTRY":
+        badge     = '<span class="badge buy">BUY SIGNAL — ENTRY</span>'
+        action    = "Price crossed the MA — entry signal triggered."
+        fin_html  = (f'<div class="metric"><div class="label">KO Barrier</div>'
+                     f'<div class="value" style="color:#f87171">{financing_level:,.2f}</div></div>'
+                     if financing_level > 0 else "")
+        pnl_html  = ""
+        instr     = f"Buy <strong>{product}</strong> on Avanza (Swing account)"
+    else:
+        badge     = '<span class="badge sell">EXIT SIGNAL</span>'
+        action    = "Price crossed back above MA — exit signal triggered."
+        fin_html  = ""
+        pnl_col   = "#4ade80" if pnl_sek >= 0 else "#f87171"
+        pnl_sign  = "+" if pnl_sek >= 0 else ""
+        pnl_html  = (f'<div class="metric"><div class="label">Paper P&amp;L</div>'
+                     f'<div class="value" style="color:{pnl_col}">{pnl_sign}{pnl_sek:,.0f} SEK</div></div>')
+        instr     = f"Sell <strong>{product}</strong> on Avanza (Swing account)"
+
+    body = f"""
+    {badge}
+    <p style="color:#94a3b8; margin:12px 0">{action}</p>
+    <div class="metric-row">
+      <div class="metric">
+        <div class="label">Instrument</div>
+        <div class="value" style="font-size:15px">{name}</div>
+      </div>
+      <div class="metric">
+        <div class="label">Strategy</div>
+        <div class="value" style="font-size:14px;text-transform:capitalize">{strategy}</div>
+      </div>
+      <div class="metric">
+        <div class="label">Leverage</div>
+        <div class="value" style="color:#fb923c">{leverage}x</div>
+      </div>
+    </div>
+    <div class="metric-row">
+      <div class="metric">
+        <div class="label">Price</div>
+        <div class="value">{price:,.2f}</div>
+      </div>
+      <div class="metric">
+        <div class="label">20-day MA</div>
+        <div class="value" style="color:#94a3b8">{ma_val:,.2f}</div>
+      </div>
+      <div class="metric">
+        <div class="label">vs MA</div>
+        <div class="value" style="color:{'#4ade80' if diff_pct >= 0 else '#f87171'}">
+          {diff_pct:+.1f}% {above}
+        </div>
+      </div>
+      <div class="metric">
+        <div class="label">Budget</div>
+        <div class="value" style="color:#60a5fa">{budget_sek:,.0f} SEK</div>
+      </div>
+      {fin_html}
+      {pnl_html}
+    </div>
+    <hr class="divider">
+    <p style="color:#f1f5f9; font-size:14px">
+      <strong>Action:</strong> {instr}
+    </p>
+    <p class="muted">Product code: {product} &nbsp;·&nbsp; Paper trading SIM — place manually on Avanza</p>
+    """
+
+    subject_map = {
+        "ENTRY": f"Avanza BUY — {name} entry signal [{today}]",
+        "EXIT":  f"Avanza SELL — {name} exit signal [{today}]",
+    }
+    _send(subject_map.get(signal_type, f"Avanza {signal_type} — {name} [{today}]"),
+          _wrap(f"Avanza Mini Futures — {signal_type} Signal", body))
+
+
 # ── Scorer signals ─────────────────────────────────────────────────────────────
 
 # Dedup: track which (date, frozenset(tickers)) combos we've already emailed

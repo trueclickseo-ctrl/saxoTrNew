@@ -338,6 +338,18 @@ def run_update(state: dict, dry_run: bool = False) -> None:
             else:
                 print(f"       [dry-run] not recorded.")
 
+            # Email alert
+            try:
+                from atos.notifier import notify_avanza_mini_signal
+                notify_avanza_mini_signal(
+                    signal_type="ENTRY", key=key, name=cfg["name"],
+                    strategy=cfg["strategy"], product=cfg["product"],
+                    price=price, ma_val=ma_val, leverage=lever,
+                    budget_sek=cfg["budget_sek"], financing_level=fin_lvl,
+                )
+            except Exception as _e:
+                print(f"       [notifier] {_e}")
+
         # ── Exit ──────────────────────────────────────────────────────────
         elif signal == "EXIT" and in_market:
             pnl_sek, pnl_pct, is_ko = _current_pnl(pos, price)
@@ -363,6 +375,19 @@ def run_update(state: dict, dry_run: bool = False) -> None:
                 state["trades"].append(trade)
                 state["positions"][key] = {"status": "FLAT"}
                 print(f"       Paper position closed and recorded.")
+
+            # Email alert
+            try:
+                from atos.notifier import notify_avanza_mini_signal
+                notify_avanza_mini_signal(
+                    signal_type="EXIT", key=key, name=cfg["name"],
+                    strategy=cfg["strategy"], product=cfg["product"],
+                    price=price, ma_val=ma_val, leverage=cfg["leverage"],
+                    budget_sek=cfg["budget_sek"],
+                    pnl_sek=pnl_sek, entry_price=pos["entry_price"],
+                )
+            except Exception as _e:
+                print(f"       [notifier] {_e}")
 
         # ── Open position status ──────────────────────────────────────────
         elif in_market:
