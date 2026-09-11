@@ -40,56 +40,120 @@ INSTRUMENTS = {
 MARKET_OPEN_PKT  = (12, 0)   # 09:00 CET = 12:00 PKT
 MARKET_CLOSE_PKT = (20, 30)  # 17:30 CET = 20:30 PKT
 
-W = 78  # display width
+# ── Column widths (visual chars — used to compute separator widths) ─────────────
+# Paper Trading open-positions row  (indent=2, gap=2)
+_P_INST  = 16   # left
+_P_STRAT =  9   # left  ("reversion")
+_P_LEV   =  5   # right ("5.4x")
+_P_ENTRY = 10   # right (price)
+_P_DATE  = 10   # right ("2026-09-11")
+_P_OPNL  = 22   # right ("+1,234 SEK (+99.9%)")
+_P_GAP   =  2
+_P_IND   =  2
+_P_ROW   = (_P_IND + _P_INST + _P_GAP + _P_STRAT + _P_GAP + _P_LEV
+            + _P_GAP + _P_ENTRY + _P_GAP + _P_DATE + _P_GAP + _P_OPNL)
+# = 2 + 16 + 2 + 9 + 2 + 5 + 2 + 10 + 2 + 10 + 2 + 22 = 84
+
+# Warranter View row  (indent=2, gap=3)
+_W_NAMN  = 22   # left
+_W_ANTAL =  5   # right
+_W_SEN   =  8   # right ("  132.10")
+_W_INKOP = 10   # right ("    153.90")
+_W_SEDAN = 19   # right ("-22 kr (-14.2%)")
+_W_VARD  =  9   # right ("1,990 kr")
+_W_COMM  =  5   # right ("0 kr")
+_W_GAP   =  3
+_W_IND   =  2
+_W_ROW   = (_W_IND + _W_NAMN + _W_GAP + _W_ANTAL + _W_GAP + _W_SEN
+            + _W_GAP + _W_INKOP + _W_GAP + _W_SEDAN + _W_GAP + _W_VARD
+            + _W_GAP + _W_COMM)
+# = 2 + 22 + 3 + 5 + 3 + 8 + 3 + 10 + 3 + 19 + 3 + 9 + 3 + 5 = 99
+
+# Closed-trades row  (indent=2, gap=2)
+_C_INST  = 16   # left
+_C_TR    =  6   # right
+_C_WIN   =  4   # right
+_C_LOS   =  5   # right
+_C_WR    =  6   # right ("  55%")
+_C_PF    =  6   # right (" 1.50")
+_C_PNL   = 11   # right
+_C_COMM  =  5   # right
+_C_GATE  =  9   # right
+_C_GAP   =  2
+_C_IND   =  2
+_C_ROW   = (_C_IND + _C_INST + _C_GAP + _C_TR + _C_GAP + _C_WIN
+            + _C_GAP + _C_LOS + _C_GAP + _C_WR + _C_GAP + _C_PF
+            + _C_GAP + _C_PNL + _C_GAP + _C_COMM + _C_GAP + _C_GATE)
+# = 2+16+2+6+2+4+2+5+2+6+2+6+2+11+2+5+2+9 = 86
+
+W = max(_P_ROW, _W_ROW, _C_ROW) + 2   # 101 — master border width
 
 # ── ANSI colours ───────────────────────────────────────────────────────────────
 
 class C:
-    RST    = "\033[0m"
-    BOLD   = "\033[1m"
-    DIM    = "\033[2m"
-    # foregrounds
-    RED    = "\033[91m"
-    GREEN  = "\033[92m"
-    YELLOW = "\033[93m"
-    BLUE   = "\033[94m"
-    MAGENTA= "\033[95m"
-    CYAN   = "\033[96m"
-    WHITE  = "\033[97m"
-    GRAY   = "\033[90m"
-    # compound
-    BRED   = BOLD + RED
-    BGRN   = BOLD + GREEN
-    BYEL   = BOLD + YELLOW
-    BCYN   = BOLD + CYAN
-    BWHT   = BOLD + WHITE
+    RST     = "\033[0m"
+    BOLD    = "\033[1m"
+    DIM     = "\033[2m"
+    RED     = "\033[91m"
+    GREEN   = "\033[92m"
+    YELLOW  = "\033[93m"
+    BLUE    = "\033[94m"
+    MAGENTA = "\033[95m"
+    CYAN    = "\033[96m"
+    WHITE   = "\033[97m"
+    GRAY    = "\033[90m"
+    BRED    = BOLD + RED
+    BGRN    = BOLD + GREEN
+    BYEL    = BOLD + YELLOW
+    BCYN    = BOLD + CYAN
+    BWHT    = BOLD + WHITE
+    BMAG    = BOLD + MAGENTA
+
 
 def _c(text: str, *codes: str) -> str:
     return "".join(codes) + str(text) + C.RST
 
-def _pnl_str(val: float, unit: str = "SEK") -> str:
-    if val > 0:
-        return _c(f"+{val:,.0f} {unit}", C.BGRN)
-    if val < 0:
-        return _c(f"{val:,.0f} {unit}", C.BRED)
-    return _c(f"0 {unit}", C.GRAY)
 
-def _pnl_pct_str(val_sek: float, pct: float) -> str:
-    sign = "+" if val_sek >= 0 else ""
-    text = f"{sign}{val_sek:,.0f} kr ({sign}{pct:.1f}%)"
-    if val_sek > 0:   return _c(text, C.BGRN)
-    if val_sek < 0:   return _c(text, C.BRED)
-    return _c(text, C.GRAY)
+def _cell(value: str, width: int, left: bool = False, color: str | None = None) -> str:
+    """Pad plain text to `width` chars first, THEN apply color.
+    Visual width is always exactly `width` regardless of ANSI codes."""
+    plain = f"{value:<{width}}" if left else f"{value:>{width}}"
+    return _c(plain, color) if color else plain
 
-def _pnl_color(val: float) -> str:
-    if val > 0:  return f"+{val:.2f}"
-    if val < 0:  return f"{val:.2f}"
-    return "0.00"
+
+def _pnl_cell(val: float, width: int, unit: str = "SEK") -> str:
+    sign  = "+" if val >= 0 else ""
+    plain = f"{sign}{val:,.0f} {unit}"
+    pad   = f"{plain:>{width}}"
+    col   = C.BGRN if val > 0 else C.BRED if val < 0 else C.GRAY
+    return _c(pad, col)
+
+
+def _sedan_cell(sedan_sek: float, sedan_pct: float, width: int = _W_SEDAN) -> str:
+    sign  = "+" if sedan_sek > 0 else "-" if sedan_sek < 0 else ""
+    plain = f"{sign}{abs(sedan_sek):,.0f} kr ({sign}{abs(sedan_pct):.1f}%)"
+    pad   = f"{plain:>{width}}"
+    col   = C.BGRN if sedan_sek > 0 else C.BRED if sedan_sek < 0 else C.GRAY
+    return _c(pad, col)
+
+
+def _wr_color(wr: float) -> str:
+    if wr >= 55: return C.BGRN
+    if wr >= 40: return C.YELLOW
+    return C.RED
+
+
+def _pf_color(pf: float) -> str:
+    if pf >= 1.5: return C.BGRN
+    if pf >= 1.0: return C.YELLOW
+    return C.RED
+
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
 def _clear():
     os.system("cls" if os.name == "nt" else "clear")
+
 
 def _load_state() -> dict:
     try:
@@ -98,8 +162,10 @@ def _load_state() -> dict:
     except Exception:
         return {"positions": {}, "trades": []}
 
+
 def _now_pkt() -> datetime:
     return datetime.now(timezone.utc) + timedelta(hours=5)
+
 
 def _market_open() -> bool:
     now = _now_pkt()
@@ -110,6 +176,7 @@ def _market_open() -> bool:
     ch, cm = MARKET_CLOSE_PKT
     return (h * 60 + m) >= (oh * 60 + om) and (h * 60 + m) < (ch * 60 + cm)
 
+
 def _last_log_lines(n: int = 5) -> list[str]:
     try:
         with open(_LOG_FILE, encoding="utf-8", errors="replace") as f:
@@ -118,20 +185,23 @@ def _last_log_lines(n: int = 5) -> list[str]:
     except Exception:
         return []
 
-def _fmt_ts(ts: str | None) -> str:
+
+def _fmt_date(ts: str | None) -> str:
     if not ts:
         return "-"
     try:
         dt  = datetime.fromisoformat(ts.replace("Z", "+00:00"))
         pkt = dt.astimezone(timezone.utc) + timedelta(hours=5)
-        return pkt.strftime("%Y-%m-%d %H:%M")
+        return pkt.strftime("%Y-%m-%d")
     except Exception:
-        return ts[:16] if ts else "-"
+        return ts[:10] if ts else "-"
+
 
 # ── live prices ────────────────────────────────────────────────────────────────
 
 _price_cache: dict[str, tuple[float, datetime]] = {}
 _CACHE_TTL_S = 60
+
 
 def _fetch_price(yahoo: str) -> float | None:
     now = datetime.now()
@@ -155,6 +225,7 @@ def _fetch_price(yahoo: str) -> float | None:
 
 _avanza_sek_cache: dict[str, tuple[float, datetime]] = {}
 
+
 def _load_avanza_env() -> None:
     env_file = os.path.join(_ROOT, ".env.avanza")
     if os.path.exists(env_file):
@@ -166,7 +237,7 @@ def _load_avanza_env() -> None:
                     os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
 
-_avanza_client_cache: list = []  # holds [client] once loaded
+_avanza_client_cache: list = []
 
 
 def _fetch_avanza_sek(avanza_id: str) -> float | None:
@@ -220,31 +291,34 @@ def render():
     now    = _now_pkt()
     is_mkt = _market_open()
     mkt_str = _c("OPEN", C.BGRN) if is_mkt else _c("CLOSED", C.GRAY)
+    g = " " * _P_GAP   # standard 2-space gap
+    w = " " * _W_GAP   # warranter 3-space gap
 
     # ── HEADER ────────────────────────────────────────────────────────────────
-    print(_c("=" * W, C.CYAN))
-    print(_c(f"{'AVANZA MINI FUTURES DASHBOARD':^{W}}", C.BCYN + C.BOLD))
-    print(_c(f"  {now.strftime('%Y-%m-%d %H:%M')} PKT  |  Market: ", C.GRAY)
-          + mkt_str
-          + _c("  |  6 instruments", C.GRAY))
-    print(_c("=" * W, C.CYAN))
+    border = _c("=" * W, C.CYAN)
+    print(border)
+    print(_c(f"{'AVANZA MINI FUTURES  —  PAPER TRADING SIM':^{W}}", C.BCYN))
+    ts_line = f"  {now.strftime('%Y-%m-%d  %H:%M')} PKT   |   Market: "
+    print(_c(ts_line, C.GRAY) + mkt_str + _c("   |   6 instruments   |   Budget: 2 000 SEK / instrument", C.GRAY))
+    print(border)
 
-    # ── PAPER TRADING (SIM) ───────────────────────────────────────────────────
+    # ── SECTION 1: OPEN POSITIONS ─────────────────────────────────────────────
     print()
-    print(_c(f"  ┌{'─' * (W - 4)}┐", C.YELLOW))
-    print(_c(f"  │{'  PAPER TRADING  (SIM)':^{W-4}}│", C.BYEL))
-    print(_c(f"  └{'─' * (W - 4)}┘", C.YELLOW))
-    print()
+    print(_c(f"  {'OPEN POSITIONS':^{_P_ROW - 2}}", C.BYEL))
+    sep_p = _c("  " + "-" * (_P_ROW - 2), C.DIM)
+    print(sep_p)
 
-    hdr_open = (f"  {_c('Instrument', C.BWHT):<24} "
-                f"{_c('Strat', C.BWHT):<14} "
-                f"{_c('Lev', C.BWHT):>9}  "
-                f"{_c('Entry', C.BWHT):>12}  "
-                f"{_c('Now', C.BWHT):>12}  "
-                f"{_c('Date', C.BWHT):<14}  "
-                f"{_c('Open P&L', C.BWHT):>16}")
-    print(hdr_open)
-    print(_c(f"  {'-' * (W + 4)}", C.DIM))
+    hdr = (
+        "  "
+        + _cell("Instrument",  _P_INST,  left=True,  color=C.BWHT)  + g
+        + _cell("Strategy",    _P_STRAT, left=True,  color=C.BWHT)  + g
+        + _cell("Lev",         _P_LEV,               color=C.BWHT)  + g
+        + _cell("Entry price", _P_ENTRY,              color=C.BWHT)  + g
+        + _cell("Entry date",  _P_DATE,               color=C.BWHT)  + g
+        + _cell("Open P&L",    _P_OPNL,               color=C.BWHT)
+    )
+    print(hdr)
+    print(sep_p)
 
     total_open_pnl   = 0.0
     total_closed_pnl = 0.0
@@ -252,93 +326,135 @@ def render():
     total_losses     = 0
 
     for key, cfg in INSTRUMENTS.items():
-        p        = pos.get(key, {})
-        in_pos   = p.get("status") == "OPEN" and bool(p.get("entry_price"))
+        p       = pos.get(key, {})
+        in_pos  = p.get("status") == "OPEN" and bool(p.get("entry_price"))
         entry_px = p.get("entry_price", 0.0)
-        entry_dt = p.get("entry_date", "")
-        date_str = _c(entry_dt[:10], C.BLUE) if in_pos and entry_dt else _c("-", C.GRAY)
+        date_s  = _fmt_date(p.get("entry_date", ""))
 
-        strat_color = C.MAGENTA if cfg["strategy"] == "reversion" else C.CYAN
-        name_str  = _c(f"{cfg['name']:<16}", C.WHITE)
-        strat_str = _c(f"{cfg['strategy']:<10}", strat_color)
-        lev_str   = _c(f"{cfg['leverage']:.1f}x", C.YELLOW)
-
-        open_pnl_str = _c("-", C.GRAY)
-        now_px_str   = _c("-", C.GRAY)
-        entry_str    = _c("-", C.GRAY)
+        sc      = C.BMAG if cfg["strategy"] == "reversion" else C.BCYN
+        name_c  = _cell(cfg["name"],       _P_INST,  left=True, color=C.WHITE)
+        strat_c = _cell(cfg["strategy"],   _P_STRAT, left=True, color=sc)
+        lev_c   = _cell(f"{cfg['leverage']:.1f}x", _P_LEV, color=C.YELLOW)
 
         if in_pos:
-            entry_str = _c(f"{entry_px:>10.2f}", C.WHITE)
+            entry_c = _cell(f"{entry_px:,.2f}", _P_ENTRY, color=C.WHITE)
+            date_c  = _cell(date_s,              _P_DATE,  color=C.BLUE)
             cur = _fetch_price(cfg["yahoo"])
             if cur is not None:
-                now_px_str = _c(f"{cur:>10.2f}", C.WHITE)
                 pnl_sek, pnl_pct, is_ko = _current_pnl(p, cur)
                 total_open_pnl += pnl_sek
-                sign = "+" if pnl_sek >= 0 else ""
                 if is_ko:
-                    open_pnl_str = _c(f"KO! -{cfg['budget_sek']:.0f} SEK", C.BRED)
+                    opnl_c = _cell(f"KO! -{cfg['budget_sek']:.0f} SEK", _P_OPNL, color=C.BRED)
                 else:
-                    open_pnl_str = _pnl_str(pnl_sek) + _c(f" ({sign}{pnl_pct*100:.1f}%)", C.DIM)
+                    sign   = "+" if pnl_sek >= 0 else ""
+                    plain  = f"{sign}{pnl_sek:,.0f} SEK  ({sign}{pnl_pct*100:.1f}%)"
+                    opnl_c = _cell(plain, _P_OPNL, color=C.BGRN if pnl_sek >= 0 else C.BRED)
             else:
-                open_pnl_str = _c("no data", C.GRAY)
+                opnl_c = _cell("no data", _P_OPNL, color=C.GRAY)
+        else:
+            entry_c = _cell("-", _P_ENTRY, color=C.GRAY)
+            date_c  = _cell("-", _P_DATE,  color=C.GRAY)
+            opnl_c  = _cell("-", _P_OPNL,  color=C.GRAY)
 
-        print(f"  {name_str}  {strat_str}  {lev_str}  {entry_str}  {now_px_str}  {date_str}  {open_pnl_str}")
+        print("  " + name_c + g + strat_c + g + lev_c + g + entry_c + g + date_c + g + opnl_c)
 
-    # ── WARRANTER VIEW ────────────────────────────────────────────────────────
+    print(sep_p)
+    sign = "+" if total_open_pnl >= 0 else ""
+    col  = C.BGRN if total_open_pnl > 0 else C.BRED if total_open_pnl < 0 else C.GRAY
+    print("  " + _cell("", _P_INST + _P_GAP + _P_STRAT + _P_GAP + _P_LEV + _P_GAP + _P_ENTRY + _P_GAP + _P_DATE, left=True)
+          + g + _cell(f"{sign}{total_open_pnl:,.0f} SEK  total open", _P_OPNL, color=col))
+
+    # ── SECTION 2: AVANZA WARRANTER VIEW ─────────────────────────────────────
     open_positions = {k: v for k, v in pos.items()
                       if v.get("status") == "OPEN" and v.get("entry_sek")}
     if open_positions:
         print()
-        print(_c(f"  {'AVANZA WARRANTER VIEW':^{W}}", C.BYEL))
-        print(_c(f"  {'-' * (W - 2)}", C.YELLOW))
-        print(f"  {_c('Namn', C.BWHT):<35} "
-              f"{_c('Antal', C.BWHT):>5}  "
-              f"{_c('Senast', C.BWHT):>8}  "
-              f"{_c('Inkopskurs', C.BWHT):>10}  "
-              f"{_c('Sedan kop', C.BWHT):>22}  "
-              f"{_c('Varde', C.BWHT):>9}  "
-              f"{_c('Comm', C.BWHT):>5}")
-        print(_c(f"  {'-' * (W + 14)}", C.DIM))
+        print()
+        # box top
+        box_inner = _W_ROW - 2          # inner width inside "  │ ... │"
+        box_line  = "─" * (box_inner + 2)
+        print(_c(f"  ┌{box_line}┐", C.YELLOW))
+        title = "AVANZA WARRANTER VIEW"
+        print(_c(f"  │ {title:^{box_inner}} │", C.BYEL))
+        print(_c(f"  ├{box_line}┤", C.YELLOW))
+
+        # header row inside box
+        hdr_w = (
+            "   "
+            + _cell("Naam",       _W_NAMN,  left=True, color=C.BWHT) + w
+            + _cell("Antal",      _W_ANTAL,             color=C.BWHT) + w
+            + _cell("Senast",     _W_SEN,               color=C.BWHT) + w
+            + _cell("Inkopskurs", _W_INKOP,             color=C.BWHT) + w
+            + _cell("Sedan kop",  _W_SEDAN,             color=C.BWHT) + w
+            + _cell("Varde",      _W_VARD,              color=C.BWHT) + w
+            + _cell("Comm",       _W_COMM,              color=C.BWHT)
+            + "  │"
+        )
+        print(_c("  │", C.YELLOW) + hdr_w)
+        inner_sep = _c("  │", C.YELLOW) + _c(" " + "-" * box_inner + " ", C.DIM) + _c("│", C.YELLOW)
+        print(inner_sep)
 
         for key, p in open_positions.items():
             cfg       = INSTRUMENTS.get(key, {})
-            namn      = cfg.get("product", key)[:28]
+            namn      = cfg.get("product", key)[:_W_NAMN]
             qty       = p.get("qty", 0)
             entry_sek = p.get("entry_sek", 0.0)
             comm_sek  = cfg.get("commission_sek", 0.0)
             avanza_id = cfg.get("avanza_id", "")
             senast    = _fetch_avanza_sek(avanza_id) if avanza_id else None
 
-            namn_str   = _c(f"{namn:<28}", C.CYAN)
-            entry_str  = _c(f"{entry_sek:>10.2f}", C.WHITE)
-            comm_str   = _c(f"{comm_sek:.0f} kr", C.GRAY)
+            namn_c  = _cell(namn, _W_NAMN, left=True, color=C.CYAN)
+            antal_c = _cell(str(qty), _W_ANTAL, color=C.WHITE)
+            inkop_c = _cell(f"{entry_sek:.2f}", _W_INKOP, color=C.WHITE)
+            comm_c  = _cell(f"{comm_sek:.0f} kr", _W_COMM, color=C.GRAY)
 
             if senast and senast > 0:
-                sedan_sek = (senast - entry_sek) * qty
-                sedan_pct = (senast - entry_sek) / entry_sek * 100 if entry_sek else 0.0
-                varde     = senast * qty
-                senast_str = _c(f"{senast:>8.2f}", C.WHITE)
-                sedan_str  = _pnl_pct_str(sedan_sek, sedan_pct)
+                sedan_sek  = (senast - entry_sek) * qty
+                sedan_pct  = (senast - entry_sek) / entry_sek * 100 if entry_sek else 0.0
+                varde      = senast * qty
                 varde_col  = C.BGRN if sedan_sek >= 0 else C.BRED
-                varde_str  = _c(f"{varde:,.0f} kr", varde_col)
+                sen_c      = _cell(f"{senast:.2f}", _W_SEN,  color=C.WHITE)
+                sedan_c    = _sedan_cell(sedan_sek, sedan_pct)
+                varde_c    = _cell(f"{varde:,.0f} kr", _W_VARD, color=varde_col)
             else:
-                senast_str = _c("N/A", C.GRAY)
-                sedan_str  = _c("N/A", C.GRAY)
-                varde_str  = _c("N/A", C.GRAY)
+                sen_c   = _cell("N/A", _W_SEN,  color=C.GRAY)
+                sedan_c = _cell("N/A", _W_SEDAN, color=C.GRAY)
+                varde_c = _cell("N/A", _W_VARD,  color=C.GRAY)
 
-            print(f"  {namn_str} {qty:>5}  {senast_str}  {entry_str}  {sedan_str}  {varde_str}  {comm_str}")
+            row = "   " + namn_c + w + antal_c + w + sen_c + w + inkop_c + w + sedan_c + w + varde_c + w + comm_c + "  │"
+            print(_c("  │", C.YELLOW) + row)
 
-        print(_c("  AVA-branded: 0 kr brokerage (financing cost is implicit)", C.GRAY + C.DIM))
+        # footnote inside box
+        note = "  AVA-branded instruments:  0 kr brokerage  (financing cost is implicit in daily drift)"
+        print(_c("  │", C.YELLOW) + _c(f" {note:<{box_inner}} │", C.GRAY + C.DIM))
+        print(_c(f"  └{box_line}┘", C.YELLOW))
 
-    # ── CLOSED TRADES ─────────────────────────────────────────────────────────
+    # ── SECTION 3: PAPER TRADE HISTORY ────────────────────────────────────────
     print()
-    print(_c(f"  {'Instrument':<16} {'Trades':>6} {'Wins':>5} {'Losses':>7} {'WR':>6} {'PF':>6} {'Closed P&L':>13} {'Comm':>5}  {'Gate':>12}", C.BWHT))
-    print(_c(f"  {'-' * (W + 6)}", C.DIM))
+    print()
+    print(_c(f"  {'PAPER TRADE HISTORY':^{_C_ROW - 2}}", C.BYEL))
+    sep_c = _c("  " + "-" * (_C_ROW - 2), C.DIM)
+    print(sep_c)
 
-    N_GATE = 5
-    total_gross_win  = 0.0
-    total_gross_loss = 0.0
-    total_comm       = 0.0
+    hdr_c = (
+        "  "
+        + _cell("Instrument",  _C_INST, left=True, color=C.BWHT) + g
+        + _cell("Trades",      _C_TR,              color=C.BWHT) + g
+        + _cell("Wins",        _C_WIN,             color=C.BWHT) + g
+        + _cell("Loss",        _C_LOS,             color=C.BWHT) + g
+        + _cell("WR",          _C_WR,              color=C.BWHT) + g
+        + _cell("PF",          _C_PF,              color=C.BWHT) + g
+        + _cell("Closed P&L",  _C_PNL,             color=C.BWHT) + g
+        + _cell("Comm",        _C_COMM,            color=C.BWHT) + g
+        + _cell("Gate",        _C_GATE,            color=C.BWHT)
+    )
+    print(hdr_c)
+    print(sep_c)
+
+    N_GATE          = 5
+    total_gross_win = 0.0
+    total_gross_loss= 0.0
+    total_comm      = 0.0
 
     for key, cfg in INSTRUMENTS.items():
         inst_trades = [t for t in trades if t.get("instrument") == key]
@@ -354,7 +470,8 @@ def render():
         pf_str = f"{pf:.2f}" if pf != float("inf") else "inf"
 
         remaining = max(0, N_GATE - n)
-        gate_str  = _c("READY", C.BGRN) if not remaining else _c(f"{remaining} more", C.YELLOW)
+        gate_s    = "READY" if not remaining else f"{remaining} more"
+        gate_col  = C.BGRN if not remaining else C.YELLOW
 
         total_closed_pnl += pnl
         total_wins       += wins
@@ -363,42 +480,52 @@ def render():
         total_gross_loss += gl
         total_comm       += comm
 
-        wr_col  = C.BGRN if wr >= 50 else C.YELLOW if wr >= 35 else C.RED
-        pf_col  = C.BGRN if pf >= 1.5 else C.YELLOW if pf >= 1.0 else C.RED
-        name_c  = _c(f"{cfg['name']:<16}", C.WHITE)
-        wr_c    = _c(f"{wr:>5.0f}%", wr_col)
-        pf_c    = _c(f"{pf_str:>6}", pf_col)
-        pnl_c   = _pnl_str(pnl)
-        comm_c  = _c(f"{comm:.0f} kr", C.GRAY)
-        print(f"  {name_c} {n:>6} {wins:>5} {losses:>7}  {wr_c}  {pf_c}  {pnl_c}  {comm_c}  {gate_str}")
+        pnl_sign = "+" if pnl >= 0 else ""
+        pnl_plain = f"{pnl_sign}{pnl:,.0f} kr"
+        pnl_col   = C.BGRN if pnl > 0 else C.BRED if pnl < 0 else C.GRAY
+
+        print(
+            "  "
+            + _cell(cfg["name"], _C_INST, left=True, color=C.WHITE) + g
+            + _cell(str(n),      _C_TR,               color=C.WHITE) + g
+            + _cell(str(wins),   _C_WIN,              color=C.GREEN) + g
+            + _cell(str(losses), _C_LOS,              color=C.RED  ) + g
+            + _cell(f"{wr:.0f}%",_C_WR,              color=_wr_color(wr)) + g
+            + _cell(pf_str,      _C_PF,               color=_pf_color(pf)) + g
+            + _cell(pnl_plain,   _C_PNL,              color=pnl_col) + g
+            + _cell(f"{comm:.0f} kr", _C_COMM,        color=C.GRAY) + g
+            + _cell(gate_s,      _C_GATE,             color=gate_col)
+        )
 
     total_n   = total_wins + total_losses
     total_wr  = (total_wins / total_n * 100) if total_n else 0.0
     total_pf  = (total_gross_win / total_gross_loss) if total_gross_loss > 0 else (float("inf") if total_gross_win > 0 else 0.0)
     tpf_str   = f"{total_pf:.2f}" if total_pf != float("inf") else "inf"
-    print(_c(f"  {'-' * (W + 6)}", C.DIM))
-    print(f"  {_c('TOTAL', C.BWHT):<25} "
-          f"{_c(str(total_n), C.WHITE):>6} "
-          f"{_c(str(total_wins), C.GREEN):>5} "
-          f"{_c(str(total_losses), C.RED):>7}  "
-          f"{_c(f'{total_wr:.0f}%', C.WHITE):>9}  "
-          f"{_c(tpf_str, C.WHITE):>9}  "
-          f"{_pnl_str(total_closed_pnl)}  "
-          f"{_c(f'{total_comm:.0f} kr', C.GRAY)}")
+    tpnl_sign = "+" if total_closed_pnl >= 0 else ""
+    tpnl_plain = f"{tpnl_sign}{total_closed_pnl:,.0f} kr"
 
-    if total_open_pnl != 0.0:
-        sign = "+" if total_open_pnl >= 0 else ""
-        col  = C.BGRN if total_open_pnl > 0 else C.BRED
-        print(f"  {_c('Open P&L (live):', C.GRAY)}  {_c(f'{sign}{total_open_pnl:,.0f} SEK', col)}")
+    print(sep_c)
+    print(
+        "  "
+        + _cell("TOTAL",         _C_INST, left=True, color=C.BWHT) + g
+        + _cell(str(total_n),    _C_TR,               color=C.WHITE) + g
+        + _cell(str(total_wins), _C_WIN,              color=C.GREEN) + g
+        + _cell(str(total_losses),_C_LOS,             color=C.RED  ) + g
+        + _cell(f"{total_wr:.0f}%", _C_WR,           color=_wr_color(total_wr)) + g
+        + _cell(tpf_str,         _C_PF,               color=_pf_color(total_pf)) + g
+        + _cell(tpnl_plain,      _C_PNL,              color=C.BGRN if total_closed_pnl > 0 else C.BRED if total_closed_pnl < 0 else C.GRAY) + g
+        + _cell(f"{total_comm:.0f} kr", _C_COMM,      color=C.GRAY) + g
+        + _cell("",              _C_GATE)
+    )
 
     # ── LIVE SEPARATOR ────────────────────────────────────────────────────────
     print()
-    print(_c(f"  {'─' * (W - 4)}", C.BLUE + C.DIM))
-    print(_c(f"  {'· · ·  AVANZA LIVE  · · ·':^{W-4}}", C.BLUE + C.BOLD))
-    print(_c(f"  {'─' * (W - 4)}", C.BLUE + C.DIM))
     print()
-    print(_c("  No live positions yet.", C.GRAY))
-    print(_c("  Live trading unlocks when each instrument has 5 closed paper trades with positive P&L.", C.GRAY))
+    print(_c(f"  {'─' * (_P_ROW - 2)}", C.BLUE + C.DIM))
+    print(_c(f"  {'· · ·  AVANZA LIVE  —  not yet active  · · ·':^{_P_ROW - 2}}", C.BLUE + C.BOLD))
+    print(_c(f"  {'─' * (_P_ROW - 2)}", C.BLUE + C.DIM))
+    print()
+    print(_c("  Live trading unlocks when each instrument reaches 5 closed paper trades with positive total P&L.", C.GRAY))
     print()
     print(_c("  Gate status:", C.BWHT))
     for key, cfg in INSTRUMENTS.items():
@@ -406,24 +533,23 @@ def render():
         n    = len(inst_trades)
         pnl  = sum(t.get("pnl_sek", t.get("pnl", 0)) for t in inst_trades)
         done = n >= N_GATE and pnl > 0
-        filled = "#" * n
-        empty  = "." * max(0, N_GATE - n)
-        bar    = _c(filled, C.BGRN) + _c(empty, C.GRAY)
-        flag   = _c("READY", C.BGRN) if done else _c(f"{max(0, N_GATE - n)} left", C.YELLOW)
-        pnl_d  = _pnl_str(pnl)
-        nm = f"{cfg['name']:<16}"
-        print(f"    {_c(nm, C.WHITE)} [{bar}]  {n}/{N_GATE}   {pnl_d}   {flag}")
+        bar  = _c("#" * n, C.BGRN) + _c("." * max(0, N_GATE - n), C.GRAY)
+        flag = _c("READY", C.BGRN) if done else _c(f"{max(0, N_GATE - n)} to go", C.YELLOW)
+        nm   = f"{cfg['name']:<16}"
+        sign_g = "+" if pnl >= 0 else ""
+        pnl_g  = _c(f"{sign_g}{pnl:,.0f} SEK", C.BGRN if pnl > 0 else C.BRED if pnl < 0 else C.GRAY)
+        print(f"    {_c(nm, C.WHITE)}  [{bar}]  {n}/{N_GATE}  {pnl_g}   {flag}")
 
     # ── RECENT ACTIVITY ───────────────────────────────────────────────────────
     print()
-    print(_c(f"  {'─' * (W - 4)}", C.DIM))
+    print(_c(f"  {'─' * (_P_ROW - 2)}", C.DIM))
     print(_c("  Recent activity:", C.BWHT))
     for line in _last_log_lines(5):
         print(_c(f"    {line[:W - 6]}", C.GRAY))
 
     print()
-    print(_c(f"  Scheduler: 13:30 / 19:30 / 20:00 PKT  |  Market hours: 12:00-20:30 PKT Mon-Fri", C.GRAY))
-    print(_c(f"  State: {_STATE_FILE}", C.GRAY + C.DIM))
+    print(_c("  Scheduler: 13:30 / 19:30 / 20:00 PKT  |  Market: Mon-Fri  12:00-20:30 PKT", C.GRAY))
+    print(_c(f"  {_STATE_FILE}", C.GRAY + C.DIM))
     print(_c("=" * W, C.CYAN))
 
 
