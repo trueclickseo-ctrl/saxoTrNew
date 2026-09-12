@@ -453,7 +453,11 @@ def trail_stops(ib, account_id: str, cfg: dict, dry_run: bool = True,
             print(f"           [DRY RUN] would ratchet stop to ${new_stop:.2f}")
             continue
 
-        # Cancel old stop, place new one
+        # Place new stop FIRST, then cancel old one only after confirmed.
+        # Reversing the order prevents a naked position if placement fails.
+        new_stop_trade = ic.place_stop_order(ib, account_id, sym, qty, new_stop)
+        ib.sleep(0.5)
+
         if stop_order_id:
             open_orders = ib.openTrades()
             old_trade   = next((t for t in open_orders
@@ -462,8 +466,6 @@ def trail_stops(ib, account_id: str, cfg: dict, dry_run: bool = True,
                 ic.cancel_order(ib, old_trade)
                 ib.sleep(0.5)
 
-        new_stop_trade = ic.place_stop_order(ib, account_id, sym, qty, new_stop)
-        ib.sleep(0.5)
         st.update_stop(sym, new_stop, str(new_stop_trade.order.orderId), new_high,
                        strategy=pos.get("strategy"))
         print(f"           -> stop updated (new id={new_stop_trade.order.orderId})")
