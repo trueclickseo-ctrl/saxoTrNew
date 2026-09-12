@@ -815,6 +815,27 @@ REVERSION_TICKERS: list = [
     "NCLH",  # Norwegian Cruise Line — travel momentum, strong pricing power
 ]
 
+# ── Penny stock universe (2026-09-12, backtest-validated) ────────────────────
+# STRATEGY: momentum breakout — buy when price breaks 20-day high + vol >= 2x avg
+#           + above SMA10.  Exit: +25% target | -12% stop | 15-day time stop.
+# BACKTEST: 3-year daily (Sep 2023-Sep 2026), entry at next-day open.
+#           Pass bar: WR >= 40% AND avg_ret >= 2.0% per trade.
+# ALL entries are SIM-ONLY — these never get LIVE entries (too volatile, sub-$2).
+# EXCLUDED (failed backtest): BTBT, BLNK, CGC, MVIS, OGI, SNDL, LUNG, OXSQ,
+#           ZENA, KPTI, CLNE, REI, GEVO, NWBO, GERN, BATL, IAUX, NNOX, BYSI
+PENNY_TICKERS: list = [
+    "AKBA",   # Akebia Therapeutics   — 75% WR, +14.9% avg, 8 trades
+    "UWMC",   # UWM Holdings          — 75% WR, +7.5% avg,  4 trades, 20M vol/day
+    "HRTX",   # Heron Therapeutics    — 50% WR, +6.5% avg,  6 trades
+    "CHRS",   # Coherus BioSciences   — 50% WR, +6.5% avg,  6 trades
+    "COSM",   # Cosmos Health         — 46% WR, +4.8% avg, 11 trades
+    "OCGN",   # Ocugen               — 42% WR, +3.4% avg, 12 trades
+    "EVTL",   # Vertical Aerospace    — 42% WR, +3.4% avg, 12 trades
+    "EVGO",   # EVgo                  — 50% WR, +3.3% avg,  6 trades
+    "LIDR",   # AEye (LiDAR)          — 41% WR, +3.2% avg, 17 trades
+    "LCTX",   # Lineage Cell Tx       — 55% WR, +2.6% avg, 11 trades
+]
+
 # ── LIVE vs SIM split (2026-09-04) ───────────────────────────────────────────
 # LIVE (atos_live_stocks.py / Saxo real-money):  LIVE_TICKERS only  (~337 names)
 # SIM  (atos_runner.py / run_ibkr_stocks.py):    US_TICKERS in full (~398 names)

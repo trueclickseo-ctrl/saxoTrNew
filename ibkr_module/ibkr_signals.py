@@ -26,11 +26,12 @@ _ROOT = Path(__file__).parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from atos.universe import US_TICKERS, LIVE_TICKERS, REVERSION_TICKERS
+from atos.universe import US_TICKERS, LIVE_TICKERS, REVERSION_TICKERS, PENNY_TICKERS
 from atos import us_momentum as _mom
 from atos import us_blend_v2 as _momv2
 from atos import us_reversion as _rev
 from atos import us_reversion_v2 as _rev2
+from atos import us_penny as _penny
 
 _CACHE_FILE = _ROOT / "data" / "ibkr_price_cache.pkl"
 _CACHE_MAX_AGE_HOURS = 8   # re-download if cache is older than this
@@ -168,6 +169,20 @@ def intraday_candidates(lookback_days: int = 260) -> list[dict]:
     print(f"  [intraday] got live bars for {len(intraday_data)} tickers")
     candidates = intraday_scan(feat_data, REVERSION_TICKERS)
     print(f"  [intraday] {len(candidates)} intraday signal(s) found")
+    return candidates
+
+
+def penny_candidates(lookback_days: int = 60) -> list[dict]:
+    """US Penny Stock momentum breakout scan.
+
+    Returns ranked [{ticker, price, sma10, don_high, vol_ratio, pct_above_don, score}].
+    SIM-ONLY — never promoted to LIVE entries (sub-$2, extreme volatility).
+    Entry: close > 20-day Donchian high + volume >= 2x avg + above SMA10.
+    """
+    feat_data = _download(PENNY_TICKERS, lookback_days=lookback_days)
+    print(f"  [penny] {len(feat_data)}/{len(PENNY_TICKERS)} tickers with sufficient history")
+    candidates = _penny.scan(feat_data, PENNY_TICKERS)
+    print(f"  [penny] {len(candidates)} signal(s) found")
     return candidates
 
 
