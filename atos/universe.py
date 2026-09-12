@@ -615,6 +615,133 @@ NASDAQ100_DOW_TICKERS = [
 # Deduplicated, sector order preserved
 US_TICKERS = list(dict.fromkeys(SP500_TICKERS + HIGH_GROWTH_TICKERS + NASDAQ100_DOW_TICKERS))
 
+# ── US Reversion curated universe (2026-09-12) ───────────────────────────────
+# Mean-reversion works best on fundamentally strong stocks where a dip is
+# temporary (sector rotation, macro noise, profit-taking) — NOT on stocks in
+# secular downtrends or mature low-growth businesses.
+#
+# CRITERIA: high-growth/momentum, near 52-week highs, ADV > $200M/day.
+#
+# EXCLUDED vs US_TICKERS:
+#   Weak/mature: DLTR, DG, MDB, ITW, GD, AMGN, BKR, LH — consistent downtrends
+#   Legacy/slow: IBM, VZ, T, CMCSA — telecom/legacy, no growth catalyst
+#   Speculative: RIVN, LCID, IONQ, RKLB, TLN — too thin / gap-risk
+#   Solar weakness: SEDG, ENPH, RUN, FSLR — structurally weak
+#   Regional banks: rate-driven, excluded separately in SIM_ONLY_TICKERS
+REVERSION_TICKERS: list = [
+    # ── Tech mega-cap & AI ──────────────────────────────────────────────────
+    "NVDA",  # Nvidia — AI chips, highest momentum
+    "MSFT",  # Microsoft — cloud + AI, $3T
+    "AAPL",  # Apple — highest $ volume, strong ecosystem
+    "META",  # Meta — social/AI, strong FCF growth
+    "GOOGL", # Alphabet — search + cloud, $2T
+    "AMZN",  # Amazon — AWS + retail momentum
+    "AMD",   # AMD — CPUs + AI GPUs, high beta
+    "AVGO",  # Broadcom — AI networking + custom chips
+    "ORCL",  # Oracle — cloud database, compounder
+    "ADBE",  # Adobe — creative SaaS, recurring revenue
+    "NOW",   # ServiceNow — workflow automation, high NRR
+
+    # ── Cloud / SaaS high-growth ────────────────────────────────────────────
+    "CRM",   # Salesforce — enterprise CRM
+    "WDAY",  # Workday — HR/finance cloud
+    "DDOG",  # Datadog — observability/APM
+    "SNOW",  # Snowflake — cloud data platform
+    "TEAM",  # Atlassian — dev collaboration (Jira)
+    "HUBS",  # HubSpot — marketing/CRM software
+    "SHOP",  # Shopify — e-commerce platform
+    "PLTR",  # Palantir — data analytics/AI
+    "VEEV",  # Veeva Systems — life sciences cloud
+    "TTD",   # The Trade Desk — programmatic advertising
+
+    # ── Cybersecurity ────────────────────────────────────────────────────────
+    "PANW",  # Palo Alto Networks — cybersecurity platform
+    "CRWD",  # CrowdStrike — endpoint security
+    "FTNT",  # Fortinet — network security appliances
+    "ZS",    # Zscaler — zero-trust network security
+    "NET",   # Cloudflare — network security/CDN
+    "AXON",  # Axon Enterprise — tasers + body-cam software
+
+    # ── Semiconductors ──────────────────────────────────────────────────────
+    "AMAT",  # Applied Materials — semiconductor equipment
+    "KLAC",  # KLA Corp — semiconductor inspection
+    "LRCX",  # Lam Research — etch equipment
+    "ASML",  # ASML — EUV monopoly (Dutch ADR)
+    "CDNS",  # Cadence Design Systems — EDA software
+    "SNPS",  # Synopsys — EDA, semiconductor toolchain
+    "MRVL",  # Marvell Technology — data infra chips
+    "MU",    # Micron — DRAM/NAND, AI memory
+    "ADI",   # Analog Devices — analog/mixed-signal
+
+    # ── Hardware / storage / AI infra ───────────────────────────────────────
+    "NTAP",  # NetApp — cloud data storage
+    "DELL",  # Dell Technologies — infrastructure + AI servers
+    "HPE",   # HP Enterprise — servers/networking, strong FCF
+    "ANET",  # Arista Networks — cloud networking switches
+    "WDC",   # Western Digital — HDD/NAND, AI storage
+    "ARM",   # Arm Holdings — chip IP powering mobile/AI silicon
+    "SMCI",  # Super Micro — AI server hardware (high-beta)
+    "VRT",   # Vertiv Holdings — data-center cooling/power
+    "GEV",   # GE Vernova — power generation/grid, AI-datacenter
+
+    # ── Payments / fintech quality ──────────────────────────────────────────
+    "V",     # Visa — payments network, 80%+ margins
+    "MA",    # Mastercard — payments, pairs Visa
+    "FISV",  # Fiserv — payment processing, POS systems
+
+    # ── Financial momentum ──────────────────────────────────────────────────
+    "JPM",   # JPMorgan — largest US bank, strongest earnings
+    "GS",    # Goldman Sachs — investment bank, high momentum
+    "MS",    # Morgan Stanley — wealth + IB
+    "BLK",   # BlackRock — world's largest asset manager
+    "AXP",   # American Express — premium card, Buffett
+    "SPGI",  # S&P Global — ratings + data, compounder
+    "MCO",   # Moody's — ratings duopoly
+    "SCHW",  # Charles Schwab — largest US brokerage
+    "NDAQ",  # Nasdaq Inc. — exchange + data/analytics
+
+    # ── Data-center REITs ────────────────────────────────────────────────────
+    "EQIX",  # Equinix — data center REIT, AI buildout
+    "AMT",   # American Tower — cell tower REIT
+
+    # ── Power / energy transition ────────────────────────────────────────────
+    "VST",   # Vistra — power generator, nuclear + AI-datacenter
+    "CEG",   # Constellation Energy — largest US nuclear operator
+    "ETN",   # Eaton — power management/data center, strong growth
+
+    # ── Healthcare momentum ──────────────────────────────────────────────────
+    "LLY",   # Eli Lilly — GLP-1 monopoly, highest momentum
+    "ISRG",  # Intuitive Surgical — robotic surgery, recurring revenue
+    "ABBV",  # AbbVie — Humira successor drugs, strong pipeline
+    "DXCM",  # DexCom — continuous glucose monitoring, high growth
+    "VRTX",  # Vertex Pharma — cystic fibrosis monopoly
+    "REGN",  # Regeneron — biotech, high momentum
+    "BSX",   # Boston Scientific — cardiac/endo devices
+    "TMO",   # Thermo Fisher — lab instruments, compounder
+
+    # ── Consumer / travel momentum ───────────────────────────────────────────
+    "BKNG",  # Booking Holdings — online travel, strong FCF
+    "UBER",  # Uber — ride-share + delivery, now profitable
+    "COST",  # Costco — membership retail, consistent compounder
+    "HD",    # Home Depot — home improvement, best-in-class retail
+    "CMG",   # Chipotle — fast casual, digital ordering
+    "ULTA",  # Ulta Beauty — beauty specialty
+    "LULU",  # Lululemon — premium athletic wear
+    "RCL",   # Royal Caribbean — cruise, strong pricing power
+    "HLT",   # Hilton Hotels — asset-light franchise
+    "MAR",   # Marriott — largest hotel franchise
+    "DECK",  # Deckers Brands — HOKA/UGG, high-growth footwear
+    "WSM",   # Williams-Sonoma — premium home goods
+    "CAVA",  # CAVA Group — high-momentum fast-casual
+    "APP",   # AppLovin — mobile ad-tech, AI-driven growth
+
+    # ── Industrials / aerospace ──────────────────────────────────────────────
+    "GE",    # GE Aerospace — jet engines, strong cycle
+    "CAT",   # Caterpillar — construction/mining equipment
+    "HON",   # Honeywell — automation/aerospace
+    "PH",    # Parker-Hannifin — motion & control, data-center cooling
+]
+
 # ── LIVE vs SIM split (2026-09-04) ───────────────────────────────────────────
 # LIVE (atos_live_stocks.py / Saxo real-money):  LIVE_TICKERS only  (~337 names)
 # SIM  (atos_runner.py / run_ibkr_stocks.py):    US_TICKERS in full (~398 names)

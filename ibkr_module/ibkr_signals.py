@@ -26,7 +26,7 @@ _ROOT = Path(__file__).parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from atos.universe import US_TICKERS, LIVE_TICKERS
+from atos.universe import US_TICKERS, LIVE_TICKERS, REVERSION_TICKERS
 from atos import us_momentum as _mom
 from atos import us_blend_v2 as _momv2
 from atos import us_reversion as _rev
@@ -144,10 +144,13 @@ def blend_v2_targets(lookback_days: int = 252) -> dict:
 def reversion_candidates(lookback_days: int = 260) -> list[dict]:
     """US Reversion daily scan.
     Returns ranked [{ticker, price, rsi, sma20, dip_pct, vol_ratio, score}].
+    Uses REVERSION_TICKERS — a curated ~90-name high-momentum universe that
+    excludes weak/mature stocks (DLTR, MDB, ITW, GD, AMGN, BKR, etc.) to ensure
+    dips are temporary bounces in fundamentally strong names.
     """
-    feat_data = _download(US_TICKERS, lookback_days=lookback_days)
-    print(f"  [reversion] {len(feat_data)}/{len(US_TICKERS)} tickers with sufficient history")
-    candidates = _rev.scan(feat_data, US_TICKERS)
+    feat_data = _download(REVERSION_TICKERS, lookback_days=lookback_days)
+    print(f"  [reversion] {len(feat_data)}/{len(REVERSION_TICKERS)} tickers with sufficient history")
+    candidates = _rev.scan(feat_data, REVERSION_TICKERS)
     print(f"  [reversion] {len(candidates)} signal(s) found")
     return candidates
 
@@ -159,11 +162,11 @@ def intraday_candidates(lookback_days: int = 260) -> list[dict]:
     """
     from atos.intraday_reversion import intraday_scan, fetch_intraday
 
-    feat_data = _download(US_TICKERS, lookback_days=lookback_days)
+    feat_data = _download(REVERSION_TICKERS, lookback_days=lookback_days)
     print(f"  [intraday] fetching live 5-min bars for {len(feat_data)} tickers...")
     intraday_data = fetch_intraday(list(feat_data.keys()))
     print(f"  [intraday] got live bars for {len(intraday_data)} tickers")
-    candidates = intraday_scan(feat_data, US_TICKERS)
+    candidates = intraday_scan(feat_data, REVERSION_TICKERS)
     print(f"  [intraday] {len(candidates)} intraday signal(s) found")
     return candidates
 
