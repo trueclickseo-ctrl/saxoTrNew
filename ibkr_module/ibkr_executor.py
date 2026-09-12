@@ -392,56 +392,54 @@ def heal_missing_stops(ib, account_id: str, cfg: dict,
                        dry_run: bool = False) -> int:
     """Re-place GTC stop orders for any open position whose stop is missing on IBKR.
 
-    Checks every open position in the ledger against live IBKR open orders.
-    If the recorded stop_order_id is absent (dropped, cancelled, never placed),
-    a fresh GTC stop is placed at max(trailing_high, current_price) * (1-stop_pct)
-    or ATR-based for atr_strategies. Returns the count of stops restored.
+    Rules:
+    - Uses IBKR live prices only. If IBKR returns no prices (market closed),
+      the entire heal pass is aborted -- Yahoo is never used here.
+    - A position with a stored stop_order_id is only healed when IBKR prices
+      ARE available, so we can positively confirm the order is absent (not just
+      that openTrades() returned empty due to market closure).
+    - Positions with stop_order_id=None are always healed when prices available.
+    - Stop level uses fixed stop_pct only -- no ATR/Yahoo. Heal restores
+      protection; trail_stops handles refinement when market is live.
     """
-    stop_pct       = cfg["risk"]["stop_pct"]
-    positions      = st.get_open_positions()
+    stop_pct  = cfg["risk"]["stop_pct"]
+    positions = st.get_open_positions()
     if not positions:
         return 0
 
+    all_syms = [p["symbol"] for p in positions]
+    prices   = {s: ic.abs_price(p) for s, p in ic.get_prices(ib, all_syms).items()}
+    live_prices_available = any(v > 0 for v in prices.values())
+
+    if not live_prices_available:
+        print("  [heal-stop] IBKR returned no live prices (market closed) -- "
+              "cannot verify order status, skipping heal to avoid false positives.")
+        return 0
+
     open_order_ids = {str(t.order.orderId) for t in ib.openTrades()}
-    all_syms       = [p["symbol"] for p in positions]
-    prices         = {s: ic.abs_price(p) for s, p in ic.get_prices(ib, all_syms).items()}
 
     healed = 0
     for pos in positions:
-        sym       = pos["symbol"]
-        stop_oid  = pos.get("stop_order_id")
-        qty       = int(pos.get("qty") or 0)
-        cur_price = prices.get(sym, 0.0)
+        sym      = pos["symbol"]
+        stop_oid = pos.get("stop_order_id")
+        qty      = int(pos.get("qty") or 0)
+        price    = prices.get(sym, 0.0)
 
         if qty < 1:
             continue
-        if stop_oid and str(stop_oid) in open_order_ids:
-            continue  # stop is live on IBKR -- nothing to heal
-
-        # Use stored trailing_high / fill_price as fallback when IBKR returns no
-        # live price (market closed). We just need the known high watermark to
-        # compute a safe stop -- we are restoring protection, not sizing a new entry.
-        trail_high = float(pos.get("trailing_high") or pos.get("fill_price") or cur_price)
-        new_high   = max(trail_high, cur_price) if cur_price > 0 else trail_high
-        if new_high <= 0:
-            print(f"  [heal-stop] {sym}: no price and no stored high -- skipped")
+        if price <= 0:
+            print(f"  [heal-stop] {sym}: no IBKR price -- skipped")
             continue
+        if stop_oid and str(stop_oid) in open_order_ids:
+            continue  # stop confirmed live on IBKR
 
-        use_atr = bool(atr_strategies and pos.get("strategy") in atr_strategies)
-        if use_atr:
-            _atr = _ibkr_atr(sym)
-            if _atr:
-                stop_price = round(new_high - IBKR_ATR_MULTIPLIER * _atr, 2)
-            else:
-                stop_price = round(new_high * (1 - stop_pct), 2)
-                use_atr = False
-        else:
-            stop_price = round(new_high * (1 - stop_pct), 2)
+        trail_high = float(pos.get("trailing_high") or pos.get("fill_price") or price)
+        new_high   = max(trail_high, price)
+        stop_price = round(new_high * (1 - stop_pct), 2)
 
         reason = "missing" if stop_oid else "never set"
-        tag    = "[ATR-2.5x]" if use_atr else f"[{stop_pct*100:.0f}%]"
         print(f"  [heal-stop] {sym}: stop {reason} -> ${stop_price:.2f}  "
-              f"high=${new_high:.2f}  {tag}")
+              f"high=${new_high:.2f}  [{stop_pct*100:.0f}%]")
 
         if dry_run:
             print(f"  [heal-stop] {sym}: [DRY RUN] would place stop @ ${stop_price:.2f}")
