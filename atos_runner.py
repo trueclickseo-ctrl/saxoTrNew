@@ -3431,7 +3431,7 @@ def run_us_penny(open_trades: list, todays_actions: list) -> None:
         print(f"  {tag} no entry signals today")
         return
 
-    PENNY_SLEEVE_SEK = 30_000.0
+    PENNY_SLEEVE_SEK = 50_000.0
     slot_sek = PENNY_SLEEVE_SEK / _UPY.MAX_POSITIONS
     print(f"  {tag} {len(candidates)} signal(s) | {slots_free} slot(s) free | "
           f"slot: {slot_sek:,.0f} SEK")

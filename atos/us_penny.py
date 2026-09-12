@@ -46,7 +46,7 @@ SMA_PERIOD     = 10     # must be above SMA10
 TARGET_PCT     = 0.25   # +25% profit target
 STOP_PCT       = 0.12   # -12% hard stop
 MAX_HOLD_DAYS  = 15     # 15-day time stop
-MAX_POSITIONS  = 3      # max concurrent penny positions
+MAX_POSITIONS  = 5      # max concurrent penny positions
 MAX_PRICE      = 2.00   # hard gate: skip if price has risen above $2
 # ─────────────────────────────────────────────────────────────────────────────
 
