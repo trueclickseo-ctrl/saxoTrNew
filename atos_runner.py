@@ -84,7 +84,7 @@ sys.path.insert(0, BASE_DIR)
 
 # ── ATOS modules ──────────────────────────────────────────────────
 from atos import database as db
-from atos.universe import ATOS_UNIVERSE, US_TICKERS, LIVE_TICKERS, market_of, MARKET_GROUPS
+from atos.universe import ATOS_UNIVERSE, US_TICKERS, LIVE_TICKERS, REVERSION_TICKERS, market_of, MARKET_GROUPS
 from atos.features import add_all
 from atos.decision_engine import scan_universe, BUY_THRESHOLD, consensus_evaluate
 from atos.strategies import S3_MeanReversion, S4_BreakoutVol, S5_MomentumAccel
@@ -2674,7 +2674,7 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
     slots_free = max_positions - len(rev_open_now)
     if slots_free <= 0:
         print(f"  {tag} full ({max_positions}/{max_positions} positions, "
-              f"{USR.MAX_UNIVERSE_PCT*100:.0f}% of {len(US_TICKERS)}-stock universe)")
+              f"{USR.MAX_UNIVERSE_PCT*100:.0f}% of {len(REVERSION_TICKERS)}-stock universe)")
         return
 
     # ── Sleeve size: dynamic (% of SIM cash) or fixed fallback ───────
@@ -2699,7 +2699,7 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
 
     blend_held = {t["ticker"] for t in db.get_open_trades()
                   if t.get("strategy") == "US Blend"}
-    candidates = USR.scan(feat_data, US_TICKERS)
+    candidates = USR.scan(feat_data, REVERSION_TICKERS)
     candidates = [c for c in candidates
                   if c["ticker"] not in rev_open_now
                   and c["ticker"] not in blend_held]   # no duplicate cross-strategy position
@@ -2708,7 +2708,7 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
         return
 
     print(f"  {tag} {len(candidates)} signal(s) | {slots_free} slot(s) free of {max_positions} "
-          f"({USR.MAX_UNIVERSE_PCT*100:.0f}% of {len(US_TICKERS)}) | "
+          f"({USR.MAX_UNIVERSE_PCT*100:.0f}% of {len(REVERSION_TICKERS)}) | "
           f"slot: {slot_sek:,.0f} SEK each")
 
     global _rev_signals
@@ -3217,7 +3217,7 @@ def run_us_reversion_v2(feat_data: dict, open_trades: list, todays_actions: list
     blend_held = {t["ticker"] for t in db.get_open_trades() if t.get("strategy") == "US Blend"}
     v1_held    = {t["ticker"] for t in db.get_open_trades() if t.get("strategy") == "US Reversion"}
 
-    candidates = USR2.scan(feat_data, US_TICKERS, market_ok=market_ok)
+    candidates = USR2.scan(feat_data, REVERSION_TICKERS, market_ok=market_ok)
     candidates = [c for c in candidates
                   if c["ticker"] not in rev_open_now
                   and c["ticker"] not in blend_held
