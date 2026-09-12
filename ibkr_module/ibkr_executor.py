@@ -387,19 +387,102 @@ def _ibkr_atr(symbol: str, period: int = IBKR_ATR_PERIOD) -> float | None:
 
 # â"€â"€ Trail stops â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
+def heal_missing_stops(ib, account_id: str, cfg: dict,
+                       atr_strategies: list[str] | None = None,
+                       dry_run: bool = False) -> int:
+    """Re-place GTC stop orders for any open position whose stop is missing on IBKR.
+
+    Checks every open position in the ledger against live IBKR open orders.
+    If the recorded stop_order_id is absent (dropped, cancelled, never placed),
+    a fresh GTC stop is placed at max(trailing_high, current_price) * (1-stop_pct)
+    or ATR-based for atr_strategies. Returns the count of stops restored.
+    """
+    stop_pct       = cfg["risk"]["stop_pct"]
+    positions      = st.get_open_positions()
+    if not positions:
+        return 0
+
+    open_order_ids = {str(t.order.orderId) for t in ib.openTrades()}
+    all_syms       = [p["symbol"] for p in positions]
+    prices         = {s: ic.abs_price(p) for s, p in ic.get_prices(ib, all_syms).items()}
+
+    healed = 0
+    for pos in positions:
+        sym       = pos["symbol"]
+        stop_oid  = pos.get("stop_order_id")
+        qty       = int(pos.get("qty") or 0)
+        cur_price = prices.get(sym, 0.0)
+
+        if qty < 1:
+            continue
+        if stop_oid and str(stop_oid) in open_order_ids:
+            continue  # stop is live on IBKR -- nothing to heal
+
+        if cur_price <= 0:
+            print(f"  [heal-stop] {sym}: no price -- skipped")
+            continue
+
+        trail_high = float(pos.get("trailing_high") or pos.get("fill_price") or cur_price)
+        new_high   = max(trail_high, cur_price)
+
+        use_atr = bool(atr_strategies and pos.get("strategy") in atr_strategies)
+        if use_atr:
+            _atr = _ibkr_atr(sym)
+            if _atr:
+                stop_price = round(new_high - IBKR_ATR_MULTIPLIER * _atr, 2)
+            else:
+                stop_price = round(new_high * (1 - stop_pct), 2)
+                use_atr = False
+        else:
+            stop_price = round(new_high * (1 - stop_pct), 2)
+
+        reason = "missing" if stop_oid else "never set"
+        tag    = "[ATR-2.5x]" if use_atr else f"[{stop_pct*100:.0f}%]"
+        print(f"  [heal-stop] {sym}: stop {reason} -> ${stop_price:.2f}  "
+              f"high=${new_high:.2f}  {tag}")
+
+        if dry_run:
+            print(f"  [heal-stop] {sym}: [DRY RUN] would place stop @ ${stop_price:.2f}")
+            continue
+
+        try:
+            new_trade = ic.place_stop_order(ib, account_id, sym, qty, stop_price)
+            ib.sleep(0.5)
+            st.update_stop(sym, stop_price, str(new_trade.order.orderId), new_high,
+                           strategy=pos.get("strategy"))
+            print(f"  [heal-stop] {sym}: stop placed (id={new_trade.order.orderId})")
+            healed += 1
+        except Exception as exc:
+            print(f"  [heal-stop] {sym}: ERROR placing stop: {exc}")
+
+    if healed:
+        print(f"  [heal-stop] restored {healed} missing stop(s)")
+    else:
+        print("  [heal-stop] all stops present on IBKR")
+    return healed
+
+
 def trail_stops(ib, account_id: str, cfg: dict, dry_run: bool = True,
                 strategy: str | None = None,
                 min_move_usd: float = 1.0,
                 atr_strategies: list[str] | None = None) -> None:
     """Ratchet GTC stop-loss orders upward for open positions.
 
-    strategy: if given, only trail positions for that strategy (e.g. "blend").
-    min_move_usd: minimum stop improvement in USD before submitting a new order
-        (avoids order churn on tiny price moves). Default $1.00 matches the
-        Saxo live-stocks implementation.
-    atr_strategies: list of strategy names that use ATR Chandelier stops instead
-        of fixed stop_pct (e.g. ["blend", "blend_v2"]). Others keep fixed stop_pct.
+    Calls heal_missing_stops() first so any naked position gets a fresh stop
+    before the trail pass. strategy filters which positions to trail; heal
+    always covers all open positions regardless of strategy.
+
+    min_move_usd: minimum stop improvement before submitting a new order
+        (avoids churn on tiny price moves). Default $1.00 matches Saxo.
+    atr_strategies: strategy names that use ATR Chandelier stops instead of
+        fixed stop_pct (e.g. ["blend", "blend_v2"]).
     """
+    # Heal first -- restore any stop that disappeared before trailing
+    print("  [heal-stop] Checking for missing stops...")
+    heal_missing_stops(ib, account_id, cfg,
+                       atr_strategies=atr_strategies, dry_run=dry_run)
+    print()
+
     stop_pct  = cfg["risk"]["stop_pct"]
     positions = st.get_open_positions(strategy=strategy) if strategy else st.get_open_positions()
     if not positions:

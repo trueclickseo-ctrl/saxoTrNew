@@ -165,6 +165,8 @@ def main() -> None:
     parser.add_argument("--positions",   action="store_true")
     parser.add_argument("--info",        action="store_true")
     parser.add_argument("--trail-stops", action="store_true")
+    parser.add_argument("--heal-stops",  action="store_true",
+                        help="Re-place missing stop orders for all open positions, then exit")
     parser.add_argument("--dashboard",   action="store_true")
     parser.add_argument("--interval",    type=int, default=30)
     parser.add_argument("--client-id",   type=int, default=None,
@@ -263,7 +265,7 @@ def main() -> None:
 
     needs_signal = (
         not args.positions and not args.info and
-        not args.dashboard and not args.trail_stops
+        not args.dashboard and not args.trail_stops and not args.heal_stops
     )
     if needs_signal:
         if args.strategy in ("blend", "all"):
@@ -404,6 +406,11 @@ def main() -> None:
 
         elif args.dashboard:
             cmd_dashboard(ib, account_id, args.interval)
+
+        elif args.heal_stops:
+            ex.heal_missing_stops(ib, account_id, cfg,
+                                  atr_strategies=["blend", "blend_v2"],
+                                  dry_run=not args.execute)
 
         elif args.trail_stops:
             ex.trail_stops(ib, account_id, cfg, dry_run=not args.execute,
