@@ -615,29 +615,34 @@ NASDAQ100_DOW_TICKERS = [
 # Deduplicated, sector order preserved
 US_TICKERS = list(dict.fromkeys(SP500_TICKERS + HIGH_GROWTH_TICKERS + NASDAQ100_DOW_TICKERS))
 
-# ── US Reversion curated universe (2026-09-12, expanded) ─────────────────────
+# ── US Reversion curated universe (2026-09-12, backtest-validated) ───────────
 # Mean-reversion works best on fundamentally strong stocks where a dip is
 # temporary (sector rotation, macro noise, profit-taking) — NOT on stocks in
 # secular downtrends or mature low-growth businesses.
 #
 # CRITERIA: high-growth/momentum, near 52-week highs, ADV > $200M/day.
+# BACKTEST: 3-year daily simulation (Aug 2023–Sep 2026), entry at next open,
+#   RSI<38 + >5% below SMA20 + vol≥1.5x + above EMA200. Exits: RSI>60/SMA20
+#   recover, 4% hard stop, or 10-day time stop.
 #
 # EXCLUDED vs US_TICKERS:
-#   Weak/mature: DLTR, DG, MDB, ITW, GD, AMGN, BKR, LH — consistent downtrends
+#   Weak/mature: DLTR, DG, MDB, ITW, GD, AMGN, BKR, LH — secular downtrends
 #   Legacy/slow: IBM, VZ, T, CMCSA — telecom/legacy, no growth catalyst
 #   Speculative: RIVN, LCID, IONQ, RKLB, TLN — too thin / gap-risk
 #   Solar weakness: SEDG, ENPH, RUN, FSLR — structurally weak
+#   Backtest-removed (0% WR, all stopped): AMAT, GE, DUOL, CRDO, RDDT, CVNA, VST, DECK
+#   Backtest-removed (≤25% WR, neg return): CEG, RCL, PH, WSM, EXPE, COF, SCHW
 #   Regional banks: rate-driven, excluded separately in SIM_ONLY_TICKERS
 REVERSION_TICKERS: list = [
     # ── Tech mega-cap & AI ──────────────────────────────────────────────────
     "NVDA",  # Nvidia — AI chips, highest momentum
     "MSFT",  # Microsoft — cloud + AI, $3T
-    "AAPL",  # Apple — highest $ volume, strong ecosystem
+    "AAPL",  # Apple — 75% WR / +5.1% avg in backtest; highest $ volume
     "META",  # Meta — social/AI, strong FCF growth
-    "GOOGL", # Alphabet — search + cloud, $2T
+    "GOOGL", # Alphabet — 67% WR / +2.1% avg; search + cloud
     "AMZN",  # Amazon — AWS + retail momentum
     "AMD",   # AMD — CPUs + AI GPUs, high beta
-    "AVGO",  # Broadcom — AI networking + custom chips
+    "AVGO",  # Broadcom — 60% WR / +2.4% avg; AI networking + custom chips
     "ORCL",  # Oracle — cloud database, compounder
     "ADBE",  # Adobe — creative SaaS, recurring revenue
     "NOW",   # ServiceNow — workflow automation, high NRR
@@ -659,54 +664,69 @@ REVERSION_TICKERS: list = [
     "CRWD",  # CrowdStrike — endpoint security
     "FTNT",  # Fortinet — network security appliances
     "ZS",    # Zscaler — zero-trust network security
-    "NET",   # Cloudflare — network security/CDN
-    "AXON",  # Axon Enterprise — tasers + body-cam software
+    "NET",   # Cloudflare — 33% WR / +0.8% avg; positive expectancy
+    "AXON",  # Axon Enterprise — 75% WR / +3.5% avg in backtest
 
     # ── Semiconductors ──────────────────────────────────────────────────────
-    "AMAT",  # Applied Materials — semiconductor equipment
+    # AMAT removed: 0% WR on 3 signals (dips didn't recover in 3yr window)
     "KLAC",  # KLA Corp — semiconductor inspection
     "LRCX",  # Lam Research — etch equipment
     "ASML",  # ASML — EUV monopoly (Dutch ADR)
     "CDNS",  # Cadence Design Systems — EDA software
     "SNPS",  # Synopsys — EDA, semiconductor toolchain
-    "MRVL",  # Marvell Technology — data infra chips
+    "MRVL",  # Marvell Technology — 33% WR / +1.6% avg; AI data infra chips
     "MU",    # Micron — DRAM/NAND, AI memory
     "ADI",   # Analog Devices — analog/mixed-signal
+    "QCOM",  # Qualcomm — mobile chips + automotive, AI on-device momentum
+    "NXPI",  # NXP Semiconductors — automotive/IoT chips, strong cycle
+    "TXN",   # Texas Instruments — analog compounder, best-in-class FCF; rarely triggers
 
     # ── Hardware / storage / AI infra ───────────────────────────────────────
     "NTAP",  # NetApp — cloud data storage
     "DELL",  # Dell Technologies — infrastructure + AI servers
     "HPE",   # HP Enterprise — servers/networking, strong FCF
-    "ANET",  # Arista Networks — cloud networking switches
+    "ANET",  # Arista Networks — 50% WR / +2.8% avg; cloud networking
     "WDC",   # Western Digital — HDD/NAND, AI storage
     "ARM",   # Arm Holdings — chip IP powering mobile/AI silicon
     "SMCI",  # Super Micro — AI server hardware (high-beta)
-    "VRT",   # Vertiv Holdings — data-center cooling/power
-    "GEV",   # GE Vernova — power generation/grid, AI-datacenter
+    "VRT",   # Vertiv Holdings — 40% WR / +2.4% avg; data-center cooling
+    "GEV",   # GE Vernova — 43% WR / +3.1% avg (7 signals); power/grid
 
     # ── Payments / fintech quality ──────────────────────────────────────────
     "V",     # Visa — payments network, 80%+ margins
     "MA",    # Mastercard — payments, pairs Visa
     "FISV",  # Fiserv — payment processing, POS systems
 
-    # ── Financial momentum ──────────────────────────────────────────────────
+    # ── Large banks (backtest-confirmed) ────────────────────────────────────
+    # SCHW removed: 33% WR / -0.07% avg (slow bleed to time stop, not reversion)
     "JPM",   # JPMorgan — largest US bank, strongest earnings
-    "GS",    # Goldman Sachs — investment bank, high momentum
+    "GS",    # Goldman Sachs — 67% WR / +0.9% avg; investment bank
     "MS",    # Morgan Stanley — wealth + IB
+    "WFC",   # Wells Fargo — 67% WR / +4.3% avg in backtest; quality bank
+    "BAC",   # Bank of America — 67% WR / +2.7% avg in backtest
+    "C",     # Citigroup — 67% WR / +3.4% avg in backtest; turnaround compounder
+
+    # ── Asset management / ratings ───────────────────────────────────────────
     "BLK",   # BlackRock — world's largest asset manager
     "AXP",   # American Express — premium card, Buffett
     "SPGI",  # S&P Global — ratings + data, compounder
     "MCO",   # Moody's — ratings duopoly
-    "SCHW",  # Charles Schwab — largest US brokerage
+
+    # ── Exchanges / market data ──────────────────────────────────────────────
     "NDAQ",  # Nasdaq Inc. — exchange + data/analytics
+    "ICE",   # Intercontinental Exchange — exchange + data compounder
+    "CME",   # CME Group — futures exchange, near-monopoly
+    "VRSK",  # Verisk Analytics — insurance/risk data compounder; rarely triggers
+
+    # ── Insurance compounder ─────────────────────────────────────────────────
+    "TRV",   # Travelers — 67% WR / +2.0% avg in backtest; P&C insurance
 
     # ── Data-center REITs ────────────────────────────────────────────────────
     "EQIX",  # Equinix — data center REIT, AI buildout
     "AMT",   # American Tower — cell tower REIT
 
-    # ── Power / energy transition ────────────────────────────────────────────
-    "VST",   # Vistra — power generator, nuclear + AI-datacenter
-    "CEG",   # Constellation Energy — largest US nuclear operator
+    # ── Power / utilities ────────────────────────────────────────────────────
+    # VST removed: 0% WR on 5 signals. CEG removed: 25% WR / -2.5% avg.
     "ETN",   # Eaton — power management/data center, strong growth
 
     # ── Healthcare momentum ──────────────────────────────────────────────────
@@ -716,82 +736,82 @@ REVERSION_TICKERS: list = [
     "DXCM",  # DexCom — continuous glucose monitoring, high growth
     "VRTX",  # Vertex Pharma — cystic fibrosis monopoly
     "REGN",  # Regeneron — biotech, high momentum
-    "BSX",   # Boston Scientific — cardiac/endo devices
+    "BSX",   # Boston Scientific — 67% WR / +4.8% avg; cardiac devices
     "TMO",   # Thermo Fisher — lab instruments, compounder
+    "SYK",   # Stryker — medtech compounder, robotic surgery expansion
+    "DHR",   # Danaher — life-sciences instruments, best-in-class operator
+    "ZTS",   # Zoetis — animal health compounder, pricing power
+    "IDXX",  # IDEXX Labs — vet diagnostics monopoly; rarely triggers (strength)
+    "UNH",   # UnitedHealth Group — managed care leader; rarely triggers
 
-    # ── Consumer / travel momentum ───────────────────────────────────────────
+    # ── Consumer / food / retail momentum ────────────────────────────────────
+    # RCL removed: 20% WR / -2.1% avg. DECK: 0% WR. WSM: 25% WR / -1.8%.
     "BKNG",  # Booking Holdings — online travel, strong FCF
     "UBER",  # Uber — ride-share + delivery, now profitable
     "COST",  # Costco — membership retail, consistent compounder
     "HD",    # Home Depot — home improvement, best-in-class retail
+    "LOW",   # Lowe's — home improvement, strong FCF; rarely triggers (strength)
     "CMG",   # Chipotle — fast casual, digital ordering
     "ULTA",  # Ulta Beauty — beauty specialty
     "LULU",  # Lululemon — premium athletic wear
-    "RCL",   # Royal Caribbean — cruise, strong pricing power
     "HLT",   # Hilton Hotels — asset-light franchise
     "MAR",   # Marriott — largest hotel franchise
-    "DECK",  # Deckers Brands — HOKA/UGG, high-growth footwear
-    "WSM",   # Williams-Sonoma — premium home goods
     "CAVA",  # CAVA Group — high-momentum fast-casual
-    "APP",   # AppLovin — mobile ad-tech, AI-driven growth
-
-    # ── Industrials / aerospace ──────────────────────────────────────────────
-    "GE",    # GE Aerospace — jet engines, strong cycle
-    "CAT",   # Caterpillar — construction/mining equipment
-    "HON",   # Honeywell — automation/aerospace
-    "PH",    # Parker-Hannifin — motion & control, data-center cooling
-    "TDG",   # TransDigm — aerospace aftermarket parts, extreme compounder
-    "CARR",  # Carrier Global — HVAC/cooling, data-center thermal management
-    "LIN",   # Linde — industrial gases compounder, AI-plant buildout
-    "ODFL",  # Old Dominion Freight — LTL freight, consistent compounder
-    "UNP",   # Union Pacific — railroad compounder, freight pricing power
-
-    # ── High-momentum must-adds ──────────────────────────────────────────────
-    "TSLA",  # Tesla — highest ADV among excluded, strongest reversion cycles
-    "NFLX",  # Netflix — streaming dominance, strong FCF, near 52w highs
-    "TMUS",  # T-Mobile — wireless compounder, strong subscriber growth
-    "MELI",  # MercadoLibre — LatAm e-commerce/fintech, high momentum
-
-    # ── Exchange compounders ─────────────────────────────────────────────────
-    "ICE",   # Intercontinental Exchange — exchange + data business compounder
-    "CME",   # CME Group — futures exchange, near-monopoly, consistent growth
+    "APP",   # AppLovin — 50% WR / +5.7% avg; mobile ad-tech, AI-driven
+    "ROST",  # Ross Stores — 67% WR / +3.6% avg in backtest; off-price retail
+    "TJX",   # TJX Companies — off-price retail compounder; rarely triggers
+    "MCD",   # McDonald's — global QSR compounder; rarely triggers (strength)
+    "SBUX",  # Starbucks — global coffee brand, recovering; rarely triggers
+    "EBAY",  # eBay — 67% WR / +5.1% avg in backtest; e-commerce marketplace
+    "MNST",  # Monster Beverage — energy drinks compounder; rarely triggers
+    "TSCO",  # Tractor Supply — niche retail compounder; rarely triggers
 
     # ── Auto parts compounders ───────────────────────────────────────────────
     "ORLY",  # O'Reilly Auto Parts — reliable compounder, near highs
     "AZO",   # AutoZone — consistent compounder, strong buybacks
 
-    # ── Semiconductor additions ──────────────────────────────────────────────
-    "QCOM",  # Qualcomm — mobile chips + automotive, AI on-device momentum
-    "NXPI",  # NXP Semiconductors — automotive/IoT chips, strong cycle
-
-    # ── Software / SaaS additions ────────────────────────────────────────────
-    "ADSK",  # Autodesk — design/engineering SaaS, subscription compounder
-    "MNDY",  # Monday.com — work-management SaaS, high NRR growth
-    "DUOL",  # Duolingo — EdTech, subscriber growth + AI monetization
-    "SPOT",  # Spotify — audio streaming, improving margins
-
-    # ── Healthcare / medtech additions ───────────────────────────────────────
-    "SYK",   # Stryker — medtech compounder, robotic surgery expansion
-    "DHR",   # Danaher — life-sciences instruments, best-in-class operator
-    "ZTS",   # Zoetis — animal health compounder, pricing power
-    "PGR",   # Progressive — auto insurance compounder, near 52w highs
+    # ── Industrials / aerospace / transportation ─────────────────────────────
+    # GE removed: 0% WR on 3 signals. PH removed: 25% WR / -1.8%.
+    "CAT",   # Caterpillar — construction/mining equipment
+    "HON",   # Honeywell — automation/aerospace
+    "TDG",   # TransDigm — aerospace aftermarket parts, extreme compounder
+    "CARR",  # Carrier Global — HVAC/cooling, data-center thermal management
+    "LIN",   # Linde — industrial gases compounder, AI-plant buildout
+    "ROP",   # Roper Technologies — industrial software compounder; rarely triggers
+    "NSC",   # Norfolk Southern — railroad compounder; rarely triggers
+    "CSX",   # CSX Corporation — railroad compounder; rarely triggers
+    "ODFL",  # Old Dominion Freight — LTL freight, consistent compounder
+    "UNP",   # Union Pacific — railroad compounder, freight pricing power
 
     # ── Services compounders ─────────────────────────────────────────────────
     "CTAS",  # Cintas — uniform/facilities services, consistent compounder
     "FAST",  # Fastenal — industrial distribution, high-quality growth
     "CPRT",  # Copart — auto auction platform, near-monopoly economics
     "WM",    # Waste Management — infrastructure compounder
+    "ADP",   # Automatic Data Processing — payroll SaaS compounder; rarely triggers
+    "PAYX",  # Paychex — payroll services compounder; rarely triggers
 
-    # ── Financials additions ─────────────────────────────────────────────────
-    "COF",   # Capital One — fintech banking, strong earnings momentum
+    # ── High-momentum ────────────────────────────────────────────────────────
+    "TSLA",  # Tesla — highest ADV; strongest reversion cycles in backtest
+    "NFLX",  # Netflix — 40% WR / +2.7% avg (wins avg 12.7%, losses -4%); streaming
+    "TMUS",  # T-Mobile — wireless compounder, strong subscriber growth
+    "MELI",  # MercadoLibre — LatAm e-commerce/fintech, high momentum
+    "SE",    # Sea Limited — 50% WR / +8.1% avg in backtest; SEA platform
 
-    # ── High-growth additions ─────────────────────────────────────────────────
+    # ── Software / SaaS additions ────────────────────────────────────────────
+    # DUOL removed: 0% WR on 4 signals (dips didn't recover).
+    "ADSK",  # Autodesk — design/engineering SaaS, subscription compounder
+    "MNDY",  # Monday.com — work-management SaaS, high NRR growth
+    "SPOT",  # Spotify — 67% WR / +5.3% avg in backtest; audio streaming
+
+    # ── Healthcare / medtech additions ───────────────────────────────────────
+    "PGR",   # Progressive — 67% WR / +2.7% avg; auto insurance compounder
+
+    # ── High-growth speculative ───────────────────────────────────────────────
+    # CRDO removed: 0% WR. RDDT: 0% WR. CVNA: 0% WR. EXPE: 25% WR / -1.7%.
+    # COF removed: 50% WR / -0.2% avg (marginally negative).
     "ALAB",  # Astera Labs — AI networking silicon, hyper-growth
-    "CRDO",  # Credo Technology — high-speed connectivity chips, AI infra
-    "HIMS",  # Hims & Hers — telehealth/GLP-1 adjacent, strong growth
-    "RDDT",  # Reddit — social/AI platform, high momentum post-IPO
-    "CVNA",  # Carvana — online auto dealer turnaround, strong momentum
-    "EXPE",  # Expedia — online travel platform, quality consumer brand
+    "HIMS",  # Hims & Hers — 33% WR / +4.3% avg (wins avg 20.8%); GLP-1 adjacent
     "NCLH",  # Norwegian Cruise Line — travel momentum, strong pricing power
 ]
 
