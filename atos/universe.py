@@ -615,7 +615,7 @@ NASDAQ100_DOW_TICKERS = [
 # Deduplicated, sector order preserved
 US_TICKERS = list(dict.fromkeys(SP500_TICKERS + HIGH_GROWTH_TICKERS + NASDAQ100_DOW_TICKERS))
 
-# ── US Reversion curated universe (2026-09-12) ───────────────────────────────
+# ── US Reversion curated universe (2026-09-12, expanded) ─────────────────────
 # Mean-reversion works best on fundamentally strong stocks where a dip is
 # temporary (sector rotation, macro noise, profit-taking) — NOT on stocks in
 # secular downtrends or mature low-growth businesses.
@@ -740,6 +740,59 @@ REVERSION_TICKERS: list = [
     "CAT",   # Caterpillar — construction/mining equipment
     "HON",   # Honeywell — automation/aerospace
     "PH",    # Parker-Hannifin — motion & control, data-center cooling
+    "TDG",   # TransDigm — aerospace aftermarket parts, extreme compounder
+    "CARR",  # Carrier Global — HVAC/cooling, data-center thermal management
+    "LIN",   # Linde — industrial gases compounder, AI-plant buildout
+    "ODFL",  # Old Dominion Freight — LTL freight, consistent compounder
+    "UNP",   # Union Pacific — railroad compounder, freight pricing power
+
+    # ── High-momentum must-adds ──────────────────────────────────────────────
+    "TSLA",  # Tesla — highest ADV among excluded, strongest reversion cycles
+    "NFLX",  # Netflix — streaming dominance, strong FCF, near 52w highs
+    "TMUS",  # T-Mobile — wireless compounder, strong subscriber growth
+    "MELI",  # MercadoLibre — LatAm e-commerce/fintech, high momentum
+
+    # ── Exchange compounders ─────────────────────────────────────────────────
+    "ICE",   # Intercontinental Exchange — exchange + data business compounder
+    "CME",   # CME Group — futures exchange, near-monopoly, consistent growth
+
+    # ── Auto parts compounders ───────────────────────────────────────────────
+    "ORLY",  # O'Reilly Auto Parts — reliable compounder, near highs
+    "AZO",   # AutoZone — consistent compounder, strong buybacks
+
+    # ── Semiconductor additions ──────────────────────────────────────────────
+    "QCOM",  # Qualcomm — mobile chips + automotive, AI on-device momentum
+    "NXPI",  # NXP Semiconductors — automotive/IoT chips, strong cycle
+
+    # ── Software / SaaS additions ────────────────────────────────────────────
+    "ADSK",  # Autodesk — design/engineering SaaS, subscription compounder
+    "MNDY",  # Monday.com — work-management SaaS, high NRR growth
+    "DUOL",  # Duolingo — EdTech, subscriber growth + AI monetization
+    "SPOT",  # Spotify — audio streaming, improving margins
+
+    # ── Healthcare / medtech additions ───────────────────────────────────────
+    "SYK",   # Stryker — medtech compounder, robotic surgery expansion
+    "DHR",   # Danaher — life-sciences instruments, best-in-class operator
+    "ZTS",   # Zoetis — animal health compounder, pricing power
+    "PGR",   # Progressive — auto insurance compounder, near 52w highs
+
+    # ── Services compounders ─────────────────────────────────────────────────
+    "CTAS",  # Cintas — uniform/facilities services, consistent compounder
+    "FAST",  # Fastenal — industrial distribution, high-quality growth
+    "CPRT",  # Copart — auto auction platform, near-monopoly economics
+    "WM",    # Waste Management — infrastructure compounder
+
+    # ── Financials additions ─────────────────────────────────────────────────
+    "COF",   # Capital One — fintech banking, strong earnings momentum
+
+    # ── High-growth additions ─────────────────────────────────────────────────
+    "ALAB",  # Astera Labs — AI networking silicon, hyper-growth
+    "CRDO",  # Credo Technology — high-speed connectivity chips, AI infra
+    "HIMS",  # Hims & Hers — telehealth/GLP-1 adjacent, strong growth
+    "RDDT",  # Reddit — social/AI platform, high momentum post-IPO
+    "CVNA",  # Carvana — online auto dealer turnaround, strong momentum
+    "EXPE",  # Expedia — online travel platform, quality consumer brand
+    "NCLH",  # Norwegian Cruise Line — travel momentum, strong pricing power
 ]
 
 # ── LIVE vs SIM split (2026-09-04) ───────────────────────────────────────────
