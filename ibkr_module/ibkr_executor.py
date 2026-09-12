@@ -753,6 +753,191 @@ def run_reversion_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
             st.mark_filled(str(sell_trade.order.orderId), fill, side="SELL")
 
     print("\n  Reversion exit check complete.")
+
+
+# ── US Penny entries ──────────────────────────────────────────────────────────
+
+def run_penny_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
+                      candidates: list | None = None,
+                      auto: bool = False) -> None:
+    """SIM-ONLY penny stock momentum breakout entries.
+
+    candidates: pre-generated from ibkr_signals.penny_candidates(). If None,
+      generated here (holds the IBKR connection open during Yahoo download).
+      Prefer passing from main() so the connection is held for seconds only.
+
+    SIM-ONLY: the --live gate in run_ibkr_stocks.py only allows 'blend' on live,
+      so this function will never execute against a live account in normal use.
+    """
+    from atos import us_penny as _penny
+
+    penny_cfg  = cfg["strategies"].get("penny", {})
+    max_slots  = int(penny_cfg.get("max_slots", 3))
+    stop_pct   = float(penny_cfg.get("stop_pct", 0.12))
+    budget     = float(penny_cfg.get("budget_usd", 6000))
+    min_usd    = float(penny_cfg.get("min_trade_usd", 50))
+    max_price  = float(penny_cfg.get("max_price_usd", 2.20))
+
+    open_pos   = st.get_open_positions("penny")
+    open_syms  = {p["symbol"] for p in open_pos}
+    slots_free = max_slots - len(open_pos)
+
+    print(f"\n  [penny] {len(open_pos)}/{max_slots} slots used  ({slots_free} free)  [SIM-ONLY]")
+
+    if slots_free <= 0:
+        print("  All penny slots full.")
+        return
+
+    if candidates is None:
+        candidates = sig.penny_candidates()
+    new_cands = [c for c in candidates if c["ticker"] not in open_syms]
+
+    if not new_cands:
+        print("  No new penny candidates.")
+        return
+
+    live_syms   = [c["ticker"] for c in new_cands[:slots_free]]
+    live_prices = ic.get_prices(ib, live_syms)
+
+    if not dry_run and not ic.is_market_open():
+        print(f"\n  [BLOCKED] US market is closed. Orders can only be placed "
+              f"09:30--16:00 ET (14:30--21:00 UTC).")
+        return
+
+    per_slot = budget / max_slots
+
+    for c in new_cands[:slots_free]:
+        ibkr_price = live_prices.get(c["ticker"], 0.0)
+        ibkr_ok    = bool(ibkr_price and ibkr_price > 0)
+
+        if not ibkr_ok:
+            print(f"\n  [BLOCKED] {c['ticker']}: no IBKR live price -- skip")
+            continue
+        price = ibkr_price
+
+        if price > max_price:
+            print(f"\n  [SKIP] {c['ticker']}: live price ${price:.2f} > ${max_price:.2f} gate")
+            continue
+
+        qty      = math.floor(per_slot / price)
+        if qty < 1:
+            continue
+        notional = round(price * qty, 2)
+        if notional < min_usd:
+            continue
+        stop_price = round(price * (1 - stop_pct), 2)
+
+        print(f"\n  [penny] BUY  {c['ticker']:<8}  "
+              f"vol={c['vol_ratio']}x  above_don=+{c['pct_above_don']}%  score={c['score']:.2f}")
+        print(f"    qty={qty}  price~${price:.2f} [IBKR live]  "
+              f"notional~${notional:,.0f}  stop=${stop_price:.2f}  [SIM-ONLY]")
+
+        if dry_run:
+            print("    [DRY RUN] would place buy + stop")
+            continue
+
+        confirm = "y" if auto else input(f"  Confirm buy {c['ticker']}? [y/N]: ").strip().lower()
+        if confirm != "y":
+            print("  Skipped.")
+            continue
+
+        trade = ic.place_market_order(ib, account_id, c["ticker"], "BUY", qty)
+        st.record_order(str(trade.order.orderId), c["ticker"], "BUY", qty, strategy="penny")
+        print(f"  Order placed (id={trade.order.orderId}). Waiting for fill...")
+        fill = ic.confirm_fill(ib, trade)
+        if fill is None:
+            print(f"  WARNING: fill not confirmed for {c['ticker']}.")
+            st.mark_cancelled(str(trade.order.orderId))
+            continue
+
+        print(f"  Filled @ ${fill:.4f}")
+        st.mark_filled(str(trade.order.orderId), fill, side="BUY")
+        actual_stop = round(fill * (1 - stop_pct), 2)
+        stop_trade  = ic.place_stop_order(ib, account_id, c["ticker"], qty, actual_stop)
+        ib.sleep(1.0)
+        st.update_stop(c["ticker"], actual_stop, str(stop_trade.order.orderId), fill)
+        print(f"  Stop placed @ ${actual_stop:.2f} (id={stop_trade.order.orderId})")
+
+    print(f"\n  [penny] entry scan complete.")
+
+
+# ── US Penny exits ────────────────────────────────────────────────────────────
+
+def run_penny_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
+                    auto: bool = False) -> None:
+    """Check open penny positions for exit conditions and close if triggered.
+
+    Exits: +25% profit target | -12% hard stop | 15-day time stop.
+    IBKR live price only -- no Yahoo fallback per trading rules.
+    """
+    from atos import us_penny as _penny
+
+    open_pos = st.get_open_positions("penny")
+    if not open_pos:
+        print("  No open penny positions.")
+        return
+
+    symbols     = [p["symbol"] for p in open_pos]
+    ibkr_prices = {s: ic.abs_price(p) for s, p in ic.get_prices(ib, symbols).items()}
+    today       = datetime.date.today()
+
+    print(f"\n  [penny exits] {len(open_pos)} position(s)")
+
+    for pos in open_pos:
+        sym      = pos["symbol"]
+        entry_px = float(pos.get("fill_price") or 0)
+        stop_oid = pos.get("stop_order_id")
+        qty      = int(pos["qty"])
+
+        cur_price = ibkr_prices.get(sym, 0.0)
+        if not cur_price or cur_price <= 0:
+            print(f"  {sym:<8}  [BLOCKED] no IBKR live price -- skipped")
+            continue
+
+        filled_at_str = pos.get("filled_at") or pos.get("created_at", "")
+        filled_date   = datetime.date.fromisoformat(filled_at_str[:10])
+        td_held       = max(0, len(pd.bdate_range(filled_date, today)) - 1)
+
+        trade_dict = {"entry_price": entry_px, "days_held": td_held}
+        should_exit, reason = _penny.should_exit(trade_dict, cur_price)
+
+        print(f"  {sym:<8}  px=${cur_price:.2f}  entry=${entry_px:.2f}  "
+              f"held={td_held}d  "
+              f"{'-> EXIT: ' + reason if should_exit else 'HOLD'}")
+
+        if not should_exit:
+            continue
+
+        if dry_run:
+            print(f"    [DRY RUN] would sell {qty} {sym}")
+            continue
+
+        confirm = "y" if auto else input(f"  Confirm EXIT {sym}? [y/N]: ").strip().lower()
+        if confirm != "y":
+            print("  Skipped.")
+            continue
+
+        if stop_oid:
+            open_orders = ib.openTrades()
+            old = next((t for t in open_orders if str(t.order.orderId) == str(stop_oid)), None)
+            if old:
+                ic.cancel_order(ib, old)
+                ib.sleep(0.5)
+
+        sell_trade = ic.place_market_order(ib, account_id, sym, "SELL", qty)
+        st.record_order(str(sell_trade.order.orderId), sym, "SELL", qty, strategy="penny")
+        fill = ic.confirm_fill(ib, sell_trade)
+        if fill is None:
+            print(f"  WARNING: exit fill not confirmed for {sym}.")
+            st.mark_cancelled(str(sell_trade.order.orderId))
+        else:
+            pnl = (fill - entry_px) * qty
+            print(f"  Sold {qty} {sym} @ ${fill:.4f}  P&L: ${pnl:+,.2f}")
+            st.mark_filled(str(sell_trade.order.orderId), fill, side="SELL")
+
+    print("\n  Penny exit check complete.")
+
+
 # -- US Reversion V2 entries ---------------------------------------------------
 
 def run_reversion_v2_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,

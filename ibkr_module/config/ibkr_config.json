@@ -16,7 +16,8 @@
     "positions": 14,
     "dashboard": 15,
     "signals":   16,
-    "scorer":    17
+    "scorer":    17,
+    "penny":     19
   },
   "capital": {
     "budget_usd": 10000,
@@ -91,6 +92,16 @@
         "min_score": 65.0,
         "min_trade_usd": 50
       }
+    },
+    "penny": {
+      "budget_usd": 6000,
+      "max_slots": 3,
+      "stop_pct": 0.12,
+      "target_pct": 0.25,
+      "max_hold_days": 15,
+      "max_price_usd": 2.20,
+      "min_trade_usd": 50,
+      "_note": "SIM-ONLY — never promoted to live. sub-$2 momentum breakout."
     }
   }
 }

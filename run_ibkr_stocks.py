@@ -149,9 +149,9 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="IBKR stocks sleeve -- all ATOS strategies")
     parser.add_argument("--strategy",
-                        choices=["blend", "blend_v2", "reversion", "reversion_v2", "intraday", "signals", "scorer", "all"],
+                        choices=["blend", "blend_v2", "reversion", "reversion_v2", "intraday", "signals", "scorer", "penny", "all"],
                         default="blend",
-                        help="Which strategy to run (default: blend); 'all' runs every strategy")
+                        help="Which strategy to run (default: blend); 'all' runs every strategy except penny")
     parser.add_argument("--exits",       action="store_true",
                         help="Check exits for the reversion strategy (ignored for blend)")
     parser.add_argument("--execute",     action="store_true",
@@ -256,12 +256,13 @@ def main() -> None:
     # only ~3-5s (account lookup + positions + order placement).
     from ibkr_module import ibkr_signals as sig
 
-    pre_signal     = None   # blend / blend_v2
-    pre_signal_v2  = None   # blend_v2 only
-    pre_candidates = None   # reversion / intraday
-    pre_indicators = None   # reversion exits
-    pre_feat_data  = None   # signals (all 4 strategies)
-    pre_scorer     = None   # scorer entries + exits
+    pre_signal          = None   # blend / blend_v2
+    pre_signal_v2       = None   # blend_v2 only
+    pre_candidates      = None   # reversion / intraday
+    pre_indicators      = None   # reversion exits
+    pre_feat_data       = None   # signals (all 4 strategies)
+    pre_scorer          = None   # scorer entries + exits
+    pre_penny_candidates = None  # penny momentum breakout (SIM-ONLY)
 
     needs_signal = (
         not args.positions and not args.info and
@@ -367,6 +368,10 @@ def main() -> None:
                         )
                     except Exception as _e:
                         print(f"  [notifier] scorer email error: {_e}")
+
+        if args.strategy in ("penny",):
+            print("\n  Pre-generating US Penny candidates (Yahoo Finance) [SIM-ONLY]...")
+            pre_penny_candidates = sig.penny_candidates()
 
     # ── Connect to IB Gateway (short window now) ──────────────────────────────
     mode_label = "PAPER" if is_paper else "LIVE"
@@ -483,6 +488,16 @@ def main() -> None:
                 ex.run_scorer_entries(ib, account_id, cfg, dry_run=dry_run,
                                       scorer_results=pre_scorer,
                                       auto=args.auto)
+
+        elif args.strategy == "penny":
+            dry_run = not args.execute
+            if dry_run:
+                print("  [DRY RUN] pass --execute to place orders.\n")
+            if args.exits:
+                ex.run_penny_exits(ib, account_id, cfg, dry_run=dry_run, auto=args.auto)
+            else:
+                ex.run_penny_entries(ib, account_id, cfg, dry_run=dry_run,
+                                     candidates=pre_penny_candidates, auto=args.auto)
 
         elif args.strategy == "all":
             dry_run = not args.execute

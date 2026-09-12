@@ -84,7 +84,7 @@ sys.path.insert(0, BASE_DIR)
 
 # ── ATOS modules ──────────────────────────────────────────────────
 from atos import database as db
-from atos.universe import ATOS_UNIVERSE, US_TICKERS, LIVE_TICKERS, REVERSION_TICKERS, market_of, MARKET_GROUPS
+from atos.universe import ATOS_UNIVERSE, US_TICKERS, LIVE_TICKERS, REVERSION_TICKERS, PENNY_TICKERS, market_of, MARKET_GROUPS
 from atos.features import add_all
 from atos.decision_engine import scan_universe, BUY_THRESHOLD, consensus_evaluate
 from atos.strategies import S3_MeanReversion, S4_BreakoutVol, S5_MomentumAccel
@@ -211,6 +211,13 @@ US_BLEND_V2_ENABLED     = True   # SIM A/B twin — skip-month momentum + vol-ta
 # Runs on the same US universe; tracked in the trades table with distinct
 # strategy names; visible on the dashboard. CORE STRATEGIES UNTOUCHED.
 US_SIGNALS_ENABLED = True
+
+# ── US Penny momentum breakout (2026-09-12) ────────────────────────────────────
+# SIM-ONLY — paper=1 always. 10-ticker curated universe, sub-$2 stocks.
+# STRATEGY: close > 20-day Donchian high + vol >= 2x + above SMA10.
+# EXIT: +25% target | -12% stop | 15-day time stop.
+# BACKTEST: WR 42%, avg ret +3.6% across 10 passing tickers (2023-2026).
+US_PENNY_ENABLED = True
 
 # ── SIM paper-fill fallback (2026-09-01) ──────────────────────────────────
 # Mirrors forex/runner.py's SIM_PAPER_FILL_ON_REJECT. Saxo SIM's order
@@ -829,6 +836,14 @@ def run_open_scan(log_fn=None) -> dict:
         except Exception as e:
             _log(f"  [US signals ERROR] {e}")
 
+    # ── US Penny momentum breakout (SIM-ONLY) ─────────────────────
+    if US_PENNY_ENABLED:
+        _log("  Running US Penny strategy (SIM-ONLY)...")
+        try:
+            run_us_penny(db.get_open_trades(), todays_actions)
+        except Exception as e:
+            _log(f"  [US Penny ERROR] {e}")
+
     buy_n     = sum(1 for a in todays_actions if a["action"] == "BUY")
     exit_n    = sum(1 for a in todays_actions if a["action"] == "EXIT")
     blocked_n = sum(1 for a in todays_actions if a["action"] == "BLOCKED")
@@ -1275,6 +1290,14 @@ def run_cycle():
             run_us_signals(feat_data, db.get_open_trades(), todays_actions)
         except Exception as e:
             print(f"  [US signals] ERROR: {e}")
+
+    # ── 6f. US Penny momentum breakout (SIM-ONLY) ─────────────────
+    if US_PENNY_ENABLED:
+        print("  Running US Penny strategy (SIM-ONLY)...")
+        try:
+            run_us_penny(db.get_open_trades(), todays_actions)
+        except Exception as e:
+            print(f"  [US Penny] ERROR: {e}")
 
     # ── 7. Learning pass ──────────────────────────────────────────
     print("  Running learning pass...")
@@ -3311,6 +3334,147 @@ def run_us_reversion_v2(feat_data: dict, open_trades: list, todays_actions: list
             })
         except Exception as e:
             print(f"  {tag} BUY {ticker} failed: {e}")
+
+
+# ── US Penny stock momentum breakout — SIM only ───────────────────────────────
+
+def run_us_penny(open_trades: list, todays_actions: list) -> None:
+    """US Penny Stock momentum breakout — SIM-ONLY (paper=1 always).
+
+    Downloads its own 60-day OHLCV via Yahoo Finance (penny tickers are NOT in
+    the main Saxo universe so the shared feat_data doesn't cover them).
+    Books all trades with paper=1 — no real Saxo orders are attempted.
+    Strategy name "US Penny" keeps these isolated in the DB and dashboard.
+    """
+    from atos import us_penny as _UPY
+    import yfinance as yf
+    from datetime import timedelta
+
+    if kill_switch_active():
+        print("  [US Penny] STOP_TRADING present — skip"); return
+
+    tag    = "[US Penny SIM]"
+    fx_usd = _rate_to_sek("USD")
+    today  = date.today()
+
+    # Download penny tickers via Yahoo (not in Saxo universe; SIM paper only)
+    print(f"  {tag} downloading {len(PENNY_TICKERS)} penny tickers (Yahoo Finance)...")
+    try:
+        start = today - timedelta(days=90)
+        raw   = yf.download(
+            PENNY_TICKERS, start=str(start), end=str(today),
+            progress=False, auto_adjust=True, threads=True,
+        )
+    except Exception as e:
+        print(f"  {tag} yfinance download failed: {e}"); return
+
+    penny_data: dict = {}
+    if len(PENNY_TICKERS) == 1:
+        if not raw.empty and len(raw) >= 20:
+            penny_data[PENNY_TICKERS[0]] = raw
+    elif hasattr(raw.columns, "levels"):
+        for tk in PENNY_TICKERS:
+            try:
+                df = raw.xs(tk, axis=1, level=1).dropna(how="all")
+                if len(df) >= 20:
+                    penny_data[tk] = df
+            except KeyError:
+                pass
+    print(f"  {tag} {len(penny_data)}/{len(PENNY_TICKERS)} tickers with data")
+
+    def _price(tk):
+        return float(penny_data[tk]["Close"].iloc[-1]) if tk in penny_data else 0.0
+
+    # ── Exit check ────────────────────────────────────────────────────────────
+    penny_open = {t["ticker"]: t for t in open_trades if t.get("strategy") == "US Penny"}
+    for ticker, trade in list(penny_open.items()):
+        cur_price = _price(ticker)
+        if cur_price <= 0:
+            continue
+        entry_d   = trade.get("entry_date", today.isoformat())
+        days_held = (today - date.fromisoformat(entry_d)).days
+        exit_flag, reason = _UPY.should_exit(
+            {"entry_price": trade.get("entry_price", 0), "days_held": days_held},
+            cur_price,
+        )
+        if not exit_flag:
+            continue
+        sh        = trade.get("shares", 0) or 0
+        comm_exit = commission_sek(sh, sh * cur_price * fx_usd)
+        pnl_sek   = (cur_price - trade.get("entry_price", 0)) * sh * fx_usd - comm_exit
+        print(f"  {tag} EXIT {ticker}: {reason} [PAPER]")
+        db.close_trade(trade["id"], exit_price=cur_price,
+                       exit_reason=reason, pnl_sek=pnl_sek,
+                       commission_sek=comm_exit)
+        _append_trade_log(
+            "US Penny", "SELL", ticker, sh, cur_price,
+            sh * cur_price * fx_usd, pnl_sek, reason,
+        )
+        todays_actions.append({
+            "action": "EXIT", "ticker": ticker, "market_group": "US Equities",
+            "strategy": "US Penny", "score": 0, "shares": sh,
+            "price": cur_price, "reason": f"penny exit: {reason}",
+            "pnl_sek": pnl_sek,
+        })
+
+    # ── Entry scan ────────────────────────────────────────────────────────────
+    penny_open_now = {t["ticker"] for t in db.get_open_trades()
+                      if t.get("strategy") == "US Penny"}
+    slots_free = _UPY.MAX_POSITIONS - len(penny_open_now)
+    if slots_free <= 0:
+        print(f"  {tag} full ({_UPY.MAX_POSITIONS}/{_UPY.MAX_POSITIONS} slots)")
+        return
+
+    candidates = _UPY.scan(penny_data, PENNY_TICKERS)
+    candidates = [c for c in candidates if c["ticker"] not in penny_open_now]
+    if not candidates:
+        print(f"  {tag} no entry signals today")
+        return
+
+    PENNY_SLEEVE_SEK = 30_000.0
+    slot_sek = PENNY_SLEEVE_SEK / _UPY.MAX_POSITIONS
+    print(f"  {tag} {len(candidates)} signal(s) | {slots_free} slot(s) free | "
+          f"slot: {slot_sek:,.0f} SEK")
+
+    for cand in candidates[:slots_free]:
+        ticker = cand["ticker"]
+        price  = cand["price"]
+        shares = int(slot_sek / (price * fx_usd))
+        if shares < 1:
+            print(f"  {tag} {ticker}: slot too small for 1 share — skip")
+            continue
+        cost_sek = shares * price * fx_usd
+        stop_p   = round(price * (1 - _UPY.STOP_PCT), 2)
+        print(f"  {tag} BUY {ticker}: vol={cand['vol_ratio']}x "
+              f"above_don=+{cand['pct_above_don']}% | "
+              f"{shares} shares @ ${price:.2f} (~{cost_sek:,.0f} SEK) [PAPER]")
+        comm = commission_sek(shares, cost_sek)
+        db.insert_trade({
+            "strategy": "US Penny", "market_group": "US Equities",
+            "ticker": ticker, "direction": "BUY",
+            "entry_date": today.isoformat(), "entry_price": price,
+            "shares": shares, "commission_sek": comm,
+            "entry_score": cand["score"],
+            "d1_trend": 0, "d2_momentum": cand["vol_ratio"],
+            "d3_breakout": cand["pct_above_don"], "d4_mean_revert": 0,
+            "d5_volume": cand["vol_ratio"], "d6_smart_money": 0,
+            "d7_mom_quality": 0, "d8_regime": 0,
+            "stop_price": stop_p, "trailing_stop_high": price,
+            "regime_at_entry": "penny_breakout",
+            "paper": 1, "stop_order_id": None,
+        })
+        _append_trade_log(
+            "US Penny", "BUY", ticker, shares, price, cost_sek, None,
+            f"vol={cand['vol_ratio']}x above_don=+{cand['pct_above_don']}%",
+        )
+        todays_actions.append({
+            "action": "BUY", "ticker": ticker, "market_group": "US Equities",
+            "strategy": "US Penny", "score": cand["score"],
+            "shares": shares, "price": price,
+            "reason": (f"[US Penny] vol {cand['vol_ratio']}x, "
+                       f"+{cand['pct_above_don']}% above Donchian high"),
+            "pnl_sek": None,
+        })
 
 
 # ── USA Strategy signals — SIM only ───────────────────────────────────────────
