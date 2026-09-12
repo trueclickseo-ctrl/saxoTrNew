@@ -328,6 +328,18 @@ def test_end_to_end_dry_run_cycle_places_nothing_and_writes_the_artifacts():
     wb = os.path.join(BASE, "data", "us_blend_live_would_be_orders.jsonl")
     st = os.path.join(BASE, "data", "stocks_live_status.json")
     wb_before = os.path.getsize(wb) if os.path.exists(wb) else 0
+    # Snapshot real-row count BEFORE the run; existing live trades must not change
+    import sqlite3
+    _dbp_snap = os.path.join(BASE, "data", "atos_live_stocks.db")
+    _real_rows_before = 0
+    if os.path.exists(_dbp_snap):
+        _c = sqlite3.connect(_dbp_snap)
+        try:
+            _real_rows_before = _c.execute(
+                "select count(*) from trades where paper=0 and strategy='US Blend'"
+            ).fetchone()[0]
+        finally:
+            _c.close()
     p = _cli([], timeout=560)
     out = p.stdout + p.stderr
     # The module must ALWAYS exit cleanly (never a traceback) and ALWAYS
@@ -361,7 +373,6 @@ def test_end_to_end_dry_run_cycle_places_nothing_and_writes_the_artifacts():
     # NO real order: the would-be log only ever grew (append) or stayed put;
     # and the LIVE ledger got no new open row from this dry run
     assert os.path.getsize(wb) >= wb_before
-    import sqlite3
     dbp = os.path.join(BASE, "data", "atos_live_stocks.db")
     if os.path.exists(dbp):
         c = sqlite3.connect(dbp)
@@ -369,7 +380,10 @@ def test_end_to_end_dry_run_cycle_places_nothing_and_writes_the_artifacts():
             real_rows = c.execute("select count(*) from trades where paper=0 and strategy='US Blend'").fetchone()[0]
         finally:
             c.close()
-        assert real_rows == 0, f"a dry run must never book a non-paper row (found {real_rows})"
+        assert real_rows == _real_rows_before, (
+            f"a dry run must never add non-paper rows "
+            f"(was {_real_rows_before} before run, {real_rows} after)"
+        )
 
 
 for _n, _f in list(globals().items()):

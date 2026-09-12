@@ -286,6 +286,7 @@ def render() -> str:
     L = []
     L.append(f"{BD}{'='*70}{W}")
     L.append(f"{BD}  ATOS LIVE STOCKS — US Blend sleeve{W}   {RD}REAL MONEY{W}")
+    L.append(f"  {YL}{BD}OBSERVE-ONLY{W}   {DM}dry_run=True until all env gates met{W}")
     L.append(f"{DM}  {datetime.now():%Y-%m-%d %H:%M:%S} PKT{W}")
     L.append(f"{BD}{'='*70}{W}")
 
