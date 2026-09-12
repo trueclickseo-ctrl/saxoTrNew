@@ -418,12 +418,14 @@ def heal_missing_stops(ib, account_id: str, cfg: dict,
         if stop_oid and str(stop_oid) in open_order_ids:
             continue  # stop is live on IBKR -- nothing to heal
 
-        if cur_price <= 0:
-            print(f"  [heal-stop] {sym}: no price -- skipped")
-            continue
-
+        # Use stored trailing_high / fill_price as fallback when IBKR returns no
+        # live price (market closed). We just need the known high watermark to
+        # compute a safe stop -- we are restoring protection, not sizing a new entry.
         trail_high = float(pos.get("trailing_high") or pos.get("fill_price") or cur_price)
-        new_high   = max(trail_high, cur_price)
+        new_high   = max(trail_high, cur_price) if cur_price > 0 else trail_high
+        if new_high <= 0:
+            print(f"  [heal-stop] {sym}: no price and no stored high -- skipped")
+            continue
 
         use_atr = bool(atr_strategies and pos.get("strategy") in atr_strategies)
         if use_atr:
@@ -457,8 +459,8 @@ def heal_missing_stops(ib, account_id: str, cfg: dict,
 
     if healed:
         print(f"  [heal-stop] restored {healed} missing stop(s)")
-    else:
-        print("  [heal-stop] all stops present on IBKR")
+    elif not dry_run:
+        print("  [heal-stop] all stops confirmed present on IBKR")
     return healed
 
 
