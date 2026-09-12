@@ -180,13 +180,11 @@ def get_prices(ib: IB, symbols: list[str]) -> dict[str, float]:
     """Batch price fetch for a list of symbols.
 
     Tries IBKR real-time -> delayed (type 3) -> delayed frozen (type 4) in order.
-    If all IBKR attempts return 0/nan (common on paper accounts without live
-    market-data subscriptions), falls back to Yahoo Finance daily close prices
-    via ibkr_signals.yahoo_prices() -- uses the 8-hour disk cache when available.
+    If all IBKR attempts return 0/nan (market closed or no live data
+    subscription), returns the empty result. No Yahoo fallback -- IBKR prices only.
 
     Error 10168 (no subscription) and Error 300 (cancel-before-subscribe race)
-    are suppressed silently -- they are expected on paper accounts and the Yahoo
-    fallback handles the missing prices.
+    are suppressed silently -- they are expected when the market is closed.
     """
     import math
 
@@ -238,7 +236,7 @@ def get_prices(ib: IB, symbols: list[str]) -> dict[str, float]:
             result = _fetch(4)  # delayed frozen
 
         if _prices_are_empty(result):
-            print("  [prices] IBKR returned no market data -- using Yahoo fallback.")
+            print("  [prices] IBKR returned no prices (market closed or no data subscription).")
 
         return result
 
