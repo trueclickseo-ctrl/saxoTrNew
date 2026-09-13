@@ -413,8 +413,9 @@ def _confirm_stock_fill(entry_oid: str, uic: int) -> tuple[bool, float]:
 
 
 # ── Signal caches — written by run_us_momentum/run_us_reversion, read by dashboard ──
-_blend_signal: dict  = {}   # keys: targets, risk_off, reason, momentum, lowvol
-_rev_signals:  list  = []   # list of candidate dicts from USR.scan()
+_blend_signal:  dict = {}   # keys: targets, risk_off, reason, momentum, lowvol
+_rev_signals:   list = []   # list of candidate dicts from USR.scan()
+_penny_signals: list = []   # list of candidate dicts from _UPY.scan()
 
 # ── Dynamic capital allocation — loaded from config/capital.json ──────────
 # Edit config/capital.json to change percentages; no code change needed.
@@ -1353,6 +1354,7 @@ def run_cycle():
             "blend_targets":         _blend_signal.get("targets", []),
             "blend_risk_off":        _blend_signal.get("risk_off", False),
             "reversion_candidates":  _rev_signals,
+            "penny_candidates":      _penny_signals,
         },
     )
     print(f"  Dashboard saved: {html_file}")
@@ -3426,6 +3428,8 @@ def run_us_penny(open_trades: list, todays_actions: list) -> None:
         return
 
     candidates = _UPY.scan(penny_data, PENNY_TICKERS)
+    global _penny_signals
+    _penny_signals = list(candidates)          # expose to dashboard before filtering
     candidates = [c for c in candidates if c["ticker"] not in penny_open_now]
     if not candidates:
         print(f"  {tag} no entry signals today")

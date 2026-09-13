@@ -48,7 +48,9 @@ def _read_trade_log(n: int = 30) -> list[dict]:
 
 def _strategy_badge(strategy: str) -> str:
     s = strategy or "ATOS"
-    if "Reversion" in s:
+    if "Penny" in s:
+        return f'<span class="badge badge-penny">{s}</span>'
+    elif "Reversion" in s:
         return f'<span class="badge badge-rev">{s}</span>'
     elif "Blend" in s or "Momentum" in s:
         return f'<span class="badge badge-blend">{s}</span>'
@@ -56,10 +58,11 @@ def _strategy_badge(strategy: str) -> str:
 
 
 def _signal_panel(run_summary: dict) -> str:
-    """Render the live signal tickers card (Blend targets + Reversion candidates)."""
+    """Render the live signal tickers card (Blend targets + Reversion + Penny candidates)."""
     blend_targets   = run_summary.get("blend_targets", [])
     blend_risk_off  = run_summary.get("blend_risk_off", False)
     rev_cands       = run_summary.get("reversion_candidates", [])
+    penny_cands     = run_summary.get("penny_candidates", [])
 
     # Blend section
     if blend_risk_off:
@@ -99,6 +102,30 @@ def _signal_panel(run_summary: dict) -> str:
     else:
         rev_html = '<span style="color:var(--muted)">No entry signals — RSI&lt;33, dip&gt;5%, vol&gt;1.5x all needed simultaneously</span>'
 
+    # Penny section
+    if penny_cands:
+        rows = ""
+        for c in penny_cands:
+            vol = c.get("vol_ratio", 0)
+            adn = c.get("pct_above_don", 0)
+            px  = c.get("price", 0)
+            sc  = c.get("score", 0)
+            rows += (
+                f'<tr><td style="font-weight:700;color:var(--text)">{c["ticker"]}</td>'
+                f'<td style="color:var(--cyan)">{vol:.1f}x</td>'
+                f'<td style="color:var(--green)">+{adn:.1f}%</td>'
+                f'<td>${px:.3f}</td>'
+                f'<td style="color:var(--muted)">{sc:.2f}</td></tr>'
+            )
+        penny_html = f'''<table style="width:100%;margin-top:8px">
+          <thead><tr>
+            <th>Ticker</th><th>Vol</th><th>Above Don</th><th>Price</th><th>Score</th>
+          </tr></thead>
+          <tbody>{rows}</tbody>
+        </table>'''
+    else:
+        penny_html = '<span style="color:var(--muted)">No breakout today — need close &gt; 20d high + vol &ge; 2x + above SMA10</span>'
+
     return f'''
   <div class="grid-2" style="margin-bottom:20px">
     <div class="card">
@@ -115,6 +142,14 @@ def _signal_panel(run_summary: dict) -> str:
       </div>
       {rev_html}
     </div>
+  </div>
+  <div class="card" style="margin-bottom:20px">
+    <div class="section-title">
+      <span class="status-dot sleeve-dot-cyan"></span>
+      US Penny — Momentum Breakout Signals &nbsp;
+      <span style="font-size:11px;color:var(--muted);font-weight:400">[SIM-ONLY · paper trades]</span>
+    </div>
+    {penny_html}
   </div>'''
 
 
@@ -184,8 +219,10 @@ def generate(
 
     blend_s = _strat_stats("Blend")
     rev_s   = _strat_stats("Reversion")
+    penny_s = _strat_stats("Penny")
     blend_n, blend_wr, blend_pnl = blend_s["n"], blend_s["wr"], blend_s["pnl"]
     rev_n,   rev_wr,   rev_pnl   = rev_s["n"],   rev_s["wr"],   rev_s["pnl"]
+    penny_n, penny_wr, penny_pnl = penny_s["n"], penny_s["wr"], penny_s["pnl"]
 
     # ── Cumulative P&L per strategy from trade_log.csv ────────────
     all_log = _read_trade_log(500)   # all available history
@@ -206,13 +243,17 @@ def generate(
 
     blend_pnl_dates, blend_pnl_cum = _cumulative_pnl("Blend")
     rev_pnl_dates,   rev_pnl_cum   = _cumulative_pnl("Reversion")
+    penny_pnl_dates, penny_pnl_cum = _cumulative_pnl("Penny")
 
     # Sleeve status
-    rev_open   = [t for t in open_trades if "Reversion" in (t.get("strategy") or "")]
-    blend_open = [t for t in open_trades if "Blend" in (t.get("strategy") or "")
-                  or t.get("market_group") == "US Equities"
-                  and "Reversion" not in (t.get("strategy") or "")]
-    rev_slots_used = len(rev_open)
+    rev_open    = [t for t in open_trades if "Reversion" in (t.get("strategy") or "")]
+    penny_open  = [t for t in open_trades if "Penny" in (t.get("strategy") or "")]
+    blend_open  = [t for t in open_trades if "Blend" in (t.get("strategy") or "")
+                   or t.get("market_group") == "US Equities"
+                   and "Reversion" not in (t.get("strategy") or "")
+                   and "Penny" not in (t.get("strategy") or "")]
+    rev_slots_used   = len(rev_open)
+    penny_slots_used = len(penny_open)
 
     # ── Chart data ─────────────────────────────────────────────────
     eq_labels = [r["snap_date"] for r in equity_curve]
@@ -366,8 +407,9 @@ def generate(
     )
 
     # ── Strategy sleeve cards ──────────────────────────────────────
-    blend_pnl_s = f'{"+" if blend_pnl>=0 else ""}{blend_pnl:,.0f} SEK'
-    rev_pnl_s   = f'{"+" if rev_pnl>=0 else ""}{rev_pnl:,.0f} SEK'
+    blend_pnl_s  = f'{"+" if blend_pnl>=0 else ""}{blend_pnl:,.0f} SEK'
+    rev_pnl_s    = f'{"+" if rev_pnl>=0 else ""}{rev_pnl:,.0f} SEK'
+    penny_pnl_s  = f'{"+" if penny_pnl>=0 else ""}{penny_pnl:,.0f} SEK'
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -390,6 +432,7 @@ def generate(
       --purple:   #a78bfa;
       --yellow:   #fbbf24;
       --orange:   #fb923c;
+      --cyan:     #22d3ee;
       --accent:   #7c3aed;
     }}
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
@@ -437,6 +480,7 @@ def generate(
     .badge-blend   {{ background: rgba(96,165,250,0.15);  color: var(--blue);   border: 1px solid rgba(96,165,250,0.3); }}
     .badge-rev     {{ background: rgba(251,146,60,0.15);  color: var(--orange); border: 1px solid rgba(251,146,60,0.3); }}
     .badge-atos    {{ background: rgba(167,139,250,0.15); color: var(--purple); border: 1px solid rgba(167,139,250,0.3); }}
+    .badge-penny   {{ background: rgba(34,211,238,0.15);  color: var(--cyan);   border: 1px solid rgba(34,211,238,0.3); }}
     .score-pill {{ display: inline-block; padding: 2px 8px; border-radius: 12px;
                    font-size: 12px; font-weight: 700; color: #fff; }}
     .weight-row {{ display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }}
@@ -454,12 +498,14 @@ def generate(
                    box-shadow: 0 0 6px var(--green); animation: pulse 2s infinite; }}
     .sleeve-dot-blue   {{ background: var(--blue);   box-shadow: 0 0 6px var(--blue); }}
     .sleeve-dot-orange {{ background: var(--orange); box-shadow: 0 0 6px var(--orange); }}
+    .sleeve-dot-cyan   {{ background: var(--cyan);   box-shadow: 0 0 6px var(--cyan); }}
     @keyframes pulse {{ 0%,100%{{opacity:1}} 50%{{opacity:.4}} }}
     .section-title {{ font-size: 15px; font-weight: 700; margin-bottom: 14px;
                       color: var(--text); display: flex; align-items: center; gap: 8px; }}
     .sleeve-bar-bg {{ background: var(--surface2); border-radius: 6px; height: 6px; margin-top: 8px; }}
     .sleeve-bar-fill-blue   {{ height: 6px; border-radius: 6px; background: var(--blue); }}
     .sleeve-bar-fill-orange {{ height: 6px; border-radius: 6px; background: var(--orange); }}
+    .sleeve-bar-fill-cyan   {{ height: 6px; border-radius: 6px; background: var(--cyan); }}
     @media(max-width:900px){{.grid-4,.grid-2,.grid-3{{grid-template-columns:1fr;}}}}
   </style>
 </head>
@@ -490,7 +536,7 @@ def generate(
     <div class="card">
       <div class="card-title">Open Positions</div>
       <div class="metric blue">{len(open_trades)}</div>
-      <div class="metric-sub">{len(blend_open)} blend &nbsp;·&nbsp; {len(rev_open)} reversion</div>
+      <div class="metric-sub">{len(blend_open)} blend &nbsp;·&nbsp; {len(rev_open)} rev &nbsp;·&nbsp; {penny_slots_used} penny</div>
     </div>
     <div class="card">
       <div class="card-title">Algorithm Progress</div>
@@ -559,6 +605,36 @@ def generate(
       </div>
       <div class="muted small" style="margin-top:4px">300,000 SEK sleeve &nbsp;·&nbsp; RSI&lt;33 dip-buy &nbsp;·&nbsp; max 10d hold</div>
     </div>
+  </div>
+  <div class="card" style="margin-bottom:20px">
+    <div class="section-title">
+      <span class="status-dot sleeve-dot-cyan"></span>
+      US Penny — Momentum Breakout &nbsp;
+      <span style="font-size:11px;color:var(--muted);font-weight:400">[SIM-ONLY · paper trades]</span>
+    </div>
+    <div style="display:flex; gap:32px;">
+      <div>
+        <div class="card-title">Closed Trades</div>
+        <div style="font-size:22px; font-weight:700; color:var(--cyan)">{penny_n}</div>
+      </div>
+      <div>
+        <div class="card-title">Win Rate</div>
+        <div style="font-size:22px; font-weight:700; color:{'var(--green)' if penny_wr>=50 else 'var(--red)' if penny_n>0 else 'var(--muted)'}">
+          {penny_wr:.0f}%</div>
+      </div>
+      <div>
+        <div class="card-title">Total P&L</div>
+        <div style="font-size:22px; font-weight:700; color:{_color(penny_pnl)}">{penny_pnl_s}</div>
+      </div>
+      <div>
+        <div class="card-title">Slots Used</div>
+        <div style="font-size:22px; font-weight:700; color:var(--cyan)">{penny_slots_used}/5</div>
+      </div>
+    </div>
+    <div class="sleeve-bar-bg" style="margin-top:14px">
+      <div class="sleeve-bar-fill-cyan" style="width:{penny_slots_used/5*100:.0f}%"></div>
+    </div>
+    <div class="muted small" style="margin-top:4px">50,000 SEK sleeve &nbsp;·&nbsp; close &gt; 20d Donchian + vol &ge; 2x + SMA10 &nbsp;·&nbsp; max $2.00 &nbsp;·&nbsp; max 15d hold</div>
   </div>
 
   <!-- Signal Ticker Panel -->
@@ -669,9 +745,11 @@ const blend_pnl_dates = {json.dumps(blend_pnl_dates)};
 const blend_pnl_cum   = {json.dumps(blend_pnl_cum)};
 const rev_pnl_dates   = {json.dumps(rev_pnl_dates)};
 const rev_pnl_cum     = {json.dumps(rev_pnl_cum)};
+const penny_pnl_dates = {json.dumps(penny_pnl_dates)};
+const penny_pnl_cum   = {json.dumps(penny_pnl_cum)};
 
 // Cumulative P&L per strategy
-if (blend_pnl_dates.length > 0 || rev_pnl_dates.length > 0) {{
+if (blend_pnl_dates.length > 0 || rev_pnl_dates.length > 0 || penny_pnl_dates.length > 0) {{
   const pnlDatasets = [];
   if (blend_pnl_cum.length > 0) pnlDatasets.push({{
     label: 'US Blend', data: blend_pnl_cum, borderColor: '#60a5fa',
@@ -683,8 +761,13 @@ if (blend_pnl_dates.length > 0 || rev_pnl_dates.length > 0) {{
     backgroundColor: 'rgba(251,146,60,0.08)', fill: true,
     tension: 0.3, pointRadius: 3, borderWidth: 2,
   }});
+  if (penny_pnl_cum.length > 0) pnlDatasets.push({{
+    label: 'US Penny [SIM]', data: penny_pnl_cum, borderColor: '#22d3ee',
+    backgroundColor: 'rgba(34,211,238,0.08)', fill: true,
+    tension: 0.3, pointRadius: 3, borderWidth: 2,
+  }});
   // Merge + sort labels
-  const allDates = [...new Set([...blend_pnl_dates, ...rev_pnl_dates])].sort();
+  const allDates = [...new Set([...blend_pnl_dates, ...rev_pnl_dates, ...penny_pnl_dates])].sort();
   new Chart(document.getElementById('pnlChart'), {{
     type: 'line',
     data: {{ labels: allDates, datasets: pnlDatasets }},

@@ -120,18 +120,37 @@ def cmd_dashboard(ib, account_id: str, interval: int = 30) -> None:
             u = summary['unrealized_pnl']
             print(f"  Unreal.  : {'+'if u>=0 else''}${u:>11,.2f}")
 
-            if positions:
-                prices = ic.get_prices(ib, [p["symbol"] for p in positions])
-                print(f"\n  Positions ({len(positions)}):")
+            # Split positions into penny vs regular
+            penny_syms = {r["symbol"] for r in st.get_open_positions("penny")}
+            penny_pos  = [p for p in positions if p["symbol"] in penny_syms]
+            other_pos  = [p for p in positions if p["symbol"] not in penny_syms]
+
+            if other_pos:
+                prices = ic.get_prices(ib, [p["symbol"] for p in other_pos])
+                print(f"\n  Positions ({len(other_pos)}):")
                 print(f"  {'Sym':<8} {'Qty':>5} {'Avg':>8} {'Last':>8} {'Gain%':>7}")
                 print("  " + "-" * 40)
-                for p in positions:
+                for p in other_pos:
                     last = prices.get(p["symbol"], 0)
                     g    = (last / p["avg_cost"] - 1) * 100 if p["avg_cost"] > 0 else 0
                     print(f"  {p['symbol']:<8} {p['qty']:>5} {p['avg_cost']:>8.2f} "
                           f"{last:>8.2f} {'+'if g>=0 else''}{g:>6.1f}%")
             else:
                 print("\n  No open positions.")
+
+            # Penny sleeve section
+            print(f"\n  Penny Positions [SIM] ({len(penny_pos)}/5 slots):")
+            print("  " + "-" * 40)
+            if penny_pos:
+                pp_prices = ic.get_prices(ib, [p["symbol"] for p in penny_pos])
+                print(f"  {'Sym':<8} {'Qty':>5} {'Avg':>8} {'Last':>8} {'Gain%':>7}")
+                for p in penny_pos:
+                    last = pp_prices.get(p["symbol"], 0)
+                    g    = (last / p["avg_cost"] - 1) * 100 if p["avg_cost"] > 0 else 0
+                    print(f"  {p['symbol']:<8} {p['qty']:>5} {p['avg_cost']:>8.3f} "
+                          f"{last:>8.3f} {'+'if g>=0 else''}{g:>6.1f}%")
+            else:
+                print("  No penny positions today.")
 
             today_pnl = st.get_today_pnl_usd()
             print(f"\n  Today P&L: {'+'if today_pnl>=0 else''}${today_pnl:,.2f} (from ledger)")
