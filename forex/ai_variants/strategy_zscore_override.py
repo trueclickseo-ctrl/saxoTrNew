@@ -1,6 +1,6 @@
-# AI-WRITTEN Phase 2+3 2026-09-06 by claude-sonnet-5
+# AI-WRITTEN Phase 2+3 2026-09-13 by claude-sonnet-5
 # Entry filter: none -- pass-through to original generate_signals()
-# Exit filter: none -- pass-through to original should_exit(), data still dominated by external forced flatten
+# Exit filter: none -- pass-through to original should_exit(), sample still dominated by external forced flatten
 
 import pandas as pd
 
@@ -13,17 +13,18 @@ def generate_signals(market_data: dict, open_symbols: set = None) -> list:
 
 
 def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tuple:
-    # No reliable exit-logic pattern to act on: 14 of 15 closed trades were
-    # closed by an external 'roster_flatten_2026-09-02' event (a portfolio-
-    # level forced liquidation unrelated to should_exit()'s own decisions),
-    # leaving only 1 trade that actually exercised the strategy's native
-    # zscore_reverted / hard_stop / time_stop logic. That single sample
-    # (a winner) is not enough to justify any rule change -- the poor
-    # win-rate/avg-pnl on 'roster_flatten_2026-09-02' reflects an external
-    # forced-liquidation event, not a flaw in should_exit()'s own decision
-    # logic (zscore reversion, hard stop, time stop), so no exit-logic fix
-    # here would address it. Preserving original exit behavior unchanged
-    # pending a larger sample of trades that close under normal
-    # (non-flatten) conditions.
+    # Exit-reason breakdown (16 quality trades) still shows the same pattern
+    # noted in the prior Phase-3 pass: 14 of 16 closed trades were closed by
+    # 'roster_flatten_2026-09-02', an external portfolio-level forced
+    # liquidation event that fires regardless of should_exit()'s own logic.
+    # Only 2 trades actually exercised the strategy's native exit paths
+    # (both 'zscore_reverted': 1 win, 1 loss). That is far too small a
+    # sample to support any rule change to zscore_reverted / hard_stop /
+    # time_stop -- and the poor win-rate/avg-pnl concentrated in
+    # roster_flatten is a symptom of the external flatten event, not a flaw
+    # in this function's decision logic, so no exit-logic change here would
+    # address it. Preserving original exit behavior unchanged pending a
+    # larger sample of trades that close under normal (non-flatten)
+    # conditions.
     exit_flag, reason = _orig_should_exit(position, df, calendar_days_held)
     return exit_flag, reason

@@ -23,11 +23,11 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> Tu
     we still cannot conclusively separate 'genuinely adverse move' stops
     from 'single-bar noise piercing the stop then closing back inside
     it', so we keep the conservative confirmation requirement unchanged
-    from Phase 2/3's prior iteration: a hard_stop signal is only honored
-    if the stop breach persists for two consecutive daily closes. A
-    one-bar breach that closes back on the correct side of the stop is
-    treated as noise and the position is held one more day (subject to
-    the original logic re-evaluating on the next bar).
+    from the prior iteration: a hard_stop signal is only honored if the
+    stop breach persists for two consecutive daily closes. A one-bar
+    breach that closes back on the correct side of the stop is treated
+    as noise and the position is held one more day (subject to the
+    original logic re-evaluating on the next bar).
 
     No new exit_reason category has appeared since the last iteration
     (still 100% hard_stop, same 4 trades), so there is no additional

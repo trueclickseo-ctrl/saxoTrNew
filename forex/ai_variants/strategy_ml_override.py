@@ -1,6 +1,6 @@
-# AI-WRITTEN Phase 2+3 2026-09-04 by claude-sonnet-5
+# AI-WRITTEN Phase 2+3 2026-09-10 by claude-sonnet-5
 # Entry filter: exclude TRY (Turkish Lira) and XAU (gold) cross-pair symbols, which showed a consistent pattern of large stop-loss losses.
-# Exit filter: require 2 consecutive closes beyond the ATR hard-stop level before honoring a 'hard_stop' exit, to filter single-bar whipsaw stop-outs.
+# Exit filter: require 3 consecutive closes beyond the ATR hard-stop level (escalated from 2) before honoring a 'hard_stop' exit -- the 2-bar rule alone still left hard_stop as a net-loss bucket.
 
 import pandas as pd
 import numpy as np
@@ -53,22 +53,27 @@ def generate_signals(market_data: dict, open_symbols: set = None, **kwargs) -> l
 
 # --- Phase 3: exit logic override -----------------------------------------
 #
-# Closed-trade exit_reason breakdown (34 quality trades) showed:
-#   hard_stop           : n=14, win_rate=28.6%, total_pnl=-382.16, avg=-27.3
-#   ml_flip             : n=3,  win_rate=66.7%, total_pnl=+1.95
-#   roster_flatten_...  : n=13, win_rate=38.5%, total_pnl=+1146.13 (forced, not ours to change)
-#   individual STOP-LOSS hit @ X (broker fills): all losers, small n each
+# Updated closed-trade exit_reason breakdown (36 quality trades) shows:
+#   hard_stop            : n=16, win_rate=37.5%, total_pnl=-326.30, avg=-20.4
+#   STOP-LOSS hit @ ...   : n=4 individual broker-side fills, all losers
+#                           (small n each, these are broker-executed stop
+#                           fills that happen outside should_exit() and
+#                           cannot be intercepted by this function)
+#   ml_flip               : n=3,  win_rate=66.7%, total_pnl=+1.95
+#   roster_flatten_...    : n=13, win_rate=38.5%, total_pnl=+1146.13 (forced)
 #
-# The strategy's own 'hard_stop' exit path (should_exit()'s ATR-based check,
-# distinct from broker-side stop fills) is by far the largest and most
-# reliably unprofitable exit_reason bucket. A plausible cause is single-bar
-# noise briefly poking through the ATR stop level and triggering an exit
-# that a very next bar would have reversed. We add a lightweight
-# confirmation-bar rule: only honor a 'hard_stop' exit if BOTH the most
-# recent close and the prior close have breached the stop level in the
-# position's adverse direction. If only the latest close breached it, we
-# hold one more bar (return False) and let the original logic re-evaluate
-# next time should_exit() is called.
+# A prior Phase 3 pass already added a 2-consecutive-close confirmation
+# rule for the 'hard_stop' reason (the strategy's own ATR-based stop check,
+# distinct from broker-side STOP-LOSS fills). That rule modestly improved
+# the hard_stop win rate (was 28.6% -> now 37.5%) and average loss (was
+# -27.3 -> now -20.4), but the bucket is STILL the single largest net-loss
+# exit reason under our control (-326.30 total). This indicates 2-bar
+# confirmation still lets some whipsaw stop-outs through. We escalate the
+# confirmation requirement from 2 to 3 consecutive closes beyond the stop
+# level in the adverse direction before honoring the exit -- if only 1 or 2
+# bars have breached so far, we hold and let should_exit() re-evaluate on
+# the next bar. Broker-side 'STOP-LOSS hit @ X' fills are outside this
+# function's control and are left unchanged.
 
 
 def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tuple:
@@ -82,21 +87,25 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
         direction = (position.get("direction") or "").lower()
         closes = df["Close"]
 
-        if stop_price is None or direction not in ("long", "short") or len(closes) < 2:
+        if stop_price is None or direction not in ("long", "short") or len(closes) < 3:
             return exit_flag, reason
 
         last_close = closes.iloc[-1]
         prev_close = closes.iloc[-2]
+        prev2_close = closes.iloc[-3]
 
         if direction == "long":
             breached_last = last_close <= stop_price
             breached_prev = prev_close <= stop_price
+            breached_prev2 = prev2_close <= stop_price
         else:
             breached_last = last_close >= stop_price
             breached_prev = prev_close >= stop_price
+            breached_prev2 = prev2_close >= stop_price
 
-        if breached_last and not breached_prev:
-            # Only one bar of confirmation so far -- hold and re-check next bar.
+        if breached_last and not (breached_prev and breached_prev2):
+            # Fewer than 3 consecutive confirmed breaches -- hold and
+            # let should_exit() re-check on the next bar.
             return False, "hard_stop_pending_confirmation"
     except Exception:
         # Any unexpected data shape: fall back to original decision, don't

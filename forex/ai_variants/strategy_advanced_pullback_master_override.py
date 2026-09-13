@@ -1,4 +1,4 @@
-# AI-WRITTEN Phase 2+3 2026-09-05 by claude-sonnet-5
+# AI-WRITTEN Phase 2+3 2026-09-12 by claude-sonnet-5
 # Entry filter: none -- pass-through to original generate_signals (no Phase 2 filter existed)
 # Exit filter: require 2 consecutive daily closes beyond stop_price before honoring a hard_stop exit, to reduce single-bar whipsaw stop-outs
 
@@ -20,13 +20,14 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
 
     reason_text = (orig_reason or "").lower()
 
-    # hard_stop dominated the loss side of the SIM record (5 of 7 quality trades,
-    # total_pnl -73.84 despite a 60% win rate on that bucket -- large single-bar
-    # stop hits are the primary drag). Require confirmation that price has closed
-    # beyond the stop on two consecutive bars before honoring the exit, to filter
-    # single-bar spikes/noise through the stop level. Any other exit reason
-    # (e.g. roster_flatten, time_stop) is passed through unchanged since the data
-    # shows no problem there.
+    # hard_stop dominates the SIM record (5 of 7 quality trades). Even though
+    # the win rate on that bucket is 60%, total_pnl is -73.84 (avg -14.8),
+    # meaning losing hard_stop hits are far larger than winning ones -- a
+    # classic single-bar spike/whipsaw signature. Require confirmation that
+    # price has closed beyond the stop on two consecutive bars before honoring
+    # the exit, to filter transient stop breaches. Any other exit reason
+    # (e.g. roster_flatten) is passed through unchanged since the data shows
+    # no problem there (2/2 wins, +24.59 total).
     if "stop" in reason_text:
         stop_price = position.get("stop_price")
         direction = position.get("direction")

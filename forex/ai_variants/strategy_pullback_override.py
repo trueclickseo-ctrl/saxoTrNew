@@ -1,6 +1,6 @@
-# AI-WRITTEN Phase 2+3 2026-09-26 by claude-sonnet-5
+# AI-WRITTEN Phase 2+3 2026-10-10 by claude-sonnet-5
 # Entry filter: Filters out NZD-involved pairs, which caused ~71% of realized losses.
-# Exit filter: Requires 2 consecutive daily closes past EMA(50) before honoring a trend_break exit, since single-bar trend_break exits were 14/15 losers (unchanged this cycle -- see rationale).
+# Exit filter: Requires 2 consecutive daily closes past EMA(50) before honoring a trend_break exit, since single-bar trend_break exits were 14/15 losers (unchanged this cycle -- data identical to prior pull).
 
 import pandas as pd
 import numpy as np
@@ -43,35 +43,35 @@ def _is_trend_break_reason(reason: str) -> bool:
 def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tuple:
     """Wrap original should_exit, adding a 2-bar confirmation filter for trend_break exits.
 
-    Exit-reason data (both the original diagnosis and this cycle's refreshed
-    ledger pull) shows 'trend_break' exits (close crosses EMA(50)) are
-    extremely poor: 15 trades, 14 losses, only 1 win, avg -38.8 EUR/trade,
-    total -582 EUR -- by far the worst-performing exit bucket. This looks
-    like single-bar whipsaw across EMA(50) rather than a genuine trend
-    reversal. We require the close to have been on the 'broken' side of
+    Exit-reason data (refreshed this cycle) shows 'trend_break' exits (close
+    crosses EMA(50)) remain extremely poor: 15 trades, 14 losses, only 1
+    win, avg -38.8 EUR/trade, total -582.43 EUR -- by far the worst-
+    performing exit bucket, and the stats are IDENTICAL to the prior cycle
+    pull. This indicates either (a) no new trend_break exits have fired
+    since the 2-bar filter was installed (the filter is deferring/
+    suppressing them), or (b) the sample is simply static between pulls.
+    Either way, the underlying evidence hasn't changed, so the rule is left
+    exactly as-is rather than being tightened or loosened off a stale
+    sample.
+
+    The rule: require the close to have been on the 'broken' side of
     EMA(50) for the last TWO consecutive closed bars before honoring a
-    trend_break exit signal from the original strategy.
+    trend_break exit signal from the original strategy. A single-bar
+    crossing looks like whipsaw, not a genuine trend reversal.
 
-    This cycle's ledger pull shows IDENTICAL trend_break stats to the prior
-    cycle (n=15, 14 losses, win_rate 6.7%, avg -38.8, total -582.43) --
-    meaning no new trend_break exits have occurred since the 2-bar filter
-    was installed (the filter is presumably suppressing/deferring them, or
-    none have recurred yet). Since the underlying data hasn't moved, the
-    2-bar confirmation rule is left exactly as-is rather than tightened
-    further off the same static sample.
-
-    Other exit-reason buckets were reviewed this cycle and NOT touched:
-      - hard_stop: 74 trades, 44.6% win rate, avg +0.1 EUR/trade -- roughly
-        breakeven with no directional bias to exploit; the 1.5xATR stop
-        distance appears reasonably calibrated already.
+    Other exit-reason buckets were reviewed again this cycle and NOT
+    touched:
+      - hard_stop: 77 trades, 46.8% win rate, avg +0.2 EUR/trade --
+        essentially breakeven with no directional bias to exploit; the
+        1.5xATR stop distance still looks reasonably calibrated.
       - Six singleton 'STOP-LOSS hit @ <price>' rows (n=1 each, all
-        losses, -562 EUR combined) -- each is a distinct symbol/price with
-        a sample size of one. This is too sparse to distinguish a genuine
-        systematic flaw (e.g. gap-through stops) from random bad luck, and
-        adding a rule tuned to single-instance observations would be
-        overfitting. No change made.
-      - roster_flatten: forced administrative exits, not a strategy signal
-        -- left untouched.
+        losses, -562 EUR combined) -- each a distinct symbol/price with
+        sample size of one; too sparse to distinguish systematic gap-
+        through-stop risk from random bad luck. No rule added to avoid
+        overfitting to single instances.
+      - roster_flatten_2026-09-02: forced administrative exits (n=5, mixed
+        result, +330 EUR net), not a strategy-driven signal -- left
+        untouched.
     """
     orig_exit, orig_reason = _orig_should_exit(position, df, calendar_days_held)
 

@@ -1,4 +1,4 @@
-# AI-WRITTEN Phase 2+3 2026-09-03 by claude-sonnet-5
+# AI-WRITTEN Phase 2+3 2026-09-04 by claude-sonnet-5
 # Entry filter: none -- no Phase 2 entry filter exists yet, pass-through to original generate_signals()
 # Exit filter: none -- insufficient exit data (1 closed trade, roster_flatten only), pass-through to original should_exit()
 

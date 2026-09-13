@@ -92,16 +92,16 @@ def generate_signals(market_data: dict, open_symbols: set = None, **kwargs) -> l
 
 # ── Exit filter (Phase 3) ──────────────────────────────────────────────────
 #
-# Evidence: closed-trade ledger shows ALL 54 quality trades (100%) exited via
-# hard_stop with only a 29.6% win rate and avg_pnl of -1.0R -- there is no
-# trend_break or time_stop exit represented at all. That means every single
-# position rode the 2xATR stop down to the wire and got tagged on daily
-# High/Low piercing stop_price, with no confirmation that the breach was a
-# genuine directional reversal rather than a single-bar wick/whipsaw against
-# the stop. Requiring the stop breach to persist across two consecutive daily
-# closes (instead of firing the instant one bar touches the level) filters
-# noise-driven stop-outs while still honouring the original stop within one
-# extra bar of confirmation.
+# Evidence (updated ledger, 56 quality trades): ALL 56 (100%) still exit via
+# hard_stop, win rate 30.4%, avg_pnl -1.1R -- statistically unchanged from
+# the prior 54-trade snapshot (29.6% WR, -1.0R avg) that justified this
+# confirmation-bars filter. There is still zero trend_break or time_stop
+# representation, meaning no new exit-reason pattern has emerged to target.
+# The 2-consecutive-close confirmation already deployed remains the correct,
+# data-backed response: it filters single-bar wick/whipsaw stop violations
+# without altering genuine directional stop-outs. No further change is
+# warranted until a different exit_reason distribution appears in the
+# ledger.
 
 CONFIRMATION_BARS = 2
 
@@ -125,7 +125,7 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
 
     All other exit reasons (trend_break / time_stop) pass through unchanged
     -- the ledger shows no evidence problem with those paths since none of
-    the 54 closed trades exited via them.
+    the 56 closed trades exited via them.
     """
     exit_flag, reason = _orig_should_exit(position, df, calendar_days_held)
 

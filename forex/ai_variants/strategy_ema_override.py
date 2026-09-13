@@ -1,103 +1,109 @@
-# AI-WRITTEN Phase 2+3 2026-09-04 by claude-sonnet-5
-# Entry filter: per-symbol 12h cooldown to prevent rapid whipsaw re-entry cascades
-# Exit filter: require 2 consecutive should_exit() calls signaling a hard-stop breach before honoring the exit, to filter single-bar wick spikes
+# AI-WRITTEN Phase 2+3 2026-09-05 by claude-sonnet-5
+# Entry filter: block new entries sharing a currency leg with an already-open position (NZD-cross cascade fix)
+# Exit filter: require 2 consecutive closes beyond stop_price before honoring a hard_stop exit, to filter single-bar wick spikes
 
-import datetime as _dt
-from typing import Dict, Tuple
+from typing import Dict, Set, Tuple
 
 import pandas as pd
 
 from forex.strategy_ema import generate_signals as _orig_generate_signals
 from forex.strategy_ema import should_exit as _orig_should_exit
 
-# Minimum hours between successive signal emissions for the same symbol.
-COOLDOWN_HOURS = 12.0
 
-# Module-level state: last time we emitted (allowed through) a signal per symbol.
-_last_signal_time: Dict[str, _dt.datetime] = {}
+def _currency_pair(symbol: str) -> Tuple[str, str]:
+    """Split a 6-char FX symbol like 'NZDAUD' into (base, quote) 3-letter codes.
+
+    Falls back gracefully if symbol format is unexpected.
+    """
+    s = symbol.upper()
+    if len(s) >= 6:
+        return s[:3], s[3:6]
+    return s, s
 
 
 def generate_signals(market_data: dict, open_symbols: set = None, **kwargs) -> list:
-    """Wrap the original EMA crossover strategy with a per-symbol signal cooldown.
+    """Wrap the original EMA crossover strategy with a currency-concentration cap.
 
-    Trade history showed dozens of hard-stop losses on the same NZD-cross
-    symbols fired within 30-60 minutes of each other on the same day -- a
-    repeated whipsaw re-entry pattern. This wrapper suppresses new entry
-    signals for a symbol until COOLDOWN_HOURS have elapsed since the last
-    signal we allowed through for that symbol, regardless of what the
-    underlying indicators say.
+    Trade history (52 closed trades) showed a severe cascade of near-simultaneous
+    hard-stop losses across NZDAUD, NZDSGD, NZDHKD and NZDUSD -- all sharing NZD
+    as a common currency leg. A single underlying NZD move whipsawed every NZD
+    cross the strategy was long/short at once, multiplying losses instead of
+    diversifying them. This filter blocks any new signal whose base or quote
+    currency is already represented in an open position, and also de-duplicates
+    currency exposure within the same batch of signals, so the book never holds
+    more than one position per currency leg at a time.
     """
+    if open_symbols is None:
+        open_symbols = set()
+
     raw_signals = _orig_generate_signals(market_data, open_symbols=open_symbols, **kwargs)
 
     if not raw_signals:
         return raw_signals
 
-    now = _dt.datetime.now()
+    # Currencies already committed via existing open positions.
+    committed_currencies: Set[str] = set()
+    for sym in open_symbols:
+        base, quote = _currency_pair(sym)
+        committed_currencies.add(base)
+        committed_currencies.add(quote)
+
     filtered = []
     for sig in raw_signals:
-        sym = sig.get("symbol")
-        last = _last_signal_time.get(sym)
-        if last is not None:
-            elapsed_hours = (now - last).total_seconds() / 3600.0
-            if elapsed_hours < COOLDOWN_HOURS:
-                continue
+        sym = sig.get("symbol", "")
+        base, quote = _currency_pair(sym)
+        if base in committed_currencies or quote in committed_currencies:
+            continue
         filtered.append(sig)
-        _last_signal_time[sym] = now
+        committed_currencies.add(base)
+        committed_currencies.add(quote)
 
     return filtered
 
 
-# Per-symbol counter of consecutive should_exit() calls that returned a
-# hard-stop exit. Exit-reason data showed hard_stop accounted for 49 of 52
-# (94%) closed trades with only a 6.1% win rate -- essentially the strategy's
-# entire loss profile funnels through this one exit path. FX daily bars
-# frequently show a brief wick/spike through a level (session rollovers,
-# news prints) that closes back inside range on the next bar. Requiring the
-# breach to persist for a second consecutive check before honoring the exit
-# filters out single-bar noise without weakening the stop's protection against
-# a genuine, sustained adverse move.
-_stop_breach_count: Dict[str, int] = {}
-
-CONFIRMATION_CALLS_REQUIRED = 2
-
-
 def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> Tuple[bool, str]:
-    """Wrap the original should_exit with a confirmation filter on hard-stop exits.
+    """Wrap the original exit logic with a 2-bar close confirmation on hard_stop.
 
-    Exit-reason data showed hard_stop exits made up 49/52 (94%) of all closed
-    trades with only a 6.1% win rate -- by far the dominant loss driver.
-    Crossover-reversal and time-stop/roster-flatten exits were rare (3 trades
-    total) and are passed through unchanged since they were not implicated in
-    the loss cluster. For hard-stop exits specifically, we require the stop
-    breach to still be present on the *next* should_exit() call for the same
-    symbol before actually exiting, filtering transient wick spikes. If the
-    breach persists, the original stop still fires on the very next bar --
-    this adds at most one bar of delay and never removes the stop entirely.
+    Closed-trade data showed hard_stop firing 49 of 52 times with only a 6.1%
+    win rate (46 losses) -- by far the dominant loss driver. This pattern is
+    consistent with the ATR stop being clipped by single-bar wick spikes
+    (intrabar High/Low touching stop_price) that reverse the very next bar.
+    We keep the original stop level and direction untouched -- we only refuse
+    to honor a hard_stop exit until the Close price has remained beyond the
+    stop for two consecutive bars, filtering noise without weakening protection
+    against a genuinely sustained adverse move (which will simply confirm on
+    the next bar).
     """
-    should_exit_flag, reason = _orig_should_exit(position, df, calendar_days_held)
+    exit_flag, reason = _orig_should_exit(position, df, calendar_days_held)
 
-    sym = position.get("symbol")
+    if not exit_flag or reason != "hard_stop":
+        return exit_flag, reason
 
-    if not should_exit_flag:
-        if sym is not None:
-            _stop_breach_count[sym] = 0
-        return should_exit_flag, reason
+    if df is None or len(df) < 2:
+        return exit_flag, reason
 
-    reason_lower = (reason or "").lower()
+    stop_price = position.get("stop_price")
+    direction = str(position.get("direction", "")).lower()
 
-    # Only intercept the hard-stop path; let crossover reversal / time stop /
-    # roster-flatten exits fire immediately -- those were rare and not tied
-    # to the loss data.
-    if "hard_stop" not in reason_lower or sym is None:
-        return should_exit_flag, reason
+    if stop_price is None or direction not in ("long", "short"):
+        return exit_flag, reason
 
-    count = _stop_breach_count.get(sym, 0) + 1
-    _stop_breach_count[sym] = count
+    try:
+        last_close = df["Close"].iloc[-1]
+        prev_close = df["Close"].iloc[-2]
+    except Exception:
+        return exit_flag, reason
 
-    if count >= CONFIRMATION_CALLS_REQUIRED:
-        _stop_breach_count[sym] = 0
-        return True, reason
+    if direction == "long":
+        last_breach = last_close < stop_price
+        prev_breach = prev_close < stop_price
+    else:
+        last_breach = last_close > stop_price
+        prev_breach = prev_close > stop_price
 
-    # First breach observed -- hold off one more check to filter a possible
-    # single-bar wick spike through the stop level.
+    if last_breach and prev_breach:
+        return True, "hard_stop_confirmed"
+
+    # Single-bar breach only (likely a wick spike) -- hold the position and
+    # wait for a second confirming close before exiting on the hard stop.
     return False, "hard_stop_awaiting_confirmation"

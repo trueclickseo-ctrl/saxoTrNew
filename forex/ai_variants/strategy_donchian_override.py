@@ -1,6 +1,6 @@
 # AI-WRITTEN Phase 2+3 2026-09-19 by claude-sonnet-5
 # Entry filter: Block new entries on exotic-quote currency pairs (TRY, MXN, CZK, DKK, PLN, NOK, HUF, ZAR, SGD) due to clustered hard_stop losses / re-entry churn.
-# Exit filter: UNCHANGED -- require 2 consecutive daily closes past the ATR hard-stop level before honoring a hard_stop exit; refreshed ledger (43 trades) still shows hard_stop net-positive (avg +474.0, total +11,375.32, win rate 41.7%), confirming the confirmation-bar fix continues to work and no new should_exit pattern is justified.
+# Exit filter: UNCHANGED -- require 2 consecutive daily closes past the ATR hard-stop level before honoring a hard_stop exit; re-validated ledger (43 trades) still shows hard_stop net-positive (avg +474.0, total +11,375.32, win rate 41.7%), confirming the confirmation-bar fix continues to work and no new should_exit pattern is justified.
 
 import pandas as pd
 import numpy as np

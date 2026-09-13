@@ -17,8 +17,10 @@ def generate_signals(market_data: dict, open_symbols: set = None) -> list:
 
 def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tuple:
     """Pass-through to the original strategy's should_exit().
-    No closed quality trades exist yet in pnl_ledger.db for this strategy, so
-    there is no exit_reason data to justify an override. Calling the original
-    decision unchanged preserves behavior until real trade data accumulates."""
+    No closed quality trades exist yet in pnl_ledger.db for this strategy (0
+    total quality trades, empty by_exit_reason breakdown), so there is no
+    exit_reason data to justify an override. Calling the original decision
+    unchanged preserves behavior until real trade data accumulates -- at
+    which point this wrapper should be revisited."""
     exit_flag, exit_reason = _orig_should_exit(position, df, calendar_days_held)
     return exit_flag, exit_reason

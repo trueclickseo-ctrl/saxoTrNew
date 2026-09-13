@@ -1,6 +1,6 @@
 # AI-WRITTEN Phase 2+3 2026-08-30 by claude-sonnet-5
 # Entry filter: pass-through (no Phase 2 entry filter exists yet; original generate_signals() called unchanged)
-# Exit filter: pass-through (no closed quality trades yet; original should_exit() called unchanged, preserved for future data-driven update)
+# Exit filter: pass-through (zero closed quality trades; no exit_reason data exists to justify a behavioral change)
 
 import pandas as pd
 
@@ -15,11 +15,12 @@ def generate_signals(market_data: dict, open_symbols: set = None,
 
 def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tuple:
     """
-    Wraps the original should_exit(). No closed quality trades exist yet for
-    this strategy, so there is no exit_reason data to justify a behavioral
-    change. This wrapper is a transparent pass-through preserved so that a
-    future Phase 3 re-run (once trades accumulate) can slot in real logic
-    without needing a fresh scaffold.
+    Wraps the original should_exit(). Zero closed quality trades exist yet
+    for this strategy (total_quality_trades == 0, empty by_exit_reason), so
+    there is no data-backed pattern to justify any exit-logic change. Per
+    Phase 3 rules, this remains a transparent pass-through so that a future
+    re-run (once trades accumulate) can slot in real logic without needing
+    a fresh scaffold.
     """
     exit_now, reason = _orig_should_exit(position, df, calendar_days_held)
     return exit_now, reason
