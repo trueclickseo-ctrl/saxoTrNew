@@ -598,6 +598,10 @@ def evolve_forex_strategy(strategy: str, dry_run: bool = False) -> dict | None:
     print(f"  closed trades: {closed}  (gate={_FOREX_CODE_GATE}, gate_met={gate_met})")
     print(f"  copilot decisions: {shadow.get('total_decisions',0)}  verdicts: {shadow.get('verdicts',{})}")
 
+    if not gate_met:
+        print(f"  gate not met ({closed}/{_FOREX_CODE_GATE} trades) — analysis only, no code written")
+        return {"strategy": strategy, "gate_met": False, "closed": closed, "code_written": False}
+
     prompt = f"""Strategy: {strategy} (forex, SIM paper research track)
 
 === STRATEGY SOURCE CODE ===
@@ -786,6 +790,11 @@ def evolve_forex_exit(strategy: str, dry_run: bool = False) -> dict | None:
     total = exit_data.get("total_quality_trades", 0)
     print(f"  quality closed trades: {total}")
     print(f"  exit breakdown: {exit_data.get('by_exit_reason', {})}")
+
+    # Skip LLM call when insufficient trade data — same gate as Phase 2
+    if total < _FOREX_CODE_GATE:
+        print(f"  gate not met ({total}/{_FOREX_CODE_GATE} quality trades) — skipping LLM call")
+        return {"strategy": strategy, "gate_met": False, "total": total, "code_written": False}
 
     has_phase2 = bool(existing_override)
     prompt = f"""Strategy: {strategy} (forex, SIM paper research track)
