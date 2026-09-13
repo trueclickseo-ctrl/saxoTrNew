@@ -33,7 +33,7 @@
       "max_universe_pct": 0.10,
       "min_slots": 2,
       "max_slots": 10,
-      "stop_pct": 0.04,
+      "stop_pct": 0.05,
       "max_hold_days": 10,
       "sleeve_dd_cap": 0.10,
       "fallback_sleeve_sek": 300000
