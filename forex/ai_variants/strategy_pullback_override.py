@@ -1,6 +1,6 @@
-# AI-WRITTEN Phase 2+3 2026-10-10 by claude-sonnet-5
+# AI-WRITTEN Phase 2+3 2026-10-17 by claude-sonnet-5
 # Entry filter: Filters out NZD-involved pairs, which caused ~71% of realized losses.
-# Exit filter: Requires 2 consecutive daily closes past EMA(50) before honoring a trend_break exit, since single-bar trend_break exits were 14/15 losers (unchanged this cycle -- data identical to prior pull).
+# Exit filter: Requires 2 consecutive daily closes past EMA(50) before honoring a trend_break exit, since single-bar trend_break exits were 14/15 losers (data unchanged this cycle -- rule left as-is).
 
 import pandas as pd
 import numpy as np
@@ -43,16 +43,19 @@ def _is_trend_break_reason(reason: str) -> bool:
 def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tuple:
     """Wrap original should_exit, adding a 2-bar confirmation filter for trend_break exits.
 
-    Exit-reason data (refreshed this cycle) shows 'trend_break' exits (close
-    crosses EMA(50)) remain extremely poor: 15 trades, 14 losses, only 1
-    win, avg -38.8 EUR/trade, total -582.43 EUR -- by far the worst-
-    performing exit bucket, and the stats are IDENTICAL to the prior cycle
-    pull. This indicates either (a) no new trend_break exits have fired
-    since the 2-bar filter was installed (the filter is deferring/
-    suppressing them), or (b) the sample is simply static between pulls.
-    Either way, the underlying evidence hasn't changed, so the rule is left
-    exactly as-is rather than being tightened or loosened off a stale
-    sample.
+    Exit-reason data (refreshed this cycle, 102 quality trades total) shows
+    'trend_break' exits (close crosses EMA(50)) remain extremely poor: 15
+    trades, 14 losses, only 1 win, avg -38.8 EUR/trade, total -582.43 EUR --
+    by far the worst-performing exit bucket, and the numbers are IDENTICAL
+    to the prior two cycle pulls. This is now the third consecutive cycle
+    with the exact same trend_break stats, strongly suggesting either (a)
+    no new trend_break exits have fired since the 2-bar filter was
+    installed -- i.e. the filter is successfully deferring/suppressing bad
+    single-bar whipsaw exits and those positions are resolving via other
+    exit paths instead -- or (b) the underlying sample genuinely hasn't
+    grown. Either way there is no new evidence to justify tightening,
+    loosening, or replacing the rule, so it is kept exactly as-is per the
+    Phase 3 guidance to avoid overfitting to a stale/unchanged sample.
 
     The rule: require the close to have been on the 'broken' side of
     EMA(50) for the last TWO consecutive closed bars before honoring a

@@ -1,6 +1,6 @@
-# AI-WRITTEN Phase 2+3 2026-09-11 by claude-sonnet-5
+# AI-WRITTEN Phase 2+3 2026-09-18 by claude-sonnet-5
 # Entry filter: none (pass-through) -- Phase 2 blacklist (NOK/SEK/DKK/PLN/CZK) removed; Nordic/Scandi crosses profitable, insufficient data to re-filter
-# Exit filter: Require 2 consecutive daily closes beyond the hard-stop level before confirming a hard-stop exit (unchanged this cycle -- same ledger snapshot, no new pattern)
+# Exit filter: Require 2 consecutive daily closes beyond the hard-stop level before confirming a hard-stop exit (UNCHANGED this cycle -- identical ledger snapshot to prior cycle, no new closed trades since rule went live)
 
 import pandas as pd
 from forex.strategy_gap import generate_signals as _orig_generate_signals

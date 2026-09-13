@@ -90,7 +90,7 @@ def generate_signals(market_data: dict, open_symbols: set = None, **kwargs) -> l
     return filtered
 
 
-# ── Exit filter (Phase 3) ──────────────────────────────────────────────────
+# ── Exit filter (Phase 3) ────────────────────────────────────────────────────────
 #
 # Evidence (updated ledger, 56 quality trades): ALL 56 (100%) still exit via
 # hard_stop, win rate 30.4%, avg_pnl -1.1R -- statistically unchanged from
