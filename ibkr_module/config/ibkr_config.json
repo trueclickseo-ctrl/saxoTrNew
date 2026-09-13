@@ -30,12 +30,12 @@
   },
   "strategies": {
     "live_blend": {
-      "budget_usd": 1421,
-      "_budget_sek": 13624,
-      "max_positions": 2,
+      "budget_usd": 4000,
+      "_budget_sek": 38000,
+      "_budget_note": "10k SEK initial + 10k SEK 2026-09-14 deposit; ~$3700 target, $300 cash buffer",
+      "max_positions": 5,
       "fractional": false,
-      "force_targets": ["HPE", "ROKU"],
-      "slot_weights": {"HPE": 0.50, "ROKU": 0.50},
+      "force_targets": ["HPE", "ROKU", "HUM", "U"],
       "stop_pct": 0.08,
       "rebal_days": 14,
       "min_trade_usd": 50
