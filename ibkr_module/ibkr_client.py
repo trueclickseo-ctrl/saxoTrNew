@@ -339,17 +339,22 @@ def get_open_orders(ib: IB) -> list[dict]:
     return result
 
 
-def confirm_fill(ib: IB, trade: Any, timeout_s: int = 90,
+def confirm_fill(ib: IB, trade: Any, timeout_s: int = 180,
                  poll_s: float = 2.0) -> float | None:
     """
     Poll until trade is filled or timeout. Returns fill price or None (timed out).
     Cancels the order on timeout.
     """
+    sym = getattr(trade.contract, "symbol", "?")
     deadline = time.monotonic() + timeout_s
+    last_status = None
     while time.monotonic() < deadline:
         ib.sleep(poll_s)
         ib.reqOpenOrders()
         status = trade.orderStatus.status
+        if status != last_status:
+            print(f"    [fill] {sym} order status: {status}")
+            last_status = status
         if status == "Filled":
             price = float(trade.orderStatus.avgFillPrice or 0)
             return price if price > 0 else None
@@ -357,6 +362,7 @@ def confirm_fill(ib: IB, trade: Any, timeout_s: int = 90,
             return None
 
     # Timeout: cancel
+    print(f"    [fill] {sym} fill timeout after {timeout_s}s — cancelling order")
     cancel_order(ib, trade)
     ib.sleep(1.0)
     return None
