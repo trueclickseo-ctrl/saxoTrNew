@@ -238,6 +238,26 @@ def get_prices(ib: IB, symbols: list[str]) -> dict[str, float]:
         if _prices_are_empty(result):
             print("  [prices] IBKR returned no prices (market closed or no data subscription).")
 
+        # Per-ticker historical fallback: for any ticker still at $0 after the
+        # subscription chain, reqHistoricalData needs no market-data subscription.
+        zeros = [s for s, p in result.items() if not p or math.isnan(p)]
+        if zeros:
+            zero_contracts = {s: c for s, c in zip(symbols, contracts) if s in zeros}
+            for sym, con in zero_contracts.items():
+                try:
+                    bars = ib.reqHistoricalData(
+                        con, endDateTime="", durationStr="2 D",
+                        barSizeSetting="1 day", whatToShow="TRADES",
+                        useRTH=True, formatDate=1, keepUpToDate=False,
+                    )
+                    if bars:
+                        result[sym] = float(bars[-1].close)
+                except Exception:
+                    pass
+            still_zero = [s for s in zeros if not result.get(s)]
+            if still_zero:
+                print(f"  [prices] No price after hist fallback: {still_zero}")
+
         return result
 
     finally:
