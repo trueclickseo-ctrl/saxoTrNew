@@ -35,7 +35,7 @@
       "_budget_note": "10k SEK initial + 10k SEK 2026-09-14 deposit; ~$3700 target, $300 cash buffer",
       "max_positions": 5,
       "fractional": false,
-      "force_targets": ["HPE", "ROKU", "HUM", "U"],
+      "force_targets": ["ROKU", "U", "DELL", "HPE"],
       "stop_pct": 0.08,
       "rebal_days": 14,
       "min_trade_usd": 50

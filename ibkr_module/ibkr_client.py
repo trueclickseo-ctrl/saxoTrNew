@@ -350,9 +350,10 @@ def confirm_fill(ib: IB, trade: Any, timeout_s: int = 90,
         ib.sleep(poll_s)
         ib.reqOpenOrders()
         status = trade.orderStatus.status
-        if status in ("Filled", "Inactive"):
-            return float(trade.orderStatus.avgFillPrice or 0)
-        if status in ("Cancelled", "ApiCancelled"):
+        if status == "Filled":
+            price = float(trade.orderStatus.avgFillPrice or 0)
+            return price if price > 0 else None
+        if status in ("Inactive", "Cancelled", "ApiCancelled"):
             return None
 
     # Timeout: cancel
