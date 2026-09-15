@@ -15,8 +15,33 @@ No Saxo imports. No Avanza imports. Completely standalone.
 """
 from __future__ import annotations
 
+import json
+import os
 import time
 from typing import Any
+
+_PRICE_CACHE_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data", "ibkr_price_cache.json",
+)
+
+
+def _load_price_cache() -> dict:
+    try:
+        with open(_PRICE_CACHE_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_price_cache(prices: dict[str, float]) -> None:
+    try:
+        existing = _load_price_cache()
+        existing.update({k: v for k, v in prices.items() if v and v > 0})
+        with open(_PRICE_CACHE_PATH, "w") as f:
+            json.dump(existing, f)
+    except Exception:
+        pass
 
 try:
     from ib_insync import IB, Stock, MarketOrder, LimitOrder, StopOrder, util
@@ -192,7 +217,9 @@ def get_prices(ib: IB, symbols: list[str]) -> dict[str, float]:
         return {}
 
     # Suppress noisy but harmless paper-account market-data errors.
-    _SUPPRESS = {10089, 10167, 10168, 10182, 300, 354, 2119, 2104, 2106, 162, 2107}
+    # Note: 162 (historical data error) is intentionally NOT suppressed so we
+    # can see why reqHistoricalData fails in the fallback below.
+    _SUPPRESS = {10089, 10167, 10168, 10182, 300, 354, 2119, 2104, 2106, 2107}
 
     def _err_suppress(reqId, errorCode, errorString, contract):
         if errorCode not in _SUPPRESS:
@@ -236,35 +263,55 @@ def get_prices(ib: IB, symbols: list[str]) -> dict[str, float]:
             result = _fetch(4)  # delayed frozen
 
         if _prices_are_empty(result):
-            print("  [prices] IBKR returned no prices (market closed or no data subscription).")
-
-        # Per-ticker historical fallback: for any ticker still at $0 after the
-        # subscription chain, reqHistoricalData needs no market-data subscription.
-        zeros = [s for s, p in result.items() if not p or math.isnan(p)]
-        if zeros:
-            zero_contracts = {s: c for s, c in zip(symbols, contracts) if s in zeros}
-            for sym, con in zero_contracts.items():
-                try:
-                    bars = ib.reqHistoricalData(
-                        con, endDateTime="", durationStr="2 D",
-                        barSizeSetting="1 day", whatToShow="TRADES",
-                        useRTH=True, formatDate=1, keepUpToDate=False,
-                    )
-                    if bars:
-                        result[sym] = float(bars[-1].close)
-                except Exception:
-                    pass
-            still_zero = [s for s in zeros if not result.get(s)]
-            if still_zero:
-                print(f"  [prices] No price after hist fallback: {still_zero}")
-
-        return result
+            print("  [prices] Market data unavailable — trying historical last-close...")
 
     finally:
         try:
             ib.errorEvent -= _err_suppress
         except Exception:
             pass
+
+    # Historical + cache fallback runs outside the suppress scope so error 162
+    # is visible if reqHistoricalData fails.
+    zeros = [s for s, p in result.items() if not p or math.isnan(p)]
+    if zeros:
+        hist_got: list[str] = []
+        for sym in zeros:
+            try:
+                con = Stock(sym, "SMART", "USD")
+                bars = ib.reqHistoricalData(
+                    con, endDateTime="", durationStr="2 D",
+                    barSizeSetting="1 day", whatToShow="TRADES",
+                    useRTH=True, formatDate=1, keepUpToDate=False,
+                )
+                if bars:
+                    result[sym] = float(bars[-1].close)
+                    hist_got.append(sym)
+            except Exception as e:
+                print(f"  [prices] hist {sym}: {e}")
+        if hist_got:
+            print(f"  [prices] Using last close (hist) for: {' '.join(hist_got)}")
+
+        still_zero = [s for s in zeros if not result.get(s)]
+        if still_zero:
+            cache = _load_price_cache()
+            cache_used = []
+            for sym in still_zero:
+                if cache.get(sym):
+                    result[sym] = float(cache[sym])
+                    cache_used.append(sym)
+            if cache_used:
+                print(f"  [prices] Using cached price for: {' '.join(cache_used)}")
+            truly_zero = [s for s in still_zero if not result.get(s)]
+            if truly_zero:
+                print(f"  [prices] No price at all for: {truly_zero}")
+
+    if _prices_are_empty(result):
+        print("  [prices] IBKR returned no prices (market closed or no data subscription).")
+    else:
+        _save_price_cache(result)
+
+    return result
 
 
 def abs_price(price: float) -> float:
