@@ -192,7 +192,7 @@ def get_prices(ib: IB, symbols: list[str]) -> dict[str, float]:
         return {}
 
     # Suppress noisy but harmless paper-account market-data errors.
-    _SUPPRESS = {10089, 10168, 10182, 300, 354}
+    _SUPPRESS = {10089, 10167, 10168, 10182, 300, 354, 2119, 2104, 2106}
 
     def _err_suppress(reqId, errorCode, errorString, contract):
         if errorCode not in _SUPPRESS:
@@ -303,6 +303,16 @@ def place_market_order(ib: IB, account_id: str, symbol: str,
     contract = _stock_contract(symbol)
     ib.qualifyContracts(contract)
     order = MarketOrder(action, qty, tif="DAY", account=account_id)
+    trade = ib.placeOrder(contract, order)
+    return trade
+
+
+def place_limit_order(ib: IB, account_id: str, symbol: str,
+                      action: str, qty: float, limit_price: float) -> Any:
+    """Place a DAY limit order. Returns the Trade object."""
+    contract = _stock_contract(symbol)
+    ib.qualifyContracts(contract)
+    order = LimitOrder(action, qty, round(limit_price, 2), tif="DAY", account=account_id)
     trade = ib.placeOrder(contract, order)
     return trade
 

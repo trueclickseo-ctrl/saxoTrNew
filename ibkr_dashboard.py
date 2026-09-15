@@ -420,8 +420,13 @@ def main() -> None:
     # timeout) don't appear. Yahoo fallback handles missing prices.
     import logging
     for _log in ("ib_insync", "ib_insync.ib", "ib_insync.wrapper",
-                 "ib_insync.client", "ib_insync.ticker"):
-        logging.getLogger(_log).setLevel(logging.CRITICAL)
+                 "ib_insync.client", "ib_insync.ticker",
+                 "ibapi", "ibapi.wrapper", "ibapi.client",
+                 "ibapi.decoder", "ibapi.connection"):
+        lg = logging.getLogger(_log)
+        lg.setLevel(logging.CRITICAL)
+        lg.handlers.clear()
+        lg.propagate = False
 
     from ibkr_module import ibkr_client as ic
     from ibkr_module import ibkr_state  as st
