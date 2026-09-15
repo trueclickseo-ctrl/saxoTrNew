@@ -2635,22 +2635,29 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
             is_paper = bool(trade.get("paper"))
             print(f"  {tag} EXIT {ticker}: {reason}{' [PAPER]' if is_paper else ''}")
             uic = imap.get(ticker, {}).get("uic")
-            if (uic and sh > 0) or (is_paper and sh > 0):
-                try:
-                    if not is_paper:
+            if sh > 0:
+                saxo_ok = False
+                if uic and not is_paper:
+                    try:
                         saxo_client.place_market_order(uic, "Stock", "Sell", sh)
-                    # paper position: no Saxo counterpart to sell -- just close
-                    # the DB row at the current price, same as forex paper exits
+                        saxo_ok = True
+                    except Exception as e:
+                        print(f"  {tag} sell {ticker} FAILED: {e}")
+                else:
+                    saxo_ok = True  # paper or no uic: no Saxo order needed
+                # Always close the DB record so no position stays a zombie
+                try:
                     comm_exit = commission_sek(sh, sh * cur_price * fx_usd)
                     pnl_sek = (cur_price - trade.get("entry_price", 0)) * sh * fx_usd - comm_exit
+                    exit_reason = reason if saxo_ok else f"{reason} [no-saxo-backing]"
                     db.close_trade(trade["id"], exit_price=cur_price,
-                                   exit_reason=reason, pnl_sek=pnl_sek,
+                                   exit_reason=exit_reason, pnl_sek=pnl_sek,
                                    commission_sek=comm_exit)
                     entry_d = trade.get("entry_date", "")
                     held_d  = (today - _date.fromisoformat(entry_d)).days if entry_d else 0
                     _append_trade_log(
                         "US Reversion", "SELL", ticker, sh, cur_price,
-                        sh * cur_price * fx_usd, pnl_sek, reason,
+                        sh * cur_price * fx_usd, pnl_sek, exit_reason,
                         entry_date=entry_d, days_held=held_d,
                     )
                     if (ai_config is not None and ai_config.stocks_enabled()
@@ -2660,7 +2667,7 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
                             _sp = trade.get("stop_price")
                             ai_stock_cards.log_stock_exit_card(
                                 card_id=ai_stock_cards.card_id_for("us_reversion", ticker, entry_d),
-                                exit_price=cur_price, exit_reason=reason,
+                                exit_price=cur_price, exit_reason=exit_reason,
                                 gross_pnl_sek=(cur_price - _ep) * sh * fx_usd,
                                 commission_sek=comm_exit,
                                 net_pnl_sek=pnl_sek,
@@ -2673,28 +2680,16 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
                     todays_actions.append({
                         "action": "SELL", "ticker": ticker, "market_group": "US Equities",
                         "strategy": "US Reversion", "score": 0, "shares": sh,
-                        "price": cur_price, "reason": f"reversion exit: {reason}",
+                        "price": cur_price, "reason": f"reversion exit: {exit_reason}",
                         "pnl_sek": pnl_sek,
                     })
                     notifier.notify_reversion_exit(
                         ticker=ticker, pnl_sek=pnl_sek,
-                        reason=reason, hold_days=held_d,
+                        reason=exit_reason, hold_days=held_d,
                         account_balance_sek=get_total_equity(db.get_open_trades()),
                     )
-                except Exception as e:
-                    print(f"  {tag} sell {ticker} FAILED: {e}")
-                    # Saxo SIM sell failed (position gone from SIM side).
-                    # Close the DB record at current price so the zombie
-                    # doesn't block new entries indefinitely.
-                    try:
-                        comm_exit = commission_sek(sh, sh * cur_price * fx_usd)
-                        pnl_sek = (cur_price - trade.get("entry_price", 0)) * sh * fx_usd - comm_exit
-                        db.close_trade(trade["id"], exit_price=cur_price,
-                                       exit_reason=f"{reason} [no-saxo-backing]",
-                                       pnl_sek=pnl_sek, commission_sek=comm_exit)
-                        print(f"  {tag} {ticker} DB closed at ${cur_price:.2f} (no Saxo backing)")
-                    except Exception as e2:
-                        print(f"  {tag} {ticker} DB close also failed: {e2}")
+                except Exception as e2:
+                    print(f"  {tag} {ticker} DB close failed: {e2}")
 
     # ── Max positions: percentage of universe, clamped both ends ─────
     # min_slots <= round(universe × max_universe_pct) <= max_slots.
@@ -3200,30 +3195,38 @@ def run_us_reversion_v2(feat_data: dict, open_trades: list, todays_actions: list
             is_paper = bool(trade.get("paper"))
             print(f"  {tag} EXIT {ticker}: {reason}{' [PAPER]' if is_paper else ''}")
             uic = imap.get(ticker, {}).get("uic")
-            if (uic and sh > 0) or (is_paper and sh > 0):
-                try:
-                    if not is_paper:
+            if sh > 0:
+                saxo_ok = False
+                if uic and not is_paper:
+                    try:
                         saxo_client.place_market_order(uic, "Stock", "Sell", sh)
+                        saxo_ok = True
+                    except Exception as e:
+                        print(f"  {tag} sell {ticker} FAILED: {e}")
+                else:
+                    saxo_ok = True
+                try:
                     comm_exit = commission_sek(sh, sh * cur_price * fx_usd)
                     pnl_sek = (cur_price - trade.get("entry_price", 0)) * sh * fx_usd - comm_exit
+                    exit_reason = reason if saxo_ok else f"{reason} [no-saxo-backing]"
                     db.close_trade(trade["id"], exit_price=cur_price,
-                                   exit_reason=reason, pnl_sek=pnl_sek,
+                                   exit_reason=exit_reason, pnl_sek=pnl_sek,
                                    commission_sek=comm_exit)
                     entry_d = trade.get("entry_date", "")
                     held_d  = (today - _date.fromisoformat(entry_d)).days if entry_d else 0
                     _append_trade_log(
                         "US Reversion V2", "SELL", ticker, sh, cur_price,
-                        sh * cur_price * fx_usd, pnl_sek, reason,
+                        sh * cur_price * fx_usd, pnl_sek, exit_reason,
                         entry_date=entry_d, days_held=held_d,
                     )
                     todays_actions.append({
                         "action": "SELL", "ticker": ticker, "market_group": "US Equities",
                         "strategy": "US Reversion V2", "score": 0, "shares": sh,
-                        "price": cur_price, "reason": f"reversion v2 exit: {reason}",
+                        "price": cur_price, "reason": f"reversion v2 exit: {exit_reason}",
                         "pnl_sek": pnl_sek,
                     })
-                except Exception as e:
-                    print(f"  {tag} sell {ticker} FAILED: {e}")
+                except Exception as e2:
+                    print(f"  {tag} {ticker} DB close failed: {e2}")
 
     # ── Entry scan ─────────────────────────────────────────────────
     max_positions = CAP.reversion_slots(len(US_TICKERS))
