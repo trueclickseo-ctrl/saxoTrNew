@@ -87,7 +87,7 @@
       },
       "portfolio": {
         "budget_usd": 30000,
-        "max_positions": 10,
+        "max_positions": 15,
         "stop_pct": 0.06,
         "min_score": 65.0,
         "min_trade_usd": 50
