@@ -204,11 +204,12 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
         print(f"  Order placed (id={trade.order.orderId}). Waiting for fill...")
         fill = ic.confirm_fill(ib, trade)
         if fill is None:
-            print(f"  WARNING: fill not confirmed within timeout for {s['symbol']}.")
+            print(f"  WARNING: fill not confirmed within timeout for {s['symbol']} -- sell cancelled, will retry next cycle.")
             st.mark_cancelled(str(trade.order.orderId))
         else:
             print(f"  Filled @ ${fill:.4f}")
             st.mark_filled(str(trade.order.orderId), fill, side="SELL")
+            st.close_buy_position(s["symbol"], "blend")
 
     for b in buys:
         stop_price = round(b["price"] * (1 - stop_pct), 2)
@@ -219,9 +220,10 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
             print("  Skipped.")
             continue
 
-        trade = ic.place_market_order(ib, account_id, b["symbol"], "BUY", b["qty"])
+        lmt = round(b["price"] * 1.01, 2)
+        trade = ic.place_limit_order(ib, account_id, b["symbol"], "BUY", b["qty"], lmt)
         st.record_order(str(trade.order.orderId), b["symbol"], "BUY", b["qty"], strategy="blend")
-        print(f"  Order placed (id={trade.order.orderId}). Waiting for fill...")
+        print(f"  Limit order placed (id={trade.order.orderId}, lmt=${lmt:.2f}). Waiting for fill...")
         fill = ic.confirm_fill(ib, trade)
         if fill is None:
             print(f"  WARNING: fill not confirmed for {b['symbol']}. Skipping stop.")
@@ -332,11 +334,12 @@ def run_rebalance_v2(ib, account_id: str, cfg: dict, dry_run: bool = True,
                         strategy="blend_v2")
         fill = ic.confirm_fill(ib, trade)
         if fill is None:
-            print(f"  WARNING: fill not confirmed for {s['symbol']}.")
+            print(f"  WARNING: fill not confirmed for {s['symbol']} -- sell cancelled, will retry next cycle.")
             st.mark_cancelled(str(trade.order.orderId))
         else:
             print(f"  Filled @ ${fill:.4f}")
             st.mark_filled(str(trade.order.orderId), fill, side="SELL")
+            st.close_buy_position(s["symbol"], "blend_v2")
 
     for b in buys:
         actual_stop_est = round(b["price"] * (1 - stop_pct), 2)
@@ -745,12 +748,13 @@ def run_reversion_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
         st.record_order(str(sell_trade.order.orderId), sym, "SELL", qty, strategy="reversion")
         fill = ic.confirm_fill(ib, sell_trade)
         if fill is None:
-            print(f"  WARNING: exit fill not confirmed for {sym}.")
+            print(f"  WARNING: exit fill not confirmed for {sym} -- sell cancelled, will retry next cycle.")
             st.mark_cancelled(str(sell_trade.order.orderId))
         else:
             pnl = (fill - entry_px) * qty
             print(f"  Sold {qty} {sym} @ ${fill:.4f}  P&L: ${pnl:+,.2f}")
             st.mark_filled(str(sell_trade.order.orderId), fill, side="SELL")
+            st.close_buy_position(sym, "reversion")
 
     print("\n  Reversion exit check complete.")
 
@@ -928,12 +932,13 @@ def run_penny_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
         st.record_order(str(sell_trade.order.orderId), sym, "SELL", qty, strategy="penny")
         fill = ic.confirm_fill(ib, sell_trade)
         if fill is None:
-            print(f"  WARNING: exit fill not confirmed for {sym}.")
+            print(f"  WARNING: exit fill not confirmed for {sym} -- sell cancelled, will retry next cycle.")
             st.mark_cancelled(str(sell_trade.order.orderId))
         else:
             pnl = (fill - entry_px) * qty
             print(f"  Sold {qty} {sym} @ ${fill:.4f}  P&L: ${pnl:+,.2f}")
             st.mark_filled(str(sell_trade.order.orderId), fill, side="SELL")
+            st.close_buy_position(sym, "penny")
 
     print("\n  Penny exit check complete.")
 
@@ -1105,12 +1110,13 @@ def run_reversion_v2_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
         st.record_order(str(sell_trade.order.orderId), sym, "SELL", qty, strategy="reversion_v2")
         fill = ic.confirm_fill(ib, sell_trade)
         if fill is None:
-            print(f"  WARNING: exit fill not confirmed for {sym}.")
+            print(f"  WARNING: exit fill not confirmed for {sym} -- sell cancelled, will retry next cycle.")
             st.mark_cancelled(str(sell_trade.order.orderId))
         else:
             pnl = (fill - entry_px) * qty
             print(f"  Sold {qty} {sym} @ ${fill:.4f}  P&L: ${pnl:+,.2f}")
             st.mark_filled(str(sell_trade.order.orderId), fill, side="SELL")
+            st.close_buy_position(sym, "reversion_v2")
 
     print("\n  Reversion v2 exit check complete.")
 
@@ -1341,12 +1347,13 @@ def run_us_signals_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
         st.record_order(str(sell_trade.order.orderId), sym, "SELL", qty, strategy=strat)
         fill = ic.confirm_fill(ib, sell_trade)
         if fill is None:
-            print(f"  WARNING: exit fill not confirmed for {sym}.")
+            print(f"  WARNING: exit fill not confirmed for {sym} -- sell cancelled, will retry next cycle.")
             st.mark_cancelled(str(sell_trade.order.orderId))
         else:
             pnl = (fill - entry_px) * qty
             print(f"  Sold {qty} {sym} @ ${fill:.4f}  P&L: ${pnl:+,.2f}")
             st.mark_filled(str(sell_trade.order.orderId), fill, side="SELL")
+            st.close_buy_position(sym, strat)
 
     print("\n  [us signals] exit check complete.")
 
@@ -1648,12 +1655,13 @@ def run_scorer_exits(
                             strategy=strategy)
             fill = ic.confirm_fill(ib, sell_trade)
             if fill is None:
-                print(f"  WARNING: exit fill not confirmed for {sym}.")
+                print(f"  WARNING: exit fill not confirmed for {sym} -- sell cancelled, will retry next cycle.")
                 st.mark_cancelled(str(sell_trade.order.orderId))
             else:
                 pnl = (fill - entry_px) * qty
                 print(f"  Sold {qty} {sym} @ ${fill:.4f}  P&L: ${pnl:+,.2f}")
                 st.mark_filled(str(sell_trade.order.orderId), fill, side="SELL")
+                st.close_buy_position(sym, strategy)
 
         print(f"  [scorer/{label}] exit check complete.")
 

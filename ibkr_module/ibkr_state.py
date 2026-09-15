@@ -100,6 +100,17 @@ def mark_cancelled(order_id: str) -> None:
         )
 
 
+def close_buy_position(symbol: str, strategy: str) -> None:
+    """Mark the open BUY record for symbol+strategy as SOLD so it no longer
+    appears in get_open_positions(). Call after a SELL fill is confirmed."""
+    with _conn() as con:
+        con.execute(
+            "UPDATE trades SET status='SOLD' "
+            "WHERE symbol=? AND strategy=? AND side='BUY' AND status='FILLED'",
+            (symbol.upper(), strategy),
+        )
+
+
 def update_stop(symbol: str, stop_price: float,
                 stop_order_id: str, trailing_high: float,
                 strategy: str | None = None) -> None:
@@ -122,7 +133,7 @@ def update_stop(symbol: str, stop_price: float,
 # ── Read ──────────────────────────────────────────────────────────────────────
 
 def get_open_positions(strategy: str | None = None) -> list[dict]:
-    """Return rows where side=BUY and status=FILLED. Optionally filter by strategy."""
+    """Return rows where side=BUY and status=FILLED (not SOLD/CANCELLED). Optionally filter by strategy."""
     with _conn() as con:
         if strategy:
             rows = con.execute(
