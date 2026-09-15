@@ -265,14 +265,14 @@ def _render_ibkr_live_section(live_prices: dict[str, float]) -> None:
 
 def render_dashboard(cfg: dict, summary: dict, account_id: str,
                      positions_by_strat: dict[str, list[dict]],
-                     live_prices: dict[str, float],
-                     yahoo_fallback: bool) -> None:
+                     live_prices: dict[str, float]) -> None:
     os.system("cls" if os.name == "nt" else "clear")
 
     mode      = "PAPER" if cfg.get("paper", True) else "LIVE"
     now       = time.strftime("%Y-%m-%d %H:%M:%S")
     total_pos = sum(len(v) for v in positions_by_strat.values())
-    price_lbl = "Yahoo (delayed)" if yahoo_fallback else "IBKR live"
+    any_price = any(v and v > 0 for v in live_prices.values())
+    price_lbl = "IBKR live" if any_price else "IBKR (market closed)"
 
     # ── Header ────────────────────────────────────────────────────────────────
     ccy = summary.get("currency", "USD")
@@ -463,22 +463,10 @@ def main() -> None:
             symbols      = list({p["symbol"] for p in all_open})
             live_prices  = ic.get_prices(ib, symbols) if symbols else {}
 
-            # Full Yahoo fallback when IBKR returns nothing at all.
-            yahoo_fallback = bool(symbols) and not any(
-                v and v > 0 for v in live_prices.values()
-            )
-            # Per-symbol Yahoo fill for any individual zeros (partial IBKR failure).
-            missing_price = [s for s in symbols if not live_prices.get(s)]
-            if yahoo_fallback or missing_price:
-                from ibkr_module.ibkr_signals import yahoo_prices
-                fill_syms = symbols if yahoo_fallback else missing_price
-                yp = yahoo_prices(fill_syms)
-                live_prices.update({s: p for s, p in yp.items() if p and p > 0})
-
             ic.disconnect(ib)
 
             render_dashboard(cfg, summary, account_id, positions_by_strat,
-                             live_prices, yahoo_fallback)
+                             live_prices)
 
         except KeyboardInterrupt:
             print("\n  Stopped.")
