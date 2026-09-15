@@ -178,9 +178,9 @@ def main() -> None:
     parser.add_argument("--auto",        action="store_true",
                         help="Skip y/N prompts for scorer on paper accounts only")
     parser.add_argument("--paper",       action="store_true",
-                        help="Force paper port 4002 (default if config paper=true)")
+                        help="Force paper port 4001 (default if config paper=true)")
     parser.add_argument("--live",        action="store_true",
-                        help="Force live port 4001")
+                        help="Force live port 4002")
     parser.add_argument("--positions",   action="store_true")
     parser.add_argument("--info",        action="store_true")
     parser.add_argument("--trail-stops", action="store_true")
@@ -399,12 +399,24 @@ def main() -> None:
     from ibkr_module import ibkr_client as ic
     from ibkr_module import ibkr_executor as ex
 
-    try:
-        ib = ic.connect(host, port, client_id)
-    except Exception as exc:
-        print(f"\n  ERROR: Could not connect to IB Gateway: {exc}")
-        print("  Make sure IB Gateway or TWS is running and API access is enabled.")
-        sys.exit(1)
+    # Retry up to 4 times with 25s gap -- handles the ~2-min IB Gateway daily
+    # reset (23:45 ET) and brief transient disconnections.
+    _MAX_RETRIES = 4
+    _RETRY_WAIT  = 25
+    ib = None
+    for _attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            ib = ic.connect(host, port, client_id)
+            break
+        except Exception as exc:
+            if _attempt < _MAX_RETRIES:
+                print(f"  WARNING: Gateway not ready (attempt {_attempt}/{_MAX_RETRIES}): {exc}")
+                print(f"  Retrying in {_RETRY_WAIT}s...")
+                time.sleep(_RETRY_WAIT)
+            else:
+                print(f"\n  ERROR: Could not connect to IB Gateway after {_MAX_RETRIES} attempts: {exc}")
+                print(f"  Make sure IB Gateway is running on port {port} and API access is enabled.")
+                sys.exit(1)
 
     print("  Connected.")
 
