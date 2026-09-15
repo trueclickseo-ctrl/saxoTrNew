@@ -152,9 +152,9 @@ def _strategy_perf() -> dict[str, dict]:
                        THEN ABS((s.fill_price - b.fill_price) * s.qty) ELSE 0 END) AS gross_loss,
                    SUM((s.fill_price - b.fill_price) * s.qty) AS net_pnl
             FROM trades s
-            JOIN trades b ON s.symbol   = b.symbol
-                          AND b.side    = 'BUY'
-                          AND b.status  = 'FILLED'
+            JOIN trades b ON s.symbol    = b.symbol
+                          AND b.side     = 'BUY'
+                          AND b.status  IN ('FILLED', 'SOLD')
                           AND b.strategy = s.strategy
             WHERE s.side='SELL' AND s.status='FILLED'
             GROUP BY s.strategy
@@ -322,6 +322,9 @@ def render_dashboard(cfg: dict, summary: dict, account_id: str,
             sym    = pos["symbol"]
             qty    = int(pos.get("qty", 0))
             entry  = float(pos.get("fill_price") or pos.get("limit_price") or 0)
+            # fill_price=0 means pre-fix ghost record; trailing_high is the best proxy
+            if not entry:
+                entry = float(pos.get("trailing_high") or 0)
             last   = float(live_prices.get(sym) or 0)
             stop   = float(pos.get("stop_price") or 0)
             days   = _days_held(pos.get("filled_at"))
