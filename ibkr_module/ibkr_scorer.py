@@ -101,6 +101,16 @@ def _build_features(
 
         price = float(close.iloc[-1])
 
+        # Sanity check: reject if last close is >3x or <1/3 of the 5-day average.
+        # Guards against Yahoo Finance returning a bad data point (ticker mix-up in
+        # a 400-ticker MultiIndex batch, stale split-adjusted close, etc.).
+        if len(close) >= 6:
+            recent_avg = float(close.iloc[-6:-1].mean())
+            if recent_avg > 0 and (price > recent_avg * 3.0 or price < recent_avg / 3.0):
+                print(f"  [scorer] {ticker}: price spike ${price:.2f} vs "
+                      f"5d avg ${recent_avg:.2f} — skipping (bad data)")
+                continue
+
         # Liquidity
         vol_20   = float(volume.iloc[-20:].mean())
         dvol_20  = vol_20 * price
