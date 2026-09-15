@@ -2683,6 +2683,18 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
                     )
                 except Exception as e:
                     print(f"  {tag} sell {ticker} FAILED: {e}")
+                    # Saxo SIM sell failed (position gone from SIM side).
+                    # Close the DB record at current price so the zombie
+                    # doesn't block new entries indefinitely.
+                    try:
+                        comm_exit = commission_sek(sh, sh * cur_price * fx_usd)
+                        pnl_sek = (cur_price - trade.get("entry_price", 0)) * sh * fx_usd - comm_exit
+                        db.close_trade(trade["id"], exit_price=cur_price,
+                                       exit_reason=f"{reason} [no-saxo-backing]",
+                                       pnl_sek=pnl_sek, commission_sek=comm_exit)
+                        print(f"  {tag} {ticker} DB closed at ${cur_price:.2f} (no Saxo backing)")
+                    except Exception as e2:
+                        print(f"  {tag} {ticker} DB close also failed: {e2}")
 
     # ── Max positions: percentage of universe, clamped both ends ─────
     # min_slots <= round(universe × max_universe_pct) <= max_slots.
