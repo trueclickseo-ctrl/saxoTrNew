@@ -441,7 +441,7 @@ def main() -> None:
             ib = ic.connect(host, port, client_id)
 
             # Suppress known non-critical IBKR codes (delayed data, farm reconnect, etc.)
-            _SUPPRESS = {10167, 10089, 10168, 2119, 2104, 2106, 2158, 300, 366, 10182}
+            _SUPPRESS = {10167, 10089, 10168, 2119, 2104, 2106, 2158, 300, 366, 10182, 162, 2107}
             ib.errorEvent += (lambda reqId, code, msg, contract:
                               None if code in _SUPPRESS else
                               print(f"  [IBKR {code}] {msg}"))

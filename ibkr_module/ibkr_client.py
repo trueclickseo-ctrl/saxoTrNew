@@ -192,7 +192,7 @@ def get_prices(ib: IB, symbols: list[str]) -> dict[str, float]:
         return {}
 
     # Suppress noisy but harmless paper-account market-data errors.
-    _SUPPRESS = {10089, 10167, 10168, 10182, 300, 354, 2119, 2104, 2106}
+    _SUPPRESS = {10089, 10167, 10168, 10182, 300, 354, 2119, 2104, 2106, 162, 2107}
 
     def _err_suppress(reqId, errorCode, errorString, contract):
         if errorCode not in _SUPPRESS:
