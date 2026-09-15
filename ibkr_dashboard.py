@@ -435,6 +435,12 @@ def main() -> None:
         try:
             ib = ic.connect(host, port, client_id)
 
+            # Suppress known non-critical IBKR codes (delayed data, farm reconnect, etc.)
+            _SUPPRESS = {10167, 10089, 10168, 2119, 2104, 2106, 2158, 300, 366, 10182}
+            ib.errorEvent += (lambda reqId, code, msg, contract:
+                              None if code in _SUPPRESS else
+                              print(f"  [IBKR {code}] {msg}"))
+
             if not account_id:
                 accounts   = ib.managedAccounts()
                 account_id = accounts[0] if accounts else "unknown"
