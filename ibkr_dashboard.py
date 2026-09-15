@@ -441,7 +441,7 @@ def main() -> None:
             ib = ic.connect(host, port, client_id)
 
             # Suppress known non-critical IBKR codes (delayed data, farm reconnect, etc.)
-            _SUPPRESS = {10167, 10089, 10168, 2119, 2104, 2106, 2158, 300, 366, 10182, 162, 2107}
+            _SUPPRESS = {10167, 10089, 10168, 2119, 2104, 2106, 2158, 300, 366, 10182, 162, 2107, 2105, 165}
             ib.errorEvent += (lambda reqId, code, msg, contract:
                               None if code in _SUPPRESS else
                               print(f"  [IBKR {code}] {msg}"))
@@ -485,9 +485,11 @@ def main() -> None:
             break
         except Exception as exc:
             os.system("cls" if os.name == "nt" else "clear")
-            print(f"\n  [ERROR] {exc}")
+            msg = str(exc) or "Connection refused or timed out"
+            print(f"\n  [ERROR] {msg}")
             print("  Make sure IB Gateway is running on port "
-                  f"{cfg.get('port_paper', 4002)} and API access is enabled.")
+                  f"{cfg.get('port_paper', 4001)} and API access is enabled.")
+            time.sleep(10)
 
         if args.once:
             break
