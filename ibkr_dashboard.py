@@ -406,9 +406,10 @@ def main() -> None:
     cfg = _load_config()
 
     parser = argparse.ArgumentParser(description="IBKR strategy-grouped dashboard")
-    parser.add_argument("--once",     action="store_true", help="Print once and exit")
-    parser.add_argument("--interval", type=int, default=10, help="Refresh interval in seconds")
-    parser.add_argument("--live",     action="store_true", help="Connect to live account instead of paper")
+    parser.add_argument("--once",      action="store_true", help="Print once and exit")
+    parser.add_argument("--interval",  type=int, default=10, help="Refresh interval in seconds")
+    parser.add_argument("--live",      action="store_true", help="Connect to live account instead of paper")
+    parser.add_argument("--client-id", type=int, default=None, help="Override IBKR client ID (default: from config)")
     args = parser.parse_args()
 
     if args.live:
@@ -431,7 +432,7 @@ def main() -> None:
     from ibkr_module import ibkr_client as ic
     from ibkr_module import ibkr_state  as st
 
-    client_id  = cfg.get("client_ids", {}).get("dashboard", 15)
+    client_id  = args.client_id if args.client_id is not None else cfg.get("client_ids", {}).get("dashboard", 15)
     host       = cfg["host"]
     port       = cfg["port_paper"] if cfg.get("paper", True) else cfg["port_live"]
     account_id = os.environ.get("IBKR_ACCOUNT_ID", "")
