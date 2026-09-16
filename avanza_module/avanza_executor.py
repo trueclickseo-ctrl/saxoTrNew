@@ -371,7 +371,7 @@ def run_rebalance(client: "Avanza", account_id: str,
         price = action["price"]
         ob_id = action["order_book_id"]
 
-        print(f"\n  ── {side} {qty}x {ticker} @ {price:.2f}  (~{action['value_sek']:,.0f} SEK) ──")
+        print(f"\n  -- {side} {qty}x {ticker} @ {price:.2f}  (~{action['value_sek']:,.0f} SEK) --")
         ans = input("  Place this order? [y/n/q=quit]: ").strip().lower()
         if ans == "q":
             print("  Stopping at user request.")
@@ -392,7 +392,7 @@ def run_rebalance(client: "Avanza", account_id: str,
             msg      = resp.get("message", "") if isinstance(resp, dict) else str(resp)
 
             if status == "SUCCESS" or order_id:
-                print(f"  ✓ {side} order placed — orderId={order_id}")
+                print(f"  OK {side} order placed -- orderId={order_id}")
                 if side == "BUY":
                     trade_id = state.record_order(ticker, ob_id, "BUY", qty, price,
                                                   order_id, value_sek=action["value_sek"])
@@ -402,13 +402,13 @@ def run_rebalance(client: "Avanza", account_id: str,
                     if fill_price is None:
                         # Order timed out — already cancelled by confirm_fill
                         state.mark_cancelled(order_id)
-                        print(f"  ✗ {ticker}: limit order not filled within 2 min — cancelled.")
+                        print(f"  FAIL {ticker}: limit order not filled within 2 min -- cancelled.")
                         skips += 1
                         continue
                     # fill_price==0 means filled but price unreadable; fall back to limit
                     actual_fill = fill_price if fill_price > 0 else price
                     state.mark_filled(order_id, fill_price=actual_fill)
-                    print(f"  ✓ {ticker} filled @ {actual_fill:.2f}")
+                    print(f"  OK {ticker} filled @ {actual_fill:.2f}")
                     executed_buys += 1
 
                     # ── Place stop-loss at actual fill price ──────────────────
@@ -422,13 +422,13 @@ def run_rebalance(client: "Avanza", account_id: str,
                         sl_status = sl_resp.get("status", "") if isinstance(sl_resp, dict) else ""
                         if sl_id or sl_status == "SUCCESS":
                             state.update_stop(trade_id, sl_id, initial_stop, actual_fill)
-                            print(f"    ✓ Stop-loss @ {initial_stop:.2f} "
-                                  f"({stop_pct*100:.0f}% below fill {actual_fill:.2f}) — id={sl_id}")
+                            print(f"    OK Stop-loss @ {initial_stop:.2f} "
+                                  f"({stop_pct*100:.0f}% below fill {actual_fill:.2f}) -- id={sl_id}")
                         else:
-                            print(f"    ⚠ Stop-loss FAILED: {sl_resp} — "
+                            print(f"    WARN Stop-loss FAILED: {sl_resp} -- "
                                   f"place manually @ {initial_stop:.2f}")
                     except Exception as sl_exc:
-                        print(f"    ⚠ Stop-loss error: {sl_exc} — "
+                        print(f"    WARN Stop-loss error: {sl_exc} -- "
                               f"place manually @ {initial_stop:.2f}")
                 else:
                     state.record_close(ticker, ob_id, qty, price, order_id, pnl_sek=0.0)
@@ -437,19 +437,19 @@ def run_rebalance(client: "Avanza", account_id: str,
                                                  timeout_s=120, poll_s=10)
                     if fill_price is None:
                         state.mark_cancelled(order_id)
-                        print(f"  ✗ {ticker}: sell order not filled within 2 min — cancelled.")
+                        print(f"  FAIL {ticker}: sell order not filled within 2 min -- cancelled.")
                         skips += 1
                         continue
                     actual_fill = fill_price if fill_price > 0 else price
                     state.mark_filled(order_id, fill_price=actual_fill)
-                    print(f"  ✓ {ticker} sold @ {actual_fill:.2f}")
+                    print(f"  OK {ticker} sold @ {actual_fill:.2f}")
                     executed_sells += 1
             else:
-                print(f"  ✗ Order REJECTED: {msg} (status={status})")
+                print(f"  FAIL Order REJECTED: {msg} (status={status})")
                 skips += 1
 
         except Exception as exc:
-            print(f"  ✗ Order failed: {exc}")
+            print(f"  FAIL Order failed: {exc}")
             skips += 1
 
     print(f"\n  Done — {executed_buys} buy(s), {executed_sells} sell(s), {skips} skipped.")
@@ -503,13 +503,13 @@ def trail_stops(client: "Avanza", account_id: str,
     live_stops = {sl["stop_loss_id"]: sl for sl in ac.get_stop_losses(client)}
 
     w = 72
-    print(f"\n  {'─' * w}")
+    print(f"\n  {'-' * w}")
     print(f"  AVANZA TRAILING STOP UPDATE  "
-          f"({'DRY RUN — no changes' if dry_run else 'LIVE'})")
-    print(f"  {'─' * w}")
+          f"({'DRY RUN -- no changes' if dry_run else 'LIVE'})")
+    print(f"  {'-' * w}")
     print(f"  {'Ticker':<8} {'Entry':>8} {'CurPrice':>9} {'TrailHigh':>10} "
           f"{'CurStop':>9} {'NewStop':>9}  Action")
-    print(f"  {'─' * w}")
+    print(f"  {'-' * w}")
 
     updated = skipped = errors = 0
 
@@ -564,17 +564,17 @@ def trail_stops(client: "Avanza", account_id: str,
             sl_status = sl_resp.get("status", "") if isinstance(sl_resp, dict) else ""
             if new_sl_id or sl_status == "SUCCESS":
                 state.update_stop(trade_id, new_sl_id, new_stop, new_high)
-                print(f"    ✓ {ticker}: stop {cur_stop:.2f} → {new_stop:.2f} "
+                print(f"    OK {ticker}: stop {cur_stop:.2f} -> {new_stop:.2f} "
                       f"(high={new_high:.2f}) id={new_sl_id}")
                 updated += 1
             else:
-                print(f"    ✗ {ticker}: stop placement failed: {sl_resp}")
+                print(f"    FAIL {ticker}: stop placement failed: {sl_resp}")
                 errors += 1
         except Exception as exc:
-            print(f"    ✗ {ticker}: {exc}")
+            print(f"    FAIL {ticker}: {exc}")
             errors += 1
 
-    print(f"  {'─' * w}")
+    print(f"  {'-' * w}")
     print(f"  Result: {updated} updated, {skipped} unchanged, {errors} errors")
     if dry_run and (updated + errors) > 0:
         print("  [DRY RUN] Pass --execute to apply.")
