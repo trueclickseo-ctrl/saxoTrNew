@@ -300,6 +300,10 @@ WINDOWS_TASKS = {
     # 26h (daily task -- allow for one missed midnight before alerting).
     "AI Outcome Predictor": ("ATOS AI Outcome Predictor", "ai_outcome_predictor.log", 30, 26),
     "Stock Outcome Predictor": ("ATOS Stock Outcome Predictor", "ai_stock_outcome_predictor.log", 30, 26),
+    # IBKR Gateway Watchdog (2026-09-16) -- checks port 4001 every 5 min and
+    # auto-restarts IB Gateway on crash. grace=8 (two missed cycles still ok);
+    # max_first_run_wait=1h (should fire within 5 min of registration).
+    "IBKR Gateway Watchdog": ("ATOS IBKR Gateway Watchdog", "ibkr_gateway_watchdog.log", 8, 1),
 }
 
 # ── Registry: Claude-native scheduled tasks (no Windows entry) ──────────────
