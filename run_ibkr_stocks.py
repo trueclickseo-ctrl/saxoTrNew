@@ -248,6 +248,13 @@ def main() -> None:
         print(f"  [live] State DB -> data/ibkr_live_stocks.db (separate from paper)")
     else:
         os.environ.setdefault("IBKR_DB_PATH", os.path.join(_ROOT, "data", "ibkr_stocks.db"))
+        # When the Gateway is a live-mode Gateway (single instance, both accounts),
+        # paper strategies must explicitly request the paper sub-account so orders
+        # never accidentally land on the live account.
+        if not os.environ.get("IBKR_ACCOUNT_ID"):
+            _paper_acct = cfg.get("paper_account_id", "")
+            if _paper_acct:
+                os.environ["IBKR_ACCOUNT_ID"] = _paper_acct
 
     host = cfg["host"]
 
