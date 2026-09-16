@@ -214,14 +214,17 @@ def _wait_for_gateway() -> bool:
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
-def main() -> None:
+def main(simulate_crash: bool = False) -> None:
     _init_log()
     now_ts  = time.time()
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     _log("=== IBKR Gateway Watchdog ===")
 
-    # Fast path: Gateway is up and healthy
-    if _tcp_ok():
+    if simulate_crash:
+        _log("  [SIMULATE] --simulate-crash: skipping real TCP/API checks, forcing failure path")
+        _log("  [SIMULATE] Gateway reported as DOWN")
+    elif _tcp_ok():
+        # Fast path: Gateway is up and healthy
         if _api_ok():
             _log("  Gateway OK")
             return
@@ -260,12 +263,20 @@ def main() -> None:
 
     # ── Restart ───────────────────────────────────────────────────────────────
     _log(f"  Restart #{len(recent)+1} (of {MAX_RESTARTS_PER_HOUR} allowed/hour)")
-    _kill_gateway()
-    time.sleep(3)   # let OS release the port before we relaunch
-    _start_gateway()
+    if simulate_crash:
+        _log("  [SIMULATE] would kill ibgateway1.exe (skipped -- Gateway still running)")
+        _log("  [SIMULATE] would launch C:\\Jts\\ibgateway\\1050\\ibgateway1.exe (skipped)")
+        _log("  [SIMULATE] Gateway is actually still up -- reporting restart success")
+        came_up = True
+    else:
+        _kill_gateway()
+        time.sleep(3)   # let OS release the port before we relaunch
+        _start_gateway()
+        came_up = _wait_for_gateway()
 
-    if _wait_for_gateway():
-        _log(f"  Gateway restarted OK at {datetime.now().strftime('%H:%M:%S')}")
+    if came_up:
+        _log(f"  Gateway restarted OK at {datetime.now().strftime('%H:%M:%S')}"
+             + ("  [SIMULATED]" if simulate_crash else ""))
         state["restarts"] = recent + [now_ts]
         _save_state(state)
         _send_alert(
@@ -290,4 +301,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("--simulate-crash", action="store_true",
+                   help="Force the failure path without actually killing Gateway "
+                        "(tests detection, state, email, and restart logic end-to-end)")
+    args = p.parse_args()
+    main(simulate_crash=args.simulate_crash)
