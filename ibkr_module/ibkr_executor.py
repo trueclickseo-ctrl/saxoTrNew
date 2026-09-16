@@ -147,6 +147,26 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
     # Held positions come from the local DB (blend-only) so the rebalancer never
     # sells positions that belong to another strategy (scorer, reversion, etc.).
     held    = st.get_open_positions(strategy="blend")
+
+    # 14-day rebalance guard: skip if the portfolio was built less than rebal_days ago.
+    # Prevents churn on newly-bought positions when the task fires on schedule but the
+    # clock hasn't elapsed since the last rebalance.
+    rebal_days = blend_cfg.get("rebal_days", 14)
+    if not dry_run and held:
+        from datetime import datetime, timezone
+        fill_dates = [p["filled_at"] for p in held if p.get("filled_at")]
+        if fill_dates:
+            earliest = min(fill_dates)
+            try:
+                last_dt   = datetime.fromisoformat(earliest.replace("Z", "+00:00"))
+                days_held = (datetime.now(timezone.utc) - last_dt).days
+                if days_held < rebal_days:
+                    print(f"\n  [SKIP] Portfolio built {days_held}d ago; "
+                          f"rebalancing in {rebal_days - days_held}d "
+                          f"(rebal_days={rebal_days}).")
+                    return
+            except Exception:
+                pass
     symbols = list({*targets, *[p["symbol"] for p in held]})
     prices  = ic.get_prices(ib, symbols)   # returns 0 if IBKR has no data
     ibkr_ok = not all(v == 0.0 for v in prices.values())
