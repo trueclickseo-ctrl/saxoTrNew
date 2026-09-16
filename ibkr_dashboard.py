@@ -187,7 +187,7 @@ def _render_ibkr_live_section(live_prices: dict[str, float]) -> None:
         con = sqlite3.connect(live_db)
         rows = con.execute(
             "SELECT symbol, qty, fill_price, stop_price, filled_at, strategy, status, notes "
-            "FROM trades WHERE status IN ('FILLED','PENDING_TRANSFER') ORDER BY filled_at"
+            "FROM trades WHERE status IN ('FILLED','PENDING_TRANSFER') AND side='BUY' ORDER BY filled_at"
         ).fetchall()
         con.close()
     except Exception:
