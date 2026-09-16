@@ -264,7 +264,10 @@ def main() -> None:
     if args.client_id is not None:
         client_id = args.client_id
     elif args.trail_stops:
-        client_id = client_ids.get("trail",    cfg["client_id"])
+        # live trail stops uses trail_live (20) so it doesn't conflict with
+        # the paper trail task (trail=13) which runs at the same time
+        key = "trail_live" if not is_paper else "trail"
+        client_id = client_ids.get(key, cfg["client_id"])
     elif args.info or args.positions:
         client_id = client_ids.get("info", cfg["client_id"])
     elif args.dashboard:
