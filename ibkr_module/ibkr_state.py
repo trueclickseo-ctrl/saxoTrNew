@@ -13,10 +13,11 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-DB_PATH = os.environ.get(
-    "IBKR_DB_PATH",
-    os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "ibkr_stocks.db"),
-)
+_DEFAULT_DB = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "ibkr_stocks.db")
+
+# DB_PATH is kept for backward compat but _conn() always re-reads the env var so
+# that --live can override IBKR_DB_PATH after this module is already imported.
+DB_PATH = os.environ.get("IBKR_DB_PATH", _DEFAULT_DB)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS trades (
@@ -48,7 +49,7 @@ def _migrate(con: sqlite3.Connection) -> None:
 
 @contextmanager
 def _conn():
-    con = sqlite3.connect(DB_PATH)
+    con = sqlite3.connect(os.environ.get("IBKR_DB_PATH", _DEFAULT_DB))
     con.row_factory = sqlite3.Row
     try:
         con.execute(_SCHEMA)

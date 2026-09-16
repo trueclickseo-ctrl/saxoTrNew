@@ -419,7 +419,16 @@ def heal_missing_stops(ib, account_id: str, cfg: dict,
               "cannot verify order status, skipping heal to avoid false positives.")
         return 0
 
-    open_order_ids = {str(t.order.orderId) for t in ib.openTrades()}
+    # Filter to this account's orders only -- the single live Gateway exposes
+    # both paper and live accounts so openTrades() may return paper GTC stops
+    # whose order IDs coincidentally match live DB stop_order_ids.
+    # Use account == account_id strictly; empty-account orders are NOT trusted.
+    ib.reqOpenOrders()
+    ib.sleep(1.0)
+    open_order_ids = {
+        str(t.order.orderId) for t in ib.openTrades()
+        if t.order.account == account_id
+    }
 
     healed = 0
     for pos in positions:
