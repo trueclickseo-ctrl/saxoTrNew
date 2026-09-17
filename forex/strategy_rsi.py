@@ -106,6 +106,14 @@ def generate_signals(market_data: dict, open_symbols: set = None) -> list:
         if df is None or len(df) < MIN_BARS:
             continue
 
+        # Evidence (77 Sep-2026 trades): JPY crosses 0% WR across 7 pairs
+        # (-880 EUR combined); XAU pairs 0% WR across 8 pairs (-916 EUR).
+        # RSI(2) mean-reversion has no edge on JPY crosses (carry-driven,
+        # not mean-reverting) or gold (trend-dominant asset class).
+        sym_up = sym.upper()
+        if "JPY" in sym_up or sym_up.startswith("XAU"):
+            continue
+
         h, l, c = df["High"], df["Low"], df["Close"]
         rsi_s    = _rsi(c)
         ema200   = _ema(c, TREND_EMA)
