@@ -124,6 +124,15 @@ def generate_signals(market_data: dict, open_symbols: set = None,
         if df is None or len(df) < MIN_BARS:
             continue
 
+        # Evidence (254 trades, 2026-09-18):
+        # EURHUF: 4 trades WLLL, losses -12,477 EUR each — HUF ATR mismatch makes
+        # gap losses catastrophic and systematic. Block the pair entirely.
+        # JPY crosses: consistent 0% WR pattern across gap/RSI/pullback strategies;
+        # gap fills on JPY pairs show same large-loss / tiny-win asymmetry.
+        sym_up = sym.upper()
+        if sym_up == "EURHUF" or "JPY" in sym_up:
+            continue
+
         sunday_open = live_prices.get(sym)
         if sunday_open is None or sunday_open <= 0:
             continue
