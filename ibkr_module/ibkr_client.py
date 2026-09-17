@@ -172,9 +172,21 @@ def get_positions(ib: IB, account_id: str) -> list[dict]:
 
 # ── Prices ────────────────────────────────────────────────────────────────────
 
+# Tickers that are ambiguous under SMART routing — specify exchange explicitly.
+_EXCHANGE_OVERRIDE: dict[str, str] = {
+    "U": "NYSE",   # Unity Software — single-char ticker fails SMART qualification
+}
+
+
+def _make_contract(symbol: str) -> Stock:
+    """Return a Stock contract, using an explicit exchange for ambiguous tickers."""
+    exchange = _EXCHANGE_OVERRIDE.get(symbol, "SMART")
+    return Stock(symbol, exchange, "USD")
+
+
 def get_price(ib: IB, symbol: str, timeout_s: float = 5.0) -> float:
     """Return last traded price for a US stock. Returns 0.0 if unavailable."""
-    contract = Stock(symbol, "SMART", "USD")
+    contract = _make_contract(symbol)
     try:
         ib.qualifyContracts(contract)
     except Exception:
@@ -228,7 +240,7 @@ def get_prices(ib: IB, symbols: list[str]) -> dict[str, float]:
     ib.errorEvent += _err_suppress
 
     try:
-        contracts = [Stock(s, "SMART", "USD") for s in symbols]
+        contracts = [_make_contract(s) for s in symbols]
         try:
             ib.qualifyContracts(*contracts)
         except Exception:
@@ -278,7 +290,7 @@ def get_prices(ib: IB, symbols: list[str]) -> dict[str, float]:
         hist_got: list[str] = []
         for sym in zeros:
             try:
-                con = Stock(sym, "SMART", "USD")
+                con = _make_contract(sym)
                 bars = ib.reqHistoricalData(
                     con, endDateTime="", durationStr="2 D",
                     barSizeSetting="1 day", whatToShow="TRADES",
@@ -340,7 +352,7 @@ def is_market_open() -> bool:
 # ── Orders ────────────────────────────────────────────────────────────────────
 
 def _stock_contract(symbol: str) -> Stock:
-    return Stock(symbol, "SMART", "USD")
+    return _make_contract(symbol)
 
 
 def place_market_order(ib: IB, account_id: str, symbol: str,
