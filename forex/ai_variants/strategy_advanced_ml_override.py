@@ -8,6 +8,11 @@ from forex.strategy_advanced_ml import should_exit as _orig_should_exit
 
 
 def generate_signals(df: pd.DataFrame, symbol: str):
+    # Evidence: 2 organic trades, both XAU crosses (XAUTHB -108, XAUTRY -135 EUR,
+    # 2026-08-31). Gold is trend-dominant; ML mean-reversion has no edge on XAU.
+    # Same block in strategy_rsi.py (649669b) and advanced_rsi_master (965a602).
+    if symbol.upper().startswith("XAU"):
+        return []
     return _orig_generate_signals(df, symbol)
 
 
