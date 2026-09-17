@@ -11,8 +11,15 @@ from forex.strategy_advanced_rsi_master import should_exit as _orig_should_exit
 
 
 def generate_signals(market_data: dict, open_symbols: set = None) -> list:
-    """Pass-through: no entry filter changes yet (insufficient trade sample)."""
-    return _orig_generate_signals(market_data, open_symbols)
+    """Block XAU pairs before delegating to original generate_signals.
+
+    Evidence: 4 organic trades, all XAU crosses (XAUCHF/XAUGBP/XAUEUR/XAUHKD),
+    all closed 2026-09-02, 0% WR, -423 EUR total. Gold is trend-dominant;
+    RSI(2) mean-reversion has no edge on XAU. Same block already in strategy_rsi.py.
+    """
+    filtered = {sym: df for sym, df in market_data.items()
+                if not sym.upper().startswith("XAU")}
+    return _orig_generate_signals(filtered, open_symbols)
 
 
 def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> Tuple[bool, str]:
@@ -50,10 +57,10 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> Tu
         last_close = float(df["Close"].iloc[-1])
         prev_close = float(df["Close"].iloc[-2])
 
-        if direction == "long":
+        if direction == "Buy":
             breached_last = last_close < stop_price
             breached_prev = prev_close < stop_price
-        elif direction == "short":
+        elif direction == "Sell":
             breached_last = last_close > stop_price
             breached_prev = prev_close > stop_price
         else:
