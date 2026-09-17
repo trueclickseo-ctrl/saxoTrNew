@@ -137,7 +137,11 @@ def generate_signals(market_data: dict, open_symbols: set = None) -> list:
             continue
         # AI-derived filter (2026-09-05): NZD crosses drove ~71% of pullback losses
         # (14 of 35 trades, two catastrophic). Skip them entirely.
-        if "NZD" in sym.upper():
+        # Evidence (2026-09-18): JPY crosses produced 36 micro-trades on Sept 7-8
+        # (all same-day bursts at the same stop level, P&L cents per trade).
+        # Net across 36 trades: +4/0/-6 EUR -- noise, not edge. Block JPY too.
+        sym_up = sym.upper()
+        if "NZD" in sym_up or "JPY" in sym_up:
             continue
 
         h, l, c = df["High"], df["Low"], df["Close"]
