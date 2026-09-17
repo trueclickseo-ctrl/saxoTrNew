@@ -150,7 +150,12 @@ def _strategy_perf() -> dict[str, dict]:
                        THEN (s.fill_price - b.fill_price) * s.qty ELSE 0 END) AS gross_profit,
                    SUM(CASE WHEN (s.fill_price - b.fill_price) <= 0
                        THEN ABS((s.fill_price - b.fill_price) * s.qty) ELSE 0 END) AS gross_loss,
-                   SUM((s.fill_price - b.fill_price) * s.qty) AS net_pnl
+                   SUM((s.fill_price - b.fill_price) * s.qty) AS net_pnl,
+                   AVG(CASE WHEN (s.fill_price - b.fill_price) > 0
+                       THEN (s.fill_price - b.fill_price) * s.qty ELSE NULL END) AS avg_win,
+                   AVG(CASE WHEN (s.fill_price - b.fill_price) <= 0
+                       THEN (s.fill_price - b.fill_price) * s.qty ELSE NULL END) AS avg_loss,
+                   AVG(JULIANDAY(s.filled_at) - JULIANDAY(b.filled_at)) AS avg_hold
             FROM trades s
             JOIN trades b ON s.symbol    = b.symbol
                           AND b.side     = 'BUY'
@@ -164,10 +169,13 @@ def _strategy_perf() -> dict[str, dict]:
             gp = float(r["gross_profit"] or 0)
             gl = float(r["gross_loss"] or 0)
             out[str(r["strategy"])] = {
-                "closed": int(r["n"]),
-                "wins":   int(r["wins"]),
-                "pnl":    float(r["net_pnl"] or 0),
-                "pf":     round(gp / gl, 2) if gl else None,
+                "closed":    int(r["n"]),
+                "wins":      int(r["wins"]),
+                "pnl":       float(r["net_pnl"] or 0),
+                "pf":        round(gp / gl, 2) if gl else None,
+                "avg_win":   float(r["avg_win"])  if r["avg_win"]  is not None else None,
+                "avg_loss":  float(r["avg_loss"]) if r["avg_loss"] is not None else None,
+                "avg_hold":  float(r["avg_hold"]) if r["avg_hold"] is not None else None,
             }
     except Exception:
         pass
@@ -368,20 +376,28 @@ def render_dashboard(cfg: dict, summary: dict, account_id: str,
     any_closed = any(v.get("closed", 0) > 0 for v in perf.values())
 
     print(f"\n  {_BOLD}── Strategy Performance{_RST}  {_DIM}(closed trades · USD){_RST}")
-    print(f"  {'Strategy':<22}  {'Open':>5}  {'Closed':>7}  {'WR%':>6}  {'PF':>5}  {'Net P&L':>11}")
+    print(f"  {'Strategy':<22}  {'Open':>5}  {'Closed':>7}  {'WR%':>6}  {'PF':>5}  {'Net P&L':>11}  {'Avg W':>7}  {'Avg L':>7}  {'Hold':>5}")
     print("  " + "─" * (_W - 2))
     for db_key, label, _, _, _ in _STRATEGY_ROWS:
         open_n  = len(positions_by_strat.get(db_key, []))
         p       = perf.get(db_key, {})
         closed  = p.get("closed", 0)
         if closed:
-            wr_s  = f"{p['wins'] / closed * 100:.0f}%"
-            pf_s  = f"{p['pf']:.2f}" if p.get("pf") else "∞"
-            pnl_s = _color_dollar(p.get("pnl", 0.0), 11)
+            wr_s   = f"{p['wins'] / closed * 100:.0f}%"
+            pf_s   = f"{p['pf']:.2f}" if p.get("pf") else "∞"
+            pnl_s  = _color_dollar(p.get("pnl", 0.0), 11)
+            aw     = p.get("avg_win")
+            al     = p.get("avg_loss")
+            hold   = p.get("avg_hold")
+            aw_s   = f"+${aw:>5.0f}" if aw  is not None else f"{'—':>7}"
+            al_s   = f" ${al:>5.0f}" if al  is not None else f"{'—':>7}"
+            hold_s = f"{hold:.0f}d"  if hold is not None else "—"
         else:
             wr_s = pf_s = "—"
-            pnl_s = f"{'—':>11}"
-        print(f"  {label:<22}  {open_n:>5}  {closed:>7}  {wr_s:>6}  {pf_s:>5}  {pnl_s}")
+            pnl_s  = f"{'—':>11}"
+            aw_s = al_s = f"{'—':>7}"
+            hold_s = "—"
+        print(f"  {label:<22}  {open_n:>5}  {closed:>7}  {wr_s:>6}  {pf_s:>5}  {pnl_s}  {aw_s:>7}  {al_s:>7}  {hold_s:>5}")
 
     if not any_closed:
         print(f"\n  {_DIM}No closed trades yet — WR/PF will populate once stops or exits trigger.{_RST}")
