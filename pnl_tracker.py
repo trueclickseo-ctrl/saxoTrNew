@@ -667,7 +667,7 @@ def get_strategy_summary(module: str = "forex", symbols: set | None = None) -> l
                    MAX(realized_pnl)                                            AS best,
                    MIN(realized_pnl)                                            AS worst
               FROM trades
-             WHERE module=? AND status='closed'{rc_sql}{sym_filter}
+             WHERE module=? AND status='closed' AND realized_pnl IS NOT NULL{rc_sql}{sym_filter}
              GROUP BY strategy
              ORDER BY total_pnl DESC
         """, closed_params).fetchall()
@@ -750,7 +750,7 @@ def get_strategy_summary_since(module: str, since: str, symbols: set | None = No
                    MIN(realized_pnl)                                            AS worst,
                    SUM(commission)                                              AS total_costs
               FROM trades
-             WHERE module=? AND status='closed' AND timestamp_close >= ?{sym_filter}
+             WHERE module=? AND status='closed' AND realized_pnl IS NOT NULL AND timestamp_close >= ?{sym_filter}
              GROUP BY strategy
              ORDER BY total_pnl DESC
         """, params).fetchall()
@@ -817,7 +817,7 @@ def get_strategy_symbol_summary(module: str, since: str | None = None) -> list[d
                    SUM(CASE WHEN realized_pnl < 0 THEN realized_pnl ELSE 0 END) AS gross_loss,
                    SUM(CASE WHEN realized_pnl IS NULL THEN 1 ELSE 0 END)       AS unresolved
               FROM trades
-             WHERE module=? AND status='closed'{since_filter}
+             WHERE module=? AND status='closed' AND realized_pnl IS NOT NULL{since_filter}
              GROUP BY strategy, symbol
              ORDER BY strategy, total_pnl DESC
         """, (module, *since_params)).fetchall()
@@ -869,7 +869,7 @@ def get_pair_summary(module: str = "forex") -> list[dict]:
                    MAX(realized_pnl)                                            AS best,
                    MIN(realized_pnl)                                            AS worst
               FROM trades
-             WHERE module=? AND status='closed'{rc_sql}
+             WHERE module=? AND status='closed' AND realized_pnl IS NOT NULL{rc_sql}
              GROUP BY symbol
              ORDER BY total_pnl DESC
         """, (module, *rc_params)).fetchall()
@@ -990,7 +990,7 @@ def get_summary(module: str = None) -> dict:
                        AVG(realized_pnl)                        AS avg_pnl,
                        MIN(timestamp_open)                      AS first_trade,
                        MAX(timestamp_close)                     AS last_close
-                  FROM trades WHERE status='closed' AND module=?{rc_sql}
+                  FROM trades WHERE status='closed' AND realized_pnl IS NOT NULL AND module=?{rc_sql}
             """, (mod, *rc_params)).fetchone()
 
             open_n = c.execute(
