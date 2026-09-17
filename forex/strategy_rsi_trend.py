@@ -96,9 +96,38 @@ def generate_signals(market_data: dict, open_symbols: set | None = None) -> list
 
 
 # ── everything else: identical to "rsi", by delegation ──────────────────────
-should_exit          = _rsi.should_exit
 size_position        = _rsi.size_position
 trailing_stop_update = _rsi.trailing_stop_update
+
+
+def should_exit(position: dict, df, calendar_days_held: int) -> tuple:
+    """Delegates to rsi.should_exit but suppresses rsi_recovery exits when
+    the position is not yet profitable.
+
+    Evidence (9 organic trades): two losses (-44, -58 EUR) exited via
+    rsi_recovery while in loss (RSI ticked up to 59.4 / 70.1 before the
+    hard stop was reached). Suppressing rsi_recovery on unprofitable
+    positions lets the hard stop bound those losses instead.
+    All five winners exit on rsi_recovery while profitable — unchanged.
+    """
+    exit_flag, reason = _rsi.should_exit(position, df, calendar_days_held)
+
+    if not exit_flag or not reason.startswith("rsi_recovery"):
+        return exit_flag, reason
+
+    # Check profitability before honouring the RSI recovery signal.
+    try:
+        entry = float(position.get("entry_price") or 0)
+        direction = position.get("direction", "")
+        cur_close = float(df["Close"].iloc[-1])
+        if entry > 0:
+            in_profit = (cur_close > entry) if direction == "Buy" else (cur_close < entry)
+            if not in_profit:
+                return False, ""
+    except Exception:
+        pass  # degraded — trust the original decision
+
+    return exit_flag, reason
 
 
 def scan_summary(market_data: dict) -> list:
