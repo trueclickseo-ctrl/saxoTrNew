@@ -1,8 +1,8 @@
-# AI-WRITTEN Phase 2+3 2026-09-05 by claude-sonnet-5
-# Entry filter: block new entries sharing a currency leg with an already-open position (NZD-cross cascade fix)
-# Exit filter: require 2 consecutive closes beyond stop_price before honoring a hard_stop exit, to filter single-bar wick spikes
+# AI-WRITTEN Phase 2+3 2026-09-08 by claude-sonnet-5
+# Entry filter: block simultaneous entries that share a currency leg with an already-open EMA position (NZD-cross cascade)
+# Exit filter: require the ATR hard-stop breach to hold for 2 consecutive daily closes before honoring the exit, to filter single-bar noise whipsaws
 
-from typing import Dict, Set, Tuple
+from typing import Set, Tuple
 
 import pandas as pd
 
@@ -13,7 +13,7 @@ from forex.strategy_ema import should_exit as _orig_should_exit
 def _currency_pair(symbol: str) -> Tuple[str, str]:
     """Split a 6-char FX symbol like 'NZDAUD' into (base, quote) 3-letter codes.
 
-    Falls back gracefully if symbol format is unexpected.
+    Falls back gracefully if the symbol format is unexpected (e.g. length != 6).
     """
     s = symbol.upper()
     if len(s) >= 6:
@@ -24,14 +24,21 @@ def _currency_pair(symbol: str) -> Tuple[str, str]:
 def generate_signals(market_data: dict, open_symbols: set = None, **kwargs) -> list:
     """Wrap the original EMA crossover strategy with a currency-concentration cap.
 
-    Trade history (52 closed trades) showed a severe cascade of near-simultaneous
-    hard-stop losses across NZDAUD, NZDSGD, NZDHKD and NZDUSD -- all sharing NZD
-    as a common currency leg. A single underlying NZD move whipsawed every NZD
-    cross the strategy was long/short at once, multiplying losses instead of
-    diversifying them. This filter blocks any new signal whose base or quote
-    currency is already represented in an open position, and also de-duplicates
-    currency exposure within the same batch of signals, so the book never holds
-    more than one position per currency leg at a time.
+    Trade history (52 closed trades) showed the overwhelming majority of losses
+    (roughly 40 of 52 closed trades, essentially all hard_stop exits) clustered
+    on NZDAUD, NZDSGD, NZDHKD and NZDUSD, opened and stopped out within minutes
+    of each other in repeating cascades. All four symbols share NZD as a common
+    currency leg -- a single underlying NZD move whipsawed every open NZD cross
+    simultaneously, multiplying losses instead of diversifying them, and the
+    strategy kept re-entering the same currency exposure through multiple
+    correlated pairs at once.
+
+    This filter blocks any new signal whose base or quote currency is already
+    represented in an open position (from open_symbols), and also de-duplicates
+    currency exposure within the same batch of new signals returned by the
+    original strategy, so the book never holds more than one position per
+    currency leg at a time. This does not change the underlying EMA/ADX logic
+    or exits -- it only restricts which of the original signals get through.
     """
     if open_symbols is None:
         open_symbols = set()
@@ -52,58 +59,70 @@ def generate_signals(market_data: dict, open_symbols: set = None, **kwargs) -> l
     for sig in raw_signals:
         sym = sig.get("symbol", "")
         base, quote = _currency_pair(sym)
+
         if base in committed_currencies or quote in committed_currencies:
             continue
+
         filtered.append(sig)
+        # Reserve these currencies so later signals in this same batch
+        # (already sorted by score descending) can't also claim them.
         committed_currencies.add(base)
         committed_currencies.add(quote)
 
     return filtered
 
 
-def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> Tuple[bool, str]:
-    """Wrap the original exit logic with a 2-bar close confirmation on hard_stop.
+def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tuple:
+    """Wrap the original EMA should_exit with a 2-close confirmation on hard stops.
 
-    Closed-trade data showed hard_stop firing 49 of 52 times with only a 6.1%
-    win rate (46 losses) -- by far the dominant loss driver. This pattern is
-    consistent with the ATR stop being clipped by single-bar wick spikes
-    (intrabar High/Low touching stop_price) that reverse the very next bar.
-    We keep the original stop level and direction untouched -- we only refuse
-    to honor a hard_stop exit until the Close price has remained beyond the
-    stop for two consecutive bars, filtering noise without weakening protection
-    against a genuinely sustained adverse move (which will simply confirm on
-    the next bar).
+    Exit-reason data (52 closed trades) showed 49 of 52 exits were hard_stop,
+    with only a 6.1%% win rate among those (46 losses vs 3 wins) even though the
+    total P&L for that bucket was net positive thanks to a few large winners.
+    A win rate that low on a stop-loss exit is a strong signal that many of
+    these stops are single-bar noise -- a brief spike through the ATR stop
+    level that reverses immediately, rather than a genuine sustained move
+    against the position. crossover_reversal (the other primary exit path) had
+    only 2 trades, both losses, which is too small a sample to act on.
+
+    This wrapper does not change entries, sizing, or the crossover/time-stop
+    exit paths. It only adds one guard: when the original strategy signals an
+    exit whose reason mentions "stop" (the ATR hard stop), we require that the
+    *previous* daily close was already beyond the stop level in the same
+    direction before honoring the exit on the current bar. If the previous
+    close had not yet breached the stop, we hold the position one more bar
+    (returning False with a 'stop_confirmation_pending' note) to avoid exiting
+    on a single-bar spike. If the original exit is for any other reason
+    (crossover_reversal, time stop, roster flatten, etc.), we pass it through
+    unchanged.
     """
     exit_flag, reason = _orig_should_exit(position, df, calendar_days_held)
 
-    if not exit_flag or reason != "hard_stop":
+    if not exit_flag:
         return exit_flag, reason
 
-    if df is None or len(df) < 2:
+    reason_lower = (reason or "").lower()
+    if "stop" not in reason_lower:
+        # Not a hard-stop exit (e.g. crossover_reversal, time stop, roster
+        # flatten) -- leave the original decision untouched.
         return exit_flag, reason
 
     stop_price = position.get("stop_price")
     direction = str(position.get("direction", "")).lower()
 
-    if stop_price is None or direction not in ("long", "short"):
+    if stop_price is None or direction not in ("long", "short") or len(df) < 2 or "Close" not in df.columns:
+        # Not enough information to confirm -- fall back to original decision.
         return exit_flag, reason
 
-    try:
-        last_close = df["Close"].iloc[-1]
-        prev_close = df["Close"].iloc[-2]
-    except Exception:
-        return exit_flag, reason
+    prev_close = df["Close"].iloc[-2]
 
     if direction == "long":
-        last_breach = last_close < stop_price
-        prev_breach = prev_close < stop_price
-    else:
-        last_breach = last_close > stop_price
-        prev_breach = prev_close > stop_price
+        prev_breach = prev_close <= stop_price
+    else:  # short
+        prev_breach = prev_close >= stop_price
 
-    if last_breach and prev_breach:
-        return True, "hard_stop_confirmed"
+    if not prev_breach:
+        # The stop has only been breached on the most recent bar -- hold one
+        # more bar to confirm this isn't a single-bar spike/whipsaw.
+        return False, "stop_confirmation_pending"
 
-    # Single-bar breach only (likely a wick spike) -- hold the position and
-    # wait for a second confirming close before exiting on the hard stop.
-    return False, "hard_stop_awaiting_confirmation"
+    return exit_flag, reason

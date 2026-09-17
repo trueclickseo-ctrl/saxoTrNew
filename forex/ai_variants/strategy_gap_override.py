@@ -1,4 +1,4 @@
-# AI-WRITTEN Phase 2+3 2026-09-18 by claude-sonnet-5
+# AI-WRITTEN Phase 2+3 2026-09-25 by claude-sonnet-5
 # Entry filter: none (pass-through) -- Phase 2 blacklist (NOK/SEK/DKK/PLN/CZK) removed; Nordic/Scandi crosses profitable, insufficient data to re-filter
 # Exit filter: Require 2 consecutive daily closes beyond the hard-stop level before confirming a hard-stop exit (UNCHANGED this cycle -- identical ledger snapshot to prior cycle, no new closed trades since rule went live)
 
@@ -41,8 +41,8 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
     to originally build this rule): hard_stop exits account for 59 trades
     with only 1 win (1.7% win rate) and -4076.5 total P&L -- by far the
     single largest loss bucket in the strategy (time_stop is roughly
-    break-even at -306.2/50 trades, and gap_filled is net profitable at
-    +12244.4/79 trades despite a lower per-trade win rate, because winners
+    break-even at -306.23/50 trades, and gap_filled is net profitable at
+    +12244.38/79 trades despite a lower per-trade win rate, because winners
     run further than losers). Because this is a mean-reversion gap-fade
     strategy, a single-bar wick touching the stop level does not
     necessarily mean the adverse move will persist. We therefore require
@@ -55,23 +55,23 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
     should_exit() early-exit decision path, not the hard protective stop
     order itself.
 
-    This Phase 3 pass re-examined the identical exit_reason breakdown
-    (same 59/1/-4076.5 hard_stop signature, same near-flat time_stop, same
-    profitable gap_filled bucket) supplied for the prior evolution cycle.
+    This Phase 3 pass re-examined the exit_reason breakdown supplied for
+    the current evolution cycle and confirmed it is numerically identical
+    to the prior cycle's snapshot (same 59/1/-4076.5 hard_stop signature,
+    same near-flat time_stop bucket, same profitable gap_filled bucket).
     Since no new closed-trade data has accumulated since the confirmation
-    rule was added, there is no evidence yet on whether the rule reduced
-    hard_stop losses in live/paper trading -- the ledger snapshot predates
-    or is unchanged since that fix. Making a further change (e.g. adding a
-    percentage-distance buffer on top of the 2-bar close requirement)
-    would not be backed by any NEW data point and risks over-fitting to a
-    single already-addressed pattern. The rule is therefore left UNCHANGED
-    this cycle, pending a fresh ledger pull that reflects trades closed
-    after the confirmation logic went live. The large number of
-    single-trade 'STOP-LOSS hit @ <price>' / 'TAKE-PROFIT hit @ <price>'
-    buckets remain broker-side synthetic exit tags (unique price per
-    trade, n=1 or 2 each) too sparse individually to support any
-    additional targeted rule beyond the aggregate hard_stop / gap_filled /
-    time_stop buckets already covered.
+    rule was added, there is still no evidence on whether the rule reduced
+    hard_stop losses in live/paper trading going forward. Making a further
+    change (e.g. adding a percentage-distance buffer on top of the 2-bar
+    close requirement) would not be backed by any NEW data point and risks
+    over-fitting to a single already-addressed pattern. The rule is
+    therefore left UNCHANGED this cycle, pending a fresh ledger pull that
+    reflects trades closed after the confirmation logic went live. The
+    large number of single-trade 'STOP-LOSS hit @ <price>' /
+    'TAKE-PROFIT hit @ <price>' buckets remain broker-side synthetic exit
+    tags (unique price per trade, n=1 or 2 each) too sparse individually
+    to support any additional targeted rule beyond the aggregate
+    hard_stop / gap_filled / time_stop buckets already covered.
     """
     should_exit_flag, reason = _orig_should_exit(position, df, calendar_days_held)
 

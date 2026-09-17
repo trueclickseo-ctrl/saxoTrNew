@@ -1,6 +1,6 @@
 # AI-WRITTEN Phase 2+3 2026-09-10 by claude-sonnet-5
 # Entry filter: Block DKK/HKD pegged-currency pairs (59/61 closed trades, PF 0.6, total -135 EUR) from EMA(5/30) fresh-crossover+DI-spread entries.
-# Exit filter: No change to exit logic -- exit_reason ledger has only one populated bucket (hard_stop, 60/61 trades) so there is no differential signal (e.g. trend_break vs time_stop, or regime split) to justify altering the stop-exit decision; pass-through wrapper added for future instrumentation only.
+# Exit filter: No change to exit logic -- exit_reason ledger still has only one populated bucket (hard_stop, 60/61 trades, win rate 28.3%) plus a single unrelated roster_flatten row, so there is no differential signal (e.g. trend_break vs time_stop, or a regime split) to justify altering the stop-exit decision; pass-through wrapper retained for future instrumentation.
 
 import pandas as pd
 
@@ -51,17 +51,18 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
     """Pass-through wrapper around the base ema_trend should_exit().
 
     Exit-reason breakdown for this strategy's 61 quality closed SIM trades
-    shows essentially a single bucket: hard_stop (60/61, win rate 28.3%,
+    remains essentially a single bucket: hard_stop (60/61, win rate 28.3%,
     avg -2.2, PF 0.6); the lone remaining trade is a roster_flatten event
     unrelated to strategy logic. With only one exit-reason category
     populated there is no differential evidence (e.g. a distinct
-    trend_break-in-ranging cluster, or a time_stop cluster with a different
-    win rate) to justify tightening, loosening, or gating the stop-exit
-    decision. hard_stop is the strategy's core risk-management exit; adding
-    a confirmation-bar delay or blanket suppression here would increase risk
-    exposure without any ledger evidence that the stop itself is
-    noise-triggered (as opposed to just recording the expected base rate of
-    stop-outs for a ~28%-win-rate trend system). This wrapper therefore
+    trend_break-in-ranging cluster, a time_stop cluster with a different
+    win rate, or a cluster of stop-outs reversing shortly after) to justify
+    tightening, loosening, delaying via confirmation bars, or gating the
+    stop-exit decision. hard_stop is this strategy's core risk-management
+    exit for a ~28%-win-rate trend system; adding a confirmation-bar delay
+    or blanket suppression here would increase risk exposure without any
+    ledger evidence that the stop itself is noise-triggered as opposed to
+    reflecting the expected base rate of stop-outs. This wrapper therefore
     calls the original unchanged and exists so exit-reason instrumentation
     can be added here later once exit_reason diversity appears in the
     ledger (e.g. once DKK/HKD-driven noise trades are filtered out by the

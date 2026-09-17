@@ -1,6 +1,6 @@
-# AI-WRITTEN Phase 2+3 2025-06-15 by claude-sonnet-5
+# AI-WRITTEN Phase 2+3 2025-06-16 by claude-sonnet-5
 # Entry filter: Correlated JPY-cross basket (HKDJPY/JPYHKD/USDJPY) group cooldown of 12h to block simultaneous correlated stack-ups.
-# Exit filter: Require 2 consecutive daily closes beyond stop_price before confirming hard_stop exit, to filter single-bar wick/whipsaw stop-outs.
+# Exit filter: Require 2 consecutive daily closes beyond stop_price before confirming hard_stop exit, to filter single-bar wick/whipsaw stop-outs (unchanged -- no new exit-reason pattern in updated ledger).
 
 from __future__ import annotations
 
