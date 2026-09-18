@@ -162,6 +162,7 @@ def _strategy_perf() -> dict[str, dict]:
                           AND b.status  IN ('FILLED', 'SOLD')
                           AND b.strategy = s.strategy
             WHERE s.side='SELL' AND s.status='FILLED'
+              AND s.fill_price > 0 AND b.fill_price > 0
             GROUP BY s.strategy
         """).fetchall()
         con.close()
