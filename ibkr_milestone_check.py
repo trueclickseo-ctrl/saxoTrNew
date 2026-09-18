@@ -40,14 +40,15 @@ _MILESTONE_STEP = 20   # trigger every N closed trades
 
 _STRATEGIES = [
     # (db_key, display_name, config_path_in_json)
-    ("scorer_swing",    "Scorer Swing",     "strategies.scorer.swing"),
-    ("scorer_portfolio","Scorer Portfolio",  "strategies.scorer.portfolio"),
-    ("reversion",       "US Reversion",      "strategies.reversion"),
-    ("blend",           "US Blend",          "strategies.blend"),
-    ("US Ensemble",     "US Ensemble",       "strategies.signals"),
-    ("US Momentum",     "US Momentum",       "strategies.signals"),
-    ("US RSI Reversal", "US RSI Reversal",   "strategies.signals"),
-    ("US SMA Crossover","US SMA Crossover",  "strategies.signals"),
+    ("scorer_swing",    "Scorer Swing",      "strategies.scorer.swing"),
+    ("scorer_portfolio","Scorer Portfolio",   "strategies.scorer.portfolio"),
+    ("reversion",       "US Reversion",       "strategies.reversion"),
+    ("intraday",        "US Intraday Rev.",   "strategies.reversion"),
+    ("blend",           "US Blend",           "strategies.blend"),
+    ("US Ensemble",     "US Ensemble",        "strategies.signals"),
+    ("US Momentum",     "US Momentum",        "strategies.signals"),
+    ("US RSI Reversal", "US RSI Reversal",    "strategies.signals"),
+    ("US SMA Crossover","US SMA Crossover",   "strategies.signals"),
 ]
 
 # Tunable parameters per strategy — proposals stay within these bounds
@@ -67,6 +68,11 @@ _BOUNDS: dict[str, dict[str, tuple]] = {
         "rsi_entry":     (25,   45),
         "rsi_exit":      (55,   75),
         "max_hold_days": (5,    20),
+    },
+    "intraday": {
+        "stop_pct":      (0.01, 0.06),
+        "rsi_entry":     (25,   45),
+        "rsi_exit":      (55,   75),
     },
     "blend": {
         "stop_pct":   (0.04, 0.12),
