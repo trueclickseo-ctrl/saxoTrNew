@@ -38,14 +38,14 @@ sys.path.insert(0, _ROOT)
 # ── Config ────────────────────────────────────────────────────────────────────
 GATEWAY_HOST = "127.0.0.1"
 GATEWAY_PORT = 4001
-GATEWAY_EXE  = r"C:\Jts\ibgateway\1050\ibgateway1.exe"
+IBC_BAT      = r"C:\IBC\StartGatewayLive.bat"   # IBC launcher (handles login + 2FA push)
 
 # ib_insync client ID for the watchdog's own heartbeat connect -- must NOT
 # collide with any strategy client ID in ibkr_module/config/ibkr_config.json.
 WATCHDOG_CLIENT_ID = 99
 
-STARTUP_TIMEOUT_S = 90   # wait this long for Gateway to bind port after restart
-STARTUP_POLL_S    = 3    # polling interval during startup wait
+STARTUP_TIMEOUT_S = 300  # IBC needs time for login dialog + 2FA push approval
+STARTUP_POLL_S    = 5    # polling interval during startup wait
 
 MAX_RESTARTS_PER_HOUR = 3  # give up + email if Gateway keeps dying
 
@@ -189,15 +189,14 @@ def _kill_gateway() -> None:
 
 
 def _start_gateway() -> None:
-    """Launch IB Gateway. Requires auto-login to be configured in Gateway settings."""
-    if not os.path.exists(GATEWAY_EXE):
-        raise FileNotFoundError(f"IB Gateway executable not found: {GATEWAY_EXE}")
+    """Launch IB Gateway via IBC (auto-fills credentials, sends 2FA push to phone)."""
+    if not os.path.exists(IBC_BAT):
+        raise FileNotFoundError(f"IBC launcher not found: {IBC_BAT}")
     subprocess.Popen(
-        [GATEWAY_EXE],
-        cwd=os.path.dirname(GATEWAY_EXE),
+        ["cmd.exe", "/c", IBC_BAT],
         creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
     )
-    _log(f"  launched: {GATEWAY_EXE}")
+    _log(f"  launched via IBC: {IBC_BAT}")
 
 
 def _wait_for_gateway() -> bool:
@@ -250,8 +249,9 @@ def main(simulate_crash: bool = False) -> None:
         msg = (
             f"IB Gateway restarted {len(recent)}x in the last hour "
             f"and is STILL down at {now_str}.\n\n"
-            f"IB Gateway may be waiting for manual 2FA login.\n"
-            f"Action: open C:\\Jts\\ibgateway\\1050\\ibgateway1.exe manually and log in."
+            f"IBC (IB Controller) may be waiting for 2FA approval on your IBKR Mobile app.\n"
+            f"Action: check your iPhone for an IBKR push notification and approve it.\n"
+            f"If no notification arrives, run C:\\IBC\\StartGatewayLive.bat manually."
         )
         _log(f"  [ALERT] restart limit reached -- manual login likely needed")
         last_alert = state.get("last_alert_ts") or 0
@@ -265,7 +265,7 @@ def main(simulate_crash: bool = False) -> None:
     _log(f"  Restart #{len(recent)+1} (of {MAX_RESTARTS_PER_HOUR} allowed/hour)")
     if simulate_crash:
         _log("  [SIMULATE] would kill ibgateway1.exe (skipped -- Gateway still running)")
-        _log("  [SIMULATE] would launch C:\\Jts\\ibgateway\\1050\\ibgateway1.exe (skipped)")
+        _log("  [SIMULATE] would launch via IBC: C:\\IBC\\StartGatewayLive.bat (skipped)")
         _log("  [SIMULATE] Gateway is actually still up -- reporting restart success")
         came_up = True
     else:
@@ -287,16 +287,17 @@ def main(simulate_crash: bool = False) -> None:
             f"No manual action required.",
         )
     else:
-        _log(f"  Gateway did NOT respond within {STARTUP_TIMEOUT_S}s -- may need 2FA")
+        _log(f"  Gateway did NOT respond within {STARTUP_TIMEOUT_S}s -- 2FA approval needed")
         state["restarts"] = recent + [now_ts]
         state["last_alert_ts"] = now_ts
         _save_state(state)
         _send_alert(
-            "[ATOS IBKR] Gateway restart failed -- manual login required",
-            f"IB Gateway was restarted at {now_str} but did not become responsive\n"
+            "[ATOS IBKR] Gateway restart failed -- 2FA approval needed",
+            f"IB Gateway was restarted via IBC at {now_str} but did not become responsive\n"
             f"within {STARTUP_TIMEOUT_S}s.\n\n"
-            f"IB Gateway may require a manual 2FA login.\n"
-            f"Action: open C:\\Jts\\ibgateway\\1050\\ibgateway1.exe and log in manually.",
+            f"IBC is waiting for 2FA approval on your IBKR Mobile app.\n"
+            f"Action: check your iPhone for an IBKR push notification and approve it.\n"
+            f"If no notification arrives, run C:\\IBC\\StartGatewayLive.bat manually.",
         )
 
 
