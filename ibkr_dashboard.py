@@ -476,8 +476,22 @@ def main() -> None:
                 key = pos.get("strategy", "blend")
                 positions_by_strat.setdefault(key, []).append(pos)
 
-            # Live prices for all held symbols
-            symbols      = list({p["symbol"] for p in all_open})
+            # Live prices for all held symbols (paper + live ISK DB)
+            sym_set = {p["symbol"] for p in all_open}
+            live_db_path = os.path.join(_ROOT, "data", "ibkr_live_stocks.db")
+            if os.path.exists(live_db_path):
+                try:
+                    import sqlite3 as _sql
+                    _con = _sql.connect(live_db_path)
+                    for (_s,) in _con.execute(
+                        "SELECT DISTINCT symbol FROM trades "
+                        "WHERE status IN ('FILLED','PENDING_TRANSFER') AND side='BUY'"
+                    ).fetchall():
+                        sym_set.add(_s)
+                    _con.close()
+                except Exception:
+                    pass
+            symbols      = list(sym_set)
             live_prices  = ic.get_prices(ib, symbols) if symbols else {}
 
             ic.disconnect(ib)
