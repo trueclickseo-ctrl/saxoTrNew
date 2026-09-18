@@ -145,13 +145,11 @@ def blend_v2_targets(lookback_days: int = 252) -> dict:
 def reversion_candidates(lookback_days: int = 260) -> list[dict]:
     """US Reversion daily scan.
     Returns ranked [{ticker, price, rsi, sma20, dip_pct, vol_ratio, score}].
-    Uses REVERSION_TICKERS — a curated ~90-name high-momentum universe that
-    excludes weak/mature stocks (DLTR, MDB, ITW, GD, AMGN, BKR, etc.) to ensure
-    dips are temporary bounces in fundamentally strong names.
+    Uses full US_TICKERS universe (~384 names).
     """
-    feat_data = _download(REVERSION_TICKERS, lookback_days=lookback_days)
-    print(f"  [reversion] {len(feat_data)}/{len(REVERSION_TICKERS)} tickers with sufficient history")
-    candidates = _rev.scan(feat_data, REVERSION_TICKERS)
+    feat_data = _download(US_TICKERS, lookback_days=lookback_days)
+    print(f"  [reversion] {len(feat_data)}/{len(US_TICKERS)} tickers with sufficient history")
+    candidates = _rev.scan(feat_data, US_TICKERS)
     print(f"  [reversion] {len(candidates)} signal(s) found")
     return candidates
 
