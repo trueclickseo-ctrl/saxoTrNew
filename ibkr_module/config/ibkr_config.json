@@ -81,16 +81,16 @@
     },
     "scorer": {
       "swing": {
-        "budget_usd": 20000,
-        "max_positions": 8,
-        "stop_pct": 0.06,
+        "budget_usd": 30000,
+        "max_positions": 12,
+        "stop_pct": 0.04,
         "min_score": 65.0,
         "min_trade_usd": 50
       },
       "portfolio": {
         "budget_usd": 30000,
         "max_positions": 15,
-        "stop_pct": 0.06,
+        "stop_pct": 0.04,
         "min_score": 65.0,
         "min_trade_usd": 50
       }
