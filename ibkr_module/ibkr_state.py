@@ -80,6 +80,10 @@ def record_order(order_id: str, symbol: str, side: str,
 
 
 def mark_filled(order_id: str, fill_price: float, side: str | None = None) -> None:
+    if not fill_price or float(fill_price) <= 0:
+        print(f"  [state] ERROR mark_filled: fill_price={fill_price} for order {order_id} "
+              f"(side={side}) — rejected, fill_price must be > 0")
+        return
     with _conn() as con:
         if side and side.upper() == "BUY":
             con.execute(

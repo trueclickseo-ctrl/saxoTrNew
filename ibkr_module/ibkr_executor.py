@@ -450,6 +450,21 @@ def heal_missing_stops(ib, account_id: str, cfg: dict,
         if t.order.account == account_id
     }
 
+    # Fetch broker positions once for GTC-stop-trigger detection (lazy — only if needed)
+    _broker_positions: dict[str, int] | None = None
+
+    def _get_broker_positions() -> dict[str, int]:
+        nonlocal _broker_positions
+        if _broker_positions is None:
+            try:
+                _broker_positions = {
+                    p["symbol"]: p["qty"] for p in ic.get_positions(ib, account_id)
+                }
+            except Exception as exc:
+                print(f"  [heal-stop] WARNING: could not fetch broker positions: {exc}")
+                _broker_positions = {}
+        return _broker_positions
+
     healed = 0
     for pos in positions:
         sym      = pos["symbol"]
@@ -464,6 +479,49 @@ def heal_missing_stops(ib, account_id: str, cfg: dict,
             continue
         if stop_oid and str(stop_oid) in open_order_ids:
             continue  # stop confirmed live on IBKR
+
+        # ── When a tracked stop order has disappeared from openTrades(), check
+        # whether the position itself is still at the broker before re-placing.
+        # If the position is gone, the GTC stop triggered and we must record
+        # the exit rather than place a new stop on a closed position.
+        if stop_oid:
+            broker_pos = _get_broker_positions()
+            if sym not in broker_pos:
+                # Position closed at broker — GTC stop was triggered
+                exit_price: float | None = None
+                try:
+                    ib.reqExecutions()
+                    ib.sleep(0.5)
+                    fills = ib.fills()
+                    sell_fills = [
+                        f for f in fills
+                        if f.contract.symbol == sym and f.execution.side in ("SLD", "SELL")
+                    ]
+                    if sell_fills:
+                        sell_fills.sort(key=lambda f: f.execution.time, reverse=True)
+                        exit_price = float(sell_fills[0].execution.avgPrice)
+                except Exception as exc:
+                    print(f"  [heal-stop] {sym}: could not fetch executions: {exc}")
+
+                strategy = pos.get("strategy", "blend")
+                if exit_price and exit_price > 0:
+                    import uuid as _uuid
+                    sell_oid = f"heal_gtc_{sym}_{_uuid.uuid4().hex[:8]}"
+                    if not dry_run:
+                        st.record_order(sell_oid, sym, "SELL", qty,
+                                        limit_price=None, strategy=strategy)
+                        st.mark_filled(sell_oid, exit_price, side="SELL")
+                        st.close_buy_position(sym, strategy)
+                    print(f"  [heal-stop] {sym}: GTC stop triggered @ "
+                          f"${exit_price:.2f} -- exit recorded in DB"
+                          + (" [DRY RUN]" if dry_run else ""))
+                else:
+                    if not dry_run:
+                        st.close_buy_position(sym, strategy)
+                    print(f"  [heal-stop] {sym}: GTC stop triggered (fill price "
+                          f"unknown) -- position closed in DB"
+                          + (" [DRY RUN]" if dry_run else ""))
+                continue  # do NOT place a new stop on a closed position
 
         trail_high = float(pos.get("trailing_high") or pos.get("fill_price") or price)
         new_high   = max(trail_high, price)
