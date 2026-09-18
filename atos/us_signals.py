@@ -52,7 +52,7 @@ ALL_SIGNAL_STRATEGY_NAMES: list[str] = list(STRATEGY_NAMES.values())
 
 MAX_POSITIONS_PER_STRATEGY: int = 5     # max open positions per strategy
 MAX_HOLD_DAYS: int                = 30  # time-based exit
-HARD_STOP_PCT: float              = 0.06  # 6% max loss below entry
+HARD_STOP_PCT: float              = 0.04  # 4% max loss below entry
 ATR_STOP_MULT: float              = 2.0   # ATR multiplier for stop
 
 
