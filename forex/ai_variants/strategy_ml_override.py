@@ -1,6 +1,12 @@
 # AI-WRITTEN Phase 2+3 2026-09-18 by claude-sonnet-5
 # Entry filter: Exclude TRY, XAU, and HKD cross-pair symbols (consistent losers in closed-trade sample).
 # Exit filter: Require 2 consecutive daily closes beyond the ATR hard-stop before confirming a "hard_stop" exit, to filter single-bar wick-outs.
+#
+# PENDING ACTION FOR EVOLVER (do not remove this comment until actioned):
+# When closed organic trades >= 30 AND WR >= 60% AND PF >= 1.2: flag in evolver
+# report as live candidate for human review. Currently 10 trades (2026-09-18) with
+# WR=70% but PF=1.16 and avg_loss (-72 EUR) >> avg_win (+36 EUR) -- RR is inverted,
+# need more trades to confirm WR holds and PF improves. Human decision logged 2026-09-18.
 
 import pandas as pd
 import numpy as np
