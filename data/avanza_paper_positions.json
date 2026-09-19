@@ -38,7 +38,64 @@
       "ma_at_entry": 315.27549896240237,
       "entry_sek": 79.33,
       "qty": 25
+    },
+    "GOOGLE": {
+      "status": "OPEN",
+      "entry_date": "2026-09-14",
+      "entry_price": 343.95001220703125,
+      "financing_entry": 270.7691585459608,
+      "budget_sek": 3000.0,
+      "leverage": 4.7,
+      "financing_rate": 0.055,
+      "strategy": "trend",
+      "ma_at_entry": 340.80394134521487
+    },
+    "ASTRAZENECA": {
+      "status": "FLAT"
+    },
+    "ORACLE": {
+      "status": "FLAT"
+    },
+    "OMX": {
+      "status": "OPEN",
+      "entry_date": "2026-09-18",
+      "entry_price": 3265.122314453125,
+      "financing_entry": 753.4897648737983,
+      "budget_sek": 3000.0,
+      "leverage": 1.3,
+      "financing_rate": 0.055,
+      "strategy": "reversion",
+      "ma_at_entry": 3279.003125
     }
   },
-  "trades": []
+  "trades": [
+    {
+      "instrument": "ASTRAZENECA",
+      "entry_date": "2026-09-15",
+      "exit_date": "2026-09-17",
+      "entry_price": 162.63999938964844,
+      "exit_price": 164.92999267578125,
+      "pnl_sek": 83.17,
+      "pnl_pct": 2.77,
+      "leverage": 2.0,
+      "ko": false,
+      "strategy": "reversion",
+      "commission_sek": 0.0,
+      "budget_sek": 3000.0
+    },
+    {
+      "instrument": "ORACLE",
+      "entry_date": "2026-09-17",
+      "exit_date": "2026-09-18",
+      "entry_price": 150.58999633789062,
+      "exit_price": 145.72999572753906,
+      "pnl_sek": -389.24,
+      "pnl_pct": -12.97,
+      "leverage": 4.0,
+      "ko": false,
+      "strategy": "trend",
+      "commission_sek": 0.0,
+      "budget_sek": 3000.0
+    }
+  ]
 }

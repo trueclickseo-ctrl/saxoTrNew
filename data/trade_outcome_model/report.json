@@ -1,54 +1,54 @@
 {
   "trained": true,
-  "trained_at": "2026-09-12T17:00:05.014757+00:00",
-  "n_total": 217,
-  "n_train": 151,
-  "n_test": 66,
-  "test_accuracy": 0.6667,
-  "test_win_prec": 0.5833,
-  "test_loss_prec": 0.7143,
-  "base_win_rate": 0.3939,
-  "lift": 0.1894,
+  "trained_at": "2026-09-18T17:00:24.699544+00:00",
+  "n_total": 241,
+  "n_train": 168,
+  "n_test": 73,
+  "test_accuracy": 0.6712,
+  "test_win_prec": 0.5625,
+  "test_loss_prec": 0.7561,
+  "base_win_rate": 0.3836,
+  "lift": 0.1789,
   "top_features": [
     [
       "atr_pct",
-      0.3089
+      0.3354
     ],
     [
       "recovery_to_cost_ratio",
-      0.163
+      0.1468
     ],
     [
       "n_open_positions",
-      0.1094
-    ],
-    [
-      "rsi2",
-      0.1018
-    ],
-    [
-      "signal_strength",
-      0.0811
+      0.1071
     ],
     [
       "adx",
-      0.0811
+      0.0951
+    ],
+    [
+      "signal_strength",
+      0.0943
+    ],
+    [
+      "rsi2",
+      0.0932
     ],
     [
       "pair_n_closed",
-      0.0525
+      0.0426
     ],
     [
-      "strategy_bb_quality",
-      0.0354
+      "dir_Sell",
+      0.0314
     ],
     [
       "day_of_week",
-      0.0208
+      0.0207
     ],
     [
-      "dir_Buy",
-      0.0115
+      "strategy_bb_quality",
+      0.0155
     ]
   ]
 }
