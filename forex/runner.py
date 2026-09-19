@@ -894,6 +894,17 @@ BREAKEVEN_THRESHOLD_ATR = 1.0
 # Gap strategy: move stop to entry_price once price is this % toward the gap target
 BREAKEVEN_GAP_FILL_PCT  = 0.50
 
+# ── Per-pair confidence sizing (AI SIM only, 2026-09-19) ──────────────────────
+# When a strategy×pair combination in forex_ai has ≥ PAIR_CONF_MIN_TRADES closed
+# trades with WR ≥ PAIR_CONF_WR_THRESHOLD, position size is scaled up by
+# PAIR_CONF_MULTIPLIER. To bound the extra exposure, the breakeven stop for these
+# doubled positions triggers at PAIR_CONF_BE_ATR (tighter than the global 1.0×),
+# so a trade that doesn't move decisively locks in at entry quickly.
+PAIR_CONF_MIN_TRADES   = 10    # warm-up: don't apply until enough pair history
+PAIR_CONF_WR_THRESHOLD = 0.60  # 60%+ WR required to earn the larger size
+PAIR_CONF_MULTIPLIER   = 2.0   # size multiplier when edge is confirmed
+PAIR_CONF_BE_ATR       = 0.75  # tighter breakeven ATR mult for doubled positions
+
 # ── RSI(2) profit-protection ladder (2026-08-31) ─────────────────────────────
 # An OPT-IN alternative to the always-on trailing_stop_update + one-shot
 # _apply_breakeven_stop for the RSI(2) mean-reversion book. Design hypothesis
@@ -3131,7 +3142,13 @@ def _apply_breakeven_stop(key: str, pos: dict, df, strat_name: str,
         atr_entry = float(pos.get("atr_at_entry", 0))
         if atr_entry <= 0:
             return False
-        _be_mult = getattr(strat_mod, "BREAKEVEN_THRESHOLD_ATR", BREAKEVEN_THRESHOLD_ATR)
+        # Doubled positions (pair_conf_mult > 1) use a tighter breakeven
+        # threshold so a 2× trade that reverses quickly locks stop at entry
+        # before the extra exposure becomes a full double-loss.
+        if pos.get("pair_conf_mult", 1.0) > 1.0:
+            _be_mult = PAIR_CONF_BE_ATR
+        else:
+            _be_mult = getattr(strat_mod, "BREAKEVEN_THRESHOLD_ATR", BREAKEVEN_THRESHOLD_ATR)
         threshold = _be_mult * atr_entry
         if direction == "Buy":
             should_trigger = (cur_close - entry_price) >= threshold and cur_stop < entry_price
@@ -3176,6 +3193,53 @@ def _apply_breakeven_stop(key: str, pos: dict, df, strat_name: str,
     # so this is a quiet no-op until healed.
     pos["stop_order_id"] = None
     return False
+
+
+# ── Per-pair confidence sizing helpers ────────────────────────────────────────
+_pair_wr_cache: dict = {}     # (module_key, strategy, symbol) -> float multiplier
+_pair_wr_cache_ts: float = 0.0  # unix timestamp of last full refresh
+
+
+def _refresh_pair_wr_cache(module_key: str) -> None:
+    """Load per-(strategy, symbol) WR stats from the ledger into an in-process
+    cache (max one DB round-trip per hour).  Logs any pairs that qualify for
+    the confidence multiplier so the runner log shows which pairs earned 2×.
+    """
+    global _pair_wr_cache_ts
+    now = time.time()
+    if now - _pair_wr_cache_ts < 3600:
+        return
+    _pair_wr_cache.clear()
+    try:
+        rows = pnl_tracker.get_strategy_symbol_summary(module_key)
+        for r in rows:
+            strat  = r["strategy"]
+            sym    = r["symbol"]
+            n      = r.get("n", 0) or 0
+            wins   = r.get("wins", 0) or 0
+            wr     = wins / n if n > 0 else 0.0
+            mult   = (PAIR_CONF_MULTIPLIER
+                      if n >= PAIR_CONF_MIN_TRADES and wr >= PAIR_CONF_WR_THRESHOLD
+                      else 1.0)
+            _pair_wr_cache[(module_key, strat, sym)] = mult
+            if mult != 1.0:
+                logger.info(f"[pair_conf] {strat}/{sym}: WR {wr:.1%} "
+                            f"({n} trades, {wins} wins) → {mult:.1f}× confidence size")
+    except Exception as exc:
+        logger.debug(f"[pair_conf] cache refresh failed: {exc}")
+    _pair_wr_cache_ts = now
+
+
+def _pair_wr_multiplier(module_key: str, strat: str, sym: str) -> float:
+    """Return the confidence size multiplier for this (strategy, symbol).
+
+    2.0 when the pair has ≥ PAIR_CONF_MIN_TRADES closed trades in
+    module_key with WR ≥ PAIR_CONF_WR_THRESHOLD; 1.0 otherwise.
+    Cache is refreshed at most once per hour so repeated calls in the
+    same runner cycle are free.
+    """
+    _refresh_pair_wr_cache(module_key)
+    return _pair_wr_cache.get((module_key, strat, sym), 1.0)
 
 
 def _apply_profit_ladder_stop(key: str, pos: dict, df, strat_name: str,
@@ -4293,6 +4357,23 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 continue
             qty = _ai_qty
 
+        # ── Per-pair confidence sizing (AI SIM, 2026-09-19) ──────────────────
+        # Dynamically checks the closed-trade ledger: if this strategy×pair
+        # has ≥ PAIR_CONF_MIN_TRADES trades at ≥ 60% WR, double the size.
+        # Loss protection: the doubled position gets PAIR_CONF_BE_ATR (0.75×)
+        # as its breakeven threshold — tighter than the normal 1.0× — so if
+        # price doesn't move decisively the stop locks at entry well before a
+        # full 2× loss can materialise. AI SIM only; LIVE can never reach here.
+        _pair_conf_mult = 1.0
+        if ACCOUNT_ENV == "ai_sim" and qty > 0 and "units" not in sig:
+            _pair_conf_mult = _pair_wr_multiplier(_pnl_module(), strat_name, sym)
+            if _pair_conf_mult != 1.0:
+                qty = max(int(qty * _pair_conf_mult), int(pair_info["min_units"]))
+                logger.info(f"  [{strat_name}] {sym}[{direction}] pair confidence "
+                            f"{_pair_conf_mult:.1f}x -> {qty:,} units "
+                            f"(WR>={PAIR_CONF_WR_THRESHOLD:.0%}, "
+                            f">={PAIR_CONF_MIN_TRADES} trades gate met)")
+
         # ── SIM per-trade notional cap (2026-09-01, user) ───────────────────
         # SIM is for strategy testing, not size. Even at 0.25% risk, low-ATR
         # pairs sized to ~EUR 180k notional on a ~EUR 27,800 base. Cap the
@@ -4612,6 +4693,8 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         }
         if isinstance(entry_oid, str) and entry_oid.startswith("PAPER-"):
             pos_record["paper"] = True   # ATOS-simulated fill; see _sim_paper_fill_enabled()
+        if _pair_conf_mult != 1.0:
+            pos_record["pair_conf_mult"] = _pair_conf_mult  # drives tighter breakeven in _apply_breakeven_stop
         # 2026-09-02: stamp the market regime at entry on rsi / rsi_trend
         # positions so the dashboard's "RSI REGIME FIT" division can show
         # which open positions match the TRENDING gate (i.e. which ones
