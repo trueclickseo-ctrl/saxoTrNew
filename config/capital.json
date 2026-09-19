@@ -1,44 +1,37 @@
 {
   "_comment": "Capital and allocation config. Edit this file to adjust strategy budgets and position sizing. Restart atos_runner.py for changes to take effect.",
-
   "account": {
     "starting_capital_sek": 300000,
-    "max_deploy_pct": 0.90,
-    "cash_buffer_pct": 0.10,
-
+    "max_deploy_pct": 0.9,
+    "cash_buffer_pct": 0.1,
     "_sim_max_trade_notional_eur_comment": "2026-09-01 (user): SIM is for testing strategies, not for size. Hard ceiling on the NOTIONAL value of any single SIM entry -- forex/stocks/ETF. A signal whose computed size exceeds this is scaled DOWN to it (then floored to the instrument minimum); the strategy's risk math is untouched, only the absolute position size. WHY: even at 0.25% risk, low-ATR forex pairs sized to ~EUR 180,000 notional on a ~EUR 27,800 base (e.g. 196,000x USDHKD), and forex+futures margin exposure hit EUR 5.4M. Win-rate / expectancy / R-multiple are scale-invariant, so smaller size costs the study nothing. FUTURES ARE EXEMPT -- one contract is already the floor and can't be shrunk. Set 0 to disable.",
     "sim_max_trade_notional_eur": 10000
   },
-
   "strategies": {
-
     "us_blend": {
       "enabled": true,
-      "allocation_pct": 0.50,
+      "allocation_pct": 0.5,
       "offense_slots": 6,
       "defense_slots": 2
     },
-
     "us_blend_v2": {
       "enabled": true,
-      "allocation_pct": 0.50,
+      "allocation_pct": 0.5,
       "offense_slots": 6,
       "defense_slots": 2
     },
-
     "us_reversion": {
       "_max_slots_comment": "6 -> 10, 2026-08-28: explicit user request ('extend up to 10, if we got more signals we buy more'). max_universe_pct (10%) would derive ~38-41 slots off the current 385-407 ticker universe -- reversion_max_slots() in atos/capital_config.py caps that, so this is the real ceiling. Each slot shrinks a bit (~1/10 of the sleeve vs ~1/6) but stays well above 1-share-per-slot territory.",
       "enabled": true,
-      "allocation_pct": 0.50,
-      "max_universe_pct": 0.10,
+      "allocation_pct": 0.5,
+      "max_universe_pct": 0.1,
       "min_slots": 2,
       "max_slots": 10,
-      "stop_pct": 0.05,
+      "stop_pct": 0.03,
       "max_hold_days": 10,
-      "sleeve_dd_cap": 0.10,
+      "sleeve_dd_cap": 0.1,
       "fallback_sleeve_sek": 300000
     },
-
     "_stocks_live_comment": [
       "2026-09-02: REAL-MONEY stocks sleeve. atos_live_stocks.py runs US Blend",
       "ONLY (atos/us_momentum.py) on the existing Saxo LIVE SEK sub-account",
@@ -56,7 +49,6 @@
       "enabled": true,
       "risk_equity_sek": 30000
     },
-
     "_futures_comment": [
       "The Saxo account is denominated in EUR. risk_equity_eur is the equity base",
       "futures position sizing risks 1% of per trade. It exists because the runner",
@@ -77,7 +69,6 @@
       "enabled": true,
       "risk_equity_eur": 160000
     },
-
     "_forex_comment": [
       "Same story as futures: forex/runner.py sized off the raw SIM TotalValue",
       "(~945,000 EUR of demo credit), making positions roughly 33x the intended",
@@ -95,7 +86,6 @@
       ],
       "lbo_capital_eur": 1390
     },
-
     "_forex_live_comment": [
       "2026-08-25: the real-money Saxo LIVE forex account, entirely separate from",
       "the SIM account above -- different broker account, different Saxo app",
@@ -143,7 +133,6 @@
       "enabled": true,
       "risk_equity_sek": 35000
     },
-
     "_forex_live_eur_comment": [
       "2026-08-26: a SECOND real-money Saxo account -- the EUR sub-account under",
       "the same LIVE login as forex_live above (see forex/runner.py _account()'s",
@@ -183,6 +172,5 @@
       "enabled": true,
       "risk_equity_eur": 8000
     }
-
   }
 }

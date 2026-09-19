@@ -1612,7 +1612,7 @@ def _save_us_v2_state(state: dict):
     os.replace(tmp, US_BLEND_V2_STATE)
 
 
-US_BLEND_STOP_PCT       = 0.08   # 8% stop-loss, matching the ETF module's convention
+US_BLEND_STOP_PCT       = 0.04   # 4% stop-loss
 US_BLEND_TP_PCT         = 0.20   # 20% take-profit, matching the ETF module's convention
 US_BLEND_ATR_MULTIPLIER = 2.5    # SIM A/B: Chandelier exit — stop = peak - 2.5×ATR(14)
 US_BLEND_ATR_PERIOD     = 14
@@ -1671,7 +1671,7 @@ def _blend_book_state() -> dict:
 def _place_us(side: str, ticker: str, shares: int, imap: dict,
               todays_actions: list, price: float, cur_trade: dict = None,
               strategy: str = "US Blend", account_env: str = "sim",
-              stop_policy: str = "fixed_8pct", atr_stop_price: float | None = None) -> bool:
+              stop_policy: str = "fixed_4pct", atr_stop_price: float | None = None) -> bool:
     """Place ONE US market order and update DB + local cash on success.
     Routes to _sx() -- "sim" for atos_runner.run_cycle, "live" only when
     atos_live_stocks.py has set it.
@@ -1811,7 +1811,7 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
     comm = (stocks_live_commission_sek(shares, price, rate) if _sx() == "live"
             else commission_sek(shares, price_sek))
     if side == "Buy":
-        _effective_stop_pol = stop_policy if _sx() != "live" else "fixed_8pct"
+        _effective_stop_pol = stop_policy if _sx() != "live" else "fixed_4pct"
         _initial_stop = (atr_stop_price
                          if _effective_stop_pol == "atr_2.5x" and atr_stop_price is not None
                          else round(price * (1 - US_BLEND_STOP_PCT), 2))
@@ -2115,7 +2115,7 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
             return True
         if observe:
             return _observe_order(side, tk, shares, price, cur_trade=cur_trade)
-        _stop_pol = "fixed_8pct"
+        _stop_pol = "fixed_4pct"
         _atr_stop = None
         if side == "Buy" and account_env == "sim":
             _atr = _compute_atr(tk, feat_data)
@@ -2345,7 +2345,7 @@ def _compute_atr(ticker: str, feat_data: dict, period: int = 14) -> float | None
 def trail_us_blend_stops(feat_data: dict) -> None:
     """Trail stop-loss orders for all open US Blend positions on both SIM and LIVE.
 
-    Each cycle: new_stop = max(trailing_stop_high, current_price) * (1 - 8%).
+    Each cycle: new_stop = max(trailing_stop_high, current_price) * (1 - 4%).
     If new_stop exceeds the stored stop_price by at least $1.00, we PATCH the
     broker-side stop order on Saxo (cancel+replace fallback if PATCH is rejected)
     and update trailing_stop_high + stop_price in the DB. Paper fills skip the
@@ -2398,7 +2398,7 @@ def trail_us_blend_stops(feat_data: dict) -> None:
         new_trail  = max(trail_high, cur_price)
         cur_stop   = float(trade.get("stop_price") or 0)
 
-        stop_pol = trade.get("stop_policy") or "fixed_8pct"
+        stop_pol = trade.get("stop_policy") or "fixed_4pct"
         if stop_pol == "atr_2.5x":
             _atr = _compute_atr(ticker, feat_data, period=US_BLEND_ATR_PERIOD)
             if _atr:

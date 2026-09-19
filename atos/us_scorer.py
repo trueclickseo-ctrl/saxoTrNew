@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-SCORER_STOP_PCT      = 0.06     # 6% trailing stop (matches ibkr_config scorer.portfolio)
+SCORER_STOP_PCT      = 0.04     # 4% trailing stop
 SCORER_MAX_POS       = 15       # max concurrent positions
 SCORER_MIN_SCORE     = 65.0     # trade_score minimum to hold / enter
 SCORER_BUDGET_SEK    = 60_000   # total sleeve (SEK) — ~$30k equivalent
