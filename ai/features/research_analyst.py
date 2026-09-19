@@ -263,7 +263,7 @@ def _concurrency_agg() -> list[dict]:
     compact list the AI can reason about. Never raises."""
     try:
         import pnl_tracker
-        return pnl_tracker.get_concurrency_summary("forex")
+        return pnl_tracker.get_concurrency_summary("forex_ai")
     except Exception:
         return []
 

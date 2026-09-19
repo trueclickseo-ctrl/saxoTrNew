@@ -3196,20 +3196,22 @@ def _apply_breakeven_stop(key: str, pos: dict, df, strat_name: str,
 
 
 # ── Per-pair confidence sizing helpers ────────────────────────────────────────
-_pair_wr_cache: dict = {}     # (module_key, strategy, symbol) -> float multiplier
-_pair_wr_cache_ts: float = 0.0  # unix timestamp of last full refresh
+_pair_wr_cache: dict = {}      # (module_key, strategy, symbol) -> float multiplier
+_pair_wr_cache_ts: dict = {}   # module_key -> unix timestamp of last refresh
 
 
 def _refresh_pair_wr_cache(module_key: str) -> None:
     """Load per-(strategy, symbol) WR stats from the ledger into an in-process
-    cache (max one DB round-trip per hour).  Logs any pairs that qualify for
-    the confidence multiplier so the runner log shows which pairs earned 2×.
+    cache (max one DB round-trip per hour per module).  Logs any pairs that
+    qualify for the confidence multiplier so the runner log shows what earned 2×.
+    Cache is keyed per module so forex and forex_ai data never share a refresh.
     """
-    global _pair_wr_cache_ts
     now = time.time()
-    if now - _pair_wr_cache_ts < 3600:
+    if now - _pair_wr_cache_ts.get(module_key, 0.0) < 3600:
         return
-    _pair_wr_cache.clear()
+    # Clear only this module's entries, not other modules'
+    for k in [k for k in _pair_wr_cache if k[0] == module_key]:
+        del _pair_wr_cache[k]
     try:
         rows = pnl_tracker.get_strategy_symbol_summary(module_key)
         for r in rows:
@@ -3227,7 +3229,7 @@ def _refresh_pair_wr_cache(module_key: str) -> None:
                             f"({n} trades, {wins} wins) -> {mult:.1f}x confidence size")
     except Exception as exc:
         logger.debug(f"[pair_conf] cache refresh failed: {exc}")
-    _pair_wr_cache_ts = now
+    _pair_wr_cache_ts[module_key] = now
 
 
 def _pair_wr_multiplier(module_key: str, strat: str, sym: str) -> float:
