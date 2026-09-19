@@ -3215,7 +3215,7 @@ def _refresh_pair_wr_cache(module_key: str) -> None:
         for r in rows:
             strat  = r["strategy"]
             sym    = r["symbol"]
-            n      = r.get("n", 0) or 0
+            n      = r.get("trades", 0) or 0   # column is "trades" not "n"
             wins   = r.get("wins", 0) or 0
             wr     = wins / n if n > 0 else 0.0
             mult   = (PAIR_CONF_MULTIPLIER
@@ -3224,7 +3224,7 @@ def _refresh_pair_wr_cache(module_key: str) -> None:
             _pair_wr_cache[(module_key, strat, sym)] = mult
             if mult != 1.0:
                 logger.info(f"[pair_conf] {strat}/{sym}: WR {wr:.1%} "
-                            f"({n} trades, {wins} wins) → {mult:.1f}× confidence size")
+                            f"({n} trades, {wins} wins) -> {mult:.1f}x confidence size")
     except Exception as exc:
         logger.debug(f"[pair_conf] cache refresh failed: {exc}")
     _pair_wr_cache_ts = now
