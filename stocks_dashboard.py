@@ -374,7 +374,11 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
             pnl  = float(pv.get("ProfitLossOnTrade", 0) or 0)
             now  = float(pv.get("CurrentPrice", 0) or 0)
             if now == 0 and shs > 0 and ep > 0:
-                now = ep + pnl / shs
+                _rec = ep + pnl / shs
+                # Only use recovered price if it looks like a real stock price (>$1).
+                # Sub-dollar or negative results mean Saxo P&L data is also bad —
+                # leave now=0 so the saxo_history fallback below can fill it.
+                now = _rec if _rec > 1.0 else 0.0
             # Compute % from prices — Saxo SIM returns 0 for this field on stocks
             ppc = ((now - ep) / ep * 100) if now and ep else 0.0
             drow = db.get(base, {})
@@ -423,7 +427,8 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     # endpoint (saxo_history) DOES serve stock bars on SIM -- backfill the last
     # daily close for those rows so P&L and the exit triggers are usable. Not
     # real-time, but a real price beats a dash. (2026-09-03, user request.)
-    _need_px = [r for r in rows if r.get("now") is None and r.get("entry", 0) > 0]
+    # not r.get("now") catches both None (Saxo returned nothing) and 0 (Saxo returned 0)
+    _need_px = [r for r in rows if not r.get("now") and r.get("entry", 0) > 0]
     _px_src = None
     if _need_px:
         try:
@@ -442,8 +447,8 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
                     r["live"] = True
                     r["px_daily_close"] = True
             _px_src = f"{YL}last daily close (Saxo chart — SIM has no live stock quotes){W}"
-        except Exception:
-            pass
+        except Exception as _e:
+            _px_src = f"{RD}price fetch failed: {str(_e)[:60]}{W}"
 
     _extra = f"  {DM}+ {n_local} local" + (f" ({n_paper} paper){W}" if n_paper else f"{W}")
     if saxo:

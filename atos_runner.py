@@ -1941,7 +1941,25 @@ def run_us_momentum(feat_data: dict, open_trades: list, todays_actions: list,
     # freed slot -> a buy/sell churn loop at the same price, pure commission +
     # spread bleed (DELL/MTB, 2026-09-01/02). Reversion already scopes its own
     # set by strategy (run_us_reversion); Blend now matches.
-    us_open = {t["ticker"]: t for t in open_trades if t.get("strategy") == "US Blend"}
+    # Build us_open: newest (highest id) row per ticker.
+    # Older duplicates accumulate when the same ticker stays in the target across
+    # rebalances — the dict dedup kept only the last-iterated row, making older
+    # rows invisible forever. Close them now (DB-only, no Saxo order needed).
+    us_open: dict = {}
+    for _t in (t for t in open_trades if t.get("strategy") == "US Blend"):
+        _tk = _t["ticker"]
+        if _tk in us_open:
+            _older, _newer = (
+                (us_open[_tk], _t) if us_open[_tk].get("id", 0) < _t.get("id", 0)
+                else (_t, us_open[_tk])
+            )
+            if _mutate:
+                db.close_trade(_older["id"], _older.get("entry_price", 0), "ghost_shadow_close", 0.0, 0.0)
+            print(f"  {tag} {'[DRY-RUN] ' if not _mutate else ''}closed ghost row "
+                  f"{_tk} id={_older['id']} (newer id={_newer['id']} exists)")
+            us_open[_tk] = _newer
+        else:
+            us_open[_tk] = _t
     rev_held = {t["ticker"] for t in open_trades if t.get("strategy") == "US Reversion"}
     tag = "[US momentum DRY-RUN]" if dry_run else "[US momentum]"
 
