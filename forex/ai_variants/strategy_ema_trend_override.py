@@ -1,6 +1,16 @@
 # AI-WRITTEN Phase 2+3 2026-09-10 by claude-sonnet-5
-# Entry filter: Block DKK/HKD pegged-currency pairs (59/61 closed trades, PF 0.6, total -135 EUR) from EMA(5/30) fresh-crossover+DI-spread entries.
-# Exit filter: No change to exit logic -- exit_reason ledger still has only one populated bucket (hard_stop, 60/61 trades, win rate 28.3%) plus a single unrelated roster_flatten row, so there is no differential signal (e.g. trend_break vs time_stop, or a regime split) to justify altering the stop-exit decision; pass-through wrapper retained for future instrumentation.
+# Updated 2026-09-19: raised BREAKEVEN_THRESHOLD_ATR 1.0 → 1.5 (technique 3)
+#
+# Entry filter: Block DKK/HKD pegged-currency pairs (59/61 closed trades, PF 0.6,
+#   total -135 EUR) from EMA(5/30) fresh-crossover+DI-spread entries.
+# Exit filter: Pass-through (see should_exit docstring).
+# Breakeven: BREAKEVEN_THRESHOLD_ATR raised from global 1.0 → 1.5.
+#   WHY: AI SIM trade data (20 closed) showed most wins exiting at ~0.02R because
+#   the global 1.0×ATR breakeven trigger fired too soon on low-volatility pairs.
+#   Price crossed 1×ATR, stop moved to entry, price reversed → tiny profit.
+#   At 1.5×ATR the trade needs a stronger move before locking in; WR may dip
+#   slightly but avg win should grow from ~$5 toward $10–15, lifting PF.
+#   runner._apply_breakeven_stop() reads this constant via getattr().
 
 import pandas as pd
 
@@ -15,6 +25,10 @@ from forex.strategy_ema_trend import (
     RISK_PCT, MAX_POSITIONS, TIME_STOP_DAYS, LOT_ROUND, MIN_BARS,
     MAX_CROSSOVER_AGE, DI_SPREAD_MIN,
 )
+
+# Later breakeven: require 1.5×ATR profit before locking stop at entry.
+# runner._apply_breakeven_stop() picks this up via getattr(strat_mod, ...).
+BREAKEVEN_THRESHOLD_ATR = 1.5
 
 _BLOCKED_CURRENCIES = ("DKK", "HKD")
 

@@ -79,6 +79,14 @@ STRATEGY_NAMES = {
     # the LIVE EUR account's exclusive strategy under the two-account
     # HIGH_VOLUME split (rsi on HIGH_VOLUME_GROUP_B).
     "forex_live_eur": ["rsi"],
+    # 2026-09-19: AI-decision SIM twin -- own module key so its learned
+    # weights are never mixed with the regular SIM's history. Mirrors the
+    # full AI SIM strategy roster active as of 2026-09-08.
+    "forex_ai": [
+        "rsi", "ema_trend", "donchian_ai", "zscore_quality",
+        "rsi_trend", "rsi_atr", "bb_quality", "cnn_lstm",
+        "ema", "donchian", "ml",
+    ],
 }
 
 

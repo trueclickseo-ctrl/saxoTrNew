@@ -3080,11 +3080,15 @@ def _replace_stop_order(pos: dict, sym: str, akey: str, new_price: float) -> str
 
 
 def _apply_breakeven_stop(key: str, pos: dict, df, strat_name: str,
-                           akey: str, dry_run: bool) -> bool:
+                           akey: str, dry_run: bool, strat_mod=None) -> bool:
     """Move stop to entry_price (breakeven) once position is sufficiently in profit.
 
     Trend strategies : triggers when unrealised profit >= BREAKEVEN_THRESHOLD_ATR × ATR_at_entry
     Gap strategy     : triggers when price is >= BREAKEVEN_GAP_FILL_PCT toward gap_target
+
+    Per-strategy override: if the strategy module defines BREAKEVEN_THRESHOLD_ATR,
+    that value is used instead of the global default (1.0). AI override files use
+    this to tune the threshold without touching runner.py.
 
     One-shot per position — stored as pos["breakeven_triggered"] = True.
     Returns True if the stop was moved this call.
@@ -3127,7 +3131,8 @@ def _apply_breakeven_stop(key: str, pos: dict, df, strat_name: str,
         atr_entry = float(pos.get("atr_at_entry", 0))
         if atr_entry <= 0:
             return False
-        threshold = BREAKEVEN_THRESHOLD_ATR * atr_entry
+        _be_mult = getattr(strat_mod, "BREAKEVEN_THRESHOLD_ATR", BREAKEVEN_THRESHOLD_ATR)
+        threshold = _be_mult * atr_entry
         if direction == "Buy":
             should_trigger = (cur_close - entry_price) >= threshold and cur_stop < entry_price
         else:
@@ -3401,7 +3406,7 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
         if _ladder_active:
             _apply_profit_ladder_stop(key, pos, df, strat_name, akey, dry_run)
         else:
-            _apply_breakeven_stop(key, pos, df, strat_name, akey, dry_run)
+            _apply_breakeven_stop(key, pos, df, strat_name, akey, dry_run, strat_mod=strat_mod)
 
         # Forward-SIM observation (2026-08-27): MAE/MFE from the daily bars
         # already fetched for should_exit()/trailing-stop above -- no extra

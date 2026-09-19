@@ -470,12 +470,12 @@ def _fetch_forex_trade_history(strategy_name: str) -> dict:
         rows = [dict(r) for r in con.execute(
             "SELECT symbol, direction, realized_pnl, exit_reason, timestamp_open, "
             "timestamp_close FROM trades "
-            "WHERE strategy=? AND status='closed' AND realized_pnl IS NOT NULL "
+            "WHERE strategy=? AND module='forex_ai' AND status='closed' AND realized_pnl IS NOT NULL "
             "AND realized_pnl != 0 ORDER BY timestamp_close DESC LIMIT 100",
             (strategy_name,)
         ).fetchall()]
         open_n = con.execute(
-            "SELECT COUNT(*) FROM trades WHERE strategy=? AND status='open'",
+            "SELECT COUNT(*) FROM trades WHERE strategy=? AND module='forex_ai' AND status='open'",
             (strategy_name,)).fetchone()[0]
         con.close()
     except Exception as e:
@@ -646,7 +646,7 @@ Return the JSON object described in your instructions.
 
     log_entry = {
         "ts": datetime.now(timezone.utc).isoformat(),
-        "module": "forex",
+        "module": "forex_ai",
         "phase": 2,
         "strategy": strategy,
         "code_written": bool(code and not dry_run and gate_met),
@@ -744,7 +744,7 @@ def _fetch_exit_breakdown(strategy_name: str) -> dict:
         con = _sq.connect(db_path)
         rows = con.execute(
             "SELECT exit_reason, realized_pnl FROM trades "
-            "WHERE strategy=? AND status='closed' AND realized_pnl IS NOT NULL AND realized_pnl != 0",
+            "WHERE strategy=? AND module='forex_ai' AND status='closed' AND realized_pnl IS NOT NULL AND realized_pnl != 0",
             (strategy_name,)
         ).fetchall()
         con.close()
@@ -836,7 +836,7 @@ Return the JSON object described in your instructions.
 
     log_entry = {
         "ts": datetime.now(timezone.utc).isoformat(),
-        "module": "forex",
+        "module": "forex_ai",
         "phase": 3,
         "strategy": strategy,
         "code_written": False,
