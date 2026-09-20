@@ -2792,55 +2792,6 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
     scan_ts_str    = datetime.now().isoformat()
     ordered_tickers = set()
 
-    # ── AI Copilot on US Reversion entries ───────────────────────────────
-    # Builds proposals, logs them, calls evaluate_stock_proposal when the
-    # paid agent is on. Decisions stored in _ai_rev_decisions for the entry
-    # loop below. When can_apply_stocks_decision() is True (shadow_mode=false),
-    # REJECT skips the trade and MODIFY reduces shares.
-    _ai_rev_decisions: dict = {}
-    if (ai_config is not None and ai_stock_proposal is not None
-            and ai_config.stocks_enabled()):
-        try:
-            _spe = _sek_per_eur()
-            _equity_sek = get_total_equity(db.get_open_trades())
-            _equity_eur = (_equity_sek / _spe) if (_equity_sek and _spe) else None
-            _open_rev = [{"symbol": t, "side": "BUY", "size": v.get("shares"),
-                          "strategy": "us_reversion"}
-                         for t, v in rev_open_now.items()]
-            for _c in candidates[:slots_free]:
-                _tk = _c["ticker"]
-                _bars = feat_data.get(_tk)
-                _vol_pct = None
-                try:
-                    _cl = _bars["Close"].dropna()
-                    _vol_pct = round(float(_cl.pct_change().rolling(20).std().iloc[-1]) * 100, 3)
-                except Exception:
-                    pass
-                _stop = round(_c["price"] * (1 - USR.STOP_PCT), 2)
-                _sh = _sim_cap_shares(int(slot_sek / (_c["price"] * fx_usd)), _c["price"], fx_usd)
-                _risk_eur = ((_c["price"] - _stop) * _sh * fx_usd / _spe) if _spe else None
-                _prop = ai_stock_proposal.build_stock_proposal(
-                    strategy="us_reversion", ticker=_tk, entry_price=_c["price"],
-                    stop_price=_stop, target_price=_c.get("sma20"),
-                    rsi14=_c.get("rsi"), shares=_sh,
-                    daily_vol_pct=_vol_pct, risk_eur=_risk_eur,
-                    account_equity_eur=_equity_eur, open_positions=_open_rev,
-                    regime_bars=_bars,
-                )
-                if not _prop:
-                    continue
-                ai_stock_proposal.log_proposal(_prop)
-                if (ai_config.stocks_reversion_copilot_enabled()
-                        and ai_trading_copilot is not None):
-                    if not (ai_config.agent_dedup_enabled()
-                            and ai_stock_proposal.already_evaluated(_prop)):
-                        _dec = ai_trading_copilot.evaluate_stock_proposal(_prop)
-                        ai_stock_proposal.log_shadow_decision(
-                            _prop, _dec, entered=_tk in {c["ticker"] for c in candidates[:slots_free]})
-                        _ai_rev_decisions[_tk] = _dec
-        except Exception as _exc:
-            print(f"  [ai] reversion Copilot hook failed: {_exc}")
-
     for cand in candidates[:slots_free]:
         ticker = cand["ticker"]
         price  = cand["price"]
@@ -2854,19 +2805,6 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
         if shares < 1:
             print(f"  {tag} {ticker}: slot too small for 1 share — skip")
             continue
-
-        # Apply copilot decision (only when shadow_mode=false)
-        if ai_config is not None and ai_config.can_apply_stocks_decision():
-            _rev_dec = _ai_rev_decisions.get(ticker, {})
-            _rev_action = _rev_dec.get("action", "HOLD")
-            if _rev_action == "REJECT":
-                print(f"  {tag} {ticker}: AI REJECT — {_rev_dec.get('comment', '')[:80]}")
-                continue
-            if _rev_action == "MODIFY":
-                _mult = float(_rev_dec.get("size_multiplier", 1.0))
-                shares = max(1, int(shares * _mult))
-                print(f"  {tag} {ticker}: AI MODIFY -> {shares} shares ({_mult:.2f}x) — "
-                      f"{_rev_dec.get('comment', '')[:60]}")
 
         cost_sek = shares * price * fx_usd
         print(f"  {tag} BUY {ticker}: RSI={cand['rsi']} dip={cand['dip_pct']}% "
@@ -3516,39 +3454,6 @@ def run_us_penny(open_trades: list, todays_actions: list) -> None:
             continue
         stop_p = round(price * (1 - _UPY.STOP_PCT), 2)
 
-        # AI Copilot on US Penny entries
-        if (ai_config is not None and ai_config.stocks_penny_copilot_enabled()
-                and ai_stock_proposal is not None and ai_trading_copilot is not None):
-            try:
-                _spe = _sek_per_eur()
-                _risk_eur = (abs(price - stop_p) * shares * fx_usd / _spe) if _spe else None
-                _pprop = ai_stock_proposal.build_stock_proposal(
-                    strategy="us_penny", ticker=ticker, entry_price=price,
-                    stop_price=stop_p, target_price=round(price * (1 + _UPY.TARGET_PCT), 2),
-                    rsi14=None, shares=shares,
-                    daily_vol_pct=None, risk_eur=_risk_eur,
-                    account_equity_eur=None,
-                    regime_bars=penny_data.get(ticker),
-                )
-                if _pprop:
-                    ai_stock_proposal.log_proposal(_pprop)
-                    if not (ai_config.agent_dedup_enabled()
-                            and ai_stock_proposal.already_evaluated(_pprop)):
-                        _pdec = ai_trading_copilot.evaluate_stock_proposal(_pprop)
-                        ai_stock_proposal.log_shadow_decision(_pprop, _pdec, entered=True)
-                        if ai_config.can_apply_stocks_decision():
-                            _pact = _pdec.get("action", "HOLD")
-                            if _pact == "REJECT":
-                                print(f"  {tag} {ticker}: AI REJECT — "
-                                      f"{_pdec.get('comment', '')[:80]}")
-                                continue
-                            if _pact == "MODIFY":
-                                _mult = float(_pdec.get("size_multiplier", 1.0))
-                                shares = max(1, int(shares * _mult))
-                                print(f"  {tag} {ticker}: AI MODIFY -> {shares} shares ({_mult:.2f}x)")
-            except Exception as _exc:
-                print(f"  [ai] penny copilot hook failed for {ticker}: {_exc}")
-
         cost_sek = shares * price * fx_usd
         print(f"  {tag} BUY {ticker}: vol={cand['vol_ratio']}x "
               f"above_don=+{cand['pct_above_don']}% | "
@@ -3702,39 +3607,6 @@ def run_us_bagger(open_trades: list, todays_actions: list) -> None:
             continue
         trail_high = price
         stop_p     = round(price * (1 - _UBG.TRAILING_STOP_PCT), 4)
-
-        # AI Copilot on US Bagger entries
-        if (ai_config is not None and ai_config.stocks_bagger_copilot_enabled()
-                and ai_stock_proposal is not None and ai_trading_copilot is not None):
-            try:
-                _spe = _sek_per_eur()
-                _risk_eur = (abs(price - stop_p) * shares * fx_usd / _spe) if _spe else None
-                _bgprop = ai_stock_proposal.build_stock_proposal(
-                    strategy="us_bagger", ticker=ticker, entry_price=price,
-                    stop_price=stop_p, target_price=None,
-                    rsi14=cand.get("rsi"), shares=shares,
-                    daily_vol_pct=None, risk_eur=_risk_eur,
-                    account_equity_eur=None,
-                    regime_bars=bagger_data.get(ticker),
-                )
-                if _bgprop:
-                    ai_stock_proposal.log_proposal(_bgprop)
-                    if not (ai_config.agent_dedup_enabled()
-                            and ai_stock_proposal.already_evaluated(_bgprop)):
-                        _bgdec = ai_trading_copilot.evaluate_stock_proposal(_bgprop)
-                        ai_stock_proposal.log_shadow_decision(_bgprop, _bgdec, entered=True)
-                        if ai_config.can_apply_stocks_decision():
-                            _bgact = _bgdec.get("action", "HOLD")
-                            if _bgact == "REJECT":
-                                print(f"  {tag} {ticker}: AI REJECT — "
-                                      f"{_bgdec.get('comment', '')[:80]}")
-                                continue
-                            if _bgact == "MODIFY":
-                                _mult = float(_bgdec.get("size_multiplier", 1.0))
-                                shares = max(1, int(shares * _mult))
-                                print(f"  {tag} {ticker}: AI MODIFY -> {shares} shares ({_mult:.2f}x)")
-            except Exception as _exc:
-                print(f"  [ai] bagger copilot hook failed for {ticker}: {_exc}")
 
         cost_sek  = shares * price * fx_usd
         print(f"  {tag} BUY {ticker}: ROC={cand['roc_6m']}% rsi={cand['rsi']} "
@@ -3912,44 +3784,6 @@ def run_us_signals(feat_data: dict, open_trades: list, todays_actions: list) -> 
             print(f"  {tag} BUY {ticker} [{strategy}] "
                   f"@ {cur_price:.2f} x{shares} "
                   f"(conf={sig['confidence']:.2f}) stop={stop:.2f}")
-
-            # AI Copilot on US Signals entries
-            _sig_ai_skip = False
-            if (ai_config is not None and ai_config.stocks_signals_copilot_enabled()
-                    and ai_stock_proposal is not None and ai_trading_copilot is not None):
-                try:
-                    _spe = _sek_per_eur()
-                    _risk_eur = (abs(cur_price - stop) * shares * fx_usd / _spe) if _spe else None
-                    _prop = ai_stock_proposal.build_stock_proposal(
-                        strategy=strategy.lower().replace(" ", "_"),
-                        ticker=ticker, entry_price=cur_price,
-                        stop_price=stop, target_price=None,
-                        rsi14=None, shares=shares,
-                        daily_vol_pct=None, risk_eur=_risk_eur,
-                        account_equity_eur=None,
-                        regime_bars=feat_data.get(ticker),
-                    )
-                    if _prop:
-                        ai_stock_proposal.log_proposal(_prop)
-                        if not (ai_config.agent_dedup_enabled()
-                                and ai_stock_proposal.already_evaluated(_prop)):
-                            _sig_dec = ai_trading_copilot.evaluate_stock_proposal(_prop)
-                            ai_stock_proposal.log_shadow_decision(_prop, _sig_dec, entered=True)
-                            if ai_config.can_apply_stocks_decision():
-                                _sig_action = _sig_dec.get("action", "HOLD")
-                                if _sig_action == "REJECT":
-                                    print(f"  {tag} {ticker} [{strategy}]: AI REJECT — "
-                                          f"{_sig_dec.get('comment', '')[:80]}")
-                                    _sig_ai_skip = True
-                                elif _sig_action == "MODIFY":
-                                    _mult = float(_sig_dec.get("size_multiplier", 1.0))
-                                    shares = max(1, int(shares * _mult))
-                                    print(f"  {tag} {ticker} [{strategy}]: AI MODIFY -> "
-                                          f"{shares} shares ({_mult:.2f}x)")
-                except Exception as _exc:
-                    print(f"  [ai] signals copilot hook failed for {ticker}: {_exc}")
-            if _sig_ai_skip:
-                continue
 
             entry_oid = None
             is_paper  = False
