@@ -54,7 +54,7 @@ MAX_POSITIONS_PER_STRATEGY: int = 5     # max open positions per strategy
 MAX_HOLD_DAYS: int                = 30  # time-based exit
 HARD_STOP_PCT: float              = 0.04  # 4% max loss below entry
 ATR_STOP_MULT: float              = 2.0   # ATR multiplier for stop
-STAGNANT_HOLD_DAYS: int           = 10   # days before stagnant-loser check applies
+STAGNANT_HOLD_DAYS: int           = 5    # days before stagnant-loser check applies
 STAGNANT_LOSS_PCT: float          = -0.5 # % return threshold — exit if held long and still red
 
 
