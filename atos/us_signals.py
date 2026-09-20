@@ -54,6 +54,8 @@ MAX_POSITIONS_PER_STRATEGY: int = 5     # max open positions per strategy
 MAX_HOLD_DAYS: int                = 30  # time-based exit
 HARD_STOP_PCT: float              = 0.04  # 4% max loss below entry
 ATR_STOP_MULT: float              = 2.0   # ATR multiplier for stop
+STAGNANT_HOLD_DAYS: int           = 10   # days before stagnant-loser check applies
+STAGNANT_LOSS_PCT: float          = -0.5 # % return threshold — exit if held long and still red
 
 
 # ── DataFrame preparation ──────────────────────────────────────────────────────
@@ -145,7 +147,7 @@ def get_entry_signals(ticker: str, feat_df: pd.DataFrame) -> list[dict]:
 def should_exit(trade: dict, feat_df: pd.DataFrame, current_price: float) -> tuple[bool, str]:
     """
     Check if an open US Signals trade should be exited.
-    Checks (in order): stop hit, time limit, SELL signal from original strategy.
+    Checks (in order): stop hit, stagnant loser, time limit, SELL signal.
     Returns (exit, reason).
     """
     # 1. Hard stop
@@ -153,8 +155,21 @@ def should_exit(trade: dict, feat_df: pd.DataFrame, current_price: float) -> tup
     if stop > 0 and current_price <= stop:
         return True, f"stop hit @ {current_price:.2f} (stop {stop:.2f})"
 
-    # 2. Time limit
+    # 2. Stagnant loser: still red after STAGNANT_HOLD_DAYS — thesis hasn't played out
     entry_date_str = trade.get("entry_date", "")
+    if entry_date_str:
+        try:
+            held = (date.today() - date.fromisoformat(entry_date_str[:10])).days
+            ep   = float(trade.get("entry_price") or 0)
+            if held >= STAGNANT_HOLD_DAYS and ep > 0:
+                pct = (current_price - ep) / ep * 100
+                if pct <= STAGNANT_LOSS_PCT:
+                    return True, (f"stagnant loser: {held}d held, {pct:.1f}% "
+                                  f"(threshold {STAGNANT_LOSS_PCT}%)")
+        except Exception:
+            pass
+
+    # 3. Time limit
     if entry_date_str:
         try:
             held = (date.today() - date.fromisoformat(entry_date_str[:10])).days
@@ -163,7 +178,7 @@ def should_exit(trade: dict, feat_df: pd.DataFrame, current_price: float) -> tup
         except Exception:
             pass
 
-    # 3. SELL signal from original strategy
+    # 4. SELL signal from original strategy
     db_strategy = trade.get("strategy", "")
     pkg_cls = _DB_TO_PKG.get(db_strategy)
     if pkg_cls:
