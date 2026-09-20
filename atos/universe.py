@@ -862,6 +862,113 @@ PENNY_TICKERS: list = [
     # Crypto / digital assets (high-volume momentum plays)
     "BTBT",   # Bit Digital           — Bitcoin mining + AI compute
     "CIFR",   # Cipher Mining         — Bitcoin miner, decent daily volume
+    # ── Expansion 2 — 2026-09-20 — target 100 tickers ───────────────────────
+    # Biotech / pharma (additional)
+    "AGEN",   # Agenus                — immuno-oncology, decent volume
+    "LXRX",   # Lexicon Pharma        — metabolic/cardiovascular
+    "OVID",   # Ovid Therapeutics     — rare neurological diseases
+    "GLYC",   # GlycoMimetics         — oncology
+    "ADMP",   # Adamis Pharma         — epinephrine/allergy
+    "TNXP",   # Tonix Pharma          — CNS/pain, high trial activity
+    "VBIV",   # VBI Vaccines          — hepatitis/oncology vaccines
+    "KPTI",   # Karyopharm Tx         — nuclear export inhibitors
+    "SCYX",   # SCYNEXIS              — antifungal drugs
+    "ACRX",   # AcelRx Pharma         — acute pain management
+    "CYCC",   # Cyclacel              — cell cycle CDK inhibitors
+    "CRBP",   # Corbus Pharma         — inflammation/fibrosis
+    "JAGX",   # Jaguar Health         — GI drugs
+    "PHVS",   # Pharvaris             — hereditary angioedema
+    "FGEN",   # FibroGen              — fibrosis/anemia
+    "NUVB",   # Nuvation Bio          — oncology
+    "SLRX",   # Salarius Pharma       — epigenetic oncology
+    "ENVB",   # Enveric Biosciences   — psychedelic-derived CNS
+    # Crypto mining (additional)
+    "WULF",   # TeraWulf              — nuclear-powered BTC mining
+    "CORZ",   # Core Scientific       — BTC mining + AI HPC
+    "BTCM",   # BIT Mining            — Chinese BTC miner
+    "GREE",   # Greenidge Generation  — small BTC miner
+    "MARA",   # Marathon Digital      — large BTC miner (gate filters if >$2)
+    "IREN",   # Iris Energy           — renewable BTC mining
+    # Cannabis (additional)
+    "TLRY",   # Tilray Brands         — large cannabis LP + alcohol
+    "CGC",    # Canopy Growth         — Canadian cannabis
+    "CRON",   # Cronos Group          — global cannabis
+    "OGI",    # OrganiGram            — Canadian LP
+    "GRWG",   # GrowGeneration        — cannabis hydroponic retail
+    # Shipping / maritime (rate-driven momentum spikes)
+    "TOPS",   # TOP Ships             — tanker fleet
+    "GLBS",   # Globus Maritime       — dry bulk
+    "SHIP",   # Seanergy Maritime     — capesize bulk carriers
+    "CTRM",   # Castor Maritime       — diversified fleet
+    "GASS",   # StealthGas            — LPG carriers
+    "PSHG",   # Performance Shipping  — tanker fleet
+    # Chinese ADRs (momentum-prone on macro news)
+    "GFAI",   # Guardforce AI         — AI security robots
+    "QD",     # Qudian                — Chinese fintech
+    "SXTC",   # China SXT Pharma      — TCM + nutrition
+    "NCTY",   # The9 Limited          — crypto mining + gaming
+    "JFIN",   # Jiayin Group          — Chinese online lending
+    # EV / clean energy (additional)
+    "SES",    # SES AI                — lithium-metal battery tech
+    "SPWR",   # SunPower              — residential solar
+    "STEM",   # Stem Inc              — AI-driven energy storage
+    "OPAL",   # OPAL Fuels            — renewable natural gas
+    "CENN",   # Cenntro Electric      — commercial EV trucks
+    "CHPT",   # ChargePoint           — EV charging network
+    "BLNK",   # Blink Charging        — EV charging
+    "NIO",    # NIO                   — Chinese premium EV
+    "XPEV",   # XPeng                 — Chinese EV + ADAS
+    "SOLO",   # ElectraMeccanica      — compact EV
+    # Small-cap tech / drones / other
+    "PHUN",   # Phunware              — mobile engagement platform
+    "INPX",   # Inpixon               — indoor intelligence IoT
+    "GNUS",   # Genius Brands         — kids entertainment
+    "NXTD",   # NXT-ID                — IoT/fintech
+    "CNET",   # ChinaNet Online       — digital marketing China
+    "CLPS",   # CLPS Technology       — IT services China
+    "UAVS",   # AgEagle Aerial        — drone systems
+    # Miscellaneous high-volume penny names
+    "ZKIN",   # ZK International      — pipeline infrastructure China
+    "DPRO",   # Draganfly             — commercial drones
+    "SHOT",   # Safety Shot           — wellness/detox beverages
+    "TAOP",   # Taoping Inc           — smart display terminals China
+    "AIXI",   # Xiao-I Corporation    — enterprise AI China
+    "MDGS",   # Medigus               — medical devices + digital
+    "CODA",   # CODA Octopus          — marine tech
+    "MARK",   # Remark Holdings       — AI + media
+    "OBSV",   # ObsEva                — women's reproductive health
+    "RETO",   # ReTo Eco-Solutions    — eco building materials China
+    # ── AI / machine learning ────────────────────────────────────────────────
+    "BBAI",   # BigBear.ai            — defense + intelligence AI analytics
+    "SOUN",   # SoundHound AI         — voice AI platform
+    "GXAI",   # Gaxos.ai             — AI mobile gaming
+    "ARQQ",   # Arqit Quantum         — quantum encryption AI
+    "RGTI",   # Rigetti Computing     — quantum computing
+    "QUBT",   # Quantum Computing Inc — quantum software
+    "ABSI",   # Absci                 — AI-driven drug discovery
+    "BNGO",   # Bionano Genomics      — optical genome mapping AI
+    "AEYE",   # AudioEye              — AI web accessibility
+    "CXAI",   # CXApp                 — AI workplace experience
+    # ── Defense / aerospace / war ────────────────────────────────────────────
+    "BKSY",   # BlackSky Technology   — geospatial satellite intelligence
+    "SATL",   # Satellogic            — satellite imagery + AI for defense
+    "SPIR",   # Spire Global          — satellite data analytics
+    "MNTS",   # Momentus              — in-space transportation
+    "LUNR",   # Intuitive Machines    — lunar surface delivery / NASA
+    "ASTR",   # Astra Space           — small launch vehicles
+    "RDW",    # Redwire               — space infrastructure + defense
+    "ATRO",   # Astronics             — aerospace/defense electronics
+    # ── Apps / software / platforms ──────────────────────────────────────────
+    "SKLZ",   # Skillz                — mobile competitive gaming platform
+    "APPS",   # Digital Turbine       — app distribution + marketing
+    "BODY",   # Beachbody             — fitness + nutrition streaming app
+    "GMBL",   # Esports Entertainment — esports betting + gaming app
+    "MOGO",   # Mogo Inc              — fintech app (crypto + credit)
+    "LPSN",   # LivePerson            — conversational AI / messaging
+    "EGHT",   # 8x8 Inc               — cloud video/voice comms platform
+    "MTTR",   # Matterport            — 3D digital twin platform
+    "OPEN",   # Opendoor              — AI-powered home buying/selling app
+    "EDGIO",  # Edgio                 — streaming + app delivery CDN
 ]
 
 # ── LIVE vs SIM split (2026-09-04) ───────────────────────────────────────────
