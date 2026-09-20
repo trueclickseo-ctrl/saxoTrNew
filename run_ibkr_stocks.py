@@ -584,7 +584,7 @@ def main() -> None:
             print("  RUNNING ALL STRATEGIES")
             print("="*60)
 
-            print("\n── Scorer ──────────────────────────────────────────────────")
+            print("\n-- Scorer --------------------------------------------------")
             if args.exits:
                 ex.run_scorer_exits(ib, account_id, cfg, dry_run=dry_run,
                                     scorer_results=pre_scorer)
@@ -593,10 +593,10 @@ def main() -> None:
                                       scorer_results=pre_scorer,
                                       auto=args.auto)
 
-            print("\n── US Blend ────────────────────────────────────────────────")
+            print("\n-- US Blend ------------------------------------------------")
             ex.run_rebalance(ib, account_id, cfg, dry_run=dry_run, signal=pre_signal)
 
-            print("\n── US Reversion ────────────────────────────────────────────")
+            print("\n-- US Reversion --------------------------------------------")
             if args.exits:
                 ex.run_reversion_exits(ib, account_id, cfg, dry_run=dry_run,
                                        indicators=pre_indicators)
@@ -604,7 +604,7 @@ def main() -> None:
                 ex.run_reversion_entries(ib, account_id, cfg, dry_run=dry_run,
                                          intraday=False, candidates=pre_candidates)
 
-            print("\n── US Signals ──────────────────────────────────────────────")
+            print("\n-- US Signals ----------------------------------------------")
             if args.exits:
                 ex.run_us_signals_exits(ib, account_id, cfg, dry_run=dry_run,
                                         feat_data=pre_feat_data)
