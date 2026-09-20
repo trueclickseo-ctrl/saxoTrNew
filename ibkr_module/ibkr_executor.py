@@ -302,6 +302,20 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
 
     for b in buys:
         stop_price = round(b["price"] * (1 - stop_pct), 2)
+
+        # AI Copilot
+        _bl_open = [{"symbol": p["symbol"], "side": "BUY", "size": p.get("qty"),
+                      "strategy": "us_blend"}
+                     for p in held]
+        _bl_dec = _ai_ibkr_score("us_blend", b["symbol"], b["price"], stop_price, b["qty"],
+                                  open_positions=_bl_open)
+        _ai_skip_bl, _bl_qty = _ai_ibkr_apply(_bl_dec, b["symbol"], b["qty"], "blend")
+        if _ai_skip_bl:
+            continue
+        if _bl_qty != b["qty"]:
+            b["qty"] = _bl_qty
+            b["notional"] = round(b["price"] * _bl_qty, 2)
+
         print(f"\n  BUY  {b['qty']} {b['symbol']} @ ~${b['price']:.2f}  "
               f"notional ~${b['notional']:,.0f}  stop=${stop_price:.2f}")
         confirm = "y" if auto else input("  Confirm? [y/N]: ").strip().lower()
@@ -1362,6 +1376,17 @@ def run_reversion_v2_entries(ib, account_id: str, cfg: dict, dry_run: bool = Tru
             continue
         stop_price = round(price * (1 - stop_pct), 2)
 
+        # AI Copilot
+        _rv2_open = [{"symbol": p["symbol"], "side": "BUY", "size": p.get("qty"),
+                       "strategy": "us_reversion_v2"}
+                      for p in open_pos]
+        _rv2_dec = _ai_ibkr_score("us_reversion_v2", c["ticker"], price, stop_price, qty,
+                                   rsi14=c.get("rsi"), open_positions=_rv2_open)
+        _ai_skip, qty = _ai_ibkr_apply(_rv2_dec, c["ticker"], qty, "reversion_v2")
+        if _ai_skip:
+            continue
+        notional = round(price * qty, 2)
+
         print(f"\n  [reversion_v2] BUY  {c['ticker']:<8}  "
               f"RSI={c['rsi']:.0f}  dip={c['dip_pct']}%  vol={c['vol_ratio']}x  R:R={c['rr_ratio']}")
         print(f"    qty={qty}  price~${price:.2f} [{price_src}]  "
@@ -1857,6 +1882,18 @@ def run_scorer_entries(
             if notional < min_usd:
                 continue
             stop_px  = round(price * (1 - stop_pct), 2)
+
+            # AI Copilot
+            _sc_open = [{"symbol": p["symbol"], "side": "BUY", "size": p.get("qty"),
+                          "strategy": strategy}
+                         for p in st.get_open_positions(strategy)]
+            _sc_rsi = float(row.get("rsi_14") or 0) or None
+            _sc_dec = _ai_ibkr_score(strategy, ticker, price, stop_px, qty,
+                                      rsi14=_sc_rsi, open_positions=_sc_open)
+            _ai_skip_sc, qty = _ai_ibkr_apply(_sc_dec, ticker, qty, f"scorer/{label}")
+            if _ai_skip_sc:
+                continue
+            notional = round(price * qty, 2)
 
             roc  = float(row.get("roc_20d",  0))
             adx  = float(row.get("adx_14",   0))
