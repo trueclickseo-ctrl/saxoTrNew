@@ -92,7 +92,10 @@ def _ai_ibkr_apply(dec: dict | None, ticker: str, qty: int,
         print(f"  [ai] {lbl}{ticker}: REJECT -- {dec.get('comment', '')[:80]}")
         return True, qty
     if action == "MODIFY":
-        mult = max(0.25, min(1.0, float(dec.get("size_multiplier", 1.0))))
+        try:
+            mult = max(0.25, min(1.0, float(dec.get("size_multiplier", 1.0))))
+        except (TypeError, ValueError):
+            mult = 1.0
         new_qty = max(1, int(qty * mult))
         lbl = f"[{strategy}] " if strategy else ""
         print(f"  [ai] {lbl}{ticker}: MODIFY -> {new_qty} shares ({mult:.2f}x) -- "
