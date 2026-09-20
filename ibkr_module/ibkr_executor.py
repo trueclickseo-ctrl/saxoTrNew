@@ -64,6 +64,7 @@ def _ai_ibkr_score(strategy: str, ticker: str, price: float, stop_price: float,
             daily_vol_pct=None, risk_eur=None, account_equity_eur=None,
             open_positions=open_positions or [],
             regime_bars=regime_bars,
+            account_env="ibkr_paper",
         )
         if not prop:
             return None
@@ -277,12 +278,22 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
     print(f"  SELL  ({len(sells)}): {', '.join(s['symbol'] for s in sells)}")
     print(f"  BUY   ({len(buys)}):  {', '.join(b['symbol'] for b in buys)}")
 
+    # AI Copilot observation pass -- runs in dry-run AND live mode so every
+    # rebalance signal is scored and logged regardless of execution mode.
+    _bl_open_obs = [{"symbol": p["symbol"], "side": "BUY", "size": p.get("qty"),
+                      "strategy": "us_blend"} for p in held]
+    for b in buys:
+        _stop_obs = round(b["price"] * (1 - stop_pct), 2)
+        _bl_dec_obs = _ai_ibkr_score("us_blend", b["symbol"], b["price"], _stop_obs, b["qty"],
+                                      open_positions=_bl_open_obs)
+        _ai_ibkr_apply(_bl_dec_obs, b["symbol"], b["qty"], "blend")
+
     if dry_run:
         print("\n  [DRY RUN] No orders placed. Pass --execute to trade.\n")
         _print_plan(buys, sells, stop_pct)
         return
 
-    # â"€â"€ Execute SELLs â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    # -- Execute SELLs ---------------------------------------------------------
     for s in sells:
         print(f"\n  SELL {s['qty']} {s['symbol']} @ ~${s['price']:.2f}  "
               f"(value ~${s['value']:,.0f})")
@@ -306,7 +317,7 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
     for b in buys:
         stop_price = round(b["price"] * (1 - stop_pct), 2)
 
-        # AI Copilot
+        # AI Copilot (apply path -- dedup will skip if already scored above)
         _bl_open = [{"symbol": p["symbol"], "side": "BUY", "size": p.get("qty"),
                       "strategy": "us_blend"}
                      for p in held]
