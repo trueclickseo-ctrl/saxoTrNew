@@ -824,6 +824,7 @@ REVERSION_TICKERS: list = [
 # EXCLUDED (failed backtest): BTBT, BLNK, CGC, MVIS, OGI, SNDL, LUNG, OXSQ,
 #           ZENA, KPTI, CLNE, REI, GEVO, NWBO, GERN, BATL, IAUX, NNOX, BYSI
 PENNY_TICKERS: list = [
+    # ── Original curated 10 (backtest-validated) ──────────────────────────────
     "AKBA",   # Akebia Therapeutics   — 75% WR, +14.9% avg, 8 trades
     "UWMC",   # UWM Holdings          — 75% WR, +7.5% avg,  4 trades, 20M vol/day
     "HRTX",   # Heron Therapeutics    — 50% WR, +6.5% avg,  6 trades
@@ -834,6 +835,31 @@ PENNY_TICKERS: list = [
     "EVGO",   # EVgo                  — 50% WR, +3.3% avg,  6 trades
     "LIDR",   # AEye (LiDAR)          — 41% WR, +3.2% avg, 17 trades
     "LCTX",   # Lineage Cell Tx       — 55% WR, +2.6% avg, 11 trades
+    # ── Expansion 2026-09-20 — same sectors; $2 price gate filters at runtime ─
+    # Biotech / pharma
+    "CLNN",   # Clene Inc             — CNM-Au8 neurological platform
+    "NRXP",   # NRx Pharmaceuticals   — CNS/emergency medicine
+    "MNMD",   # Mind Medicine         — psychedelic-derived biotech
+    "PSTV",   # Plus Therapeutics     — radiotherapeutics
+    "CLOV",   # Clover Health         — tech-enabled insurance/health
+    "SIGA",   # SIGA Technologies     — antiviral drugs (TPOXX)
+    "DARE",   # Dare Bioscience       — women's health biotech
+    "NNVC",   # NanoViricides         — antiviral nanomedicine
+    # EV / clean energy
+    "NKLA",   # Nikola                — electric/hydrogen trucks
+    "WKHS",   # Workhorse Group       — electric delivery vehicles
+    "GOEV",   # Canoo                 — EV platform
+    "MULN",   # Mullen Automotive     — EV
+    "IDEX",   # Ideanomics            — EV ecosystem
+    "MVST",   # Microvast Holdings    — EV battery systems
+    "AMTX",   # Aemetis               — sustainable aviation fuel
+    # Cannabis
+    "SNDL",   # SNDL Inc              — cannabis retail + production
+    "ACB",    # Aurora Cannabis       — large Canadian LP
+    # Tech / other
+    "MVIS",   # MicroVision           — AR / lidar tech
+    "VERB",   # Verb Technology       — interactive video SaaS
+    "HOLO",   # MicroCloud Hologram   — holographic tech
 ]
 
 # ── LIVE vs SIM split (2026-09-04) ───────────────────────────────────────────
