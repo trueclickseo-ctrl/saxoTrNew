@@ -184,6 +184,22 @@ def penny_candidates(lookback_days: int = 60) -> list[dict]:
     return candidates
 
 
+def bagger_candidates(lookback_days: int = 250) -> list[dict]:
+    """US Bagger high-momentum continuation scan.
+
+    Returns ranked [{ticker, price, roc_6m, rsi, pct_from_high, vol_trend, score}].
+    SIM-ONLY — 80%+ 6-month ROC within 15% of 52w high; 12% trailing stop; no time exit.
+    lookback_days=250 supplies ~6-month ROC + 52w high + SMA50 history.
+    """
+    from atos.universe import BAGGER_TICKERS
+    from atos import us_bagger as _UBG
+    feat_data = _download(BAGGER_TICKERS, lookback_days=lookback_days)
+    print(f"  [bagger] {len(feat_data)}/{len(BAGGER_TICKERS)} tickers with sufficient history")
+    candidates = _UBG.scan(feat_data, BAGGER_TICKERS)
+    print(f"  [bagger] {len(candidates)} signal(s) found")
+    return candidates
+
+
 def yahoo_prices(symbols: list[str]) -> dict[str, float]:
     """Return the most-recent daily close for each symbol from Yahoo Finance.
 

@@ -120,10 +120,13 @@ def cmd_dashboard(ib, account_id: str, interval: int = 30) -> None:
             u = summary['unrealized_pnl']
             print(f"  Unreal.  : {'+'if u>=0 else''}${u:>11,.2f}")
 
-            # Split positions into penny vs regular
-            penny_syms = {r["symbol"] for r in st.get_open_positions("penny")}
-            penny_pos  = [p for p in positions if p["symbol"] in penny_syms]
-            other_pos  = [p for p in positions if p["symbol"] not in penny_syms]
+            # Split positions by strategy sleeve
+            penny_syms  = {r["symbol"] for r in st.get_open_positions("penny")}
+            bagger_syms = {r["symbol"] for r in st.get_open_positions("bagger")}
+            sim_syms    = penny_syms | bagger_syms
+            penny_pos   = [p for p in positions if p["symbol"] in penny_syms]
+            bagger_pos  = [p for p in positions if p["symbol"] in bagger_syms]
+            other_pos   = [p for p in positions if p["symbol"] not in sim_syms]
 
             if other_pos:
                 prices = ic.get_prices(ib, [p["symbol"] for p in other_pos])
@@ -152,6 +155,24 @@ def cmd_dashboard(ib, account_id: str, interval: int = 30) -> None:
             else:
                 print("  No penny positions today.")
 
+            # Bagger sleeve section
+            bagger_db = {r["symbol"]: r for r in st.get_open_positions("bagger")}
+            print(f"\n  Bagger Positions [SIM] ({len(bagger_pos)}/5 slots)  12% trailing stop:")
+            print("  " + "-" * 50)
+            if bagger_pos:
+                bg_prices = ic.get_prices(ib, [p["symbol"] for p in bagger_pos])
+                print(f"  {'Sym':<8} {'Qty':>5} {'Entry':>8} {'Last':>8} {'High':>8} {'Stop':>8} {'Gain%':>7}")
+                for p in bagger_pos:
+                    last     = bg_prices.get(p["symbol"], 0)
+                    db_row   = bagger_db.get(p["symbol"], {})
+                    th       = float(db_row.get("trailing_high") or p["avg_cost"] or 0)
+                    stop     = round(th * 0.88, 2) if th > 0 else 0
+                    g        = (last / p["avg_cost"] - 1) * 100 if p["avg_cost"] > 0 else 0
+                    print(f"  {p['symbol']:<8} {p['qty']:>5} {p['avg_cost']:>8.2f} "
+                          f"{last:>8.2f} {th:>8.2f} {stop:>8.2f} {'+'if g>=0 else''}{g:>6.1f}%")
+            else:
+                print("  No bagger positions today.")
+
             today_pnl = st.get_today_pnl_usd()
             print(f"\n  Today P&L: {'+'if today_pnl>=0 else''}${today_pnl:,.2f} (from ledger)")
 
@@ -168,9 +189,9 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="IBKR stocks sleeve -- all ATOS strategies")
     parser.add_argument("--strategy",
-                        choices=["blend", "blend_v2", "reversion", "reversion_v2", "intraday", "signals", "scorer", "penny", "all"],
+                        choices=["blend", "blend_v2", "reversion", "reversion_v2", "intraday", "signals", "scorer", "penny", "bagger", "all"],
                         default="blend",
-                        help="Which strategy to run (default: blend); 'all' runs every strategy except penny")
+                        help="Which strategy to run (default: blend); 'all' runs every strategy except penny/bagger")
     parser.add_argument("--exits",       action="store_true",
                         help="Check exits for the reversion strategy (ignored for blend)")
     parser.add_argument("--execute",     action="store_true",
@@ -291,7 +312,8 @@ def main() -> None:
     pre_indicators      = None   # reversion exits
     pre_feat_data       = None   # signals (all 4 strategies)
     pre_scorer          = None   # scorer entries + exits
-    pre_penny_candidates = None  # penny momentum breakout (SIM-ONLY)
+    pre_penny_candidates  = None  # penny momentum breakout (SIM-ONLY)
+    pre_bagger_candidates = None  # bagger high-momentum continuation (SIM-ONLY)
 
     needs_signal = (
         not args.positions and not args.info and
@@ -401,6 +423,10 @@ def main() -> None:
         if args.strategy in ("penny",):
             print("\n  Pre-generating US Penny candidates (Yahoo Finance) [SIM-ONLY]...")
             pre_penny_candidates = sig.penny_candidates()
+
+        if args.strategy in ("bagger",):
+            print("\n  Pre-generating US Bagger candidates (Yahoo Finance) [SIM-ONLY]...")
+            pre_bagger_candidates = sig.bagger_candidates()
 
     # ── Connect to IB Gateway (short window now) ──────────────────────────────
     mode_label = "PAPER" if is_paper else "LIVE"
@@ -539,6 +565,16 @@ def main() -> None:
             else:
                 ex.run_penny_entries(ib, account_id, cfg, dry_run=dry_run,
                                      candidates=pre_penny_candidates, auto=args.auto)
+
+        elif args.strategy == "bagger":
+            dry_run = not args.execute
+            if dry_run:
+                print("  [DRY RUN] pass --execute to place orders.\n")
+            if args.exits:
+                ex.run_bagger_exits(ib, account_id, cfg, dry_run=dry_run, auto=args.auto)
+            else:
+                ex.run_bagger_entries(ib, account_id, cfg, dry_run=dry_run,
+                                      candidates=pre_bagger_candidates, auto=args.auto)
 
         elif args.strategy == "all":
             dry_run = not args.execute

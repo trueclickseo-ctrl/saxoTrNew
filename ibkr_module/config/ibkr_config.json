@@ -19,7 +19,8 @@
     "dashboard": 96,
     "signals":   16,
     "scorer":    17,
-    "penny":     19
+    "penny":     19,
+    "bagger":    21
   },
   "capital": {
     "budget_usd": 10000,
@@ -104,6 +105,14 @@
       "max_price_usd": 2.20,
       "min_trade_usd": 50,
       "_note": "SIM-ONLY — never promoted to live. sub-$2 momentum breakout."
+    },
+    "bagger": {
+      "budget_usd": 7000,
+      "max_slots": 5,
+      "stop_trailing_pct": 0.12,
+      "max_hold_days": 60,
+      "min_trade_usd": 200,
+      "_note": "SIM-ONLY — multi-cap 80%+ 6m ROC trend continuation. 12% trailing stop. No broker stop order; software-managed."
     }
   }
 }

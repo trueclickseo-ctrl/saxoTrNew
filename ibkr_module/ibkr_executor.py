@@ -1030,6 +1030,174 @@ def run_penny_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
     print("\n  Penny exit check complete.")
 
 
+# ── US Bagger entries ─────────────────────────────────────────────────────────
+
+def run_bagger_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
+                       candidates: list | None = None,
+                       auto: bool = False) -> None:
+    """SIM-ONLY momentum bagger entries (80%+ 6m ROC, 12% trailing stop).
+
+    No broker stop order placed — trailing stop is managed in software each cycle.
+    SIM-ONLY: never promoted to LIVE without a separate written go/no-go.
+    """
+    from atos import us_bagger as _UBG
+
+    bag_cfg   = cfg["strategies"].get("bagger", {})
+    max_slots = int(bag_cfg.get("max_slots", 5))
+    budget    = float(bag_cfg.get("budget_usd", 7000))
+    min_usd   = float(bag_cfg.get("min_trade_usd", 200))
+
+    open_pos   = st.get_open_positions("bagger")
+    open_syms  = {p["symbol"] for p in open_pos}
+    slots_free = max_slots - len(open_pos)
+
+    print(f"\n  [bagger] {len(open_pos)}/{max_slots} slots used  ({slots_free} free)  [SIM-ONLY]")
+
+    if slots_free <= 0:
+        print("  All bagger slots full.")
+        return
+
+    if candidates is None:
+        candidates = sig.bagger_candidates()
+    new_cands = [c for c in candidates if c["ticker"] not in open_syms]
+
+    if not new_cands:
+        print("  No new bagger candidates.")
+        return
+
+    live_syms   = [c["ticker"] for c in new_cands[:slots_free]]
+    live_prices = ic.get_prices(ib, live_syms)
+
+    if not dry_run and not ic.is_market_open():
+        print(f"\n  [BLOCKED] US market is closed. Orders can only be placed "
+              f"09:30--16:00 ET (14:30--21:00 UTC).")
+        return
+
+    per_slot = budget / max_slots
+
+    for c in new_cands[:slots_free]:
+        ibkr_price = live_prices.get(c["ticker"], 0.0)
+        ibkr_ok    = bool(ibkr_price and ibkr_price > 0)
+
+        if not ibkr_ok:
+            print(f"\n  [BLOCKED] {c['ticker']}: no IBKR live price -- skip")
+            continue
+        price = ibkr_price
+
+        qty      = math.floor(per_slot / price)
+        if qty < 1:
+            continue
+        notional = round(price * qty, 2)
+        if notional < min_usd:
+            continue
+
+        print(f"\n  [bagger] BUY  {c['ticker']:<8}  "
+              f"roc_6m={c['roc_6m']}%  rsi={c['rsi']}  "
+              f"from_high={c['pct_from_high']}%  score={c['score']:.2f}")
+        print(f"    qty={qty}  price~${price:.2f} [IBKR live]  "
+              f"notional~${notional:,.0f}  trail_stop=12%  [SIM-ONLY]")
+
+        if dry_run:
+            print("    [DRY RUN] would place buy")
+            continue
+
+        confirm = "y" if auto else input(f"  Confirm buy {c['ticker']}? [y/N]: ").strip().lower()
+        if confirm != "y":
+            print("  Skipped.")
+            continue
+
+        trade = ic.place_market_order(ib, account_id, c["ticker"], "BUY", qty)
+        st.record_order(str(trade.order.orderId), c["ticker"], "BUY", qty, strategy="bagger")
+        print(f"  Order placed (id={trade.order.orderId}). Waiting for fill...")
+        fill = ic.confirm_fill(ib, trade)
+        if fill is None:
+            print(f"  WARNING: fill not confirmed for {c['ticker']}.")
+            st.mark_cancelled(str(trade.order.orderId))
+            continue
+
+        print(f"  Filled @ ${fill:.4f}  trailing_high = ${fill:.4f}")
+        st.mark_filled(str(trade.order.orderId), fill, side="BUY")
+        # mark_filled sets trailing_high = fill_price; no broker stop order.
+
+    print(f"\n  [bagger] entry scan complete.")
+
+
+# ── US Bagger exits ───────────────────────────────────────────────────────────
+
+def run_bagger_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
+                     auto: bool = False) -> None:
+    """Check open bagger positions for exit conditions and close if triggered.
+
+    Updates trailing_high in DB from live IBKR price each cycle.
+    Exits: 12% trailing stop | overbought exhaustion RSI>80 | 60-day time stop.
+    IBKR live price only -- no Yahoo fallback per trading rules.
+    """
+    from atos import us_bagger as _UBG
+
+    open_pos = st.get_open_positions("bagger")
+    if not open_pos:
+        print("  No open bagger positions.")
+        return
+
+    symbols     = [p["symbol"] for p in open_pos]
+    ibkr_prices = {s: ic.abs_price(p) for s, p in ic.get_prices(ib, symbols).items()}
+
+    print(f"\n  [bagger exits] {len(open_pos)} position(s)")
+
+    for pos in open_pos:
+        sym       = pos["symbol"]
+        entry_px  = float(pos.get("fill_price") or 0)
+        stored_th = float(pos.get("trailing_high") or entry_px or 0)
+        qty       = int(pos["qty"])
+
+        cur_price = ibkr_prices.get(sym, 0.0)
+        if not cur_price or cur_price <= 0:
+            print(f"  {sym:<8}  [BLOCKED] no IBKR live price -- skipped")
+            continue
+
+        new_th = max(stored_th, cur_price)
+        if new_th > stored_th:
+            st.update_stop(sym, 0.0, "", new_th, strategy="bagger")
+
+        filled_at_str = pos.get("filled_at") or pos.get("created_at", "")
+        trade_dict = {
+            "entry_price": entry_px,
+            "entry_date":  filled_at_str[:10] if filled_at_str else "",
+        }
+        trail_stop = round(new_th * (1 - _UBG.TRAILING_STOP_PCT), 2)
+        should_exit, reason = _UBG.should_exit(trade_dict, cur_price, new_th)
+
+        print(f"  {sym:<8}  px=${cur_price:.2f}  high=${new_th:.2f}  "
+              f"stop=${trail_stop:.2f}  "
+              f"{'-> EXIT: ' + reason if should_exit else 'HOLD'}")
+
+        if not should_exit:
+            continue
+
+        if dry_run:
+            print(f"    [DRY RUN] would sell {qty} {sym}")
+            continue
+
+        confirm = "y" if auto else input(f"  Confirm EXIT {sym}? [y/N]: ").strip().lower()
+        if confirm != "y":
+            print("  Skipped.")
+            continue
+
+        sell_trade = ic.place_market_order(ib, account_id, sym, "SELL", qty)
+        st.record_order(str(sell_trade.order.orderId), sym, "SELL", qty, strategy="bagger")
+        fill = ic.confirm_fill(ib, sell_trade)
+        if fill is None:
+            print(f"  WARNING: exit fill not confirmed for {sym} -- sell cancelled, will retry next cycle.")
+            st.mark_cancelled(str(sell_trade.order.orderId))
+        else:
+            pnl = (fill - entry_px) * qty
+            print(f"  Sold {qty} {sym} @ ${fill:.4f}  P&L: ${pnl:+,.2f}")
+            st.mark_filled(str(sell_trade.order.orderId), fill, side="SELL")
+            st.close_buy_position(sym, "bagger")
+
+    print("\n  Bagger exit check complete.")
+
+
 # -- US Reversion V2 entries ---------------------------------------------------
 
 def run_reversion_v2_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
