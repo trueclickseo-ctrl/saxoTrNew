@@ -997,7 +997,6 @@ BAGGER_TICKERS: list = [
     "MARA",  # Marathon Digital — bitcoin mining
     "RIOT",  # Riot Platforms — bitcoin mining
     "CLSK",  # CleanSpark — bitcoin mining
-    "BITF",  # Bitfarms — bitcoin mining
     "HUT",   # Hut 8 Mining — bitcoin mining
     "WULF",  # TeraWulf — nuclear-powered bitcoin mining
     "CORZ",  # Core Scientific — bitcoin mining + AI HPC
@@ -1042,7 +1041,6 @@ BAGGER_TICKERS: list = [
     # ── Software / SaaS high-growth ───────────────────────────────────────────
     "GTLB",  # GitLab — DevSecOps platform
     "BRZE",  # Braze — customer engagement platform
-    "CFLT",  # Confluent — data streaming (Apache Kafka)
     "MNDY",  # Monday.com — work management SaaS
     "BILL",  # Bill.com — SMB financial operations
     "DUOL",  # Duolingo — language learning EdTech
