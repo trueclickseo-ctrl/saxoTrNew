@@ -346,6 +346,170 @@ def _profit_ladder_section() -> str:
     """
 
 
+_IBKR_STOCKS_STRATEGIES = {
+    "us_reversion", "us_reversion_v2", "us_blend", "us_penny", "us_bagger",
+    "us_sma_crossover", "us_rsi_reversal", "us_momentum", "us_ensemble",
+    "scorer_swing", "scorer_portfolio",
+}
+
+
+def _ibkr_positions_section() -> str:
+    """IBKR SIM open positions and recent exits.
+    Reads data/ibkr_stocks.db only. Zero LLM calls. Never raises."""
+    try:
+        import sqlite3
+        from collections import defaultdict
+
+        con = sqlite3.connect("data/ibkr_stocks.db")
+        con.row_factory = sqlite3.Row
+
+        open_rows = con.execute(
+            "SELECT strategy, symbol, qty, fill_price, stop_price, trailing_high, created_at "
+            "FROM trades WHERE status NOT IN ('SOLD','CANCELLED','CLOSED') ORDER BY strategy, created_at"
+        ).fetchall()
+
+        sold_rows = con.execute(
+            "SELECT strategy, symbol, qty, fill_price, created_at, filled_at "
+            "FROM trades WHERE status='SOLD' ORDER BY filled_at DESC LIMIT 20"
+        ).fetchall()
+
+        con.close()
+
+        if not open_rows and not sold_rows:
+            return ""
+
+        by_strat: dict = defaultdict(list)
+        for r in open_rows:
+            by_strat[r["strategy"]].append(r)
+
+        total_open = len(open_rows)
+        total_notional = sum((r["fill_price"] or 0) * (r["qty"] or 0) for r in open_rows)
+
+        strat_rows_html = ""
+        for strat in sorted(by_strat.keys()):
+            positions = by_strat[strat]
+            count = len(positions)
+            notional = sum((p["fill_price"] or 0) * (p["qty"] or 0) for p in positions)
+            symbols = ", ".join(sorted(set(p["symbol"] for p in positions)))
+            strat_rows_html += (
+                f"<tr><td>{strat}</td><td class='val'>{count}</td>"
+                f"<td class='val'>${notional:,.0f}</td>"
+                f"<td class='muted'>{symbols}</td></tr>"
+            )
+
+        sold_html = ""
+        if sold_rows:
+            sold_items = [f"{r['symbol']} ({r['strategy']})" for r in sold_rows[:8]]
+            sold_html = (
+                "<h3 style='margin:16px 0 6px'>Recent Exits (SOLD)</h3>"
+                f"<p class='muted'>{' &nbsp;&middot;&nbsp; '.join(sold_items)}</p>"
+            )
+
+        return f"""
+        <h2>IBKR SIM Positions</h2>
+        <div class="metric-row">
+          <div class="metric"><div class="lbl">Open Positions</div><div class="val">{total_open}</div></div>
+          <div class="metric"><div class="lbl">Entry Notional</div><div class="val">${total_notional:,.0f}</div></div>
+          <div class="metric"><div class="lbl">Exits (total)</div><div class="val">{len(sold_rows)}</div></div>
+          <div class="metric"><div class="lbl">Strategies Active</div><div class="val">{len(by_strat)}</div></div>
+        </div>
+        <table>
+          <thead><tr><th>Strategy</th><th>Open</th><th>Entry Notional</th><th>Symbols</th></tr></thead>
+          <tbody>{strat_rows_html}</tbody>
+        </table>
+        {sold_html}
+        <p class="muted" style="margin:2px 0 0">Entry notional = fill price &times; qty (no live
+        pricing). IBKR paper DUR952103. P&amp;L available only after exit.</p>
+        """
+    except Exception:
+        return ""
+
+
+def _ai_copilot_stocks_section() -> str:
+    """AI Copilot decision breakdown for IBKR stocks strategies.
+    Reads data/ai_shadow_decisions.jsonl only. Zero LLM calls. Never raises."""
+    try:
+        import json
+        from collections import Counter, defaultdict
+
+        today = date.today().isoformat()
+        decisions = []
+        try:
+            with open("data/ai_shadow_decisions.jsonl", encoding="utf-8") as fh:
+                for line in fh:
+                    try:
+                        d = json.loads(line.strip())
+                        if d.get("strategy") in _IBKR_STOCKS_STRATEGIES:
+                            decisions.append(d)
+                    except Exception:
+                        pass
+        except FileNotFoundError:
+            return ""
+
+        if not decisions:
+            return ("<h2>AI Copilot &mdash; Stocks</h2>"
+                    "<p class='muted'>No decisions logged yet for IBKR stock strategies "
+                    "(scanner hasn't run since hooks were wired).</p>")
+
+        today_decs = [d for d in decisions if (d.get("ts") or "")[:10] == today]
+        total_actions: Counter = Counter(d.get("agent_action") for d in decisions)
+        today_actions: Counter = Counter(d.get("agent_action") for d in today_decs)
+
+        by_strat: dict = defaultdict(list)
+        for d in decisions:
+            by_strat[d.get("strategy", "?")].append(d)
+
+        strat_rows_html = ""
+        for strat in sorted(by_strat.keys()):
+            decs = by_strat[strat]
+            acts: Counter = Counter(d.get("agent_action") for d in decs)
+            t_count = sum(1 for d in decs if (d.get("ts") or "")[:10] == today)
+            strat_rows_html += (
+                f"<tr><td>{strat}</td><td class='val'>{len(decs)}</td>"
+                f"<td class='pos'>{acts.get('APPROVE',0)}</td>"
+                f"<td class='muted'>{acts.get('MODIFY',0)}</td>"
+                f"<td class='neg'>{acts.get('REJECT',0)}</td>"
+                f"<td class='muted'>{acts.get('HOLD',0)}</td>"
+                f"<td class='muted'>{t_count}</td></tr>"
+            )
+
+        total = len(decisions)
+        if today_decs:
+            t_line = (
+                f"Today: {len(today_decs)} decisions &mdash; "
+                f"APPROVE {today_actions.get('APPROVE',0)} / "
+                f"MODIFY {today_actions.get('MODIFY',0)} / "
+                f"REJECT {today_actions.get('REJECT',0)} / "
+                f"HOLD {today_actions.get('HOLD',0)}"
+            )
+        else:
+            t_line = "No decisions today (scanner hasn't run yet today)"
+
+        return f"""
+        <h2>AI Copilot &mdash; Stocks</h2>
+        <div class="metric-row">
+          <div class="metric"><div class="lbl">Total Decisions</div><div class="val">{total}</div></div>
+          <div class="metric"><div class="lbl">Today</div><div class="val">{len(today_decs)}</div></div>
+          <div class="metric"><div class="lbl">APPROVE</div><div class="val pos">{total_actions.get('APPROVE',0)}</div></div>
+          <div class="metric"><div class="lbl">MODIFY</div><div class="val">{total_actions.get('MODIFY',0)}</div></div>
+          <div class="metric"><div class="lbl">REJECT</div><div class="val neg">{total_actions.get('REJECT',0)}</div></div>
+          <div class="metric"><div class="lbl">HOLD</div><div class="val muted">{total_actions.get('HOLD',0)}</div></div>
+        </div>
+        <table>
+          <thead><tr><th>Strategy</th><th>Total</th>
+          <th class="pos">Approve</th><th>Modify</th><th class="neg">Reject</th>
+          <th>Hold</th><th>Today</th></tr></thead>
+          <tbody>{strat_rows_html}</tbody>
+        </table>
+        <p class="muted" style="margin:2px 0 0">{t_line} &nbsp;&middot;&nbsp;
+        shadow_mode=true (log-only, zero sizing changes) &nbsp;&middot;&nbsp;
+        Zero LLM credits spent for this report &mdash; reads logged decisions only.
+        Phase B flip requires written go/no-go.</p>
+        """
+    except Exception:
+        return ""
+
+
 def _generate_ai_journal() -> None:
     """Best-effort: write AI Trading Journal entries for every closed trade
     not yet journaled (one batched LLM call per day, capped by
@@ -420,8 +584,9 @@ def send_daily_summary(since: str | None = None) -> bool:
     mutate live state, which this report doesn't do. See the Housekeeping/Safeguard emails (every 30 min) for that.</p>
     """
 
-    body = (header + "".join(sections) + _account_equity_section() + _ai_health_section()
-            + _ai_journal_section() + _profit_ladder_section())
+    body = (header + "".join(sections) + _account_equity_section()
+            + _ibkr_positions_section() + _ai_copilot_stocks_section()
+            + _ai_health_section() + _ai_journal_section() + _profit_ladder_section())
     subject = f"Daily Summary — {total_trades} trades | {day_sign}${total_pnl:,.0f} | {since}"
     html = _wrap(f"Trading Day — {since}", body)
     return _send_email(subject, html)
