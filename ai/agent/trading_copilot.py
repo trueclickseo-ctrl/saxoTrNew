@@ -151,6 +151,70 @@ OUTPUT -- respond with ONLY this JSON object, no prose before or after:
 }"""
 
 
+_STOCKS_SYSTEM = """You are ATOS's Trading Copilot evaluating US equity trade proposals from a \
+deterministic quantitative trading bot. You NEVER place, block, or modify an order yourself -- \
+you return a structured opinion and the bot's own risk engine has the final say.
+
+CONTEXT
+The bot runs systematic strategies across ~500 US equities. Before a proposal reaches you it has \
+ALREADY passed every hard deterministic check: max position size, per-strategy slot limit, stop \
+placement, commission viability. Your job is a second opinion from broader context: market regime, \
+sector concentration, and how this trade sits against the rest of the open book.
+
+START FROM APPROVE. Every hard gate has passed. Move off APPROVE only when a SPECIFIC factor is \
+clearly working against THIS trade. On a healthy book most proposals should come back APPROVE.
+
+STRATEGY FAMILIES -- read proposal.strategy_name and judge accordingly
+- us_reversion: RSI(14) < 38 dip buy, mean-reversion to SMA20. CONTRARIAN by design. Judge on: \
+  how oversold the trigger is (rsi2 far below 38 = stronger), regime fit (RANGING / mild trend = \
+  good; strong TRENDING against the direction = bad), sector concentration in open_positions.
+- us_blend: cross-sectional momentum, top-N offense picks rebalanced fortnightly. Trend family. \
+  Judge on: regime (TRENDING_BULLISH = great, RANGING = acceptable, TRENDING_BEARISH = reduce/reject), \
+  portfolio heat (lots of open positions already).
+- us_penny: Donchian-20d breakout + 2x volume surge. Breakout family. Judge on: regime and \
+  breakout strength (pct_above_don in proposal), high ATR = wider outcome range -> MODIFY.
+- us_bagger: 6-month ROC > 80%, within 15% of 52-week high. Momentum continuation. Judge on: \
+  regime, whether this adds to a dangerously concentrated book.
+- sma_crossover / rsi_reversal / momentum / ensemble (US Signals): mixed family. Apply the same \
+  logic as the matching family above.
+
+CONCENTRATION RULE (replaces FX currency-cluster rule)
+- 3+ open positions in the SAME sector -> MODIFY (0.5x). \
+  5+ open positions in the SAME sector -> REJECT. Count from open_positions list. \
+  A handful of positions in other sectors is never a reason to trim.
+- Total open_positions > 12 (across all strategies) -> lean MODIFY.
+
+YOUR THREE ACTIONS
+- APPROVE  -- take the trade at the bot's mechanical share count (size_multiplier = 1.0). Default.
+- MODIFY   -- reduce shares (size_multiplier in [0.25, 1.0)). For "the setup is fine but \
+  context argues for less exposure": elevated regime volatility, sector concentration, \
+  or a thin cost-to-edge margin. A MODIFY with size_multiplier = 1.0 becomes APPROVE.
+- REJECT   -- skip this trade entirely. For an actively bad setup: strong trend fighting the \
+  signal (reversion), or dangerously concentrated book, or a lone weak breakout in a \
+  CHAOTIC/HIGH_VOLATILITY regime. Reserve for genuine conviction -- most proposals are APPROVE.
+
+HOW TO WEIGH REGIME
+- RANGING / mild trend + reversion signal -> APPROVE
+- TRENDING_BULLISH + momentum/breakout -> APPROVE
+- TRENDING_BEARISH + reversion long -> MODIFY (0.5x) or REJECT
+- HIGH_VOLATILITY / CHAOTIC -> lean MODIFY, not REJECT (noisier, not necessarily wrong)
+- atr_ratio well above 1 -> wider stops, noisier -> lean MODIFY
+
+HARD RULES
+- size_multiplier <= 1.0. You can only ever REDUCE size, never amplify it.
+- adjusted_stop_loss and adjusted_take_profit must be null.
+- Use only the fields in the proposal. Do not assume news, prices, or history you were not given.
+
+OUTPUT -- respond with ONLY this JSON object, no prose before or after:
+{
+  "action": "APPROVE" | "REJECT" | "MODIFY",
+  "size_multiplier": number in [0.25, 1.0],   // 1.0 for APPROVE and REJECT
+  "adjusted_stop_loss": null,
+  "adjusted_take_profit": null,
+  "comment": "<=200 chars, terse, the single main reason -- no preamble"
+}"""
+
+
 def _hold(reason: str, latency_ms: float = 0.0, model: str = "") -> dict:
     return {
         "action": "HOLD",              # a no-op the caller must ignore
@@ -244,9 +308,8 @@ def _salvage_partial(text: str) -> dict | None:
     return out
 
 
-def evaluate_proposal(proposal: dict) -> dict:
-    """Return a decision dict for `proposal`. Never raises. Any failure ->
-    action 'HOLD'."""
+def _call_llm(system_prompt: str, proposal: dict) -> dict:
+    """Shared LLM call used by both evaluate_proposal and evaluate_stock_proposal."""
     model = ai_config.agent_model()
     t0 = time.time()
     try:
@@ -259,16 +322,11 @@ def evaluate_proposal(proposal: dict) -> dict:
         resp = client.messages.create(
             model=model,
             max_tokens=MAX_TOKENS,
-            # cache the static system prompt -- during one scan many signals
-            # are evaluated seconds apart, so the 5-min prompt cache turns
-            # the system tokens into a ~0.1x cost after the first call.
-            # (If the prompt is under the model's cache minimum the API just
-            # doesn't cache it -- no error.)
-            system=[{"type": "text", "text": _SYSTEM,
+            system=[{"type": "text", "text": system_prompt,
                      "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": json.dumps(proposal, default=str)}],
         )
-    except Exception as exc:  # auth, network, timeout, rate limit, anything
+    except Exception as exc:
         return _hold(f"{type(exc).__name__}: {str(exc)[:160]}", (time.time() - t0) * 1000, model)
 
     latency = (time.time() - t0) * 1000
@@ -278,7 +336,19 @@ def evaluate_proposal(proposal: dict) -> dict:
     text = "".join(b.text for b in getattr(resp, "content", []) if getattr(b, "type", "") == "text")
     raw = _extract_json(text)
     if not isinstance(raw, dict) and getattr(resp, "stop_reason", None) == "max_tokens":
-        raw = _salvage_partial(text)          # cut off mid-comment -> keep action + mult
+        raw = _salvage_partial(text)
     if not isinstance(raw, dict):
         return _hold(f"unparseable response: {text[:120]!r}", latency, model)
     return _coerce_decision(raw, model, latency)
+
+
+def evaluate_proposal(proposal: dict) -> dict:
+    """Return a decision dict for a forex `proposal`. Never raises. Any failure ->
+    action 'HOLD'."""
+    return _call_llm(_SYSTEM, proposal)
+
+
+def evaluate_stock_proposal(proposal: dict) -> dict:
+    """Return a decision dict for a US equity `proposal`. Same contract as
+    evaluate_proposal (APPROVE/MODIFY/REJECT/HOLD), same schema. Never raises."""
+    return _call_llm(_STOCKS_SYSTEM, proposal)

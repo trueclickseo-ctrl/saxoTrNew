@@ -336,6 +336,27 @@ def basket_ranker_applies(account_env: str) -> bool:
     return account_env == "ai_sim" and stocks_basket_ranker_enabled("ai_sim")
 
 
+def can_apply_stocks_decision() -> bool:
+    """True when the copilot's REJECT/MODIFY should actually change a SIM
+    stocks trade (skip it or reduce shares). Requires stocks enabled, agent
+    enabled, and stocks.shadow_mode == false. Live stocks is never in
+    _AI_ACTING_ACCOUNTS so this path can never fire for real money."""
+    return (stocks_enabled("sim") and agent_enabled_for("sim")
+            and not bool(_stocks_cfg("sim").get("shadow_mode", True)))
+
+
+def stocks_penny_copilot_enabled() -> bool:
+    """Score every US Penny entry with the Trading Copilot. SIM-only."""
+    return (stocks_enabled("sim") and bool(_stocks_cfg("sim").get("shadow_copilot_penny", False))
+            and agent_enabled_for("sim"))
+
+
+def stocks_bagger_copilot_enabled() -> bool:
+    """Score every US Bagger entry with the Trading Copilot. SIM-only."""
+    return (stocks_enabled("sim") and bool(_stocks_cfg("sim").get("shadow_copilot_bagger", False))
+            and agent_enabled_for("sim"))
+
+
 def outcome_predictor_cfg() -> dict:
     """The config/ai.json `outcome_predictor` block (merged over defaults)."""
     s = _load().get("outcome_predictor")
