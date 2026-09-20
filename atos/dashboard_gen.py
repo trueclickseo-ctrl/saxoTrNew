@@ -48,7 +48,9 @@ def _read_trade_log(n: int = 30) -> list[dict]:
 
 def _strategy_badge(strategy: str) -> str:
     s = strategy or "ATOS"
-    if "Penny" in s:
+    if "Bagger" in s:
+        return f'<span class="badge badge-blend">{s}</span>'
+    elif "Penny" in s:
         return f'<span class="badge badge-penny">{s}</span>'
     elif "Reversion" in s:
         return f'<span class="badge badge-rev">{s}</span>'
@@ -58,11 +60,12 @@ def _strategy_badge(strategy: str) -> str:
 
 
 def _signal_panel(run_summary: dict) -> str:
-    """Render the live signal tickers card (Blend targets + Reversion + Penny candidates)."""
+    """Render the live signal tickers card (Blend targets + Reversion + Penny + Bagger candidates)."""
     blend_targets   = run_summary.get("blend_targets", [])
     blend_risk_off  = run_summary.get("blend_risk_off", False)
     rev_cands       = run_summary.get("reversion_candidates", [])
     penny_cands     = run_summary.get("penny_candidates", [])
+    bagger_cands    = run_summary.get("bagger_candidates", [])
 
     # Blend section
     if blend_risk_off:
@@ -126,6 +129,32 @@ def _signal_panel(run_summary: dict) -> str:
     else:
         penny_html = '<span style="color:var(--muted)">No breakout today — need close &gt; 20d high + vol &ge; 2x + above SMA10</span>'
 
+    # Bagger section
+    if bagger_cands:
+        rows = ""
+        for c in bagger_cands[:8]:
+            roc = c.get("roc_6m", 0)
+            rsi = c.get("rsi", 0)
+            pfh = c.get("pct_from_high", 0)
+            px  = c.get("price", 0)
+            sc  = c.get("score", 0)
+            rows += (
+                f'<tr><td style="font-weight:700;color:var(--text)">{c["ticker"]}</td>'
+                f'<td style="color:var(--green)">+{roc:.0f}%</td>'
+                f'<td style="color:var(--cyan)">{rsi:.0f}</td>'
+                f'<td style="color:var(--muted)">{pfh:.1f}% off high</td>'
+                f'<td>${px:.2f}</td>'
+                f'<td style="color:var(--muted)">{sc:.1f}</td></tr>'
+            )
+        bagger_html = f'''<table style="width:100%;margin-top:8px">
+          <thead><tr>
+            <th>Ticker</th><th>6m ROC</th><th>RSI</th><th>From High</th><th>Price</th><th>Score</th>
+          </tr></thead>
+          <tbody>{rows}</tbody>
+        </table>'''
+    else:
+        bagger_html = '<span style="color:var(--muted)">No signals — need 6m ROC &gt;80%, within 15% of 52w high, vol trend up, RSI 40-75, above SMA50</span>'
+
     return f'''
   <div class="grid-2" style="margin-bottom:20px">
     <div class="card">
@@ -143,13 +172,23 @@ def _signal_panel(run_summary: dict) -> str:
       {rev_html}
     </div>
   </div>
-  <div class="card" style="margin-bottom:20px">
-    <div class="section-title">
-      <span class="status-dot sleeve-dot-cyan"></span>
-      US Penny — Momentum Breakout Signals &nbsp;
-      <span style="font-size:11px;color:var(--muted);font-weight:400">[SIM-ONLY · paper trades]</span>
+  <div class="grid-2" style="margin-bottom:20px">
+    <div class="card">
+      <div class="section-title">
+        <span class="status-dot sleeve-dot-cyan"></span>
+        US Penny — Momentum Breakout Signals &nbsp;
+        <span style="font-size:11px;color:var(--muted);font-weight:400">[SIM-ONLY · paper trades]</span>
+      </div>
+      {penny_html}
     </div>
-    {penny_html}
+    <div class="card">
+      <div class="section-title">
+        <span class="status-dot sleeve-dot-green"></span>
+        US Bagger — Multi-Cap High-Momentum Signals &nbsp;
+        <span style="font-size:11px;color:var(--muted);font-weight:400">[SIM-ONLY · paper trades]</span>
+      </div>
+      {bagger_html}
+    </div>
   </div>'''
 
 
@@ -217,12 +256,14 @@ def generate(
             worst = min(pnl_list) if pnl_list else 0,
         )
 
-    blend_s = _strat_stats("Blend")
-    rev_s   = _strat_stats("Reversion")
-    penny_s = _strat_stats("Penny")
-    blend_n, blend_wr, blend_pnl = blend_s["n"], blend_s["wr"], blend_s["pnl"]
-    rev_n,   rev_wr,   rev_pnl   = rev_s["n"],   rev_s["wr"],   rev_s["pnl"]
-    penny_n, penny_wr, penny_pnl = penny_s["n"], penny_s["wr"], penny_s["pnl"]
+    blend_s  = _strat_stats("Blend")
+    rev_s    = _strat_stats("Reversion")
+    penny_s  = _strat_stats("Penny")
+    bagger_s = _strat_stats("Bagger")
+    blend_n, blend_wr, blend_pnl   = blend_s["n"],  blend_s["wr"],  blend_s["pnl"]
+    rev_n,   rev_wr,   rev_pnl     = rev_s["n"],    rev_s["wr"],    rev_s["pnl"]
+    penny_n, penny_wr, penny_pnl   = penny_s["n"],  penny_s["wr"],  penny_s["pnl"]
+    bag_n,   bag_wr,   bag_pnl     = bagger_s["n"], bagger_s["wr"], bagger_s["pnl"]
 
     # ── Cumulative P&L per strategy from trade_log.csv ────────────
     all_log = _read_trade_log(500)   # all available history
@@ -241,19 +282,23 @@ def generate(
                 pass
         return dates, cum
 
-    blend_pnl_dates, blend_pnl_cum = _cumulative_pnl("Blend")
-    rev_pnl_dates,   rev_pnl_cum   = _cumulative_pnl("Reversion")
-    penny_pnl_dates, penny_pnl_cum = _cumulative_pnl("Penny")
+    blend_pnl_dates, blend_pnl_cum  = _cumulative_pnl("Blend")
+    rev_pnl_dates,   rev_pnl_cum    = _cumulative_pnl("Reversion")
+    penny_pnl_dates, penny_pnl_cum  = _cumulative_pnl("Penny")
+    bagger_pnl_dates, bagger_pnl_cum = _cumulative_pnl("Bagger")
 
     # Sleeve status
     rev_open    = [t for t in open_trades if "Reversion" in (t.get("strategy") or "")]
     penny_open  = [t for t in open_trades if "Penny" in (t.get("strategy") or "")]
+    bagger_open = [t for t in open_trades if "Bagger" in (t.get("strategy") or "")]
     blend_open  = [t for t in open_trades if "Blend" in (t.get("strategy") or "")
                    or t.get("market_group") == "US Equities"
                    and "Reversion" not in (t.get("strategy") or "")
-                   and "Penny" not in (t.get("strategy") or "")]
-    rev_slots_used   = len(rev_open)
-    penny_slots_used = len(penny_open)
+                   and "Penny" not in (t.get("strategy") or "")
+                   and "Bagger" not in (t.get("strategy") or "")]
+    rev_slots_used    = len(rev_open)
+    penny_slots_used  = len(penny_open)
+    bagger_slots_used = len(bagger_open)
 
     # ── Chart data ─────────────────────────────────────────────────
     eq_labels = [r["snap_date"] for r in equity_curve]
@@ -410,6 +455,7 @@ def generate(
     blend_pnl_s  = f'{"+" if blend_pnl>=0 else ""}{blend_pnl:,.0f} SEK'
     rev_pnl_s    = f'{"+" if rev_pnl>=0 else ""}{rev_pnl:,.0f} SEK'
     penny_pnl_s  = f'{"+" if penny_pnl>=0 else ""}{penny_pnl:,.0f} SEK'
+    bag_pnl_s    = f'{"+" if bag_pnl>=0 else ""}{bag_pnl:,.0f} SEK'
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -636,6 +682,36 @@ def generate(
     </div>
     <div class="muted small" style="margin-top:4px">50,000 SEK sleeve &nbsp;·&nbsp; close &gt; 20d Donchian + vol &ge; 2x + SMA10 &nbsp;·&nbsp; max $2.00 &nbsp;·&nbsp; max 15d hold</div>
   </div>
+  <div class="card" style="margin-bottom:20px">
+    <div class="section-title">
+      <span class="status-dot sleeve-dot-green"></span>
+      US Bagger — Multi-Cap High-Momentum &nbsp;
+      <span style="font-size:11px;color:var(--muted);font-weight:400">[SIM-ONLY · paper trades]</span>
+    </div>
+    <div style="display:flex; gap:32px;">
+      <div>
+        <div class="card-title">Closed Trades</div>
+        <div style="font-size:22px; font-weight:700; color:var(--green)">{bag_n}</div>
+      </div>
+      <div>
+        <div class="card-title">Win Rate</div>
+        <div style="font-size:22px; font-weight:700; color:{'var(--green)' if bag_wr>=50 else 'var(--red)' if bag_n>0 else 'var(--muted)'}">
+          {bag_wr:.0f}%</div>
+      </div>
+      <div>
+        <div class="card-title">Total P&L</div>
+        <div style="font-size:22px; font-weight:700; color:{_color(bag_pnl)}">{bag_pnl_s}</div>
+      </div>
+      <div>
+        <div class="card-title">Slots Used</div>
+        <div style="font-size:22px; font-weight:700; color:var(--green)">{bagger_slots_used}/5</div>
+      </div>
+    </div>
+    <div class="sleeve-bar-bg" style="margin-top:14px">
+      <div class="sleeve-bar-fill" style="width:{bagger_slots_used/5*100:.0f}%;background:var(--green)"></div>
+    </div>
+    <div class="muted small" style="margin-top:4px">75,000 SEK sleeve &nbsp;·&nbsp; 6m ROC &gt;80% + RSI 40-75 + vol trend + SMA50 &nbsp;·&nbsp; 12% trailing stop &nbsp;·&nbsp; no time limit</div>
+  </div>
 
   <!-- Signal Ticker Panel -->
   {_signal_panel(run_summary)}
@@ -745,11 +821,13 @@ const blend_pnl_dates = {json.dumps(blend_pnl_dates)};
 const blend_pnl_cum   = {json.dumps(blend_pnl_cum)};
 const rev_pnl_dates   = {json.dumps(rev_pnl_dates)};
 const rev_pnl_cum     = {json.dumps(rev_pnl_cum)};
-const penny_pnl_dates = {json.dumps(penny_pnl_dates)};
-const penny_pnl_cum   = {json.dumps(penny_pnl_cum)};
+const penny_pnl_dates  = {json.dumps(penny_pnl_dates)};
+const penny_pnl_cum    = {json.dumps(penny_pnl_cum)};
+const bagger_pnl_dates = {json.dumps(bagger_pnl_dates)};
+const bagger_pnl_cum   = {json.dumps(bagger_pnl_cum)};
 
 // Cumulative P&L per strategy
-if (blend_pnl_dates.length > 0 || rev_pnl_dates.length > 0 || penny_pnl_dates.length > 0) {{
+if (blend_pnl_dates.length > 0 || rev_pnl_dates.length > 0 || penny_pnl_dates.length > 0 || bagger_pnl_dates.length > 0) {{
   const pnlDatasets = [];
   if (blend_pnl_cum.length > 0) pnlDatasets.push({{
     label: 'US Blend', data: blend_pnl_cum, borderColor: '#60a5fa',
@@ -766,8 +844,13 @@ if (blend_pnl_dates.length > 0 || rev_pnl_dates.length > 0 || penny_pnl_dates.le
     backgroundColor: 'rgba(34,211,238,0.08)', fill: true,
     tension: 0.3, pointRadius: 3, borderWidth: 2,
   }});
+  if (bagger_pnl_cum.length > 0) pnlDatasets.push({{
+    label: 'US Bagger [SIM]', data: bagger_pnl_cum, borderColor: '#4ade80',
+    backgroundColor: 'rgba(74,222,128,0.08)', fill: true,
+    tension: 0.3, pointRadius: 3, borderWidth: 2,
+  }});
   // Merge + sort labels
-  const allDates = [...new Set([...blend_pnl_dates, ...rev_pnl_dates, ...penny_pnl_dates])].sort();
+  const allDates = [...new Set([...blend_pnl_dates, ...rev_pnl_dates, ...penny_pnl_dates, ...bagger_pnl_dates])].sort();
   new Chart(document.getElementById('pnlChart'), {{
     type: 'line',
     data: {{ labels: allDates, datasets: pnlDatasets }},

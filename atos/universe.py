@@ -971,6 +971,93 @@ PENNY_TICKERS: list = [
     "EDGIO",  # Edgio                 — streaming + app delivery CDN
 ]
 
+# ── US Bagger universe (2026-09-20) ──────────────────────────────────────────
+# Multi-cap high-momentum scanner: targets stocks that have already moved 80%+
+# in 6 months and are consolidating near 52-week highs.
+# SIM-ONLY — these never get LIVE entries until a separate written go/no-go.
+# Covers: AI, crypto infra, space/defense new-space, biotech mid-cap,
+#         high-growth consumer, SaaS, EV/clean-energy, fintech.
+# Runtime entry filters (in us_bagger.py): ROC>80%, within 15% of 52w high,
+# volume trend up, RSI 40-75, price > SMA50. All 5 must hold simultaneously.
+BAGGER_TICKERS: list = [
+    # ── AI / compute infrastructure ──────────────────────────────────────────
+    "PLTR",  # Palantir — AI analytics, gov + commercial
+    "SMCI",  # Super Micro Computer — AI server hardware
+    "ARM",   # Arm Holdings — chip IP, mobile/AI
+    "IONQ",  # IonQ — quantum computing
+    "RKLB",  # Rocket Lab — small satellite launch
+    "ASTS",  # AST SpaceMobile — low-orbit mobile broadband
+    "AI",    # C3.ai — enterprise AI software
+    "ALAB",  # Astera Labs — AI connectivity silicon
+    "CRDO",  # Credo Technology — AI networking chips
+    "NBIS",  # Nebius Group — European AI cloud
+    # ── Crypto / digital assets ──────────────────────────────────────────────
+    "COIN",  # Coinbase — largest US crypto exchange
+    "MSTR",  # Strategy (MicroStrategy) — bitcoin treasury
+    "MARA",  # Marathon Digital — bitcoin mining
+    "RIOT",  # Riot Platforms — bitcoin mining
+    "CLSK",  # CleanSpark — bitcoin mining
+    "BITF",  # Bitfarms — bitcoin mining
+    "HUT",   # Hut 8 Mining — bitcoin mining
+    "WULF",  # TeraWulf — nuclear-powered bitcoin mining
+    "CORZ",  # Core Scientific — bitcoin mining + AI HPC
+    # ── Fintech / neo-finance ─────────────────────────────────────────────────
+    "HOOD",  # Robinhood — retail brokerage app
+    "SOFI",  # SoFi Technologies — digital banking
+    "AFRM",  # Affirm — buy-now-pay-later
+    "UPST",  # Upstart — AI lending
+    "DAVE",  # Dave Inc — neobank / cash advance
+    "MQ",    # Marqeta — card issuing platform
+    "TOST",  # Toast — restaurant POS / fintech
+    # ── Space / new-space / defense ───────────────────────────────────────────
+    "LUNR",  # Intuitive Machines — lunar surface delivery
+    "RDW",   # Redwire — space infrastructure
+    "SPIR",  # Spire Global — satellite data + weather
+    "BKSY",  # BlackSky — satellite intelligence
+    "AXON",  # Axon Enterprise — tasers + police software
+    "GEV",   # GE Vernova — power grid + AI-datacenter demand
+    "VST",   # Vistra — power generator, nuclear + AI demand
+    "TLN",   # Talen Energy — nuclear power, AI-datacenter PPAs
+    # ── Biotech / genomics mid-cap ────────────────────────────────────────────
+    "RXRX",  # Recursion Pharma — AI drug discovery
+    "BEAM",  # Beam Therapeutics — precision gene editing
+    "PACB",  # PacBio — long-read genomic sequencing
+    "ARWR",  # Arrowhead Pharma — RNAi therapeutics
+    "ALNY",  # Alnylam Pharmaceuticals — RNAi therapeutics
+    "HALO",  # Halozyme — drug delivery platform
+    "PCVX",  # Vaxcyte — pneumococcal vaccine
+    # ── Consumer high-growth ──────────────────────────────────────────────────
+    "CELH",  # Celsius Holdings — energy drinks, multi-bagger history
+    "DKNG",  # DraftKings — sports betting / gaming
+    "LYFT",  # Lyft — ride-sharing, volatile
+    "SNAP",  # Snap — social media
+    "PINS",  # Pinterest — visual commerce
+    "RDDT",  # Reddit — social media (2024 IPO)
+    "CAVA",  # CAVA Group — fast-casual Mediterranean
+    "HIMS",  # Hims & Hers — telehealth / GLP-1 adjacent
+    "CVNA",  # Carvana — online used-car marketplace
+    "ELF",   # e.l.f. Beauty — mass cosmetics high-growth
+    "APP",   # AppLovin — mobile ad-tech, AI-driven
+    "CART",  # Instacart — grocery delivery platform
+    # ── Software / SaaS high-growth ───────────────────────────────────────────
+    "GTLB",  # GitLab — DevSecOps platform
+    "BRZE",  # Braze — customer engagement platform
+    "CFLT",  # Confluent — data streaming (Apache Kafka)
+    "MNDY",  # Monday.com — work management SaaS
+    "BILL",  # Bill.com — SMB financial operations
+    "DUOL",  # Duolingo — language learning EdTech
+    "NCLH",  # Norwegian Cruise Line — travel, high beta
+    # ── EV / clean energy mid-cap ─────────────────────────────────────────────
+    "RIVN",  # Rivian — electric trucks/vans
+    "CHPT",  # ChargePoint — EV charging network
+    "PLUG",  # Plug Power — hydrogen fuel cells
+    "FSLR",  # First Solar — utility-scale solar
+    "ENPH",  # Enphase Energy — solar microinverters
+    "VRT",   # Vertiv Holdings — data-center cooling/power
+    # ── Power / AI-datacenter demand theme ───────────────────────────────────
+    "CEG",   # Constellation Energy — largest US nuclear
+]
+
 # ── LIVE vs SIM split (2026-09-04) ───────────────────────────────────────────
 # LIVE (atos_live_stocks.py / Saxo real-money):  LIVE_TICKERS only  (~337 names)
 # SIM  (atos_runner.py / run_ibkr_stocks.py):    US_TICKERS in full (~398 names)

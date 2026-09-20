@@ -84,7 +84,7 @@ sys.path.insert(0, BASE_DIR)
 
 # ── ATOS modules ──────────────────────────────────────────────────
 from atos import database as db
-from atos.universe import ATOS_UNIVERSE, US_TICKERS, LIVE_TICKERS, REVERSION_TICKERS, PENNY_TICKERS, market_of, MARKET_GROUPS
+from atos.universe import ATOS_UNIVERSE, US_TICKERS, LIVE_TICKERS, REVERSION_TICKERS, PENNY_TICKERS, BAGGER_TICKERS, market_of, MARKET_GROUPS
 from atos.features import add_all
 from atos.decision_engine import scan_universe, BUY_THRESHOLD, consensus_evaluate
 from atos.strategies import S3_MeanReversion, S4_BreakoutVol, S5_MomentumAccel
@@ -218,6 +218,12 @@ US_SIGNALS_ENABLED = True
 # EXIT: +25% target | -12% stop | 15-day time stop.
 # BACKTEST: WR 42%, avg ret +3.6% across 10 passing tickers (2023-2026).
 US_PENNY_ENABLED = True
+
+# ── US Bagger multi-cap high-momentum (2026-09-20) ─────────────────────────────
+# SIM-ONLY — paper=1 always. ~70-ticker universe, all market caps, $5+ stocks.
+# ENTRY: 6-month ROC > 80% + within 15% of 52w high + vol trend up + RSI 40-75
+#        + price > SMA50. EXIT: 12% trailing stop | RSI>80 exhaustion | 60d safety.
+US_BAGGER_ENABLED = True
 
 # ── SIM paper-fill fallback (2026-09-01) ──────────────────────────────────
 # Mirrors forex/runner.py's SIM_PAPER_FILL_ON_REJECT. Saxo SIM's order
@@ -416,6 +422,7 @@ def _confirm_stock_fill(entry_oid: str, uic: int) -> tuple[bool, float]:
 _blend_signal:  dict = {}   # keys: targets, risk_off, reason, momentum, lowvol
 _rev_signals:   list = []   # list of candidate dicts from USR.scan()
 _penny_signals: list = []   # list of candidate dicts from _UPY.scan()
+_bagger_signals: list = []  # list of candidate dicts from _UBG.scan()
 
 # ── Dynamic capital allocation — loaded from config/capital.json ──────────
 # Edit config/capital.json to change percentages; no code change needed.
@@ -844,6 +851,13 @@ def run_open_scan(log_fn=None) -> dict:
             run_us_penny(db.get_open_trades(), todays_actions)
         except Exception as e:
             _log(f"  [US Penny ERROR] {e}")
+
+    if US_BAGGER_ENABLED:
+        _log("  Running US Bagger strategy (SIM-ONLY)...")
+        try:
+            run_us_bagger(db.get_open_trades(), todays_actions)
+        except Exception as e:
+            _log(f"  [US Bagger ERROR] {e}")
 
     buy_n     = sum(1 for a in todays_actions if a["action"] == "BUY")
     exit_n    = sum(1 for a in todays_actions if a["action"] == "EXIT")
@@ -1300,6 +1314,13 @@ def run_cycle():
         except Exception as e:
             print(f"  [US Penny] ERROR: {e}")
 
+    if US_BAGGER_ENABLED:
+        print("  Running US Bagger strategy (SIM-ONLY)...")
+        try:
+            run_us_bagger(db.get_open_trades(), todays_actions)
+        except Exception as e:
+            print(f"  [US Bagger] ERROR: {e}")
+
     # ── 7. Learning pass ──────────────────────────────────────────
     print("  Running learning pass...")
     learning_result = run_learning_pass()
@@ -1355,6 +1376,7 @@ def run_cycle():
             "blend_risk_off":        _blend_signal.get("risk_off", False),
             "reversion_candidates":  _rev_signals,
             "penny_candidates":      _penny_signals,
+            "bagger_candidates":     _bagger_signals,
         },
     )
     print(f"  Dashboard saved: {html_file}")
@@ -3510,6 +3532,159 @@ def run_us_penny(open_trades: list, todays_actions: list) -> None:
             "shares": shares, "price": price,
             "reason": (f"[US Penny] vol {cand['vol_ratio']}x, "
                        f"+{cand['pct_above_don']}% above Donchian high"),
+            "pnl_sek": None,
+        })
+
+
+# ── US Bagger multi-cap high-momentum — SIM only ──────────────────────────────
+
+def run_us_bagger(open_trades: list, todays_actions: list) -> None:
+    """US Momentum Bagger — multi-cap high-momentum scanner. SIM-ONLY (paper=1).
+
+    Downloads its own 250-day OHLCV via Yahoo Finance (needs 6-month ROC history).
+    Uses a 12% trailing stop — runner updates trailing_stop_high in DB each cycle.
+    Strategy name "US Bagger" keeps these isolated in the DB and dashboard.
+    """
+    from atos import us_bagger as _UBG
+    import yfinance as yf
+    from datetime import timedelta
+
+    if kill_switch_active():
+        print("  [US Bagger] STOP_TRADING present — skip"); return
+
+    tag    = "[US Bagger SIM]"
+    fx_usd = _rate_to_sek("USD")
+    today  = date.today()
+
+    # Download 250 calendar days (~180 trading days) — needed for 6-month ROC
+    print(f"  {tag} downloading {len(BAGGER_TICKERS)} tickers (Yahoo Finance)...")
+    try:
+        start = today - timedelta(days=250)
+        raw   = yf.download(
+            BAGGER_TICKERS, start=str(start), end=str(today),
+            progress=False, auto_adjust=True, threads=True,
+        )
+    except Exception as e:
+        print(f"  {tag} yfinance download failed: {e}"); return
+
+    bagger_data: dict = {}
+    if len(BAGGER_TICKERS) == 1:
+        if not raw.empty and len(raw) >= 130:
+            bagger_data[BAGGER_TICKERS[0]] = raw
+    elif hasattr(raw.columns, "levels"):
+        for tk in BAGGER_TICKERS:
+            try:
+                df = raw.xs(tk, axis=1, level=1).dropna(how="all")
+                if len(df) >= 130:
+                    bagger_data[tk] = df
+            except KeyError:
+                pass
+    print(f"  {tag} {len(bagger_data)}/{len(BAGGER_TICKERS)} tickers with data")
+
+    def _close(tk):
+        return bagger_data[tk]["Close"] if tk in bagger_data else None
+
+    def _price(tk):
+        c = _close(tk)
+        return float(c.iloc[-1]) if c is not None and len(c) > 0 else 0.0
+
+    # ── Exit + trailing-stop update ───────────────────────────────────────────
+    bagger_open = {t["ticker"]: t for t in open_trades if t.get("strategy") == "US Bagger"}
+    for ticker, trade in list(bagger_open.items()):
+        cur_price = _price(ticker)
+        if cur_price <= 0:
+            continue
+
+        # Update trailing high first
+        new_high = _UBG.compute_trailing_high(trade, cur_price)
+        old_high = float(trade.get("trailing_stop_high") or trade.get("entry_price") or 0)
+        if new_high > old_high:
+            new_stop = round(new_high * (1 - _UBG.TRAILING_STOP_PCT), 4)
+            db.update_stop_trailing(trade["id"], trailing_stop_high=new_high, stop_price=new_stop)
+            trade["trailing_stop_high"] = new_high  # reflect in local dict for exit check
+
+        close_series = _close(ticker)
+        exit_flag, reason = _UBG.should_exit(trade, cur_price, new_high, close_series)
+        if not exit_flag:
+            continue
+
+        sh        = trade.get("shares", 0) or 0
+        comm_exit = commission_sek(sh, sh * cur_price * fx_usd)
+        pnl_sek   = (cur_price - trade.get("entry_price", 0)) * sh * fx_usd - comm_exit
+        print(f"  {tag} EXIT {ticker}: {reason} [PAPER]")
+        db.close_trade(trade["id"], exit_price=cur_price,
+                       exit_reason=reason, pnl_sek=pnl_sek,
+                       commission_sek=comm_exit)
+        _append_trade_log(
+            "US Bagger", "SELL", ticker, sh, cur_price,
+            sh * cur_price * fx_usd, pnl_sek, reason,
+        )
+        todays_actions.append({
+            "action": "EXIT", "ticker": ticker, "market_group": "US Equities",
+            "strategy": "US Bagger", "score": 0, "shares": sh,
+            "price": cur_price, "reason": f"bagger exit: {reason}",
+            "pnl_sek": pnl_sek,
+        })
+
+    # ── Entry scan ────────────────────────────────────────────────────────────
+    bagger_open_now = {t["ticker"] for t in db.get_open_trades()
+                       if t.get("strategy") == "US Bagger"}
+    slots_free = _UBG.MAX_POSITIONS - len(bagger_open_now)
+    if slots_free <= 0:
+        print(f"  {tag} full ({_UBG.MAX_POSITIONS}/{_UBG.MAX_POSITIONS} slots)")
+        return
+
+    candidates = _UBG.scan(bagger_data, BAGGER_TICKERS)
+    global _bagger_signals
+    _bagger_signals = list(candidates)          # expose to dashboard before filtering
+    candidates = [c for c in candidates if c["ticker"] not in bagger_open_now]
+    if not candidates:
+        print(f"  {tag} no entry signals today")
+        return
+
+    BAGGER_SLEEVE_SEK = 75_000.0
+    slot_sek = BAGGER_SLEEVE_SEK / _UBG.MAX_POSITIONS
+    print(f"  {tag} {len(candidates)} signal(s) | {slots_free} slot(s) free | "
+          f"slot: {slot_sek:,.0f} SEK")
+
+    for cand in candidates[:slots_free]:
+        ticker = cand["ticker"]
+        price  = cand["price"]
+        shares = int(slot_sek / (price * fx_usd))
+        if shares < 1:
+            print(f"  {tag} {ticker}: slot too small for 1 share — skip")
+            continue
+        cost_sek  = shares * price * fx_usd
+        trail_high = price
+        stop_p     = round(price * (1 - _UBG.TRAILING_STOP_PCT), 4)
+        print(f"  {tag} BUY {ticker}: ROC={cand['roc_6m']}% rsi={cand['rsi']} "
+              f"vol_trend={cand['vol_trend']}x | "
+              f"{shares} shares @ ${price:.2f} (~{cost_sek:,.0f} SEK) [PAPER]")
+        comm = commission_sek(shares, cost_sek)
+        db.insert_trade({
+            "strategy": "US Bagger", "market_group": "US Equities",
+            "ticker": ticker, "direction": "BUY",
+            "entry_date": today.isoformat(), "entry_price": price,
+            "shares": shares, "commission_sek": comm,
+            "entry_score": cand["score"],
+            "d1_trend": cand["roc_6m"], "d2_momentum": cand["vol_trend"],
+            "d3_breakout": cand["pct_from_high"], "d4_mean_revert": 0,
+            "d5_volume": cand["vol_trend"], "d6_smart_money": 0,
+            "d7_mom_quality": cand["rsi"], "d8_regime": 0,
+            "stop_price": stop_p, "trailing_stop_high": trail_high,
+            "regime_at_entry": "bagger_momentum",
+            "paper": 1, "stop_order_id": None,
+        })
+        _append_trade_log(
+            "US Bagger", "BUY", ticker, shares, price, cost_sek, None,
+            f"ROC={cand['roc_6m']}% rsi={cand['rsi']} vol_trend={cand['vol_trend']}x",
+        )
+        todays_actions.append({
+            "action": "BUY", "ticker": ticker, "market_group": "US Equities",
+            "strategy": "US Bagger", "score": cand["score"],
+            "shares": shares, "price": price,
+            "reason": (f"[US Bagger] ROC {cand['roc_6m']}%, "
+                       f"rsi={cand['rsi']}, vol_trend={cand['vol_trend']}x"),
             "pnl_sek": None,
         })
 
