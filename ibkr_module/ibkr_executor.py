@@ -29,7 +29,76 @@ IBKR_ATR_PERIOD     = 14
 
 _ROOT = Path(__file__).parent.parent
 
-# AI observation layer removed 2026-09-09 -- Saxo only for AI data pipeline.
+# ── AI Copilot layer (2026-09-20) ────────────────────────────────────────────
+# Same shadow_mode flag as Saxo SIM (config/ai.json stocks.shadow_mode).
+# shadow_mode=true  -> log proposals/decisions, no trade changed (default).
+# shadow_mode=false -> REJECT skips the trade, MODIFY reduces qty.
+# Never applies to live (run_ibkr_stocks.py --live only allows blend; no
+# copilot in run_rebalance since the basket-ranker is the AI layer for blend).
+_ai_cfg = None
+_ai_copilot = None
+_ai_stock_proposal = None
+try:
+    import ai.config as _ai_cfg
+    import ai.agent.trading_copilot as _ai_copilot
+    from ai.features import stock_proposal as _ai_stock_proposal
+except Exception:
+    pass
+
+
+def _ai_ibkr_score(strategy: str, ticker: str, price: float, stop_price: float,
+                   qty: int, rsi14=None, regime_bars=None,
+                   open_positions: list | None = None) -> dict | None:
+    """Build a stock proposal and score it with the AI copilot for IBKR paper.
+    Returns the decision dict or None if AI is unavailable/disabled. Never raises."""
+    if _ai_cfg is None or _ai_copilot is None or _ai_stock_proposal is None:
+        return None
+    try:
+        if not (_ai_cfg.stocks_enabled("sim")
+                and bool(_ai_cfg._load().get("agent_enabled", False))):
+            return None
+        prop = _ai_stock_proposal.build_stock_proposal(
+            strategy=strategy, ticker=ticker, entry_price=price,
+            stop_price=stop_price, target_price=None,
+            rsi14=rsi14, shares=qty,
+            daily_vol_pct=None, risk_eur=None, account_equity_eur=None,
+            open_positions=open_positions or [],
+            regime_bars=regime_bars,
+        )
+        if not prop:
+            return None
+        _ai_stock_proposal.log_proposal(prop)
+        if not (_ai_cfg.agent_dedup_enabled()
+                and _ai_stock_proposal.already_evaluated(prop)):
+            dec = _ai_copilot.evaluate_stock_proposal(prop)
+            _ai_stock_proposal.log_shadow_decision(prop, dec, entered=True)
+            return dec
+    except Exception as exc:
+        print(f"  [ai] ibkr copilot hook failed for {ticker}: {exc}")
+    return None
+
+
+def _ai_ibkr_apply(dec: dict | None, ticker: str, qty: int,
+                    strategy: str = "") -> tuple[bool, int]:
+    """Apply a copilot decision to qty. Returns (skip, new_qty).
+    Only applies when can_apply_stocks_decision() is True (shadow_mode=false)."""
+    if dec is None or _ai_cfg is None:
+        return False, qty
+    if not _ai_cfg.can_apply_stocks_decision():
+        return False, qty
+    action = dec.get("action", "HOLD")
+    if action == "REJECT":
+        lbl = f"[{strategy}] " if strategy else ""
+        print(f"  [ai] {lbl}{ticker}: REJECT -- {dec.get('comment', '')[:80]}")
+        return True, qty
+    if action == "MODIFY":
+        mult = max(0.25, min(1.0, float(dec.get("size_multiplier", 1.0))))
+        new_qty = max(1, int(qty * mult))
+        lbl = f"[{strategy}] " if strategy else ""
+        print(f"  [ai] {lbl}{ticker}: MODIFY -> {new_qty} shares ({mult:.2f}x) -- "
+              f"{dec.get('comment', '')[:60]}")
+        return False, new_qty
+    return False, qty
 
 
 
@@ -718,6 +787,16 @@ def run_reversion_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
             continue
         stop_price = round(price * (1 - stop_pct), 2)
 
+        # AI Copilot
+        _rev_open = [{"symbol": p["symbol"], "side": "BUY", "size": p.get("qty"),
+                       "strategy": "us_reversion"}
+                      for p in open_pos]
+        _rev_dec = _ai_ibkr_score("us_reversion", c["ticker"], price, stop_price, qty,
+                                   rsi14=c.get("rsi"), open_positions=_rev_open)
+        _ai_skip, qty = _ai_ibkr_apply(_rev_dec, c["ticker"], qty, label)
+        if _ai_skip:
+            continue
+
         print(f"\n  [{label}] BUY  {c['ticker']:<8}  "
               f"RSI={c['rsi']:.0f}  dip={c['dip_pct']}%  vol={c['vol_ratio']}x")
         print(f"    qty={qty}  price~${price:.2f} [{price_src}]  "
@@ -918,6 +997,16 @@ def run_penny_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
             continue
         stop_price = round(price * (1 - stop_pct), 2)
 
+        # AI Copilot
+        _pny_open = [{"symbol": p["symbol"], "side": "BUY", "size": p.get("qty"),
+                       "strategy": "us_penny"}
+                      for p in open_pos]
+        _pny_dec = _ai_ibkr_score("us_penny", c["ticker"], price, stop_price, qty,
+                                   open_positions=_pny_open)
+        _ai_skip, qty = _ai_ibkr_apply(_pny_dec, c["ticker"], qty, "penny")
+        if _ai_skip:
+            continue
+
         print(f"\n  [penny] BUY  {c['ticker']:<8}  "
               f"vol={c['vol_ratio']}x  above_don=+{c['pct_above_don']}%  score={c['score']:.2f}")
         print(f"    qty={qty}  price~${price:.2f} [IBKR live]  "
@@ -1090,7 +1179,19 @@ def run_bagger_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
         notional = round(price * qty, 2)
         if notional < min_usd:
             continue
+        stop_price = round(price * (1 - _UBG.TRAILING_STOP_PCT), 4)
 
+        # AI Copilot
+        _bg_open = [{"symbol": p["symbol"], "side": "BUY", "size": p.get("qty"),
+                      "strategy": "us_bagger"}
+                     for p in open_pos]
+        _bg_dec = _ai_ibkr_score("us_bagger", c["ticker"], price, stop_price, qty,
+                                  rsi14=c.get("rsi"), open_positions=_bg_open)
+        _ai_skip, qty = _ai_ibkr_apply(_bg_dec, c["ticker"], qty, "bagger")
+        if _ai_skip:
+            continue
+
+        notional = round(price * qty, 2)
         print(f"\n  [bagger] BUY  {c['ticker']:<8}  "
               f"roc_6m={c['roc_6m']}%  rsi={c['rsi']}  "
               f"from_high={c['pct_from_high']}%  score={c['score']:.2f}")
@@ -1482,6 +1583,19 @@ def run_us_signals_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
         if notional < min_usd:
             continue
         stop_price = compute_stop(df, price)
+
+        # AI Copilot
+        _sig_open = [{"symbol": p["symbol"], "side": "BUY", "size": p.get("qty"),
+                       "strategy": p.get("strategy", strat)}
+                      for p in st.get_open_positions()
+                      if p.get("strategy") in (strat,)]
+        _sig_dec = _ai_ibkr_score(strat.lower().replace(" ", "_"), ticker, price,
+                                   stop_price, qty, regime_bars=df,
+                                   open_positions=_sig_open)
+        _ai_skip, qty = _ai_ibkr_apply(_sig_dec, ticker, qty, strat)
+        if _ai_skip:
+            continue
+        notional = round(price * qty, 2)
 
         reason_short = (row.get("reason") or "")[:50]
         print(f"\n  [{strat}]  BUY {ticker:<8}  conf={row.get('confidence', 0):.2f}  {reason_short}")
