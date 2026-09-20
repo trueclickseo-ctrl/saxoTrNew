@@ -890,7 +890,7 @@ def _call_claude(prompt_user: str, system: str = _SYSTEM) -> dict | None:
         msg = client.messages.create(
             model="claude-sonnet-5",
             max_tokens=8192,
-            system=system,
+            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
             messages=[{"role": "user", "content": prompt_user}],
             timeout=180.0,
         )

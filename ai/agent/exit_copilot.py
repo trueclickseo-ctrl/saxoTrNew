@@ -209,7 +209,7 @@ def _call_llm(user_prompt: str, model: str) -> tuple[dict, float]:
             model=model,
             max_tokens=MAX_TOKENS,
             system=[{"type": "text", "text": _SYSTEM,
-                     "cache_control": {"type": "ephemeral"}}],
+                     "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
             messages=[{"role": "user", "content": user_prompt}],
         )
         latency_ms = (time.time() - t0) * 1000

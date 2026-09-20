@@ -323,7 +323,7 @@ def _call_llm(system_prompt: str, proposal: dict) -> dict:
             model=model,
             max_tokens=MAX_TOKENS,
             system=[{"type": "text", "text": system_prompt,
-                     "cache_control": {"type": "ephemeral"}}],
+                     "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
             messages=[{"role": "user", "content": json.dumps(proposal, default=str)}],
         )
     except Exception as exc:
