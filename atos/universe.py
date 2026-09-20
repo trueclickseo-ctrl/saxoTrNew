@@ -843,23 +843,25 @@ PENNY_TICKERS: list = [
     "PSTV",   # Plus Therapeutics     — radiotherapeutics
     "CLOV",   # Clover Health         — tech-enabled insurance/health
     "SIGA",   # SIGA Technologies     — antiviral drugs (TPOXX)
-    "DARE",   # Dare Bioscience       — women's health biotech
-    "NNVC",   # NanoViricides         — antiviral nanomedicine
     # EV / clean energy
     "NKLA",   # Nikola                — electric/hydrogen trucks
     "WKHS",   # Workhorse Group       — electric delivery vehicles
-    "GOEV",   # Canoo                 — EV platform
-    "MULN",   # Mullen Automotive     — EV
     "IDEX",   # Ideanomics            — EV ecosystem
     "MVST",   # Microvast Holdings    — EV battery systems
     "AMTX",   # Aemetis               — sustainable aviation fuel
+    "ADN",    # Advent Technologies   — hydrogen fuel cells, real tech
     # Cannabis
     "SNDL",   # SNDL Inc              — cannabis retail + production
     "ACB",    # Aurora Cannabis       — large Canadian LP
     # Tech / other
     "MVIS",   # MicroVision           — AR / lidar tech
-    "VERB",   # Verb Technology       — interactive video SaaS
     "HOLO",   # MicroCloud Hologram   — holographic tech
+    # Energy / commodities momentum
+    "TELL",   # Tellurian             — LNG export, 5-15M shares/day
+    "IMPP",   # Imperial Petroleum    — tanker shipping, spikes on rate moves
+    # Crypto / digital assets (high-volume momentum plays)
+    "BTBT",   # Bit Digital           — Bitcoin mining + AI compute
+    "CIFR",   # Cipher Mining         — Bitcoin miner, decent daily volume
 ]
 
 # ── LIVE vs SIM split (2026-09-04) ───────────────────────────────────────────
