@@ -8,8 +8,9 @@ Fixes the mismatch caused by $0 paper-fill exits that never actually closed
 the position on IBKR, which later caused orphan short positions.
 
 Usage:
-    python reconcile_paper_ibkr.py           # dry-run, report only
-    python reconcile_paper_ibkr.py --apply   # write fixes to DB
+    python reconcile_paper_ibkr.py                  # dry-run, report only
+    python reconcile_paper_ibkr.py --apply          # write fixes to DB
+    python reconcile_paper_ibkr.py --backfill-dates # fix 0d rows from IBKR execution history
     python reconcile_paper_ibkr.py --apply --close-shorts
         # also cancel any open stop orders for orphan shorts
         # (you still need to close the short positions manually in TWS/portal)
@@ -18,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -64,12 +66,147 @@ def _last_known_stop(con: sqlite3.Connection, symbol: str) -> float | None:
     return float(row[0]) if row and row[0] else None
 
 
+_IBKR_TIME_RE = re.compile(r"(\d{8})\s+(\d{2}:\d{2}:\d{2})")
+
+
+def _parse_ibkr_time(t: str) -> datetime | None:
+    """Parse IBKR execution time string '20260901 14:30:00 US/Eastern' -> UTC datetime."""
+    m = _IBKR_TIME_RE.search(t or "")
+    if not m:
+        return None
+    try:
+        # IBKR paper fills are in US/Eastern; approximate as UTC-4 (EDT) / UTC-5 (EST).
+        # For a best-effort fill-date match we accept ~1h ambiguity and use UTC-4.
+        from datetime import timedelta
+        naive = datetime.strptime(m.group(1) + " " + m.group(2), "%Y%m%d %H:%M:%S")
+        return (naive + timedelta(hours=4)).replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _fetch_buy_dates(ib) -> dict[str, datetime]:
+    """Return {symbol: earliest_buy_fill_datetime_utc} from IBKR execution history."""
+    ib.reqExecutions()
+    ib.sleep(2)
+    result: dict[str, datetime] = {}
+    for f in ib.fills():
+        if f.execution.side not in ("BOT", "BUY"):
+            continue
+        sym = f.contract.symbol
+        dt  = _parse_ibkr_time(f.execution.time)
+        if dt is None:
+            continue
+        # Keep the earliest buy fill per symbol (first entry)
+        if sym not in result or dt < result[sym]:
+            result[sym] = dt
+    return result
+
+
+def _dates_from_sold_rows(con: sqlite3.Connection, targets: list) -> dict[str, str]:
+    """Match reconciled FILLED rows against SOLD rows by symbol + closest price.
+
+    Returns {symbol: filled_at_iso_string} for symbols where a SOLD row
+    with price within 5% is found.  Prefers the closest-price match when
+    multiple SOLD rows exist for the same symbol.
+    """
+    result: dict[str, str] = {}
+    for row in targets:
+        sym        = row["symbol"]
+        entry      = float(row["fill_price"] or 0)
+        sold_rows  = con.execute(
+            "SELECT fill_price, filled_at FROM trades "
+            "WHERE symbol=? AND status='SOLD' AND side='BUY' AND fill_price IS NOT NULL "
+            "ORDER BY filled_at DESC",
+            (sym,)
+        ).fetchall()
+        if not sold_rows:
+            continue
+        best      = min(sold_rows, key=lambda r: abs(float(r[0]) - entry) / max(entry, 0.01))
+        diff_pct  = abs(float(best[0]) - entry) / max(entry, 0.01) * 100
+        if diff_pct <= 5.0 and best[1]:
+            result[sym] = best[1]
+    return result
+
+
+def _backfill_dates(port: int, client_id: int, apply: bool) -> None:
+    """Update filled_at on 0-day rows using DB SOLD history, then IBKR executions."""
+    print(f"\n{BOLD}Backfill fill dates from trade history{RST}")
+    print(f"  DB   : {DB_PATH}")
+    print(f"  Mode : {'** APPLY **' if apply else 'DRY-RUN'}\n")
+
+    con = sqlite3.connect(DB_PATH)
+    con.row_factory = sqlite3.Row
+
+    # Target: RECONCILE_ rows or any FILLED BUY row filled today (0-day rows)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    rows = con.execute(
+        "SELECT id, symbol, fill_price, filled_at FROM trades "
+        "WHERE side='BUY' AND status='FILLED' "
+        "AND (order_id LIKE 'RECONCILE_%' OR filled_at LIKE ?)",
+        (f"{today}%",)
+    ).fetchall()
+    print(f"  Rows to backfill : {len(rows)}")
+
+    # Primary source: match against SOLD rows in the DB
+    db_dates = _dates_from_sold_rows(con, rows)
+    print(f"  DB SOLD matches  : {len(db_dates)}/{len(rows)}")
+
+    # Secondary source: IBKR execution history (covers current session only)
+    ibkr_dates: dict[str, datetime] = {}
+    missing = [r for r in rows if r["symbol"] not in db_dates]
+    if missing and port:
+        try:
+            from ibkr_module import ibkr_client as ic
+            print(f"  Connecting to 127.0.0.1:{port} for execution history...")
+            ib = ic.connect("127.0.0.1", port, client_id)
+            ibkr_dates = _fetch_buy_dates(ib)
+            ic.disconnect(ib)
+            print(f"  IBKR exec history: {len(ibkr_dates)} symbols")
+        except Exception as exc:
+            print(f"  {DIM}IBKR exec history unavailable: {exc}{RST}")
+
+    print()
+    updated = 0
+    for row in rows:
+        sym     = row["symbol"]
+        old_ts  = (row["filled_at"] or "")[:19]
+
+        if sym in db_dates:
+            new_ts = db_dates[sym]   # full ISO string including timezone
+            src    = "sold-row"
+        elif sym in ibkr_dates:
+            new_ts = ibkr_dates[sym].isoformat()
+            src    = "ibkr-exec"
+        else:
+            print(f"  {DIM}{sym:<8}  {old_ts}  (no history found){RST}")
+            continue
+
+        print(f"  {GRN}+{RST} {sym:<8}  {old_ts}  ->  {new_ts}  [{src}]")
+        if apply:
+            con.execute("UPDATE trades SET filled_at=? WHERE id=?", (new_ts, row["id"]))
+            updated += 1
+
+    if apply:
+        con.commit()
+        print(f"\n  {GRN}Updated {updated}/{len(rows)} rows.{RST}")
+    else:
+        print(f"\n  {DIM}Pass --apply to write these dates to the DB.{RST}")
+
+    con.close()
+    print()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Reconcile IBKR paper positions vs local DB")
-    parser.add_argument("--apply",        action="store_true", help="Write fixes to ibkr_stocks.db")
-    parser.add_argument("--client-id",    type=int, default=20, help="ib_insync client ID (default 20)")
-    parser.add_argument("--port",         type=int, default=4002, help="IB Gateway port (default 4002)")
+    parser.add_argument("--apply",          action="store_true", help="Write fixes to ibkr_stocks.db")
+    parser.add_argument("--backfill-dates", action="store_true", help="Fix 0-day rows using IBKR execution history")
+    parser.add_argument("--client-id",      type=int, default=20, help="ib_insync client ID (default 20)")
+    parser.add_argument("--port",           type=int, default=4002, help="IB Gateway port (default 4002)")
     args = parser.parse_args()
+
+    if args.backfill_dates:
+        _backfill_dates(args.port, args.client_id, args.apply)
+        return
 
     # ── Connect to IBKR ──────────────────────────────────────────────────────
     print(f"\n{BOLD}Reconcile IBKR paper positions -> ibkr_stocks.db{RST}")
@@ -104,6 +241,10 @@ def main() -> None:
                 "stop_price": float(getattr(t.order, "auxPrice", 0)),
                 "status":    t.orderStatus.status,
             }
+
+    # ── Fetch execution history (for fill dates) ─────────────────────────────
+    buy_dates = _fetch_buy_dates(ib)
+    print(f"  Execution history: {len(buy_dates)} symbols with buy fills")
 
     ic.disconnect(ib)
     print(f"  IBKR positions   : {len(ibkr_positions)}")
@@ -174,10 +315,13 @@ def main() -> None:
             print(f"\n  {GRN}Inserting missing rows into DB...{RST}")
             now = datetime.now(timezone.utc).isoformat()
             for sym, d in orphan_longs:
-                strat     = _last_known_strategy(con, sym)
+                strat      = _last_known_strategy(con, sym)
                 stop_price = open_orders.get(sym, {}).get("stop_price") or _last_known_stop(con, sym)
                 stop_oid   = open_orders.get(sym, {}).get("order_id")
                 trail_high = d["avg_cost"]   # conservative: use avg cost as floor
+                exec_dt    = buy_dates.get(sym)
+                filled_ts  = exec_dt.isoformat() if exec_dt else now
+                date_src   = f"exec {filled_ts[:10]}" if exec_dt else "now (no exec history)"
                 con.execute("""
                     INSERT INTO trades
                       (order_id, symbol, side, qty, fill_price, stop_price, stop_order_id,
@@ -194,11 +338,12 @@ def main() -> None:
                     trail_high,
                     "FILLED",
                     now,
-                    now,
+                    filled_ts,
                     strat,
                 ))
                 print(f"    {GRN}+{RST} {sym:<6}  qty={d['qty']:.0f}  entry=${d['avg_cost']:.2f}"
-                      f"  stop={f'${stop_price:.2f}' if stop_price else 'none'}  strategy={strat}")
+                      f"  stop={f'${stop_price:.2f}' if stop_price else 'none'}"
+                      f"  strategy={strat}  date={date_src}")
             con.commit()
             print(f"  {GRN}Done.{RST}")
         else:

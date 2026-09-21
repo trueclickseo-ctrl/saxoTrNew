@@ -97,6 +97,8 @@ def _days_held(filled_at: str | None) -> int:
         return 0
     try:
         dt = datetime.fromisoformat(filled_at.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
         return max(0, (datetime.now(timezone.utc) - dt).days)
     except Exception:
         return 0
