@@ -66,6 +66,10 @@ _STRATEGY_ROWS = [
      "52-week high breakout, relative strength leaders"),
     ("US Ensemble",      "US Ensemble",       "signals",           "max_per_strategy",
      "Combined signal — requires SMA + RSI + momentum alignment"),
+    ("penny",            "Penny Stocks",      "penny",             "max_slots",
+     "SIM-ONLY — sub-$2 momentum breakout, 12% stop, 25% target"),
+    ("bagger",           "Baggers",           "bagger",            "max_slots",
+     "SIM-ONLY — 80%+ 6m ROC trend continuation, 12% trailing stop"),
 ]
 
 _W = 86  # terminal width
