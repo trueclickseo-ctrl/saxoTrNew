@@ -355,6 +355,77 @@ def notify_trade_executed(
     _send(subject, _wrap(f"{strategy} — {side.upper()} Order Executed", body))
 
 
+def notify_ibkr_trade(
+    side: str,               # "BUY" or "SELL"
+    ticker: str,
+    shares: int | float,
+    fill_price: float,
+    strategy: str,
+    pnl_usd: float | None = None,   # SELL only
+    reason: str = "",
+) -> None:
+    """Send email on every confirmed IBKR fill (BUY or SELL, any strategy)."""
+    today    = date.today().isoformat()
+    is_buy   = side.upper() == "BUY"
+    badge_cls = "buy" if is_buy else "sell"
+    badge_lbl = "IBKR BUY FILLED" if is_buy else "IBKR SELL FILLED"
+
+    pnl_html = ""
+    if not is_buy and pnl_usd is not None:
+        pnl_col  = "#4ade80" if pnl_usd >= 0 else "#f87171"
+        pnl_sign = "+" if pnl_usd >= 0 else ""
+        pnl_html = f'''<div class="metric">
+          <div class="label">Realised P&amp;L</div>
+          <div class="value" style="color:{pnl_col}">{pnl_sign}${pnl_usd:,.2f}</div>
+        </div>'''
+
+    notional = fill_price * shares
+
+    body = f"""
+    <span class="badge {badge_cls}">{badge_lbl}</span>
+    <div class="metric-row" style="margin-top:16px">
+      <div class="metric">
+        <div class="label">Ticker</div>
+        <div class="value">{ticker}</div>
+      </div>
+      <div class="metric">
+        <div class="label">Shares</div>
+        <div class="value">{int(shares) if float(shares) == int(shares) else shares}</div>
+      </div>
+      <div class="metric">
+        <div class="label">Fill Price</div>
+        <div class="value">${fill_price:.2f}</div>
+      </div>
+      <div class="metric">
+        <div class="label">Notional</div>
+        <div class="value">${notional:,.0f}</div>
+      </div>
+      {pnl_html}
+    </div>
+    <div class="metric-row">
+      <div class="metric">
+        <div class="label">Strategy</div>
+        <div class="value" style="font-size:14px">{strategy}</div>
+      </div>
+      <div class="metric">
+        <div class="label">Account</div>
+        <div class="value" style="font-size:14px;color:#94a3b8">IBKR Paper</div>
+      </div>
+      <div class="metric">
+        <div class="label">Date</div>
+        <div class="value" style="font-size:14px">{today}</div>
+      </div>
+    </div>
+    {"<p style='color:#94a3b8'>Reason: " + reason + "</p>" if reason else ""}
+    """
+
+    action_word = "Bought" if is_buy else "Sold"
+    pnl_str = f"  P&L: ${pnl_usd:+,.2f}" if (pnl_usd is not None) else ""
+    subject = (f"IBKR {side.upper()} — {action_word} {int(shares)} {ticker} "
+               f"@ ${fill_price:.2f}{pnl_str}  [{strategy}]")
+    _send(subject, _wrap(f"IBKR — {strategy} {side.upper()}", body))
+
+
 def notify_weekly_report(
     total_equity_sek:  float,
     week_pnl_sek:      float,
