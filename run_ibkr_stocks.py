@@ -600,18 +600,19 @@ def main() -> None:
             print("\n-- US Reversion --------------------------------------------")
             if args.exits:
                 ex.run_reversion_exits(ib, account_id, cfg, dry_run=dry_run,
-                                       indicators=pre_indicators)
+                                       indicators=pre_indicators, auto=args.auto)
             else:
                 ex.run_reversion_entries(ib, account_id, cfg, dry_run=dry_run,
-                                         intraday=False, candidates=pre_candidates)
+                                         intraday=False, candidates=pre_candidates,
+                                         auto=args.auto)
 
             print("\n-- US Signals ----------------------------------------------")
             if args.exits:
                 ex.run_us_signals_exits(ib, account_id, cfg, dry_run=dry_run,
-                                        feat_data=pre_feat_data)
+                                        feat_data=pre_feat_data, auto=args.auto)
             else:
                 ex.run_us_signals_entries(ib, account_id, cfg, dry_run=dry_run,
-                                          feat_data=pre_feat_data)
+                                          feat_data=pre_feat_data, auto=args.auto)
 
             print("\n" + "="*60)
             print("  ALL STRATEGIES COMPLETE")
