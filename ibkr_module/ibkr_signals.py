@@ -76,8 +76,10 @@ def _download(tickers: list[str], lookback_days: int = 260) -> dict[str, pd.Data
         cached = _load_cache(lookback_days)
         if cached is not None:
             subset = {t: cached[t] for t in tickers if t in cached}
-            print(f"  [signals] cache hit -- {len(subset)} tickers (age < {_CACHE_MAX_AGE_HOURS}h)")
-            return subset
+            if len(subset) >= len(tickers) * 0.5:
+                print(f"  [signals] cache hit -- {len(subset)} tickers (age < {_CACHE_MAX_AGE_HOURS}h)")
+                return subset
+            # Cache doesn't cover this ticker universe — download fresh
 
     import yfinance as yf
 
