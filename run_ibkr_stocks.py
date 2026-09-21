@@ -594,7 +594,8 @@ def main() -> None:
                                       auto=args.auto)
 
             print("\n-- US Blend ------------------------------------------------")
-            ex.run_rebalance(ib, account_id, cfg, dry_run=dry_run, signal=pre_signal)
+            ex.run_rebalance(ib, account_id, cfg, dry_run=dry_run, signal=pre_signal,
+                             auto=args.auto)
 
             print("\n-- US Reversion --------------------------------------------")
             if args.exits:
