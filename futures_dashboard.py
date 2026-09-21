@@ -209,13 +209,39 @@ def _closed_trades(limit: int = 20) -> list:
         return []
 
 
+def _true_closed_counts() -> dict:
+    """Actual closed trade counts per strategy (including NULL-pnl rows).
+    Returns {"_total": N, "donchian": N, ...}
+    """
+    try:
+        import sqlite3, os
+        db = os.path.join(BASE_DIR, "data", "pnl_ledger.db")
+        conn = sqlite3.connect(db)
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        rows = c.execute(
+            "SELECT strategy, COUNT(*) AS n FROM trades "
+            "WHERE module='futures' AND status='closed' GROUP BY strategy"
+        ).fetchall()
+        total = c.execute(
+            "SELECT COUNT(*) FROM trades WHERE module='futures' AND status='closed'"
+        ).fetchone()[0]
+        conn.close()
+        result = {r["strategy"]: r["n"] for r in rows}
+        result["_total"] = total
+        return result
+    except Exception:
+        return {}
+
+
 def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
     now_ts    = datetime.now().strftime("%Y-%m-%d  %H:%M:%S")
     positions = _read_positions()
     token     = price_service.load_token()
     uic_cache = _load_uic_cache()
-    strat_db  = _strategy_summary()
-    closed    = _closed_trades(20)
+    strat_db    = _strategy_summary()
+    closed      = _closed_trades(20)
+    true_counts = _true_closed_counts()
 
     # Live prices keyed by UIC
     px_by_uic = _saxo_live_prices(token)
@@ -581,9 +607,10 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         L.append("")
         L.append(f"  {BD}FUTURES P&L LEDGER{W}  {DM}(pnl_ledger.db){W}")
         L.append(HR)
+        true_total = true_counts.get("_total", s.get("closed_trades", 0))
         L.append(
             f"  {BD}TOTAL Realized:{W}  {pc}{BD}{pr:>+,.2f} USD{W}     "
-            f"{DM}Closed: {s.get('closed_trades',0)}  |  "
+            f"{DM}Closed: {true_total}  |  "
             f"Win rate: {s.get('win_rate',0):.1f}%  |  "
             f"Best: +{s.get('best_trade',0):.2f}  |  "
             f"Worst: {s.get('worst_trade',0):+.2f}  |  "
@@ -599,7 +626,7 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
                 if not db:
                     continue
                 sc      = STRAT_COL.get(strat, DM)
-                n       = int(db.get("trades", 0) or 0)
+                n       = true_counts.get(strat, int(db.get("trades", 0) or 0))
                 w       = int(db.get("wins", 0) or 0)
                 l       = int(db.get("losses", 0) or 0)
                 wr      = float(db.get("win_rate", 0) or 0)
