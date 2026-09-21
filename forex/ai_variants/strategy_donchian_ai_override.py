@@ -1,6 +1,6 @@
 # AI-WRITTEN Phase 2+3 2025-06-16 by claude-sonnet-5
 # Entry filter: Correlated JPY-cross basket (HKDJPY/JPYHKD/USDJPY) group cooldown of 12h to block simultaneous correlated stack-ups.
-# Exit filter: Require 2 consecutive daily closes beyond stop_price before confirming hard_stop exit, to filter single-bar wick/whipsaw stop-outs (unchanged -- no new exit-reason pattern in updated ledger).
+# Exit filter: Require 2 consecutive daily closes beyond stop_price before confirming hard_stop exit -- unchanged; latest ledger (30 trades) shows the filter is working (53.3% WR, +0.6 avg_pnl, up from 30.4%/-1.1R), so no new exit-reason pattern warrants further change.
 
 from __future__ import annotations
 
@@ -90,18 +90,19 @@ def generate_signals(market_data: dict, open_symbols: set = None, **kwargs) -> l
     return filtered
 
 
-# ── Exit filter (Phase 3) ────────────────────────────────────────────────────────
+# ── Exit filter (Phase 3) ─────────────────────────────────────────────────────────────
 #
-# Evidence (updated ledger, 56 quality trades): ALL 56 (100%) still exit via
-# hard_stop, win rate 30.4%, avg_pnl -1.1R -- statistically unchanged from
-# the prior 54-trade snapshot (29.6% WR, -1.0R avg) that justified this
-# confirmation-bars filter. There is still zero trend_break or time_stop
-# representation, meaning no new exit-reason pattern has emerged to target.
-# The 2-consecutive-close confirmation already deployed remains the correct,
-# data-backed response: it filters single-bar wick/whipsaw stop violations
-# without altering genuine directional stop-outs. No further change is
-# warranted until a different exit_reason distribution appears in the
-# ledger.
+# Evidence (latest ledger, 30 quality trades): 100% of closed trades still
+# exit via hard_stop, but the distribution has shifted materially since the
+# filter's original justification -- win rate is now 53.3% (up from 30.4%)
+# and avg_pnl is +0.6R (up from -1.1R). This is consistent with the
+# 2-consecutive-close confirmation successfully filtering out single-bar
+# wick/whipsaw stop violations while leaving genuine directional stop-outs
+# intact. There is still zero trend_break or time_stop representation in
+# the ledger, so there is no new exit-reason pattern to target. Per the
+# "no clear pattern to add" rule, the exit logic is left UNCHANGED rather
+# than layering on a second, unjustified rule against a metric that is now
+# performing well.
 
 CONFIRMATION_BARS = 2
 
@@ -125,7 +126,8 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
 
     All other exit reasons (trend_break / time_stop) pass through unchanged
     -- the ledger shows no evidence problem with those paths since none of
-    the 56 closed trades exited via them.
+    the 30 closed trades exited via them, and hard_stop performance has
+    improved substantially since this filter was deployed.
     """
     exit_flag, reason = _orig_should_exit(position, df, calendar_days_held)
 
