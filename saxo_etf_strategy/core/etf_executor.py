@@ -503,7 +503,7 @@ class ETFExecutor:
                     self.state.upsert_position(uic, {**pos, **pos_update})
                 continue
 
-            # PATCH Saxo stop order
+            # PATCH Saxo stop order (or place fresh if none exists yet)
             saxo_ok = False
             if stop_oid:
                 saxo_ok = _sxo.modify_stop_price(
@@ -526,6 +526,17 @@ class ETFExecutor:
                     if new_oid:
                         pos_update["stop_order_id"] = new_oid
                         saxo_ok = True
+            else:
+                # No stop order exists yet — place initial protective stop
+                logger.info(f"{tag} {symbol}: no stop order, placing initial stop @ ${new_stop:.2f}")
+                new_oid = _sxo.place_protective_stop(
+                    post_fn=_post_fn, account_key=self._account_key,
+                    uic=uic, asset_type="Etf", amount=qty,
+                    direction="Buy", stop_price=new_stop, label=f"trail:{symbol}",
+                )
+                if new_oid:
+                    pos_update["stop_order_id"] = new_oid
+                    saxo_ok = True
 
             if saxo_ok:
                 pos_update["stop_price"] = new_stop
