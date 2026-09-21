@@ -183,101 +183,136 @@ def _strategy_perf() -> dict[str, dict]:
     return out
 
 
-def _render_ibkr_live_section(live_prices: dict[str, float]) -> None:
-    """Show IBKR LIVE ISK positions, stops, and next rebalance date."""
-    import sqlite3, math
+def _render_live_positions(live_prices: dict[str, float],
+                           summary: dict | None = None,
+                           account_id: str = "U28013794",
+                           as_primary: bool = False) -> None:
+    """Render IBKR LIVE ISK positions.
+
+    as_primary=True  -> full-page header + account summary (--live mode)
+    as_primary=False -> compact sub-section appended to paper dashboard (legacy, now unused)
+    """
+    import sqlite3 as _sq
     from datetime import datetime, timezone, timedelta
 
     live_db = os.path.join(_ROOT, "data", "ibkr_live_stocks.db")
     if not os.path.exists(live_db):
+        if as_primary:
+            print(f"\n  {_YLW}No live DB found: {live_db}{_RST}")
         return
 
     try:
-        con = sqlite3.connect(live_db)
+        con = _sq.connect(live_db)
         rows = con.execute(
-            "SELECT symbol, qty, fill_price, stop_price, filled_at, strategy, status, notes "
+            "SELECT symbol, qty, fill_price, stop_price, filled_at, strategy, status "
             "FROM trades WHERE status IN ('FILLED','PENDING_TRANSFER') AND side='BUY' ORDER BY filled_at"
         ).fetchall()
         con.close()
     except Exception:
         return
 
+    # Next rebalance date
+    try:
+        earliest  = min(r[4] for r in rows if r[4])
+        entry_dt  = datetime.fromisoformat(earliest.replace("Z", "+00:00"))
+        next_reb  = entry_dt + timedelta(days=14)
+        days_left = (next_reb.replace(tzinfo=timezone.utc) - datetime.now(timezone.utc)).days
+        rebal_str = next_reb.strftime("%Y-%m-%d")
+    except Exception:
+        rebal_str = "—"
+        days_left = 0
+
+    if as_primary:
+        # ── Full-page header ─────────────────────────────────────────────────
+        now   = time.strftime("%Y-%m-%d %H:%M:%S")
+        ccy   = summary.get("currency", "SEK") if summary else "SEK"
+        nl    = summary.get("net_liquidation", 0) if summary else 0
+        cb    = summary.get("cash_balance",    0) if summary else 0
+        u_pnl = summary.get("unrealized_pnl",  0) if summary else 0
+        r_pnl = summary.get("realized_pnl",    0) if summary else 0
+        any_p = any(v and v > 0 for v in live_prices.values())
+        plbl  = "IBKR live" if any_p else "IBKR (market closed)"
+
+        print()
+        print(f"  {_BOLD}IBKR LIVE  *REAL MONEY*  ·  {account_id} ({ccy})  ·  {now}  ·  {plbl}{_RST}")
+        print("  " + "═" * _W)
+        print(f"  Net Liq : {ccy} {nl:>12,.0f}"
+              f"    Cash : {ccy} {cb:>12,.0f}"
+              f"    Positions : {len([r for r in rows if r[6]!='PENDING_TRANSFER'])}")
+        uc = _GRN if u_pnl >= 0 else _RED
+        rc = _GRN if r_pnl >= 0 else _RED
+        print(f"  Unreal  : {uc}{'+' if u_pnl>=0 else ''}{ccy} {u_pnl:,.0f}{_RST}"
+              f"    Realized : {rc}{'+' if r_pnl>=0 else ''}{ccy} {r_pnl:,.0f}{_RST}")
+        print("  " + "─" * _W)
+        print(f"\n  {_BOLD}── US Blend  ·  ISK  ·  max 5 slots{_RST}"
+              f"  {_DIM}Next rebalance: {rebal_str}  ({days_left}d){_RST}")
+    else:
+        print(f"\n  {_BOLD}── IBKR LIVE  ISK  {account_id}{_RST}"
+              f"  {_DIM}US Blend  Next rebalance: {rebal_str}  ({days_left}d){_RST}")
+
     if not rows:
+        print(f"  {_DIM}  No open positions.{_RST}")
         return
 
-    # Next rebalance = earliest fill date + 14 days
-    try:
-        earliest = min(r[4] for r in rows if r[4])
-        entry_dt = datetime.fromisoformat(earliest.replace("Z", "+00:00"))
-        next_rebal = entry_dt + timedelta(days=14)
-        days_left  = (next_rebal.replace(tzinfo=timezone.utc) -
-                      datetime.now(timezone.utc)).days
-        rebal_str  = next_rebal.strftime("%Y-%m-%d")
-    except Exception:
-        rebal_str = "2026-09-24"
-        days_left  = 14
+    print(f"  {'#':<3}  {'Sym':<6}  {'Qty':>5}  {'Entry':>8}  {'Last':>8}  "
+          f"{'Gain%':>7}  {'Gain$':>8}  {'Stop':>8}  {'Value':>8}  {'Days':>4}")
+    print("  " + "─" * (_W - 2))
 
-    print(f"\n  {_BOLD}-- IBKR LIVE  ISK  U28013794{_RST}  "
-          f"{_DIM}US Blend  Next rebalance: {rebal_str}  ({days_left}d away){_RST}")
-    print(f"  {_DIM}   Cherry-pick ranks #1 #2 #4 #6  50/50 weight  8% stop{_RST}")
-    print(f"  {'#':<3}  {'Sym':<6}  {'Qty':>5}  {'Entry':>8}  {'Last':>8}  {'Gain%':>7}  "
-          f"{'Gain$':>8}  {'Stop':>8}  {'Value':>8}  {'Days':>4}")
-    print("  " + "-" * (_W - 2))
-
-    total_invested = 0.0
-    total_pnl      = 0.0
-    for i, (sym, qty, entry, stop, filled_at, strat, status, notes) in enumerate(rows, 1):
-        qty   = float(qty or 0)
+    total_inv = 0.0
+    total_pnl = 0.0
+    for i, (sym, qty, entry, stop, filled_at, strat, status) in enumerate(rows, 1):
+        qty   = float(qty   or 0)
         entry = float(entry or 0)
-        stop  = float(stop or 0)
+        stop  = float(stop  or 0)
         days  = _days_held(filled_at)
 
         if status == "PENDING_TRANSFER":
-            last_s  = f"{'PENDING':>8}"
-            pct_s   = f"{'transfer':>7}"
-            gain_s  = f"{'—':>8}"
-            val_s   = f"{'—':>8}"
-            entry_s = f"{'—':>8}"
-            stop_s  = _fmt_price(stop)
             print(f"  {i:<3}  {_YLW}{sym:<6}{_RST}  {qty:>5.0f}  "
-                  f"{entry_s}  {last_s}  {pct_s}  {gain_s}  "
-                  f"{stop_s}  {val_s}  {'—':>3}")
+                  f"{'—':>8}  {'PENDING':>8}  {'transfer':>7}  {'—':>8}  "
+                  f"{_fmt_price(stop)}  {'—':>8}  {'—':>3}")
             continue
 
-        last  = float(live_prices.get(sym) or 0)
+        last   = float(live_prices.get(sym) or 0)
         pct    = _pct(entry, last)
         gain_d = (last - entry) * qty if (entry and last) else float("nan")
-        value  = last * qty if last else float("nan")
+        value  = last * qty           if last            else float("nan")
 
-        if not math.isnan(gain_d):
-            total_pnl += gain_d
-        if entry:
-            total_invested += entry * qty
+        if not math.isnan(gain_d): total_pnl += gain_d
+        if entry:                  total_inv  += entry * qty
 
-        pct_s   = _color_pct(pct)
-        gain_s  = _color_dollar(gain_d, 8)
-        val_s   = f"${value:>7,.0f}" if not math.isnan(value) else f"{'—':>8}"
-        entry_s = _fmt_price(entry)
-        last_s  = _fmt_price(last) if last else f"{'—':>8}"
-        stop_s  = _fmt_price(stop)
+        # Warn if stop is above current price (will trigger immediately)
+        stop_s = _fmt_price(stop)
+        if stop and last and stop > last:
+            stop_s = f"{_RED}{stop_s}{_RST}"
 
         print(f"  {i:<3}  {sym:<6}  {qty:>5.0f}  "
-              f"{entry_s}  {last_s}  {pct_s}  {gain_s}  "
-              f"{stop_s}  {val_s}  {days:>3}d")
+              f"{_fmt_price(entry)}  {_fmt_price(last) if last else '—':>8}  "
+              f"{_color_pct(pct)}  {_color_dollar(gain_d, 8)}  "
+              f"{stop_s}  "
+              f"{'$%7,.0f' % value if not math.isnan(value) else '—':>8}  {days:>3}d")
 
-    print("  " + "-" * (_W - 2))
-    inv_s = f"${total_invested:>10,.0f}" if total_invested else "-"
-    pnl_c = _GRN if total_pnl >= 0 else _RED
-    pnl_s = f"{'+' if total_pnl >= 0 else ''}${total_pnl:,.0f}"
-    print(f"  {'Invested':>35} : {inv_s}    P&L : {pnl_c}{pnl_s}{_RST}")
+    print("  " + "─" * (_W - 2))
+    inv_s = f"${total_inv:>10,.0f}" if total_inv else "—"
+    pc    = _GRN if total_pnl >= 0 else _RED
+    ps    = f"{'+' if total_pnl>=0 else ''}${total_pnl:,.0f}"
+    print(f"  {'Invested':>35} : {inv_s}    P&L : {pc}{ps}{_RST}")
 
 
 def render_dashboard(cfg: dict, summary: dict, account_id: str,
                      positions_by_strat: dict[str, list[dict]],
-                     live_prices: dict[str, float]) -> None:
+                     live_prices: dict[str, float],
+                     live_only: bool = False) -> None:
     os.system("cls" if os.name == "nt" else "clear")
 
-    mode      = "PAPER" if cfg.get("paper", True) else "LIVE"
+    if live_only:
+        _render_live_positions(live_prices, summary=summary,
+                               account_id=account_id, as_primary=True)
+        print()
+        print("  " + "─" * _W)
+        print(f"  {_DIM}Ctrl+C to quit  ·  --once to print once  ·  --interval N secs{_RST}\n")
+        return
+
+    mode      = "PAPER (SIM)"
     now       = time.strftime("%Y-%m-%d %H:%M:%S")
     total_pos = sum(len(v) for v in positions_by_strat.values())
     any_price = any(v and v > 0 for v in live_prices.values())
@@ -369,9 +404,6 @@ def render_dashboard(cfg: dict, summary: dict, account_id: str,
     if idle_labels:
         print(f"\n  {_DIM}Idle: {' · '.join(idle_labels)}{_RST}")
 
-    # ── IBKR LIVE ISK Account ─────────────────────────────────────────────────
-    _render_ibkr_live_section(live_prices)
-
     # ── Strategy Performance (historical closed-trade stats) ──────────────────
     perf = _strategy_perf()
     any_closed = any(v.get("closed", 0) > 0 for v in perf.values())
@@ -429,7 +461,8 @@ def main() -> None:
     parser.add_argument("--client-id", type=int, default=None, help="Override IBKR client ID (default: from config)")
     args = parser.parse_args()
 
-    if args.live:
+    live_only = args.live
+    if live_only:
         cfg["paper"] = False
         os.environ["IBKR_DB_PATH"] = os.path.join(_ROOT, "data", "ibkr_live_stocks.db")
 
@@ -498,7 +531,7 @@ def main() -> None:
             ic.disconnect(ib)
 
             render_dashboard(cfg, summary, account_id, positions_by_strat,
-                             live_prices)
+                             live_prices, live_only=live_only)
 
         except KeyboardInterrupt:
             print("\n  Stopped.")
@@ -508,7 +541,7 @@ def main() -> None:
             msg = str(exc) or "Connection refused or timed out"
             print(f"\n  [ERROR] {msg}")
             print("  Make sure IB Gateway is running on port "
-                  f"{cfg.get('port_paper', 4001)} and API access is enabled.")
+                  f"{port} and API access is enabled.")
             time.sleep(10)
 
         if args.once:
