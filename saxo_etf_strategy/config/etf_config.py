@@ -53,6 +53,14 @@ class ETFStrategyConfig:
                                                     # trim_out_of_ranking() in ETFExecutor sells
                                                     # any open position not in this top-N each run.
     rebalance_frequency_hours: int = 24
+    # Entry quality filters (dual_ma only).
+    # crossover_max_age_days: skip entry if SMA20>SMA100 was already true N days ago
+    #   (avoids buying extended uptrends weeks after the crossover fired).
+    # slope_lookback_days: SMA20 must be *higher* than it was N days ago at entry
+    #   (avoids entering a weakening trend where momentum is already rolling over).
+    # Set either to 0 to disable the corresponding filter.
+    crossover_max_age_days: int = 10
+    slope_lookback_days: int = 5
 
 
 @dataclass

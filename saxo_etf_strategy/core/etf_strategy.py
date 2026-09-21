@@ -314,21 +314,60 @@ class DualMAStrategy(_BaseStrategy):
     ]
 
     def generate_signals(self, universe: List[dict]) -> List[ETFSignal]:
-        logger.info(f"DualMA: scanning {len(self.UNIVERSE)} curated ETFs "
-                    f"(fast={self.cfg.lookback_days_fast}d / slow={self.cfg.lookback_days_slow}d MA)")
+        max_age   = self.cfg.crossover_max_age_days
+        slope_n   = self.cfg.slope_lookback_days
+        extra     = max(max_age, slope_n, 1) + 2   # extra bars for filter lookbacks
+        needed    = self.cfg.lookback_days_slow + extra
+
+        logger.info(
+            f"DualMA: scanning {len(self.UNIVERSE)} curated ETFs "
+            f"(fast={self.cfg.lookback_days_fast}d / slow={self.cfg.lookback_days_slow}d MA, "
+            f"freshness<={max_age}d, slope_lookback={slope_n}d)"
+        )
         signals = []
         for symbol in self.UNIVERSE:
             inst = self._find(symbol, universe)
             if inst is None:
                 continue
-            uic  = inst.get("Identifier")
-            closes = self._history(uic, self.cfg.lookback_days_slow)
-            if not closes:
+            uic    = inst.get("Identifier")
+            closes = self._history(uic, needed)
+            # require at least slow+max_age bars so filter slices are valid
+            if not closes or len(closes) < self.cfg.lookback_days_slow + max(max_age, slope_n):
                 continue
+
             fast_ma = self._sma(closes, self.cfg.lookback_days_fast)
             slow_ma = self._sma(closes, self.cfg.lookback_days_slow)
             if slow_ma <= 0 or fast_ma <= slow_ma:
-                continue
+                continue   # no bullish crossover today
+
+            # ── Slope filter ─────────────────────────────────────────────
+            # SMA20 must be *rising*: today's value must exceed the value
+            # from slope_n days ago. A flat or declining SMA20 means
+            # momentum is rolling over — skip.
+            if slope_n > 0:
+                fast_n_ago = self._sma(closes[:-slope_n], self.cfg.lookback_days_fast)
+                if fast_n_ago > 0 and fast_ma <= fast_n_ago:
+                    logger.debug(
+                        f"DualMA {symbol}: slope filter — SMA{self.cfg.lookback_days_fast} "
+                        f"flat/falling ({fast_ma:.4f} <= {fast_n_ago:.4f} from {slope_n}d ago)"
+                    )
+                    continue
+
+            # ── Freshness filter ─────────────────────────────────────────
+            # Crossover must have happened within the last max_age days.
+            # If fast_ma was already above slow_ma max_age days ago, the
+            # trend is extended (bought near peak) — skip.
+            if max_age > 0:
+                fast_old = self._sma(closes[:-max_age], self.cfg.lookback_days_fast)
+                slow_old = self._sma(closes[:-max_age], self.cfg.lookback_days_slow)
+                if slow_old > 0 and fast_old > slow_old:
+                    logger.debug(
+                        f"DualMA {symbol}: freshness filter — crossover >{max_age}d old "
+                        f"(SMA{self.cfg.lookback_days_fast} was {fast_old:.4f} vs "
+                        f"SMA{self.cfg.lookback_days_slow} {slow_old:.4f})"
+                    )
+                    continue
+
             score = fast_ma / slow_ma - 1.0
             signals.append(ETFSignal(
                 uic=uic, symbol=symbol,
