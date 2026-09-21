@@ -592,8 +592,8 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
         # per-strategy row
         if strat_db:
             L.append("")
-            L.append(f"  {DM}  {'Strategy':<11}  {'Closed':>7}  {'W':>3}  {'L':>3}  {'WR%':>6}  {'Best':>10}  {'Worst':>11}  {'Realized':>12}{W}")
-            L.append(f"  {DM}  {'─'*11}  {'─'*7}  {'─'*3}  {'─'*3}  {'─'*6}  {'─'*10}  {'─'*11}  {'─'*12}{W}")
+            L.append(f"  {DM}  {'Strategy':<11}  {'Closed':>7}  {'W':>3}  {'L':>3}  {'WR%':>6}  {'PF':>5}  {'Best':>10}  {'Worst':>11}  {'Realized':>12}{W}")
+            L.append(f"  {DM}  {'─'*11}  {'─'*7}  {'─'*3}  {'─'*3}  {'─'*6}  {'─'*5}  {'─'*10}  {'─'*11}  {'─'*12}{W}")
             for strat in ["donchian", "rsi", "ema", "macd", "squeeze", "ma_cross", "trend_ma"]:
                 db = strat_db.get(strat)
                 if not db:
@@ -603,16 +603,20 @@ def _render(once: bool = False, interval: int = REFRESH_SECONDS) -> str:
                 w       = int(db.get("wins", 0) or 0)
                 l       = int(db.get("losses", 0) or 0)
                 wr      = float(db.get("win_rate", 0) or 0)
+                pf      = db.get("profit_factor")
+                pf_s    = f"{pf:.2f}" if pf is not None else "—"
                 best    = float(db.get("best", 0) or 0)
                 worst   = float(db.get("worst", 0) or 0)
                 rp      = float(db.get("total_pnl", 0) or 0)
                 rc      = GR if rp >= 0 else RD
                 wrc     = GR if wr >= 50 else (YL if wr >= 40 else RD)
+                pfc     = GR if (pf or 0) >= 1.5 else (YL if (pf or 0) >= 1.0 else RD)
                 bc      = GR if best >= 0 else RD
                 woc     = RD if worst < 0 else GR
                 L.append(
                     f"  {DM}  {W}{sc}{BD}{strat:<11}{W}  "
                     f"{DM}{n:>7}  {w:>3}  {l:>3}  {W}{wrc}{wr:>5.1f}%{W}  "
+                    f"{pfc}{pf_s:>5}{W}  "
                     f"{bc}{best:>+10,.2f}{W}  {woc}{worst:>+11,.2f}{W}  "
                     f"{rc}{BD}{rp:>+12,.2f}{W}"
                 )
