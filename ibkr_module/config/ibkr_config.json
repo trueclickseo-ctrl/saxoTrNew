@@ -4,8 +4,8 @@
   "live_account_id": "U28013794",
   "paper_account_id": "U28013804",
   "host": "127.0.0.1",
-  "port_paper": 4001,
-  "port_live": 4002,
+  "port_paper": 4002,
+  "port_live": 4001,
   "client_id": 10,
   "client_ids": {
     "blend":        10,

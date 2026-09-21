@@ -289,7 +289,7 @@ def _render_live_positions(live_prices: dict[str, float],
               f"{_fmt_price(entry)}  {_fmt_price(last) if last else '—':>8}  "
               f"{_color_pct(pct)}  {_color_dollar(gain_d, 8)}  "
               f"{stop_s}  "
-              f"{'$%7,.0f' % value if not math.isnan(value) else '—':>8}  {days:>3}d")
+              f"{f'${value:>7,.0f}' if not math.isnan(value) else '—':>8}  {days:>3}d")
 
     print("  " + "─" * (_W - 2))
     inv_s = f"${total_inv:>10,.0f}" if total_inv else "—"
