@@ -316,7 +316,7 @@ def render_dashboard(cfg: dict, summary: dict, account_id: str,
     now       = time.strftime("%Y-%m-%d %H:%M:%S")
     total_pos = sum(len(v) for v in positions_by_strat.values())
     any_price = any(v and v > 0 for v in live_prices.values())
-    price_lbl = "IBKR live" if any_price else "IBKR (market closed)"
+    price_lbl = "live prices" if any_price else "hist prices"
 
     # ── Header ────────────────────────────────────────────────────────────────
     ccy = summary.get("currency", "USD")
