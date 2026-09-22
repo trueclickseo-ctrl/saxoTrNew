@@ -48,6 +48,14 @@ _MODULE_MAP = {
 }
 
 
+def _is_test_symbol(sym: str) -> bool:
+    """True for synthetic symbols written by unit/smoke tests — never real trades."""
+    if not sym:
+        return False
+    s = sym.upper()
+    return s.endswith("_ZZZ") or "TEST_HOOK" in s or s.startswith("DEDUP_TEST") or s.startswith("E2E_")
+
+
 def _load_decisions(account: str) -> list[dict]:
     if not os.path.exists(DECISIONS):
         print(f"{Y}No shadow decisions yet — data/ai_shadow_decisions.jsonl missing.{X}")
@@ -62,7 +70,7 @@ def _load_decisions(account: str) -> list[dict]:
                 row = json.loads(ln)
             except json.JSONDecodeError:
                 continue
-            if row.get("account_env") == account:
+            if row.get("account_env") == account and not _is_test_symbol(row.get("symbol", "")):
                 out.append(row)
     return out
 

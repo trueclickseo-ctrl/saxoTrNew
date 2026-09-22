@@ -32,6 +32,14 @@ G, R, Y, C, DIM, X, B = (
 )
 
 
+def _is_test_symbol(sym: str) -> bool:
+    """True for synthetic symbols written by unit/smoke tests — never real trades."""
+    if not sym:
+        return False
+    s = sym.upper()
+    return s.endswith("_ZZZ") or "TEST_HOOK" in s or s.startswith("DEDUP_TEST") or s.startswith("E2E_")
+
+
 def _load_decisions():
     if not os.path.exists(DECISIONS):
         return []
@@ -40,7 +48,9 @@ def _load_decisions():
         ln = ln.strip()
         if ln:
             try:
-                out.append(json.loads(ln))
+                row = json.loads(ln)
+                if not _is_test_symbol(row.get("symbol", "")):
+                    out.append(row)
             except Exception:
                 pass
     return out

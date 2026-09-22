@@ -31,9 +31,12 @@ print("[1] AI imports: _ai_cfg / _ai_copilot / _ai_stock_proposal  OK")
 import ai.features.trade_proposal as _tp
 _tp._evaluated_today = set()
 
-# Temporarily patch evaluate_stock_proposal to avoid a real LLM call
-_orig_eval = ex._ai_copilot.evaluate_stock_proposal
+# Temporarily patch evaluate_stock_proposal to avoid a real LLM call,
+# and _append to prevent synthetic symbols polluting the live shadow log.
+_orig_eval   = ex._ai_copilot.evaluate_stock_proposal
+_orig_append = _tp._append
 ex._ai_copilot.evaluate_stock_proposal = lambda p: {"action": "APPROVE", "comment": "smoke-test"}
+_tp._append = lambda *a, **kw: None
 
 dec = ex._ai_ibkr_score(
     strategy="us_reversion",
@@ -45,6 +48,7 @@ dec = ex._ai_ibkr_score(
     open_positions=[],
 )
 ex._ai_copilot.evaluate_stock_proposal = _orig_eval   # restore
+_tp._append = _orig_append                            # restore
 
 assert dec is not None, "_ai_ibkr_score returned None (check agent_enabled / stocks_enabled)"
 assert dec.get("action") == "APPROVE", f"Unexpected action: {dec}"

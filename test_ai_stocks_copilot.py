@@ -22,6 +22,7 @@ import json
 import pathlib
 import sys
 import types
+import unittest.mock
 import unittest
 
 ROOT = pathlib.Path(__file__).parent
@@ -332,9 +333,13 @@ class TestAIIBKRScore(unittest.TestCase):
             "action": "APPROVE", "size_multiplier": 1.0,
             "comment": "mock", "_agent": {"ok": True},
         }
+        # Prevent test symbols from polluting the live shadow log
+        self._patch_append = unittest.mock.patch("ai.features.trade_proposal._append")
+        self._patch_append.start()
 
     def tearDown(self):
         ex._ai_copilot.evaluate_stock_proposal = self._orig_eval
+        self._patch_append.stop()
 
     def test_returns_decision_dict(self):
         d = ex._ai_ibkr_score("us_reversion", self.TICKER, 100.0, 95.0, 10, rsi14=28.0)
@@ -507,6 +512,12 @@ class TestDedupGate(unittest.TestCase):
 
     def setUp(self):
         tp._evaluated_today = set()
+        # Prevent test symbols from polluting the live shadow log
+        self._patch_append = unittest.mock.patch("ai.features.trade_proposal._append")
+        self._patch_append.start()
+
+    def tearDown(self):
+        self._patch_append.stop()
 
     def _prop(self, strategy, ticker):
         return sp.build_stock_proposal(
@@ -609,9 +620,13 @@ class TestEndToEndPipeline(unittest.TestCase):
     def setUp(self):
         tp._evaluated_today = set()
         self._orig_eval = ex._ai_copilot.evaluate_stock_proposal
+        # Prevent test symbols from polluting the live shadow log
+        self._patch_append = unittest.mock.patch("ai.features.trade_proposal._append")
+        self._patch_append.start()
 
     def tearDown(self):
         ex._ai_copilot.evaluate_stock_proposal = self._orig_eval
+        self._patch_append.stop()
 
     def _run_pipeline(self, strategy, action, multiplier=1.0, qty=20):
         ticker = f"E2E_{strategy.upper()[:8]}_ZZZ"
