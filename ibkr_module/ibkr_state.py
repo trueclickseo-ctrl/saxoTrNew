@@ -88,12 +88,13 @@ def mark_filled(order_id: str, fill_price: float, side: str | None = None) -> No
         if side and side.upper() == "BUY":
             con.execute(
                 "UPDATE trades SET fill_price=?, trailing_high=?, status='FILLED', filled_at=? "
-                "WHERE order_id=?",
+                "WHERE order_id=? AND status='PENDING'",
                 (fill_price, fill_price, _now(), str(order_id)),
             )
         else:
             con.execute(
-                "UPDATE trades SET fill_price=?, status='FILLED', filled_at=? WHERE order_id=?",
+                "UPDATE trades SET fill_price=?, status='FILLED', filled_at=? "
+                "WHERE order_id=? AND status='PENDING'",
                 (fill_price, _now(), str(order_id)),
             )
 
@@ -101,7 +102,8 @@ def mark_filled(order_id: str, fill_price: float, side: str | None = None) -> No
 def mark_cancelled(order_id: str) -> None:
     with _conn() as con:
         con.execute(
-            "UPDATE trades SET status='CANCELLED' WHERE order_id=?", (str(order_id),)
+            "UPDATE trades SET status='CANCELLED' WHERE order_id=? AND status='PENDING'",
+            (str(order_id),)
         )
 
 

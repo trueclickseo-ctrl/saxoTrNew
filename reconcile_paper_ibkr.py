@@ -69,14 +69,19 @@ def _last_known_stop(con: sqlite3.Connection, symbol: str) -> float | None:
 _IBKR_TIME_RE = re.compile(r"(\d{8})\s+(\d{2}:\d{2}:\d{2})")
 
 
-def _parse_ibkr_time(t: str) -> datetime | None:
-    """Parse IBKR execution time string '20260901 14:30:00 US/Eastern' -> UTC datetime."""
+def _parse_ibkr_time(t) -> datetime | None:
+    """Parse IBKR execution time -> UTC datetime.
+
+    Accepts either a datetime object (returned by live ib-insync gateway) or the
+    legacy string format '20260901 14:30:00 US/Eastern' (returned by some paper
+    gateway versions).
+    """
+    if isinstance(t, datetime):
+        return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
     m = _IBKR_TIME_RE.search(t or "")
     if not m:
         return None
     try:
-        # IBKR paper fills are in US/Eastern; approximate as UTC-4 (EDT) / UTC-5 (EST).
-        # For a best-effort fill-date match we accept ~1h ambiguity and use UTC-4.
         from datetime import timedelta
         naive = datetime.strptime(m.group(1) + " " + m.group(2), "%Y%m%d %H:%M:%S")
         return (naive + timedelta(hours=4)).replace(tzinfo=timezone.utc)
