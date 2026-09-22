@@ -115,22 +115,12 @@ def _stats(trades, pnl_key='realized_pnl'):
 
 # ── Render ────────────────────────────────────────────────────────────────────
 
-def _render(today_only: bool) -> None:
-    forex_trades = _ledger_forex_ai()
-    ibkr_trades  = _ibkr_closed()
-    shadow       = _shadow_decisions()
-    today        = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    now_str      = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-
-    os.system("cls" if _WIN else "clear")
-    print(f"\n  {BOLD}AI Copilot — Trade Performance{RST}  {DIM}· {now_str}{RST}")
-    print(f"  {'═'*90}")
-
-    # ── SECTION 1: Forex AI Copilot ───────────────────────────────────────────
+def _render_forex(forex_trades: list) -> None:
     cnt, wins, wr, gp, gl, net = _stats(forex_trades)
     pf_str = _pf(gp, gl)
-    ccy = forex_trades[0]['currency'] if forex_trades else 'SEK'
+    ccy = forex_trades[0]['currency'] if forex_trades else 'EUR'
     wr_col = _wr_col(wr)
+
     print(f"\n  {BOLD}Forex AI Copilot  (ai_sim book){RST}  {DIM}· {cnt} closed trades · source: pnl_ledger{RST}")
     print(f"  {'─'*60}")
     print(f"  Closed trades : {BOLD}{cnt}{RST}")
@@ -143,13 +133,12 @@ def _render(today_only: bool) -> None:
     print(f"  Net P&L       : {_c(f'{net:+.2f} {ccy}', G if net >= 0 else R)}")
     print(f"  Gross profit  : {_c(f'+{gp:.2f}', G)}  |  Gross loss: {_c(f'-{gl:.2f}', R)}")
 
-    # Per-strategy breakdown
     print(f"\n  {'Strategy':<26}  {'Trades':>6}  {'WR':>5}  {'PF':>6}  {'Net P&L':>12}  Bar")
     print(f"  {'─'*26}  {'─'*6}  {'─'*5}  {'─'*6}  {'─'*12}  {'─'*20}")
     by_strat: dict[str, list] = defaultdict(list)
     for t in forex_trades:
         by_strat[t['strategy']].append(t)
-    for strat in sorted(by_strat, key=lambda s: -sum(1 for t in by_strat[s])):
+    for strat in sorted(by_strat, key=lambda s: -len(by_strat[s])):
         sc, sw, swr, sgp, sgl, snet = _stats(by_strat[strat])
         spf = _pf(sgp, sgl)
         bar = '█' * max(1, int(swr / 5))
@@ -163,13 +152,26 @@ def _render(today_only: bool) -> None:
               f"{_c(f'{snet:+.2f}', G if snet >= 0 else R):>12}  "
               f"{_c(bar, col)}")
 
-    # ── SECTION 2: IBKR Stocks Copilot ───────────────────────────────────────
+    print(f"\n  {BOLD}Recent closed trades (last 15){RST}")
+    print(f"  {'─'*75}")
+    print(f"  {'Close':<10}  {'Symbol':<10}  {'Strategy':<22}  {'P&L':>10}  Exit reason")
+    print(f"  {'─'*10}  {'─'*10}  {'─'*22}  {'─'*10}  {'─'*20}")
+    for t in reversed(forex_trades[-15:]):
+        pnl    = float(t['realized_pnl'])
+        col    = G if pnl > 0 else R
+        dt     = str(t['timestamp_close'])[:10]
+        reason = str(t.get('exit_reason') or '')[:20]
+        print(f"  {dt:<10}  {t['symbol']:<10}  {t['strategy']:<22}  "
+              f"{_c(f'{pnl:+.2f}', col):>10}  {DIM}{reason}{RST}")
+
+
+def _render_stocks(ibkr_trades: list, shadow: list, today: str) -> None:
+    ibkr_shadow  = [d for d in shadow if d.get('account_env') == 'ibkr_paper']
+    ibkr_applied = [d for d in ibkr_shadow if d.get('applied') is True]
+    live_shadow  = [d for d in shadow if d.get('account_env') in ('live', 'live_eur')]
+
     print(f"\n  {BOLD}IBKR Stocks Copilot  (ibkr_paper book){RST}  {DIM}· source: ibkr_stocks.db + shadow log{RST}")
     print(f"  {'─'*70}")
-
-    ibkr_shadow = [d for d in shadow if d.get('account_env') == 'ibkr_paper']
-    ibkr_applied = [d for d in ibkr_shadow if d.get('applied') is True]
-
     if ibkr_trades:
         cnt2, wins2, wr2, gp2, gl2, net2 = _stats(ibkr_trades, 'pnl')
         print(f"  Closed trades : {BOLD}{cnt2}{RST}")
@@ -180,8 +182,7 @@ def _render(today_only: bool) -> None:
         print(f"  {Y}Phase C — shadow observation only.{RST}  Copilot decides but does NOT act on ibkr_paper.")
         print(f"  Trade performance will appear here once Phase D is enabled.")
 
-    # Shadow decision breakdown for ibkr_paper
-    by_action = defaultdict(int)
+    by_action: dict[str, int] = defaultdict(int)
     for d in ibkr_shadow:
         by_action[d.get('agent_action', '?')] += 1
     total_sh = sum(by_action.values())
@@ -193,7 +194,6 @@ def _render(today_only: bool) -> None:
                 bar = '█' * max(1, n * 30 // total_sh)
                 print(f"    {_c(f'{action:<8}', col)}  {_c(bar, col)}  {n:>4}  {_pct(n, total_sh)}")
 
-    # Recent ibkr_paper shadow decisions
     today_ibkr = [d for d in ibkr_shadow if d.get('ts', '')[:10] == today]
     if today_ibkr:
         print(f"\n  Today's shadow decisions ({len(today_ibkr)}):")
@@ -202,8 +202,6 @@ def _render(today_only: bool) -> None:
         for d in sorted(today_ibkr, key=lambda x: x.get('ts', ''))[-20:]:
             ts    = d.get('ts', '')[-15:-9]
             act   = d.get('agent_action', '?')
-            act_c = {G: 'APPROVE', R: 'REJECT', Y: 'MODIFY', DIM: 'HOLD'
-                     }.get(act) or act
             col   = {'APPROVE': G, 'REJECT': R, 'MODIFY': Y, 'HOLD': DIM}.get(act, '')
             strat = str(d.get('strategy', '?'))[:20]
             sym   = str(d.get('symbol', '?'))[:8]
@@ -212,38 +210,43 @@ def _render(today_only: bool) -> None:
             cmt   = str(d.get('agent_comment', ''))[:55]
             print(f"  {ts:<8}  {_c(f'{act:<9}', col)}  {strat:<20}  {sym:<8}  {ms:>5}  {DIM}{cmt}{RST}")
 
-    # ── SECTION 3: Live Stocks Copilot ───────────────────────────────────────
-    live_shadow = [d for d in shadow if d.get('account_env') in ('live', 'live_eur')]
     if live_shadow:
         print(f"\n  {BOLD}Live Stocks Copilot  (Saxo real money){RST}  {DIM}· shadow observation{RST}")
         print(f"  {'─'*60}")
-        by_a2 = defaultdict(int)
+        by_a2: dict[str, int] = defaultdict(int)
         for d in live_shadow:
             by_a2[d.get('agent_action', '?')] += 1
         total2 = sum(by_a2.values())
-        print(f"  Shadow decisions: {total2} total, {sum(1 for d in live_shadow if d.get('applied') is True)} applied")
+        print(f"  Shadow decisions: {total2} total, "
+              f"{sum(1 for d in live_shadow if d.get('applied') is True)} applied")
         for action, col in [('APPROVE', G), ('REJECT', R), ('MODIFY', Y)]:
             n = by_a2.get(action, 0)
             if n:
                 bar = '█' * max(1, n * 20 // total2)
                 print(f"    {_c(f'{action:<8}', col)}  {_c(bar, col)}  {n:>3}  {_pct(n, total2)}")
 
-    # ── SECTION 4: Recent closed forex_ai trades ─────────────────────────────
-    print(f"\n  {BOLD}Recent Forex AI Copilot closed trades (last 15){RST}")
-    print(f"  {'─'*75}")
-    print(f"  {'Close':<10}  {'Symbol':<10}  {'Strategy':<22}  {'P&L':>10}  Exit reason")
-    print(f"  {'─'*10}  {'─'*10}  {'─'*22}  {'─'*10}  {'─'*20}")
-    for t in reversed(forex_trades[-15:]):
-        pnl  = float(t['realized_pnl'])
-        col  = G if pnl > 0 else R
-        dt   = str(t['timestamp_close'])[:10]
-        reason = str(t.get('exit_reason') or '')[:20]
-        print(f"  {dt:<10}  {t['symbol']:<10}  {t['strategy']:<22}  "
-              f"{_c(f'{pnl:+.2f}', col):>10}  {DIM}{reason}{RST}")
+
+def _render(today_only: bool, show_forex: bool, show_stocks: bool) -> None:
+    forex_trades = _ledger_forex_ai()
+    ibkr_trades  = _ibkr_closed()
+    shadow       = _shadow_decisions()
+    today        = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    now_str      = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    mode         = "Forex" if (show_forex and not show_stocks) else \
+                   "Stocks" if (show_stocks and not show_forex) else "All"
+
+    os.system("cls" if _WIN else "clear")
+    print(f"\n  {BOLD}AI Copilot — Trade Performance{RST}  {DIM}· {mode} · {now_str}{RST}")
+    print(f"  {'═'*90}")
+
+    if show_forex:
+        _render_forex(forex_trades)
+    if show_stocks:
+        _render_stocks(ibkr_trades, shadow, today)
 
     print(f"\n  {'─'*90}")
     print(f"  {DIM}Forex AI Copilot = ai_sim book (applied decisions) · Stocks = Phase C shadow only{RST}")
-    print(f"  {DIM}Ctrl+C to quit  ·  --once to print once{RST}\n")
+    print(f"  {DIM}Ctrl+C to quit  ·  --once to print once  ·  --forex / --stocks to filter{RST}\n")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -252,12 +255,18 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--once",     action="store_true")
     ap.add_argument("--today",    action="store_true")
+    ap.add_argument("--forex",    action="store_true", help="Show Forex section only")
+    ap.add_argument("--stocks",   action="store_true", help="Show Stocks section only")
     ap.add_argument("--interval", type=int, default=30)
     args = ap.parse_args()
 
+    # If neither flag given, show both
+    show_forex  = args.forex  or (not args.forex and not args.stocks)
+    show_stocks = args.stocks or (not args.forex and not args.stocks)
+
     try:
         while True:
-            _render(today_only=args.today)
+            _render(today_only=args.today, show_forex=show_forex, show_stocks=show_stocks)
             if args.once:
                 break
             time.sleep(args.interval)
