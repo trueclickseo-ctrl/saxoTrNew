@@ -13,9 +13,14 @@ Sources:
 Phase notes:
   Forex  : Phase B active — ai_sim book applies Copilot resize/skip decisions.
            159+ closed trades in pnl_ledger (module=forex_ai). WR/PF live.
+           2026-09-22 gate check: ALL GATES PASSING.
+             Gate 1 (counterfactual): +1103.9 EUR / 90 trades
+             Gate 2 (APPROVE > REJECT avg): APPROVE -2.19 vs REJECT -31.67 EUR (PASS)
   Stocks : Phase C (shadow only) — Copilot observes ibkr_paper but does NOT act.
            Stocks WR/PF table populates automatically when Phase D is enabled
-           and trades close with real prices. Gate check: weekly Monday.
+           and trades close with real prices.
+           Next gate check: 2026-09-29 (Monday). Phase D requires ≥30 quality
+           trades + written go/no-go from user.
 
 Usage:
     python ibkr_copilot_trades_dashboard.py           # refresh every 30s
