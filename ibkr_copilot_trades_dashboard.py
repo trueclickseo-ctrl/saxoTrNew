@@ -7,8 +7,15 @@ plus shadow-decision stats for accounts still in observation mode.
 
 Sources:
   - data/pnl_ledger.db  module=forex_ai  → Forex Copilot closed trades (ai_sim)
-  - data/ibkr_stocks.db                  → IBKR Stocks closed trades (none yet)
+  - data/ibkr_stocks.db                  → IBKR Stocks closed trades (Phase D+)
   - data/ai_shadow_decisions.jsonl        → shadow decisions for all accounts
+
+Phase notes:
+  Forex  : Phase B active — ai_sim book applies Copilot resize/skip decisions.
+           159+ closed trades in pnl_ledger (module=forex_ai). WR/PF live.
+  Stocks : Phase C (shadow only) — Copilot observes ibkr_paper but does NOT act.
+           Stocks WR/PF table populates automatically when Phase D is enabled
+           and trades close with real prices. Gate check: weekly Monday.
 
 Usage:
     python ibkr_copilot_trades_dashboard.py           # refresh every 30s
