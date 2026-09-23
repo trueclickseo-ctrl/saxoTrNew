@@ -126,6 +126,220 @@ except Exception:                                      # pragma: no cover
     ai_basket_ranker = None
 
 DEPLOY_CONFIG = os.path.join(BASE_DIR, "config", "deploy.json")
+_REVERSION_PENDING_PATH = os.path.join(BASE_DIR, "data", "reversion_pending_queue.json")
+
+
+def _us_market_currently_closed() -> bool:
+    """True when US equity market is outside 09:30–16:00 ET, or on a weekend."""
+    now_et = datetime.utcnow() - __import__("datetime").timedelta(hours=4)
+    if now_et.weekday() >= 5:
+        return True
+    open_et  = now_et.replace(hour=9,  minute=30, second=0, microsecond=0)
+    close_et = now_et.replace(hour=16, minute=0,  second=0, microsecond=0)
+    return not (open_et <= now_et <= close_et)
+
+
+def _load_reversion_pending() -> list:
+    try:
+        if os.path.exists(_REVERSION_PENDING_PATH):
+            with open(_REVERSION_PENDING_PATH) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return []
+
+
+def _save_reversion_pending(queue: list) -> None:
+    try:
+        with open(_REVERSION_PENDING_PATH, "w") as f:
+            json.dump(queue, f, indent=2)
+    except Exception as e:
+        print(f"  [US reversion] pending queue save failed: {e}")
+
+
+def _queue_reversion_pending(ticker: str, shares: int, signal_price: float,
+                              stop_p: float, cand: dict) -> None:
+    """Save a pre-market reversion signal to the pending queue.
+
+    The signal will be placed on Saxo SIM as a real broker order when
+    the next scan runs during market hours (09:30–16:00 ET weekdays).
+    Expires after 2 calendar days so stale signals never fire.
+    """
+    from datetime import date as _date, timedelta
+    queue = [q for q in _load_reversion_pending() if q.get("ticker") != ticker]
+    queue.append({
+        "ticker":      ticker,
+        "shares":      shares,
+        "signal_price": signal_price,
+        "stop_price":  stop_p,
+        "queued_at":   datetime.now().isoformat(),
+        "expires_date": (_date.today() + timedelta(days=2)).isoformat(),
+        "rsi":         cand.get("rsi"),
+        "dip_pct":     cand.get("dip_pct"),
+        "vol_ratio":   cand.get("vol_ratio"),
+        "score":       cand.get("score"),
+    })
+    _save_reversion_pending(queue)
+    print(f"  [US reversion] {ticker} queued for broker execution at market open "
+          f"({shares} sh @ ${signal_price:.2f}, stop ${stop_p:.2f})")
+
+
+def _execute_reversion_pending(
+    feat_data: dict, rev_open_now: dict, imap: dict, db,
+    fx_usd: float, slot_sek: float, max_positions: int,
+    todays_actions: list, ai_config, ai_stock_cards, tag: str,
+) -> None:
+    """Place Saxo SIM broker orders for signals queued from pre-market scans.
+
+    Called at the start of each run_us_reversion() when the market is open,
+    so signals found pre-market (when Saxo rejects orders as market-closed)
+    are executed on the real broker rather than staying as paper fills.
+    Uses current price at execution time (not the pre-market signal price).
+    """
+    import saxo_order
+    import saxo_client as _sc
+    from atos import us_reversion as USR
+    from datetime import date as _date
+
+    queue = _load_reversion_pending()
+    if not queue:
+        return
+
+    today = _date.today()
+    remaining = []
+    blend_held = {t["ticker"] for t in db.get_open_trades() if t.get("strategy") == "US Blend"}
+
+    for item in queue:
+        ticker = item.get("ticker", "")
+        try:
+            expires = _date.fromisoformat(item.get("expires_date", "2000-01-01"))
+            if today > expires:
+                print(f"  {tag} pending {ticker} EXPIRED — dropped")
+                continue
+        except Exception:
+            continue
+
+        if ticker in rev_open_now or ticker in blend_held:
+            print(f"  {tag} pending {ticker} already held — dropped")
+            continue
+
+        slots_now = max_positions - len(rev_open_now)
+        if slots_now <= 0:
+            print(f"  {tag} pending {ticker} no slots — dropped")
+            continue
+
+        # Re-price at current market open price
+        cur_price = 0.0
+        if ticker in feat_data:
+            try:
+                cur_price = float(feat_data[ticker]["Close"].iloc[-1])
+            except Exception:
+                pass
+        if cur_price <= 0:
+            print(f"  {tag} pending {ticker} no price data — kept for next scan")
+            remaining.append(item)
+            continue
+
+        signal_price = float(item.get("signal_price") or 0)
+        if signal_price > 0 and cur_price > signal_price * 1.03:
+            move_pct = (cur_price / signal_price - 1) * 100
+            print(f"  {tag} pending {ticker} already recovered {move_pct:.1f}% "
+                  f"(${signal_price:.2f}->${cur_price:.2f}) — dropped")
+            continue
+
+        uic = imap.get(ticker, {}).get("uic")
+        if not uic:
+            print(f"  {tag} pending {ticker} no UIC — dropped")
+            continue
+
+        shares = _sim_cap_shares(int(slot_sek / (cur_price * fx_usd)), cur_price, fx_usd)
+        if shares < 1:
+            print(f"  {tag} pending {ticker} slot too small at ${cur_price:.2f} — dropped")
+            continue
+
+        stop_p   = round(cur_price * (1 - USR.STOP_PCT), 2)
+        cost_sek = shares * cur_price * fx_usd
+        print(f"  {tag} PENDING->BROKER {ticker}: {shares} sh @ ${cur_price:.2f} "
+              f"(signal ${signal_price:.2f}) stop=${stop_p:.2f} (~{cost_sek:,.0f} SEK)")
+        try:
+            entry_oid, stop_oid, _ = saxo_order.place_with_stop(
+                post_fn=_sc.post,
+                account_key=_sc.get_account_key(),
+                uic=uic, asset_type="Stock", amount=shares,
+                buy_sell="Buy", stop_price=stop_p,
+                label=f"US Reversion:{ticker}",
+            )
+            paper = 0
+            if entry_oid is None:
+                if _stocks_paper_fill_enabled():
+                    paper = 1
+                    print(f"  {tag} pending {ticker} still rejected at open — paper fill fallback")
+                else:
+                    print(f"  {tag} pending {ticker} still rejected at open — dropped")
+                    continue
+            else:
+                _ok, _fp = _confirm_stock_fill(entry_oid, uic)
+                if _ok:
+                    if _fp > 0 and abs(_fp - cur_price) / max(cur_price, 1e-9) > 0.001:
+                        print(f"  {tag} pending {ticker} real fill ${_fp:.2f} (expected ${cur_price:.2f})")
+                    cur_price = _fp or cur_price
+                else:
+                    for _o in (entry_oid, stop_oid):
+                        try:
+                            _o and _sc.cancel_order(str(_o))
+                        except Exception:
+                            pass
+                    if _stocks_paper_fill_enabled():
+                        paper = 1
+                        print(f"  {tag} pending {ticker} unfilled — paper fill fallback")
+                    else:
+                        print(f"  {tag} pending {ticker} unfilled — dropped")
+                        continue
+
+            comm = commission_sek(shares, cost_sek)
+            db.insert_trade({
+                "strategy": "US Reversion", "market_group": "US Equities",
+                "ticker": ticker, "direction": "BUY",
+                "entry_date": today.isoformat(), "entry_price": cur_price,
+                "shares": shares, "commission_sek": comm,
+                "entry_score": item.get("score", 0), "d1_trend": 0, "d2_momentum": 0,
+                "d3_breakout": 0,
+                "d4_mean_revert": item.get("rsi", 0),
+                "d5_volume": item.get("vol_ratio", 0),
+                "d6_smart_money": 0, "d7_mom_quality": 0, "d8_regime": 0,
+                "stop_price": stop_p, "trailing_stop_high": cur_price,
+                "regime_at_entry": "reversion",
+                "paper": paper,
+                "stop_order_id": (stop_oid if not paper else None),
+            })
+            rev_open_now[ticker] = {"ticker": ticker, "strategy": "US Reversion"}  # update slot count in place
+
+            _append_trade_log(
+                "US Reversion", "BUY", ticker, shares, cur_price, cost_sek, None,
+                f"[PENDING->OPEN] RSI={item.get('rsi')} dip={item.get('dip_pct')}% vol={item.get('vol_ratio')}x",
+            )
+            reason_str = (("[PAPER-FILL — broker rejected at open] " if paper else "[PENDING->BROKER] ")
+                          + f"RSI {item.get('rsi', '?')} | Dip {item.get('dip_pct', '?')}% "
+                          + f"| Vol {item.get('vol_ratio', '?')}x "
+                          + f"| Signal ${signal_price:.2f} -> Exec ${cur_price:.2f}")
+            notifier.notify_trade_executed(
+                side="BUY", ticker=ticker, shares=shares, price_usd=cur_price,
+                value_sek=cost_sek, strategy="US Reversion",
+                account_balance_sek=get_total_equity(db.get_open_trades()),
+                reason=reason_str,
+            )
+            todays_actions.append({
+                "action": "BUY", "ticker": ticker, "market_group": "US Equities",
+                "strategy": "US Reversion", "score": item.get("score", 0),
+                "shares": shares, "price": cur_price,
+                "reason": f"[PENDING->BROKER] RSI {item.get('rsi')}, dip {item.get('dip_pct')}%, vol {item.get('vol_ratio')}x",
+                "pnl_sek": None,
+            })
+        except Exception as e:
+            print(f"  {tag} pending {ticker} execute failed: {e}")
+            remaining.append(item)
+
+    _save_reversion_pending(remaining)
 
 
 def _sek_per_eur() -> float | None:
@@ -2767,6 +2981,22 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
               f"— no new entries (sleeve ~{sleeve_equity:,.0f} SEK)")
         return
 
+    # ── Execute pre-market pending signals on broker at market open ───────────
+    # Signals queued outside market hours (Saxo rejects orders as market-closed)
+    # are placed here as real broker SIM orders so ATOS trains on real fills.
+    if not _paper_twin and not _us_market_currently_closed():
+        _execute_reversion_pending(
+            feat_data=feat_data, rev_open_now=rev_open_now, imap=imap,
+            db=db, fx_usd=fx_usd, slot_sek=slot_sek,
+            max_positions=max_positions, todays_actions=todays_actions,
+            ai_config=ai_config, ai_stock_cards=ai_stock_cards, tag=tag,
+        )
+        rev_open_now = {t["ticker"]: t for t in db.get_open_trades()
+                        if t.get("strategy") == "US Reversion"}
+        slots_free = max_positions - len(rev_open_now)
+        if slots_free <= 0:
+            return
+
     blend_held = {t["ticker"] for t in db.get_open_trades()
                   if t.get("strategy") == "US Blend"}
     candidates = USR.scan(feat_data, REVERSION_TICKERS)
@@ -2827,6 +3057,11 @@ def run_us_reversion(feat_data: dict, open_trades: list, todays_actions: list,
                 )
                 paper = 0
                 if entry_oid is None:
+                    if _us_market_currently_closed():
+                        # Saxo rejected because market is closed — queue for real broker
+                        # execution at the next scan during market hours (09:30–16:00 ET).
+                        _queue_reversion_pending(ticker, shares, price, stop_p, cand)
+                        continue
                     if not _stocks_paper_fill_enabled():
                         print(f"  {tag} buy {ticker} REJECTED — no position opened, no DB row recorded")
                         continue

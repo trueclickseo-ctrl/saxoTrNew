@@ -1,0 +1,50 @@
+[
+  {
+    "ticker": "NSC",
+    "shares": 4,
+    "signal_price": 314.16,
+    "stop_price": 304.74,
+    "queued_at": "2026-09-23T00:00:00",
+    "expires_date": "2026-09-25",
+    "rsi": 9.0,
+    "dip_pct": null,
+    "vol_ratio": 2.14,
+    "score": 1.612
+  },
+  {
+    "ticker": "BAC",
+    "shares": 23,
+    "signal_price": 57.73,
+    "stop_price": 56.0,
+    "queued_at": "2026-09-23T00:00:00",
+    "expires_date": "2026-09-25",
+    "rsi": 22.2,
+    "dip_pct": null,
+    "vol_ratio": 1.52,
+    "score": 0.9358
+  },
+  {
+    "ticker": "UNP",
+    "shares": 5,
+    "signal_price": 269.63,
+    "stop_price": 261.54,
+    "queued_at": "2026-09-23T00:00:00",
+    "expires_date": "2026-09-25",
+    "rsi": 9.7,
+    "dip_pct": null,
+    "vol_ratio": 2.35,
+    "score": 2.12
+  },
+  {
+    "ticker": "MS",
+    "shares": 6,
+    "signal_price": 200.18,
+    "stop_price": 194.17,
+    "queued_at": "2026-09-23T00:00:00",
+    "expires_date": "2026-09-25",
+    "rsi": 35.3,
+    "dip_pct": null,
+    "vol_ratio": 1.62,
+    "score": 0.1371
+  }
+]
