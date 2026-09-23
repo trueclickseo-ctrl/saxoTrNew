@@ -1,27 +1,35 @@
 """
 ibkr_gateway_watchdog.py
 ------------------------
-Monitors IB Gateway on 127.0.0.1:4001 and auto-restarts it when the
+Monitors BOTH IB Gateway instances and auto-restarts each when the
 connection drops or the API becomes unresponsive.
+
+  Live  Gateway: 127.0.0.1:4001  (U28013794  real money)
+  Paper Gateway: 127.0.0.1:4002  (DUR952126  paper / AI Copilot / ATOS)
 
 Scheduled every 5 minutes via "ATOS IBKR Gateway Watchdog" (Windows Task
 Scheduler). One check-and-exit per invocation -- no internal loop.
 
-Checks (in order):
-  1. TCP connect to port 4001 (fast -- no ib_insync overhead)
+Checks per gateway (in order):
+  1. TCP connect to port (fast -- no ib_insync overhead)
   2. ib_insync API handshake (reqCurrentTime) to confirm API responds
-  3. If either fails: kill ibgateway1.exe process tree + relaunch it
-  4. Poll port 4001 for up to 90 s after relaunch
+  3. If either fails: send IBC STOP → wait → kill the specific java PID
+     holding that port → relaunch via that gateway's bat file
+  4. Poll the port for up to 600 s after relaunch
   5. Email alert (success or failure)
+
+Kill strategy is port-specific: we find the PID holding port 4001 (or 4002)
+and kill only that process, so a live-Gateway restart never touches the
+paper instance and vice versa.
 
 Safety guards:
   - Never restarts while any IBKR strategy task is Running (mid-trade)
-  - Stops auto-restarting after 3 restarts/hour; emails for manual login
+  - Stops auto-restarting after 3 restarts/hour per gateway; emails for manual login
   - Skips restart during the quiet window 02:00-04:15 AM PKT
-    (auto-restart at 02:15 + machine reboot at 03:15 -- no 2FA needed)
+    (auto-restart + machine reboot -- no 2FA needed)
 
-2FA schedule (after config_live.ini AutoRestartTime=02:15 AM, ColdRestartTime=blank):
-  Every day: zero 2FA -- Gateway auto-restarts at 02:15 AM with stored session token
+2FA schedule (after AutoRestartTime in each config.ini, ColdRestartTime=blank):
+  Every day: zero 2FA -- Gateways auto-restart with stored session tokens
   If TST token expires (months apart): one IBKR Mobile push -- approve on phone
 
 State:  data/ibkr_gateway_watchdog.json
@@ -35,35 +43,54 @@ import socket
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _ROOT)
 
-# ── Config ────────────────────────────────────────────────────────────────────
-GATEWAY_HOST = "127.0.0.1"
-GATEWAY_PORT = 4001
-IBC_BAT      = r"C:\IBC\StartGatewayLive.bat"   # IBC launcher (handles login + 2FA push)
 
-# ib_insync client ID for the watchdog's own heartbeat connect -- must NOT
-# collide with any strategy client ID in ibkr_module/config/ibkr_config.json.
-WATCHDOG_CLIENT_ID = 99
+# ── Gateway configs ────────────────────────────────────────────────────────────
+@dataclass
+class _GW:
+    name: str
+    port: int
+    bat: str
+    ibc_cmd_port: int
+    watchdog_client_id: int
+    state_key: str
 
-STARTUP_TIMEOUT_S = 600  # increased: auto-restart token path is fast, but allow headroom
-STARTUP_POLL_S    = 5    # polling interval during startup wait
 
-MAX_RESTARTS_PER_HOUR = 3  # give up + email if Gateway keeps dying
+LIVE_GW = _GW(
+    name="Live",
+    port=4001,
+    bat=r"C:\IBC\StartGatewayLive.bat",
+    ibc_cmd_port=7462,
+    watchdog_client_id=99,
+    state_key="live",
+)
 
-# IBC command server port for graceful STOP (must match CommandServerPort in config_live.ini).
-IBC_COMMAND_PORT = 7462
+PAPER_GW = _GW(
+    name="Paper",
+    port=4002,
+    bat=r"C:\IBC\StartGatewayPaper.bat",
+    ibc_cmd_port=7463,
+    watchdog_client_id=98,
+    state_key="paper",
+)
+
+GATEWAYS = [LIVE_GW, PAPER_GW]
+
+GATEWAY_HOST      = "127.0.0.1"
+STARTUP_TIMEOUT_S = 600
+STARTUP_POLL_S    = 5
+MAX_RESTARTS_PER_HOUR = 3
 
 # ── Quiet windows (PKT = UTC+5) ────────────────────────────────────────────────
-# 02:00-03:00 AM PKT: Gateway does its daily AutoRestart (graceful, no 2FA).
+# 02:00-03:00 AM PKT: Gateways do their daily AutoRestart (graceful, no 2FA).
 # 03:00-04:15 AM PKT: machine reboots at 03:15; IBC relaunches with stored token.
-# During these windows the watchdog waits rather than triggering a cold restart.
-_QUIET_START_PKT = (2,  0)   # (hour, minute) PKT
-_QUIET_END_PKT   = (4, 15)   # Gateway reliably back by 04:15 AM PKT
-
+_QUIET_START_PKT = (2,  0)
+_QUIET_END_PKT   = (4, 15)
 
 STATE_FILE = os.path.join(_ROOT, "data", "ibkr_gateway_watchdog.json")
 LOG_FILE   = os.path.join(_ROOT, "data", "ibkr_gateway_watchdog.log")
@@ -95,9 +122,18 @@ def _log(msg: str) -> None:
 def _load_state() -> dict:
     try:
         with open(STATE_FILE) as f:
-            return json.load(f)
+            s = json.load(f)
     except Exception:
-        return {"restarts": [], "last_alert_ts": 0}
+        s = {}
+    # Migrate from old single-gateway format
+    if "restarts" in s and "live_restarts" not in s:
+        s["live_restarts"]    = s.pop("restarts", [])
+        s["live_last_alert"]  = s.pop("last_alert_ts", 0)
+    s.setdefault("live_restarts",   [])
+    s.setdefault("live_last_alert", 0)
+    s.setdefault("paper_restarts",   [])
+    s.setdefault("paper_last_alert", 0)
+    return s
 
 
 def _save_state(state: dict) -> None:
@@ -118,11 +154,7 @@ def _send_alert(subject: str, body: str) -> None:
 
 # ── Strategy task guard ───────────────────────────────────────────────────────
 def _ibkr_task_running() -> str | None:
-    """Return the task name if any IBKR strategy task is mid-run, else None.
-
-    Restarting Gateway while a strategy is connected would abruptly disconnect
-    it -- potentially leaving an order in an unknown state.
-    """
+    """Return the task name if any IBKR strategy task is mid-run, else None."""
     try:
         out = subprocess.check_output(
             ["schtasks", "/query", "/fo", "CSV", "/nh"],
@@ -144,258 +176,209 @@ def _ibkr_task_running() -> str | None:
 
 
 # ── Connectivity checks ───────────────────────────────────────────────────────
-def _tcp_ok(timeout_s: float = 5.0) -> bool:
-    """True if port 4001 accepts a TCP connection."""
+def _tcp_ok(port: int, timeout_s: float = 5.0) -> bool:
     try:
-        with socket.create_connection((GATEWAY_HOST, GATEWAY_PORT), timeout=timeout_s):
+        with socket.create_connection((GATEWAY_HOST, port), timeout=timeout_s):
             return True
     except OSError:
         return False
 
 
-def _api_ok() -> bool:
-    """True if ib_insync can handshake and get a response (reqCurrentTime)."""
+def _api_ok(gw: _GW) -> bool:
     try:
         from ib_insync import IB
         ib = IB()
-        # timeout=10: max seconds to wait for the API handshake
-        ib.connect(GATEWAY_HOST, GATEWAY_PORT,
-                   clientId=WATCHDOG_CLIENT_ID, timeout=10, readonly=True)
+        ib.connect(GATEWAY_HOST, gw.port,
+                   clientId=gw.watchdog_client_id, timeout=10, readonly=True)
         ib.reqCurrentTime()
         ib.disconnect()
         return True
     except Exception as e:
-        _log(f"  [api] handshake failed: {e}")
+        _log(f"  [{gw.name}] API handshake failed: {e}")
         return False
 
 
 # ── Quiet-window helpers ──────────────────────────────────────────────────────
-
 def _pkt_now() -> tuple[int, int]:
-    """Return current PKT (UTC+5) as (hour, minute)."""
     import datetime as _dt
-    utc_now = _dt.datetime.utcnow()
-    pkt = utc_now + _dt.timedelta(hours=5)
+    pkt = _dt.datetime.utcnow() + _dt.timedelta(hours=5)
     return (pkt.hour, pkt.minute)
 
 
 def _in_quiet_window() -> bool:
-    """True when Gateway is expected to be briefly down (auto-restart or reboot).
-
-    During this window the watchdog skips cold-restart attempts and waits for
-    Gateway to come back on its own using its stored session token (no 2FA).
-    """
     h, m = _pkt_now()
-    now_min  = h * 60 + m
-    start    = _QUIET_START_PKT[0]  * 60 + _QUIET_START_PKT[1]
-    end      = _QUIET_END_PKT[0]    * 60 + _QUIET_END_PKT[1]
+    now_min = h * 60 + m
+    start   = _QUIET_START_PKT[0] * 60 + _QUIET_START_PKT[1]
+    end     = _QUIET_END_PKT[0]   * 60 + _QUIET_END_PKT[1]
     return start <= now_min <= end
 
 
-
-# ── Graceful IBC stop ─────────────────────────────────────────────────────────
-
-def _ibc_stop_graceful(timeout_s: float = 10.0) -> bool:
-    """Send STOP to the IBC command server so Gateway shuts down gracefully.
-
-    A graceful shutdown lets IBC/Gateway save the auto-restart session token
-    to disk.  Returns True if the command was accepted, False otherwise.
-    """
+# ── Process management ────────────────────────────────────────────────────────
+def _ibc_stop_graceful(gw: _GW, timeout_s: float = 10.0) -> bool:
+    """Send STOP to this gateway's IBC command server port."""
     try:
-        with socket.create_connection(("127.0.0.1", IBC_COMMAND_PORT),
+        with socket.create_connection(("127.0.0.1", gw.ibc_cmd_port),
                                       timeout=timeout_s) as s:
             s.sendall(b"STOP\n")
             time.sleep(1)
-        _log(f"  [ibc] STOP sent to command server port {IBC_COMMAND_PORT}")
+        _log(f"  [{gw.name}] IBC STOP sent to port {gw.ibc_cmd_port}")
         return True
     except OSError:
-        _log(f"  [ibc] command server not reachable on port {IBC_COMMAND_PORT}"
-             " -- will use taskkill")
+        _log(f"  [{gw.name}] IBC command server not reachable on port {gw.ibc_cmd_port}"
+             " -- will use port-specific PID kill")
         return False
 
 
-# ── Process management ────────────────────────────────────────────────────────
-def _kill_gateway() -> None:
-    """Shut down ibgateway1.exe gracefully (IBC STOP), then force-kill if needed.
+def _kill_gateway(gw: _GW) -> None:
+    """Shut down this gateway gracefully (IBC STOP), then kill the PID holding its port."""
+    if _ibc_stop_graceful(gw):
+        time.sleep(8)
+        if not _tcp_ok(gw.port, timeout_s=2.0):
+            return  # already gone
 
-    Graceful shutdown is preferred because it lets IBC save the auto-restart
-    session token so the next startup can reconnect without 2FA.
-    """
-    if _ibc_stop_graceful():
-        time.sleep(8)  # wait for IBC to close Gateway cleanly
-        if not _tcp_ok(timeout_s=2.0):
-            return       # already gone, no need for taskkill
-
-    for proc in ("ibgateway1.exe",):
-        result = subprocess.run(
-            ["taskkill", "/F", "/T", "/IM", proc],
-            capture_output=True, text=True, timeout=10
-        )
-        if result.returncode == 0:
-            _log(f"  killed {proc} (and children)")
-        else:
-            # Not found is fine -- it may have already crashed
-            if "not found" not in result.stderr.lower():
-                _log(f"  taskkill {proc}: {result.stderr.strip()}")
-
-    # Belt-and-suspenders: also kill any orphaned java.exe whose parent was
-    # ibgateway1.exe (handles the case where ibgateway1.exe already exited
-    # but left a zombie java.exe still holding port 4001).
+    # Find the PID holding this specific port and kill only it
+    # This avoids touching the other gateway instance
     time.sleep(2)
-    if _tcp_ok(timeout_s=1.0):
-        # Port still bound -- find and kill the java process holding it
+    if not _tcp_ok(gw.port, timeout_s=1.0):
+        return
+    try:
         result = subprocess.run(
             ["netstat", "-ano"],
             capture_output=True, text=True, timeout=10
         )
         for line in result.stdout.splitlines():
-            if f":{GATEWAY_PORT}" in line and "LISTENING" in line:
+            if f":{gw.port}" in line and "LISTENING" in line:
                 parts = line.split()
                 pid = parts[-1] if parts else ""
                 if pid.isdigit():
-                    subprocess.run(["taskkill", "/F", "/PID", pid],
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", pid],
                                    capture_output=True, timeout=5)
-                    _log(f"  killed orphan PID {pid} holding port {GATEWAY_PORT}")
+                    _log(f"  [{gw.name}] killed PID {pid} holding port {gw.port}")
+    except Exception as e:
+        _log(f"  [{gw.name}] kill error: {e}")
 
 
-def _start_gateway() -> None:
-    """Launch IB Gateway via IBC (auto-fills credentials, sends 2FA push to phone)."""
-    if not os.path.exists(IBC_BAT):
-        raise FileNotFoundError(f"IBC launcher not found: {IBC_BAT}")
+def _start_gateway(gw: _GW) -> None:
+    if not os.path.exists(gw.bat):
+        raise FileNotFoundError(f"IBC launcher not found: {gw.bat}")
     subprocess.Popen(
-        ["cmd.exe", "/c", IBC_BAT],
+        ["cmd.exe", "/c", gw.bat],
         creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
     )
-    _log(f"  launched via IBC: {IBC_BAT}")
+    _log(f"  [{gw.name}] launched via IBC: {gw.bat}")
 
 
-def _wait_for_gateway() -> bool:
-    """Poll port 4001 until Gateway is API-responsive or timeout."""
-    _log(f"  waiting up to {STARTUP_TIMEOUT_S}s for Gateway...")
+def _wait_for_gateway(gw: _GW) -> bool:
+    _log(f"  [{gw.name}] waiting up to {STARTUP_TIMEOUT_S}s for Gateway...")
     deadline = time.monotonic() + STARTUP_TIMEOUT_S
     while time.monotonic() < deadline:
-        if _tcp_ok(timeout_s=2.0):
-            time.sleep(2)   # let the API layer finish initialising
-            if _api_ok():
+        if _tcp_ok(gw.port, timeout_s=2.0):
+            time.sleep(2)
+            if _api_ok(gw):
                 return True
         time.sleep(STARTUP_POLL_S)
     return False
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
-def main(simulate_crash: bool = False) -> None:
-    _init_log()
+# ── Per-gateway check ─────────────────────────────────────────────────────────
+def _check_gateway(gw: _GW, state: dict, simulate_crash: bool = False) -> None:
     now_ts  = time.time()
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    _log("=== IBKR Gateway Watchdog ===")
 
-    if simulate_crash:
-        _log("  [SIMULATE] --simulate-crash: skipping real TCP/API checks, forcing failure path")
-        _log("  [SIMULATE] Gateway reported as DOWN")
-    elif _tcp_ok():
-        # Fast path: Gateway is up and healthy
-        if _api_ok():
-            _log("  Gateway OK")
+    restarts_key = f"{gw.state_key}_restarts"
+    alert_key    = f"{gw.state_key}_last_alert"
+
+    if simulate_crash and gw.name == "Live":
+        _log(f"  [{gw.name}] [SIMULATE] forcing failure path")
+    elif _tcp_ok(gw.port):
+        if _api_ok(gw):
+            _log(f"  [{gw.name}] Gateway OK")
             return
-        _log("  TCP open but API handshake failed -- will restart")
+        _log(f"  [{gw.name}] TCP open but API handshake failed -- will restart")
     else:
-        _log("  TCP connect to port 4001 failed -- Gateway is down")
-
-    # ── Gateway is not responsive ─────────────────────────────────────────────
+        _log(f"  [{gw.name}] TCP connect to port {gw.port} failed -- Gateway is down")
 
     # Never restart while a strategy task has the connection open
     busy = _ibkr_task_running()
     if busy:
-        _log(f"  SKIP restart -- IBKR task is Running: {busy}")
-        _log("  Will retry on the next 5-min watchdog cycle.")
+        _log(f"  [{gw.name}] SKIP restart -- IBKR task is Running: {busy}")
         return
 
-    # During the daily auto-restart / machine-reboot quiet window (02:00-04:15 AM PKT),
-    # Gateway is expected to be briefly down.  IBC will bring it back using the stored
-    # auto-restart session token -- no 2FA needed.  We wait and skip cold-restart logic.
     if _in_quiet_window():
         pkt_h, pkt_m = _pkt_now()
-        _log(f"  Gateway down at {pkt_h:02d}:{pkt_m:02d} PKT -- inside quiet window "
-             f"({_QUIET_START_PKT[0]:02d}:{_QUIET_START_PKT[1]:02d}-"
-             f"{_QUIET_END_PKT[0]:02d}:{_QUIET_END_PKT[1]:02d} PKT).")
-        _log("  Expected: auto-restart / machine reboot.  IBC will reconnect without 2FA.")
-        _log("  Will check again on next watchdog cycle (no cold-restart triggered).")
+        _log(f"  [{gw.name}] down at {pkt_h:02d}:{pkt_m:02d} PKT -- inside quiet window, waiting.")
         return
 
-    # Restart rate limiter
-    state = _load_state()
     one_hour_ago = now_ts - 3600
-    recent = [t for t in state.get("restarts", []) if t > one_hour_ago]
+    recent = [t for t in state.get(restarts_key, []) if t > one_hour_ago]
 
     if len(recent) >= MAX_RESTARTS_PER_HOUR:
-        msg = (
-            f"IB Gateway restarted {len(recent)}x in the last hour "
-            f"and is STILL down at {now_str}.\n\n"
-            f"This is outside the expected quiet window, so something unusual happened.\n\n"
-            f"IBC may be waiting for 2FA approval on your IBKR Mobile app.\n"
-            f"Action: check your IBKR Mobile app for a push notification and approve it.\n"
-            f"If no notification arrives, run C:\\IBC\\StartGatewayLive.bat manually.\n\n"
-            f"Normal schedule: zero 2FA every day.\n"
-            f"  02:15 AM PKT: daily auto-restart (token-based, seamless)\n"
-            f"  On session-token expiry (months apart): one IBKR Mobile push\n"
-        )
-        _log(f"  [ALERT] restart limit reached -- manual login likely needed")
-        last_alert = state.get("last_alert_ts") or 0
+        last_alert = state.get(alert_key) or 0
         if now_ts - last_alert > 3600:
-            _send_alert("[ATOS IBKR] Gateway repeatedly failing -- manual login needed", msg)
-            state["last_alert_ts"] = now_ts
+            _send_alert(
+                f"[ATOS IBKR] {gw.name} Gateway repeatedly failing -- manual login needed",
+                f"IB {gw.name} Gateway restarted {len(recent)}x in the last hour "
+                f"and is STILL down at {now_str}.\n\n"
+                f"IBC may be waiting for 2FA approval on your IBKR Mobile app.\n"
+                f"Action: check IBKR Mobile for a push notification and approve it.\n"
+                f"If no notification: run {gw.bat} manually.\n",
+            )
+            state[alert_key] = now_ts
             _save_state(state)
+        _log(f"  [{gw.name}] restart limit reached -- manual login likely needed")
         return
 
     # ── Restart ───────────────────────────────────────────────────────────────
-    _log(f"  Restart #{len(recent)+1} (of {MAX_RESTARTS_PER_HOUR} allowed/hour)")
-    if simulate_crash:
-        _log("  [SIMULATE] would kill ibgateway1.exe (skipped -- Gateway still running)")
-        _log("  [SIMULATE] would launch via IBC: C:\\IBC\\StartGatewayLive.bat (skipped)")
-        _log("  [SIMULATE] Gateway is actually still up -- reporting restart success")
+    _log(f"  [{gw.name}] Restart #{len(recent)+1} (of {MAX_RESTARTS_PER_HOUR} allowed/hour)")
+    if simulate_crash and gw.name == "Live":
+        _log(f"  [{gw.name}] [SIMULATE] skipping actual kill/launch")
         came_up = True
     else:
-        _kill_gateway()
-        time.sleep(3)   # let OS release the port before we relaunch
-        _start_gateway()
-        came_up = _wait_for_gateway()
+        _kill_gateway(gw)
+        time.sleep(3)
+        _start_gateway(gw)
+        came_up = _wait_for_gateway(gw)
+
+    state[restarts_key] = recent + [now_ts]
+    _save_state(state)
 
     if came_up:
-        _log(f"  Gateway restarted OK at {datetime.now().strftime('%H:%M:%S')}"
-             + ("  [SIMULATED]" if simulate_crash else ""))
-        state["restarts"] = recent + [now_ts]
-        _save_state(state)
+        _log(f"  [{gw.name}] Gateway restarted OK at {datetime.now().strftime('%H:%M:%S')}")
         _send_alert(
-            "[ATOS IBKR] Gateway auto-restarted OK",
-            f"IB Gateway was down and was automatically restarted at {now_str}.\n"
+            f"[ATOS IBKR] {gw.name} Gateway auto-restarted OK",
+            f"IB {gw.name} Gateway was down and was automatically restarted at {now_str}.\n"
             f"Restart #{len(recent)+1} in the past hour.\n\n"
             f"All IBKR strategies will reconnect on their next scheduled run.\n"
             f"No manual action required.",
         )
     else:
-        _log(f"  Gateway did NOT respond within {STARTUP_TIMEOUT_S}s -- 2FA approval needed")
-        state["restarts"] = recent + [now_ts]
-        state["last_alert_ts"] = now_ts
+        _log(f"  [{gw.name}] Gateway did NOT respond within {STARTUP_TIMEOUT_S}s -- 2FA needed")
+        state[alert_key] = now_ts
         _save_state(state)
         _send_alert(
-            "[ATOS IBKR] Gateway restart failed -- 2FA approval needed",
-            f"IB Gateway was restarted via IBC at {now_str} but did not become responsive\n"
-            f"within {STARTUP_TIMEOUT_S}s.\n\n"
-            f"This is an unexpected restart (outside the 02:00-04:15 AM PKT quiet window).\n"
+            f"[ATOS IBKR] {gw.name} Gateway restart failed -- 2FA approval needed",
+            f"IB {gw.name} Gateway was restarted via IBC at {now_str} but did not become\n"
+            f"responsive within {STARTUP_TIMEOUT_S}s.\n\n"
             f"IBC may be waiting for 2FA approval on your IBKR Mobile app.\n"
-            f"Action: check your IBKR Mobile app for a push notification and approve it.\n"
-            f"If no notification arrives, run C:\\IBC\\StartGatewayLive.bat manually.\n\n"
-            f"Normal schedule: zero 2FA every day.\n"
-            f"  02:15 AM PKT: daily auto-restart (token-based, seamless)\n"
-            f"  On session-token expiry (months apart): one IBKR Mobile push\n",
+            f"Action: check IBKR Mobile for a push notification and approve it.\n"
+            f"If no notification: run {gw.bat} manually.\n",
         )
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+def main(simulate_crash: bool = False) -> None:
+    _init_log()
+    _log("=== IBKR Gateway Watchdog ===")
+    state = _load_state()
+    for gw in GATEWAYS:
+        _check_gateway(gw, state, simulate_crash=simulate_crash)
 
 
 if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser()
     p.add_argument("--simulate-crash", action="store_true",
-                   help="Force the failure path without actually killing Gateway "
+                   help="Force the failure path for the Live gateway without killing it "
                         "(tests detection, state, email, and restart logic end-to-end)")
     args = p.parse_args()
     main(simulate_crash=args.simulate_crash)
