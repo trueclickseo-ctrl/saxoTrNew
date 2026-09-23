@@ -25,6 +25,20 @@ from datetime import datetime, date
 _DEFAULT_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "atos_live.db")
 DB_PATH = os.environ.get("ATOS_DB_PATH") or _DEFAULT_DB_PATH
 
+# exit_reason values that are housekeeping / admin operations — not real trading outcomes.
+# These are excluded from win/loss/WR stats in all dashboards and summaries.
+# PF and realized P&L are unaffected (admin closes always have pnl_sek=0).
+ADMIN_EXIT_REASONS: tuple[str, ...] = (
+    "migrated_to_pending",       # position queued for broker execution at market open
+    "ghost_shadow_close",        # duplicate DB row dedup (US Blend monthly rebalance)
+    "reconciled_not_owned",      # Saxo position not found on broker — stale DB row closed
+    "wrong_instrument_USAR_bought_instead_of_EA",  # instrument mis-map (one-off incident)
+)
+
+# SQL placeholder string for use in WHERE exit_reason NOT IN (...)
+# Usage: f"exit_reason NOT IN ({ADMIN_EXIT_SQL_PH})", ADMIN_EXIT_REASONS
+ADMIN_EXIT_SQL_PH: str = ",".join("?" * len(ADMIN_EXIT_REASONS))
+
 
 def set_db_path(path: str) -> None:
     """Point the ledger at `path` (used by atos_live_stocks.py). Call before

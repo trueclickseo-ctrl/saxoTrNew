@@ -26,6 +26,7 @@ from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
+from atos.database import ADMIN_EXIT_REASONS, ADMIN_EXIT_SQL_PH
 
 # Enable ANSI/VT colour processing on Windows consoles that don't have it on
 # (older conhost, some PowerShell hosts) -- otherwise every colour code prints
@@ -240,6 +241,9 @@ def _db_stats() -> dict:
         else:
             extra_where, params = "", []
 
+        admin_filter = f" AND exit_reason NOT IN ({ADMIN_EXIT_SQL_PH})"
+        admin_params = list(ADMIN_EXIT_REASONS)
+
         closed_rows = conn.execute(f"""
             SELECT
                 strategy,
@@ -249,8 +253,8 @@ def _db_stats() -> dict:
                 COUNT(*) FILTER (WHERE pnl_sek <= 0)            AS losses,
                 SUM(pnl_sek) FILTER (WHERE pnl_sek > 0)         AS gross_win,
                 ABS(SUM(pnl_sek) FILTER (WHERE pnl_sek <= 0))   AS gross_loss
-            FROM trades WHERE exit_price IS NOT NULL {extra_where}
-            GROUP BY strategy""", params).fetchall()
+            FROM trades WHERE exit_price IS NOT NULL {extra_where} {admin_filter}
+            GROUP BY strategy""", params + admin_params).fetchall()
         conn.close()
 
         out = {}

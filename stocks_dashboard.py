@@ -17,6 +17,7 @@ ATOS_STATUS     = os.path.join(BASE_DIR, "data", "atos_status.json")
 
 sys.path.insert(0, BASE_DIR)
 import price_service
+from atos.database import ADMIN_EXIT_REASONS, ADMIN_EXIT_SQL_PH
 
 REFRESH_SECONDS = 30
 TRAILING_PCT    = 0.12
@@ -205,6 +206,12 @@ def _db_stats() -> dict:
         else:
             extra_where, params = "", []
 
+        # Exclude housekeeping closes (migrations, ghost dedup, Saxo reconcile).
+        # These always have pnl_sek=0 so PF/realized are unaffected, but they
+        # inflate the loss count and drag WR down artificially.
+        admin_filter = f" AND exit_reason NOT IN ({ADMIN_EXIT_SQL_PH})"
+        admin_params = list(ADMIN_EXIT_REASONS)
+
         closed_rows = conn.execute(f"""
             SELECT
                 strategy,
@@ -214,8 +221,8 @@ def _db_stats() -> dict:
                 COUNT(*) FILTER (WHERE pnl_sek <= 0)            AS losses,
                 SUM(pnl_sek) FILTER (WHERE pnl_sek > 0)         AS gross_win,
                 ABS(SUM(pnl_sek) FILTER (WHERE pnl_sek <= 0))   AS gross_loss
-            FROM trades WHERE exit_date IS NOT NULL {extra_where}
-            GROUP BY strategy""", params).fetchall()
+            FROM trades WHERE exit_date IS NOT NULL {extra_where} {admin_filter}
+            GROUP BY strategy""", params + admin_params).fetchall()
         conn.close()
 
         out = {}
