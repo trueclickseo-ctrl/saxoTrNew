@@ -176,6 +176,8 @@ WINDOWS_TASKS = {
     "Avanza Trail Stops":     ("ATOS Avanza Trail Stops",     "avanza_trail_stops.log",        30, 26),
     # IBKR stocks trail-stops (2026-09-04) -- once-daily at 21:00 PKT, protective only.
     "IBKR Trail Stops":       ("ATOS IBKR Trail Stops",       "ibkr_trail_stops.log",          30, 26),
+    # IBKR live trail-stops (2026-09-23) -- same daily 21:00 PKT cadence, live U28013794.
+    "IBKR Trail Stops Live":  ("ATOS IBKR Trail Stops Live",  "ibkr_trail_stops_live.log",     30, 26),
     # IBKR reversion strategies (2026-09-04) -- daily dry-run scans that log signals.
     # Entries: 16:00 PKT (07:00 ET, before US open). Exits: 09:00 PKT (00:00 ET, after close).
     # Both are dry-run only; execution is manual. grace=30, max_first_run_wait=26h (daily).

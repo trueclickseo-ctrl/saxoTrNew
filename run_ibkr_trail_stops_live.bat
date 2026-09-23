@@ -9,4 +9,4 @@ REM
 REM Stops only ever raised, never lowered. No new positions placed.
 
 cd /d E:\SaxoTrNew\SaxoTrNew
-python run_ibkr_stocks.py --trail-stops --live --execute
+python run_ibkr_stocks.py --trail-stops --live --execute >> data\ibkr_trail_stops_live.log 2>&1
