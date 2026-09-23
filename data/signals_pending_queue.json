@@ -85,6 +85,61 @@
     "queued_at": "2026-09-23T00:00:00",
     "expires_date": "2026-09-25",
     "confidence": 0.453,
-    "reason": "migrated from paper (original entry)"
+    "reason": "migrated from paper (today's scan)"
+  },
+  {
+    "ticker": "MDB",
+    "strategy": "US SMA Crossover",
+    "shares": 1,
+    "signal_price": 427.69,
+    "stop_price": 410.5824,
+    "queued_at": "2026-09-23T00:00:00",
+    "expires_date": "2026-09-25",
+    "confidence": 0.437,
+    "reason": "migrated from paper (today's scan)"
+  },
+  {
+    "ticker": "WBD",
+    "strategy": "US Ensemble",
+    "shares": 16,
+    "signal_price": 30.83,
+    "stop_price": 29.7666,
+    "queued_at": "2026-09-23T00:00:00",
+    "expires_date": "2026-09-25",
+    "confidence": 0.3,
+    "reason": "migrated from paper (today's scan)"
+  },
+  {
+    "ticker": "HD",
+    "strategy": "US RSI Reversal",
+    "shares": 1,
+    "signal_price": 305.35,
+    "stop_price": 293.136,
+    "queued_at": "2026-09-23T00:00:00",
+    "expires_date": "2026-09-25",
+    "confidence": 0.2,
+    "reason": "migrated from paper (today's scan)"
+  },
+  {
+    "ticker": "LOW",
+    "strategy": "US RSI Reversal",
+    "shares": 2,
+    "signal_price": 196.08,
+    "stop_price": 188.2368,
+    "queued_at": "2026-09-23T00:00:00",
+    "expires_date": "2026-09-25",
+    "confidence": 0.127,
+    "reason": "migrated from paper (today's scan)"
+  },
+  {
+    "ticker": "MGM",
+    "strategy": "US RSI Reversal",
+    "shares": 13,
+    "signal_price": 38.9,
+    "stop_price": 37.344,
+    "queued_at": "2026-09-23T00:00:00",
+    "expires_date": "2026-09-25",
+    "confidence": 0.109,
+    "reason": "migrated from paper (today's scan)"
   }
 ]
