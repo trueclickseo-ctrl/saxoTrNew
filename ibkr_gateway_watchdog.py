@@ -17,13 +17,12 @@ Checks (in order):
 Safety guards:
   - Never restarts while any IBKR strategy task is Running (mid-trade)
   - Stops auto-restarting after 3 restarts/hour; emails for manual login
-  - Skips cold-restart during the quiet window 02:00-04:15 AM PKT
+  - Skips restart during the quiet window 02:00-04:15 AM PKT
     (auto-restart at 02:15 + machine reboot at 03:15 -- no 2FA needed)
-  - Skips cold-restart on Sunday 07:30 AM PKT (weekly 2FA push -- user approves once)
 
-2FA schedule (after config_live.ini AutoRestartTime=02:15 AM):
-  Mon-Sat: zero 2FA -- Gateway auto-restarts at 02:15 AM with stored session token
-  Sunday:  one 2FA push at 07:30 AM PKT -- IBKR requires weekly re-authentication
+2FA schedule (after config_live.ini AutoRestartTime=02:15 AM, ColdRestartTime=blank):
+  Every day: zero 2FA -- Gateway auto-restarts at 02:15 AM with stored session token
+  If TST token expires (months apart): one IBKR Mobile push -- approve on phone
 
 State:  data/ibkr_gateway_watchdog.json
 Log:    data/ibkr_gateway_watchdog.log
@@ -65,8 +64,6 @@ IBC_COMMAND_PORT = 7462
 _QUIET_START_PKT = (2,  0)   # (hour, minute) PKT
 _QUIET_END_PKT   = (4, 15)   # Gateway reliably back by 04:15 AM PKT
 
-# Sunday cold-restart window — IBC sends a 2FA push at 07:30 AM PKT once/week.
-_COLD_RESTART_PKT = (7, 30)
 
 STATE_FILE = os.path.join(_ROOT, "data", "ibkr_gateway_watchdog.json")
 LOG_FILE   = os.path.join(_ROOT, "data", "ibkr_gateway_watchdog.log")
@@ -194,17 +191,6 @@ def _in_quiet_window() -> bool:
     end      = _QUIET_END_PKT[0]    * 60 + _QUIET_END_PKT[1]
     return start <= now_min <= end
 
-
-def _is_sunday_cold_restart_window() -> bool:
-    """True on Sunday ±20 min around the cold-restart time (2FA required)."""
-    import datetime as _dt
-    utc_now = _dt.datetime.utcnow()
-    pkt = utc_now + _dt.timedelta(hours=5)
-    if pkt.weekday() != 6:   # 6 = Sunday
-        return False
-    now_min  = pkt.hour * 60 + pkt.minute
-    cr_min   = _COLD_RESTART_PKT[0] * 60 + _COLD_RESTART_PKT[1]
-    return abs(now_min - cr_min) <= 20
 
 
 # ── Graceful IBC stop ─────────────────────────────────────────────────────────
@@ -336,26 +322,6 @@ def main(simulate_crash: bool = False) -> None:
         _log("  Will check again on next watchdog cycle (no cold-restart triggered).")
         return
 
-    # Sunday cold-restart window (07:30 AM PKT ±20 min): IBC sends a 2FA push once/week.
-    if _is_sunday_cold_restart_window():
-        _log("  Gateway down during Sunday cold-restart window (07:30 AM PKT).")
-        _log("  IBKR requires 2FA re-authentication once per week.")
-        _log("  Check your IBKR Mobile app for a push notification and approve it.")
-        state = _load_state()
-        last_alert = state.get("last_alert_ts") or 0
-        if now_ts - last_alert > 7200:
-            _send_alert(
-                "[ATOS IBKR] Weekly 2FA re-authentication required (Sunday)",
-                f"IB Gateway is down for its weekly cold restart at {now_str} PKT.\n\n"
-                f"IBKR requires full re-authentication once per week (Sundays).\n"
-                f"Action: check your IBKR Mobile app for a push notification and approve it.\n\n"
-                f"Gateway will reconnect automatically once you approve.\n"
-                f"No action needed for the remaining 6 days -- auto-restart handles those.",
-            )
-            state["last_alert_ts"] = now_ts
-            _save_state(state)
-        return
-
     # Restart rate limiter
     state = _load_state()
     one_hour_ago = now_ts - 3600
@@ -369,9 +335,9 @@ def main(simulate_crash: bool = False) -> None:
             f"IBC may be waiting for 2FA approval on your IBKR Mobile app.\n"
             f"Action: check your IBKR Mobile app for a push notification and approve it.\n"
             f"If no notification arrives, run C:\\IBC\\StartGatewayLive.bat manually.\n\n"
-            f"Normal schedule (no 2FA needed):\n"
+            f"Normal schedule: zero 2FA every day.\n"
             f"  02:15 AM PKT: daily auto-restart (token-based, seamless)\n"
-            f"  07:30 AM PKT Sundays only: weekly cold restart (2FA push to phone)\n"
+            f"  On session-token expiry (months apart): one IBKR Mobile push\n"
         )
         _log(f"  [ALERT] restart limit reached -- manual login likely needed")
         last_alert = state.get("last_alert_ts") or 0
@@ -419,9 +385,9 @@ def main(simulate_crash: bool = False) -> None:
             f"IBC may be waiting for 2FA approval on your IBKR Mobile app.\n"
             f"Action: check your IBKR Mobile app for a push notification and approve it.\n"
             f"If no notification arrives, run C:\\IBC\\StartGatewayLive.bat manually.\n\n"
-            f"Normal schedule (no 2FA needed):\n"
+            f"Normal schedule: zero 2FA every day.\n"
             f"  02:15 AM PKT: daily auto-restart (token-based, seamless)\n"
-            f"  07:30 AM PKT Sundays only: weekly cold restart (2FA push to phone)\n",
+            f"  On session-token expiry (months apart): one IBKR Mobile push\n",
         )
 
 
