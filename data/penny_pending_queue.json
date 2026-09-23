@@ -1,0 +1,57 @@
+[
+  {
+    "ticker": "COSM",
+    "shares": 3198.0,
+    "signal_price": 0.318,
+    "stop_price": 0.28,
+    "queued_at": "2026-09-23T00:00:00",
+    "expires_date": "2026-09-25",
+    "vol_ratio": 2.31,
+    "pct_above_don": 7.43,
+    "score": 17.1523
+  },
+  {
+    "ticker": "AMTX",
+    "shares": 470.0,
+    "signal_price": 2.16,
+    "stop_price": 1.9,
+    "queued_at": "2026-09-23T00:00:00",
+    "expires_date": "2026-09-25",
+    "vol_ratio": 3.45,
+    "pct_above_don": 4.35,
+    "score": 14.9951
+  },
+  {
+    "ticker": "ENVB",
+    "shares": 627.0,
+    "signal_price": 1.62,
+    "stop_price": 1.43,
+    "queued_at": "2026-09-23T00:00:00",
+    "expires_date": "2026-09-25",
+    "vol_ratio": 2.06,
+    "pct_above_don": 1.89,
+    "score": 3.881
+  },
+  {
+    "ticker": "EVGO",
+    "shares": 669.0,
+    "signal_price": 1.52,
+    "stop_price": 1.34,
+    "queued_at": "2026-09-23T00:00:00",
+    "expires_date": "2026-09-25",
+    "vol_ratio": 3.74,
+    "pct_above_don": 0.66,
+    "score": 2.4741
+  },
+  {
+    "ticker": "TOPS",
+    "shares": 1062.0,
+    "signal_price": 0.9559,
+    "stop_price": 0.84,
+    "queued_at": "2026-09-23T00:00:00",
+    "expires_date": "2026-09-25",
+    "vol_ratio": 12.52,
+    "pct_above_don": 19.49,
+    "score": 243.9011
+  }
+]

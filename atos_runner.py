@@ -342,6 +342,170 @@ def _execute_reversion_pending(
     _save_reversion_pending(remaining)
 
 
+_PENNY_PENDING_PATH = os.path.join(BASE_DIR, "data", "penny_pending_queue.json")
+
+
+def _load_penny_pending() -> list:
+    try:
+        if os.path.exists(_PENNY_PENDING_PATH):
+            with open(_PENNY_PENDING_PATH) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return []
+
+
+def _save_penny_pending(queue: list) -> None:
+    try:
+        with open(_PENNY_PENDING_PATH, "w") as f:
+            json.dump(queue, f, indent=2)
+    except Exception as e:
+        print(f"  [US Penny] pending queue save failed: {e}")
+
+
+def _queue_penny_pending(ticker: str, shares: int, signal_price: float,
+                          stop_p: float, cand: dict) -> None:
+    """Queue a pre-market penny signal for Saxo SIM execution at market open."""
+    from datetime import date as _date, timedelta
+    queue = [q for q in _load_penny_pending() if q.get("ticker") != ticker]
+    queue.append({
+        "ticker":       ticker,
+        "shares":       shares,
+        "signal_price": signal_price,
+        "stop_price":   stop_p,
+        "queued_at":    datetime.now().isoformat(),
+        "expires_date": (_date.today() + timedelta(days=2)).isoformat(),
+        "vol_ratio":    cand.get("vol_ratio"),
+        "pct_above_don": cand.get("pct_above_don"),
+        "score":        cand.get("score"),
+    })
+    _save_penny_pending(queue)
+    print(f"  [US Penny] {ticker} queued for Saxo SIM execution at market open "
+          f"({shares} sh @ ${signal_price:.2f}, stop ${stop_p:.2f})")
+
+
+def _execute_penny_pending(
+    penny_data: dict, imap: dict, fx_usd: float, tag: str,
+) -> None:
+    """Place Saxo SIM orders for penny signals queued from pre-market scans."""
+    import saxo_order
+    import saxo_client as _sc
+    from atos import us_penny as _UPY
+    from datetime import date as _date
+
+    queue = _load_penny_pending()
+    if not queue:
+        return
+
+    today = _date.today()
+    remaining = []
+
+    for item in queue:
+        ticker = item.get("ticker", "")
+        try:
+            expires = _date.fromisoformat(item.get("expires_date", "2000-01-01"))
+            if today > expires:
+                print(f"  {tag} pending {ticker} EXPIRED — dropped")
+                continue
+        except Exception:
+            continue
+
+        cur_price = 0.0
+        if ticker in penny_data:
+            try:
+                cur_price = float(penny_data[ticker]["Close"].iloc[-1])
+            except Exception:
+                pass
+        if cur_price <= 0:
+            print(f"  {tag} pending {ticker} no price data — kept")
+            remaining.append(item)
+            continue
+
+        signal_price = float(item.get("signal_price") or 0)
+        if signal_price > 0 and cur_price > signal_price * 1.05:
+            print(f"  {tag} pending {ticker} recovered +{(cur_price/signal_price-1)*100:.1f}% — dropped")
+            continue
+
+        uic = imap.get(ticker, {}).get("uic")
+        if not uic:
+            print(f"  {tag} pending {ticker} no UIC — dropped")
+            continue
+
+        shares = int(item.get("shares", 0))
+        if shares < 1:
+            continue
+
+        stop_p   = round(cur_price * (1 - _UPY.STOP_PCT), 2)
+        cost_sek = shares * cur_price * fx_usd
+        print(f"  {tag} PENDING->BROKER {ticker}: {shares} sh @ ${cur_price:.2f} "
+              f"(signal ${signal_price:.2f}) stop=${stop_p:.2f} (~{cost_sek:,.0f} SEK)")
+        try:
+            entry_oid, stop_oid, _ = saxo_order.place_with_stop(
+                post_fn=_sc.post,
+                account_key=_sc.get_account_key(),
+                uic=uic, asset_type="Stock", amount=shares,
+                buy_sell="Buy", stop_price=stop_p,
+                label=f"US Penny:{ticker}",
+            )
+            paper = 0
+            if entry_oid is None:
+                if _stocks_paper_fill_enabled():
+                    paper = 1
+                    print(f"  {tag} pending {ticker} still rejected at open — paper fill")
+                else:
+                    print(f"  {tag} pending {ticker} still rejected — dropped")
+                    continue
+            else:
+                _ok, _fp = _confirm_stock_fill(entry_oid, uic)
+                if _ok:
+                    cur_price = _fp or cur_price
+                else:
+                    for _o in (entry_oid, stop_oid):
+                        try:
+                            _o and _sc.cancel_order(str(_o))
+                        except Exception:
+                            pass
+                    if _stocks_paper_fill_enabled():
+                        paper = 1
+                    else:
+                        print(f"  {tag} pending {ticker} unfilled — dropped")
+                        continue
+
+            comm = commission_sek(shares, cost_sek)
+            db.insert_trade({
+                "strategy": "US Penny", "market_group": "US Equities",
+                "ticker": ticker, "direction": "BUY",
+                "entry_date": today.isoformat(), "entry_price": cur_price,
+                "shares": shares, "commission_sek": comm,
+                "entry_score": item.get("score", 0),
+                "d1_trend": 0, "d2_momentum": item.get("vol_ratio", 0),
+                "d3_breakout": item.get("pct_above_don", 0), "d4_mean_revert": 0,
+                "d5_volume": item.get("vol_ratio", 0), "d6_smart_money": 0,
+                "d7_mom_quality": 0, "d8_regime": 0,
+                "stop_price": stop_p, "trailing_stop_high": cur_price,
+                "regime_at_entry": "penny_breakout",
+                "paper": paper,
+                "stop_order_id": (stop_oid if not paper else None),
+            })
+            _append_trade_log(
+                "US Penny", "BUY", ticker, shares, cur_price, cost_sek, None,
+                f"[PENDING->BROKER] vol={item.get('vol_ratio')}x above_don=+{item.get('pct_above_don')}%",
+            )
+            notifier.notify_trade_executed(
+                side="BUY", ticker=ticker, shares=shares, price_usd=cur_price,
+                value_sek=cost_sek, strategy="US Penny",
+                account_balance_sek=get_total_equity(db.get_open_trades()),
+                reason=(("[PAPER-FILL] " if paper else "[PENDING->BROKER] ")
+                        + f"vol {item.get('vol_ratio')}x | +{item.get('pct_above_don')}% above Donchian "
+                        + f"| Signal ${signal_price:.2f} -> Exec ${cur_price:.2f}"),
+            )
+        except Exception as e:
+            print(f"  {tag} pending {ticker} execute failed: {e}")
+            remaining.append(item)
+
+    _save_penny_pending(remaining)
+
+
 def _sek_per_eur() -> float | None:
     """SEK value of one EUR, from Saxo's live quotes. None on failure -- the
     AI card writers then skip the EUR conversion rather than guess."""
@@ -3581,15 +3745,18 @@ def run_us_reversion_v2(feat_data: dict, open_trades: list, todays_actions: list
 # ── US Penny stock momentum breakout — SIM only ───────────────────────────────
 
 def run_us_penny(open_trades: list, todays_actions: list) -> None:
-    """US Penny Stock momentum breakout — SIM-ONLY (paper=1 always).
+    """US Penny Stock momentum breakout — places real Saxo SIM orders.
 
     Downloads its own 60-day OHLCV via Yahoo Finance (penny tickers are NOT in
-    the main Saxo universe so the shared feat_data doesn't cover them).
-    Books all trades with paper=1 — no real Saxo orders are attempted.
-    Strategy name "US Penny" keeps these isolated in the DB and dashboard.
+    the main Saxo universe so the shared feat_data doesn't cover them). UICs
+    are in instrument_map.csv. Pre-market signals queue to penny_pending_queue.json
+    and execute on Saxo SIM at market open.
     """
     from atos import us_penny as _UPY
     import yfinance as yf
+    import saxo_order
+    import saxo_client as _sc
+    from instrument_map import load_instrument_map
     from datetime import timedelta
 
     if kill_switch_active():
@@ -3598,8 +3765,9 @@ def run_us_penny(open_trades: list, todays_actions: list) -> None:
     tag    = "[US Penny SIM]"
     fx_usd = _rate_to_sek("USD")
     today  = date.today()
+    imap   = load_instrument_map()
 
-    # Download penny tickers via Yahoo (not in Saxo universe; SIM paper only)
+    # Download penny tickers via Yahoo (not in Saxo universe)
     print(f"  {tag} downloading {len(PENNY_TICKERS)} penny tickers (Yahoo Finance)...")
     try:
         start = today - timedelta(days=90)
@@ -3659,6 +3827,10 @@ def run_us_penny(open_trades: list, todays_actions: list) -> None:
             "pnl_sek": pnl_sek,
         })
 
+    # ── Execute pre-market pending signals on broker at market open ───────────
+    if not _us_market_currently_closed():
+        _execute_penny_pending(penny_data, imap, fx_usd, tag)
+
     # ── Entry scan ────────────────────────────────────────────────────────────
     penny_open_now = {t["ticker"] for t in db.get_open_trades()
                       if t.get("strategy") == "US Penny"}
@@ -3689,10 +3861,58 @@ def run_us_penny(open_trades: list, todays_actions: list) -> None:
             continue
         stop_p = round(price * (1 - _UPY.STOP_PCT), 2)
 
+        uic = imap.get(ticker, {}).get("uic")
+        if not uic:
+            print(f"  {tag} {ticker}: no UIC in instrument_map — paper fill")
+            paper = 1
+            entry_oid = stop_oid = None
+        else:
+            try:
+                entry_oid, stop_oid, _ = saxo_order.place_with_stop(
+                    post_fn=_sc.post,
+                    account_key=_sc.get_account_key(),
+                    uic=uic, asset_type="Stock", amount=shares,
+                    buy_sell="Buy", stop_price=stop_p,
+                    label=f"US Penny:{ticker}",
+                )
+            except Exception as e:
+                print(f"  {tag} {ticker} order exception: {e}")
+                entry_oid = stop_oid = None
+
+        if entry_oid is None:
+            if _us_market_currently_closed():
+                _queue_penny_pending(ticker, shares, price, stop_p, cand)
+                continue
+            if _stocks_paper_fill_enabled():
+                paper = 1
+                entry_oid = stop_oid = None
+                print(f"  {tag} PAPER-FILL {ticker}: market open but rejected")
+            else:
+                print(f"  {tag} {ticker} buy rejected — skip")
+                continue
+        else:
+            _ok, fp = _confirm_stock_fill(entry_oid, uic)
+            if _ok:
+                price = fp or price
+                paper = 0
+            else:
+                for _o in (entry_oid, stop_oid):
+                    try:
+                        _o and _sc.cancel_order(str(_o))
+                    except Exception:
+                        pass
+                if _stocks_paper_fill_enabled():
+                    paper = 1
+                    entry_oid = stop_oid = None
+                else:
+                    print(f"  {tag} {ticker} unfilled — skip")
+                    continue
+
         cost_sek = shares * price * fx_usd
+        label = "[PAPER]" if paper else "[BROKER]"
         print(f"  {tag} BUY {ticker}: vol={cand['vol_ratio']}x "
               f"above_don=+{cand['pct_above_don']}% | "
-              f"{shares} shares @ ${price:.2f} (~{cost_sek:,.0f} SEK) [PAPER]")
+              f"{shares} shares @ ${price:.2f} (~{cost_sek:,.0f} SEK) {label}")
         comm = commission_sek(shares, cost_sek)
         db.insert_trade({
             "strategy": "US Penny", "market_group": "US Equities",
@@ -3706,7 +3926,7 @@ def run_us_penny(open_trades: list, todays_actions: list) -> None:
             "d7_mom_quality": 0, "d8_regime": 0,
             "stop_price": stop_p, "trailing_stop_high": price,
             "regime_at_entry": "penny_breakout",
-            "paper": 1, "stop_order_id": None,
+            "paper": paper, "stop_order_id": (stop_oid if not paper else None),
         })
         _append_trade_log(
             "US Penny", "BUY", ticker, shares, price, cost_sek, None,
