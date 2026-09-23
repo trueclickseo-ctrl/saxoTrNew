@@ -1,6 +1,6 @@
 # IBKR Gateway Setup
 
-**Last updated:** 2026-09-23  
+**Last updated:** 2026-09-23 (rev 2)  
 **Accounts:** Live U28013794 (port 4001) · Paper DUR952126 (port 4002)
 
 ---
@@ -19,8 +19,17 @@ Nightly (while machine is up)
   02:30 AM PKT → IBC auto-restarts PAPER Gateway (no 2FA — TST token, staggered 15 min)
 
 Watchdog (every 5 min via ATOS IBKR Gateway Watchdog task)
-  Monitors port 4001 only; restarts live Gateway if unresponsive
+  Monitors BOTH port 4001 (live) AND port 4002 (paper)
+  Each gateway: independent restart rate-limit (3/hour) + independent email state
+  Kill is port-specific: finds PID holding that port, never touches the other instance
   Quiet window 02:00–04:15 AM PKT (auto-restart + machine reboot) — watchdog waits, does not intervene
+
+Email notifications (both gateways):
+  1. Gateway DOWN     — sent immediately on first detection (throttled: 1/hour per gateway)
+  2. Gateway back UP  — sent when healthy check-in follows a "DOWN" event
+  3. Auto-restarted OK — sent after watchdog successfully restarts a gateway
+  4. Restart failed    — sent if gateway doesn't respond after restart (manual action needed)
+  5. Repeated failures — sent if 3+ restarts/hour and still down (rate-limit alert)
 ```
 
 ---
@@ -185,3 +194,4 @@ Strategies connect to `port_paper` by default (`"paper": true` at top of config)
 | Date | Change |
 |------|--------|
 | 2026-09-23 | Initial setup. Root cause: Task Scheduler used `StartGateway.bat` → `config.ini` (no AutoRestartTime). Fixed to `StartGatewayLive.bat` → `config_live.ini`. Added AutoRestartTime=02:15 AM, CommandServerPort=7462, blank ColdRestartTime. Created paper Gateway (config_paper.ini, StartGatewayPaper.bat, Task Scheduler task). Watchdog updated with quiet window + graceful STOP. |
+| 2026-09-23 rev 2 | Watchdog extended to monitor both gateways (port 4001 + 4002). Port-specific kill avoids touching other instance. Separate restart rate-limit and DOWN/alert state per gateway. Added immediate "DOWN" email on first detection + "back UP" email on recovery. Fixed `StartGatewayPaper.bat` TWSUSERID kaxhifimran → pexgbl292. Created `C:\Jts_paper\` (was missing). |

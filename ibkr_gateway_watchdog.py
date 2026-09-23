@@ -129,10 +129,12 @@ def _load_state() -> dict:
     if "restarts" in s and "live_restarts" not in s:
         s["live_restarts"]    = s.pop("restarts", [])
         s["live_last_alert"]  = s.pop("last_alert_ts", 0)
-    s.setdefault("live_restarts",   [])
-    s.setdefault("live_last_alert", 0)
+    s.setdefault("live_restarts",    [])
+    s.setdefault("live_last_alert",  0)
+    s.setdefault("live_down_ts",     0)   # ts when "DOWN" email last sent; 0 = up
     s.setdefault("paper_restarts",   [])
     s.setdefault("paper_last_alert", 0)
+    s.setdefault("paper_down_ts",    0)   # ts when "DOWN" email last sent; 0 = up
     return s
 
 
@@ -287,16 +289,44 @@ def _check_gateway(gw: _GW, state: dict, simulate_crash: bool = False) -> None:
 
     restarts_key = f"{gw.state_key}_restarts"
     alert_key    = f"{gw.state_key}_last_alert"
+    down_key     = f"{gw.state_key}_down_ts"
 
     if simulate_crash and gw.name == "Live":
         _log(f"  [{gw.name}] [SIMULATE] forcing failure path")
+        is_down = True
     elif _tcp_ok(gw.port):
         if _api_ok(gw):
             _log(f"  [{gw.name}] Gateway OK")
+            # If it was previously reported as down, send a "back up" notification
+            if state.get(down_key, 0) > 0:
+                down_ago = int(now_ts - state[down_key])
+                _send_alert(
+                    f"[ATOS IBKR] {gw.name} Gateway is back UP",
+                    f"IB {gw.name} Gateway is healthy again at {now_str}.\n"
+                    f"It was down for approximately {down_ago // 60} min {down_ago % 60} s.\n\n"
+                    f"No manual action required -- strategies will reconnect on next run.",
+                )
+                state[down_key] = 0
+                _save_state(state)
             return
         _log(f"  [{gw.name}] TCP open but API handshake failed -- will restart")
+        is_down = True
     else:
         _log(f"  [{gw.name}] TCP connect to port {gw.port} failed -- Gateway is down")
+        is_down = True
+
+    # ── Send immediate "DOWN" email once per outage (throttled to 1/hour) ─────
+    if is_down:
+        last_down = state.get(down_key, 0)
+        if now_ts - last_down > 3600:
+            _send_alert(
+                f"[ATOS IBKR] {gw.name} Gateway is DOWN",
+                f"IB {gw.name} Gateway (port {gw.port}) is not responding at {now_str}.\n\n"
+                f"Watchdog will attempt an automatic restart now.\n"
+                f"You will receive a follow-up email once it is back up or if manual action is needed.",
+            )
+            state[down_key] = now_ts
+            _save_state(state)
 
     # Never restart while a strategy task has the connection open
     busy = _ibkr_task_running()
@@ -319,9 +349,8 @@ def _check_gateway(gw: _GW, state: dict, simulate_crash: bool = False) -> None:
                 f"[ATOS IBKR] {gw.name} Gateway repeatedly failing -- manual login needed",
                 f"IB {gw.name} Gateway restarted {len(recent)}x in the last hour "
                 f"and is STILL down at {now_str}.\n\n"
-                f"IBC may be waiting for 2FA approval on your IBKR Mobile app.\n"
-                f"Action: check IBKR Mobile for a push notification and approve it.\n"
-                f"If no notification: run {gw.bat} manually.\n",
+                f"Action: check the Gateway window -- it may need credentials entered manually.\n"
+                f"If no window is visible, run {gw.bat} manually.\n",
             )
             state[alert_key] = now_ts
             _save_state(state)
@@ -344,24 +373,25 @@ def _check_gateway(gw: _GW, state: dict, simulate_crash: bool = False) -> None:
 
     if came_up:
         _log(f"  [{gw.name}] Gateway restarted OK at {datetime.now().strftime('%H:%M:%S')}")
+        state[down_key] = 0   # clear down flag -- "back up" already implied by this email
+        _save_state(state)
         _send_alert(
-            f"[ATOS IBKR] {gw.name} Gateway auto-restarted OK",
+            f"[ATOS IBKR] {gw.name} Gateway back UP -- auto-restarted OK",
             f"IB {gw.name} Gateway was down and was automatically restarted at {now_str}.\n"
             f"Restart #{len(recent)+1} in the past hour.\n\n"
             f"All IBKR strategies will reconnect on their next scheduled run.\n"
             f"No manual action required.",
         )
     else:
-        _log(f"  [{gw.name}] Gateway did NOT respond within {STARTUP_TIMEOUT_S}s -- 2FA needed")
+        _log(f"  [{gw.name}] Gateway did NOT respond within {STARTUP_TIMEOUT_S}s")
         state[alert_key] = now_ts
         _save_state(state)
         _send_alert(
-            f"[ATOS IBKR] {gw.name} Gateway restart failed -- 2FA approval needed",
+            f"[ATOS IBKR] {gw.name} Gateway restart failed -- manual action needed",
             f"IB {gw.name} Gateway was restarted via IBC at {now_str} but did not become\n"
             f"responsive within {STARTUP_TIMEOUT_S}s.\n\n"
-            f"IBC may be waiting for 2FA approval on your IBKR Mobile app.\n"
-            f"Action: check IBKR Mobile for a push notification and approve it.\n"
-            f"If no notification: run {gw.bat} manually.\n",
+            f"Action: open the Gateway window -- it may be waiting for credentials.\n"
+            f"If no window is visible, run {gw.bat} manually.\n",
         )
 
 
