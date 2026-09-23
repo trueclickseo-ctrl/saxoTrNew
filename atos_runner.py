@@ -506,6 +506,189 @@ def _execute_penny_pending(
     _save_penny_pending(remaining)
 
 
+_SIGNALS_PENDING_PATH = os.path.join(BASE_DIR, "data", "signals_pending_queue.json")
+
+
+def _load_signals_pending() -> list:
+    try:
+        if os.path.exists(_SIGNALS_PENDING_PATH):
+            with open(_SIGNALS_PENDING_PATH) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return []
+
+
+def _save_signals_pending(queue: list) -> None:
+    try:
+        with open(_SIGNALS_PENDING_PATH, "w") as f:
+            json.dump(queue, f, indent=2)
+    except Exception as e:
+        print(f"  [US signals] pending queue save failed: {e}")
+
+
+def _queue_signals_pending(ticker: str, strategy: str, shares: int,
+                            signal_price: float, stop_price: float,
+                            sig: dict) -> None:
+    """Queue a pre-market US-signals signal for Saxo SIM execution at market open."""
+    from datetime import date as _date, timedelta
+    queue = [q for q in _load_signals_pending()
+             if not (q.get("ticker") == ticker and q.get("strategy") == strategy)]
+    queue.append({
+        "ticker":       ticker,
+        "strategy":     strategy,
+        "shares":       shares,
+        "signal_price": signal_price,
+        "stop_price":   stop_price,
+        "queued_at":    datetime.now().isoformat(),
+        "expires_date": (_date.today() + timedelta(days=2)).isoformat(),
+        "confidence":   sig.get("confidence", 0),
+        "reason":       sig.get("reason", ""),
+    })
+    _save_signals_pending(queue)
+    print(f"  [US signals] {ticker} [{strategy}] queued for Saxo SIM at market open "
+          f"({shares} sh @ ${signal_price:.2f}, stop ${stop_price:.2f})")
+
+
+def _execute_signals_pending(
+    feat_data: dict, imap: dict, fx_usd: float, today_str: str,
+    sig_open_now: dict, per_strategy_open: dict, all_open_tickers: set,
+    tag: str,
+) -> None:
+    """Place Saxo SIM orders for US-signals items queued from pre-market scans."""
+    import saxo_order
+    from atos.us_signals import MAX_POSITIONS_PER_STRATEGY
+
+    queue = _load_signals_pending()
+    if not queue:
+        return
+
+    from datetime import date as _date
+    today = _date.today()
+    remaining = []
+
+    for item in queue:
+        ticker   = item.get("ticker", "")
+        strategy = item.get("strategy", "")
+        try:
+            expires = _date.fromisoformat(item.get("expires_date", "2000-01-01"))
+            if today > expires:
+                print(f"  {tag} pending {ticker} [{strategy}] EXPIRED — dropped")
+                continue
+        except Exception:
+            continue
+
+        pair_key = (ticker, strategy)
+        if pair_key in sig_open_now or ticker in all_open_tickers:
+            print(f"  {tag} pending {ticker} [{strategy}] already open — dropped")
+            continue
+        if per_strategy_open.get(strategy, 0) >= MAX_POSITIONS_PER_STRATEGY:
+            print(f"  {tag} pending {ticker} [{strategy}] slot full — kept")
+            remaining.append(item)
+            continue
+
+        cur_price = 0.0
+        if ticker in feat_data:
+            try:
+                cur_price = float(feat_data[ticker]["Close"].iloc[-1])
+            except Exception:
+                pass
+        if cur_price <= 0:
+            print(f"  {tag} pending {ticker} no price data — kept")
+            remaining.append(item)
+            continue
+
+        signal_price = float(item.get("signal_price") or 0)
+        if signal_price > 0 and cur_price > signal_price * 1.05:
+            print(f"  {tag} pending {ticker} [{strategy}] recovered +{(cur_price/signal_price-1)*100:.1f}% — dropped")
+            continue
+
+        uic    = imap.get(ticker, {}).get("uic")
+        shares = int(item.get("shares", 0))
+        if not uic or shares < 1:
+            print(f"  {tag} pending {ticker} no UIC/shares — dropped")
+            continue
+
+        stop_p = float(item.get("stop_price") or round(cur_price * 0.94, 2))
+        print(f"  {tag} PENDING->BROKER {ticker} [{strategy}]: {shares} sh @ "
+              f"${cur_price:.2f} (signal ${signal_price:.2f}) stop=${stop_p:.2f}")
+        try:
+            entry_oid = saxo_client.place_market_order(uic, "Stock", "Buy", shares, env="sim")
+        except Exception as e:
+            print(f"  {tag} pending {ticker} order exception: {e}")
+            if _stocks_paper_fill_enabled():
+                entry_oid = None
+            else:
+                remaining.append(item)
+                continue
+
+        filled_price = cur_price
+        is_paper = False
+        if entry_oid:
+            ok, fp = _confirm_stock_fill(entry_oid, uic)
+            if ok:
+                filled_price = fp or cur_price
+            else:
+                if _stocks_paper_fill_enabled():
+                    is_paper = True
+                else:
+                    print(f"  {tag} pending {ticker} unfilled — dropped")
+                    continue
+        else:
+            if _stocks_paper_fill_enabled():
+                is_paper = True
+            else:
+                remaining.append(item)
+                continue
+
+        stop_oid = None
+        if not is_paper and uic:
+            try:
+                ak = saxo_client.get_account_key(env="sim")
+                stop_oid = saxo_order.place_stop_only(
+                    post_fn=lambda path, body: saxo_client.post(path, body, env="sim"),
+                    account_key=ak, uic=uic, asset_type="Stock",
+                    amount=shares, entry_side="Buy",
+                    stop_price=stop_p, symbol=ticker,
+                )
+            except Exception as e:
+                print(f"  {tag} pending {ticker} stop order failed: {e}")
+
+        comm = commission_sek(shares, shares * filled_price * fx_usd)
+        trade_id = db.insert_trade({
+            "strategy":        strategy,
+            "market_group":    "US Equities",
+            "ticker":          ticker,
+            "direction":       "BUY",
+            "entry_date":      today_str,
+            "entry_price":     filled_price,
+            "shares":          shares,
+            "commission_sek":  comm,
+            "entry_score":     round(float(item.get("confidence", 0)) * 100, 1),
+            "d1_trend": 0.0, "d2_momentum": 0.0, "d3_breakout": 0.0,
+            "d4_mean_revert": 0.0, "d5_volume": 0.0, "d6_smart_money": 0.0,
+            "d7_mom_quality": 0.0, "d8_regime": 0.0,
+            "trailing_stop_high": filled_price,
+            "regime_at_entry": "unknown",
+            "stop_price":      stop_p,
+            "paper":           1 if is_paper else 0,
+            "stop_order_id":   stop_oid or None,
+        })
+        label = "[PAPER-FILL]" if is_paper else "[PENDING->BROKER]"
+        print(f"  {tag} recorded trade id={trade_id} {label}")
+        _append_trade_log(
+            strategy, "BUY", ticker, shares, filled_price,
+            shares * filled_price * fx_usd, None,
+            f"[PENDING->BROKER] conf={item.get('confidence', 0):.2f} | {item.get('reason', '')[:60]}",
+            entry_date=today_str, days_held=0,
+        )
+        sig_open_now[pair_key] = True
+        per_strategy_open[strategy] = per_strategy_open.get(strategy, 0) + 1
+        all_open_tickers.add(ticker)
+
+    _save_signals_pending(remaining)
+
+
 def _sek_per_eur() -> float | None:
     """SEK value of one EUR, from Saxo's live quotes. None on failure -- the
     AI card writers then skip the EUR conversion rather than guess."""
@@ -4211,6 +4394,14 @@ def run_us_signals(feat_data: dict, open_trades: list, todays_actions: list) -> 
     # All currently-open tickers (any strategy) — prevents cross-strategy duplicates
     all_open_tickers: set[str] = {t["ticker"] for t in db.get_open_trades()}
 
+    # Execute pre-market pending signals on broker at market open
+    if not _us_market_currently_closed():
+        _execute_signals_pending(
+            feat_data=feat_data, imap=imap, fx_usd=fx_usd, today_str=today_str,
+            sig_open_now=sig_open_now, per_strategy_open=per_strategy_open,
+            all_open_tickers=all_open_tickers, tag=tag,
+        )
+
     for ticker in US_TICKERS:
         if ticker not in feat_data:
             continue
@@ -4261,6 +4452,9 @@ def run_us_signals(feat_data: dict, open_trades: list, todays_actions: list) -> 
                         print(f"  {tag} {ticker} unfilled, skipping")
                         continue
             else:
+                if _us_market_currently_closed():
+                    _queue_signals_pending(ticker, strategy, shares, cur_price, stop, sig)
+                    continue
                 if _stocks_paper_fill_enabled():
                     is_paper = True
                     print(f"  {tag} {ticker} no order id → paper fill @ {cur_price:.2f}")

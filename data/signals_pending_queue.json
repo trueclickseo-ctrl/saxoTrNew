@@ -1,0 +1,90 @@
+[
+  {
+    "ticker": "MAR",
+    "strategy": "US RSI Reversal",
+    "shares": 1,
+    "signal_price": 336.07,
+    "stop_price": 322.63,
+    "queued_at": "2026-09-23T00:00:00",
+    "expires_date": "2026-09-25",
+    "confidence": 0.118,
+    "reason": "migrated from paper (original entry)"
+  },
+  {
+    "ticker": "QCOM",
+    "strategy": "US SMA Crossover",
+    "shares": 2,
+    "signal_price": 176.88,
+    "stop_price": 169.8,
+    "queued_at": "2026-09-23T00:00:00",
+    "expires_date": "2026-09-25",
+    "confidence": 0.436,
+    "reason": "migrated from paper (original entry)"
+  },
+  {
+    "ticker": "META",
+    "strategy": "US SMA Crossover",
+    "shares": 1,
+    "signal_price": 644.38,
+    "stop_price": 618.6,
+    "queued_at": "2026-09-23T00:00:00",
+    "expires_date": "2026-09-25",
+    "confidence": 0.249,
+    "reason": "migrated from paper (original entry)"
+  },
+  {
+    "ticker": "PANW",
+    "strategy": "US SMA Crossover",
+    "shares": 1,
+    "signal_price": 363.58,
+    "stop_price": 349.0368,
+    "queued_at": "2026-09-23T00:00:00",
+    "expires_date": "2026-09-25",
+    "confidence": 0.142,
+    "reason": "migrated from paper (original entry)"
+  },
+  {
+    "ticker": "CRWD",
+    "strategy": "US Ensemble",
+    "shares": 2,
+    "signal_price": 237.65,
+    "stop_price": 228.144,
+    "queued_at": "2026-09-23T00:00:00",
+    "expires_date": "2026-09-25",
+    "confidence": 0.3,
+    "reason": "migrated from paper (original entry)"
+  },
+  {
+    "ticker": "TJX",
+    "strategy": "US RSI Reversal",
+    "shares": 3,
+    "signal_price": 127.24,
+    "stop_price": 122.1504,
+    "queued_at": "2026-09-23T00:00:00",
+    "expires_date": "2026-09-25",
+    "confidence": 0.13,
+    "reason": "migrated from paper (original entry)"
+  },
+  {
+    "ticker": "RTX",
+    "strategy": "US RSI Reversal",
+    "shares": 2,
+    "signal_price": 194.0,
+    "stop_price": 186.24,
+    "queued_at": "2026-09-23T00:00:00",
+    "expires_date": "2026-09-25",
+    "confidence": 0.117,
+    "reason": "migrated from paper (original entry)"
+  },
+  {
+    "ticker": "AVGO",
+    "strategy": "US Momentum",
+    "shares": 1,
+    "signal_price": 364.54,
+    "stop_price": 349.9584,
+    "queued_at": "2026-09-23T00:00:00",
+    "expires_date": "2026-09-25",
+    "confidence": 0.453,
+    "reason": "migrated from paper (original entry)"
+  }
+]
