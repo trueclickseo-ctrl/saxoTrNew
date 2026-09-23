@@ -97,22 +97,32 @@ CommandServerPort=7462    # watchdog sends STOP here before any kill → preserv
 
 ### config_paper.ini
 ```ini
+IbLoginId=pexgbl292       # SEPARATE paper account credentials (not the live kaxhifimran)
+IbPassword=<redacted>     # see C:\Users\Kwaseem\Documents\IBC\config_paper.ini
 TradingMode=paper         # connects to DUR952126 (paper/simulation account)
 OverrideTwsApiPort=4002   # paper Gateway API port
 AutoRestartTime=02:30 AM  # staggered 15 min after live to avoid concurrent conflicts
 ColdRestartTime=          # BLANK
 CommandServerPort=7463    # separate port from live (7462)
+AcceptNonBrokerageAccountWarning=yes  # dismisses the "not a brokerage account" popup
+# NO 2FA settings -- paper account authenticates with username/password only.
+# Gateway starts fully automatically after every reboot, zero user action needed.
 ```
 
 ---
 
-## How the zero-2FA mechanism works
+## How 2FA works (live vs paper)
 
+### Paper Gateway — fully automatic, zero user action ever
+Paper account (`pexgbl292`) has no 2FA. IBC logs in with username + password only.
+Every reboot → Gateway up on port 4002 automatically. No phone, no approval, nothing.
+
+### Live Gateway — zero-2FA after first boot
 1. **First boot after setup**: 2FA push sent to IBKR Mobile → user approves once.
 2. IBC converts the SOFT (2FA) token → **TST (Time Session Token)** stored in `thts.cache`.
-3. At `AutoRestartTime`: Gateway does a graceful daily restart. IBC writes an **autorestart file** in the Jts settings folder.
-4. On every subsequent startup (reboot, crash, watchdog restart): IBC finds the autorestart file + TST → **skips login dialog entirely**, no 2FA.
-5. TST token expires after months. When it does, one IBKR Mobile push notification arrives. Approve it on the phone (no computer needed — approve from notification shade). Clock resets.
+3. At `AutoRestartTime=02:15 AM`: Gateway does a graceful daily restart. IBC writes an **autorestart file** in `C:\Jts_live\`.
+4. On every subsequent startup (reboot, crash, watchdog restart): IBC finds the autorestart file + TST → **skips login dialog entirely, no 2FA**.
+5. TST token expires after months. One IBKR Mobile push arrives — approve from notification shade (no computer needed). Clock resets.
 
 **Critical rule**: never `taskkill /F ibgateway1.exe` directly — this destroys `thts.cache` and forces 2FA on the next boot. The watchdog sends a graceful `STOP` to the IBC command server (port 7462/7463) first; only falls back to taskkill if the command server is unreachable.
 
