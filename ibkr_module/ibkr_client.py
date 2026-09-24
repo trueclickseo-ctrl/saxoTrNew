@@ -408,6 +408,48 @@ def cancel_order_by_id(ib: IB, order_id: int) -> None:
         pass
 
 
+def cancel_stops_as_master(symbols: list[str], account_id: str, port: int = 4001) -> int:
+    """Connect as clientId=0 (master) to cancel ALL open SELL orders for the given
+    symbols, regardless of which clientId placed them.
+
+    IB API rule: a client can only cancel its own orders.  Trail stops runs as
+    clientId=13; blend runs as clientId=10 -- so blend's cancel requests for
+    trail-stop orders are silently rejected.  ClientId=0 is the master client
+    and is allowed to cancel any order on the account.
+
+    Returns the number of orders cancelled.  Never raises.
+    """
+    ib0 = IB()
+    cancelled = 0
+    try:
+        ib0.connect("127.0.0.1", port, clientId=0, readonly=False)
+        ib0.reqAllOpenOrders()
+        ib0.sleep(2.0)
+        sym_set = set(symbols)
+        for t in ib0.openTrades():
+            if (t.order.account == account_id
+                    and t.order.action == "SELL"
+                    and getattr(t.contract, "symbol", "") in sym_set):
+                try:
+                    ib0.cancelOrder(t.order)
+                    print(f"  [pre-sell] master-cancel: {t.order.orderId} "
+                          f"({t.order.orderType}) {t.contract.symbol}")
+                    cancelled += 1
+                    ib0.sleep(0.5)
+                except Exception as e:
+                    print(f"  [pre-sell] master-cancel failed {t.order.orderId}: {e}")
+        if cancelled:
+            ib0.sleep(3.0)  # let cancellations propagate before disconnecting
+    except Exception as e:
+        print(f"  [pre-sell] clientId=0 connect failed: {e}")
+    finally:
+        try:
+            ib0.disconnect()
+        except Exception:
+            pass
+    return cancelled
+
+
 def get_open_orders(ib: IB) -> list[dict]:
     """Return list of open orders across all contracts."""
     result = []

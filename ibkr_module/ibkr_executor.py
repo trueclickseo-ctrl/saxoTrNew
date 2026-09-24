@@ -326,65 +326,39 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
     # still holds the old ID.  Cancelling only the DB ID leaves the new stop alive
     # → IBKR error 201 (new sell + active stop > owned qty = implied short).
     if sells:
+        sell_syms = {s["symbol"] for s in sells}
+
+        # IB API rule: a client can only cancel orders IT placed.
+        # Trail stops (clientId=13) places the GTC stops; blend (clientId=10) cannot
+        # cancel them -- the requests are silently rejected by IB Gateway.
+        # Solution: connect briefly as clientId=0 (master) which can cancel ANY order.
+        live_port = cfg.get("port_live", 4001)
+        ic.cancel_stops_as_master(list(sell_syms), account_id, port=live_port)
+
+        # Belt-and-suspenders: also try to cancel DB-tracked stop IDs from current
+        # clientId (covers any stop placed by this same session).
         held_by_sym = {p["symbol"]: p for p in held}
-        ib.reqAllOpenOrders()
-        ib.sleep(2.0)  # Allow response to populate openTrades()
-
-        open_sell_by_sym: dict[str, list] = {}
-        for t in ib.openTrades():
-            if t.order.account == account_id and t.order.action == "SELL":
-                sym = getattr(t.contract, "symbol", "")
-                open_sell_by_sym.setdefault(sym, []).append(t)
-
-        for s in sells:
-            sym = s["symbol"]
-            cancelled_ids: set[int] = set()
-            # Cancel every live SELL order for this symbol (stop, limit, market)
-            for t in open_sell_by_sym.get(sym, []):
-                try:
-                    ic.cancel_order(ib, t)
-                    cancelled_ids.add(t.order.orderId)
-                    print(f"  [pre-sell] Cancelled order {t.order.orderId} "
-                          f"({t.order.orderType}) for {sym}")
-                    ib.sleep(0.5)
-                except Exception:
-                    pass
-            # Belt-and-suspenders: also cancel the DB-tracked stop ID in case
-            # reqAllOpenOrders missed it (different session, not yet visible).
+        for sym in sell_syms:
             p = held_by_sym.get(sym, {})
             stop_id = p.get("stop_order_id")
             if stop_id and str(stop_id) not in ("", "None", "0"):
-                try:
-                    stop_int = int(stop_id)
-                    if stop_int not in cancelled_ids:
-                        ic.cancel_order_by_id(ib, stop_int)
-                        print(f"  [pre-sell] Cancelled DB-tracked stop {stop_id} for {sym}")
-                except Exception:
-                    pass
+                ic.cancel_order_by_id(ib, int(stop_id))
 
-        # Verify cancellations actually landed: poll until all SELL orders are gone.
-        # A fixed sleep isn't enough -- IB Gateway may take >3s to confirm a cancel.
-        sell_syms = {s["symbol"] for s in sells}
-        for _attempt in range(6):           # up to 6 × 2s = 12s total
-            ib.sleep(2.0)
-            ib.reqAllOpenOrders()
-            ib.sleep(1.0)
-            still_open = [
-                t for t in ib.openTrades()
-                if t.order.account == account_id
-                and t.order.action == "SELL"
-                and getattr(t.contract, "symbol", "") in sell_syms
-            ]
-            if not still_open:
-                break
-            print(f"  [pre-sell] {len(still_open)} sell order(s) still active -- re-cancelling")
+        # Verify: poll until no SELL orders remain for sell symbols.
+        ib.reqAllOpenOrders()
+        ib.sleep(2.0)
+        sell_syms_list = list(sell_syms)
+        still_open = [
+            t for t in ib.openTrades()
+            if t.order.account == account_id
+            and t.order.action == "SELL"
+            and getattr(t.contract, "symbol", "") in sell_syms
+        ]
+        if still_open:
+            print(f"  [pre-sell] WARNING: {len(still_open)} stop(s) still visible after master-cancel")
             for t in still_open:
-                try:
-                    ic.cancel_order(ib, t)
-                    print(f"  [pre-sell] Re-cancelled {t.order.orderId} "
-                          f"({t.order.orderType}) for {getattr(t.contract,'symbol','?')}")
-                except Exception:
-                    pass
+                print(f"    orderId={t.order.orderId} sym={getattr(t.contract,'symbol','?')} "
+                      f"type={t.order.orderType} status={t.orderStatus.status}")
 
     failed_sells: list[str] = []
     for s in sells:
