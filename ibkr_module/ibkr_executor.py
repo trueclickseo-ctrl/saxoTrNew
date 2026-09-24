@@ -836,7 +836,24 @@ def trail_stops(ib, account_id: str, cfg: dict, dry_run: bool = True,
         # Place new stop FIRST, then cancel old one only after confirmed.
         # Reversing the order prevents a naked position if placement fails.
         new_stop_trade = ic.place_stop_order(ib, account_id, sym, qty, new_stop)
-        ib.sleep(0.5)
+
+        # Wait for new stop to reach Submitted before cancelling old one.
+        # If we disconnect while it's still PreSubmitted, the order freezes in
+        # that state and can never be cancelled via the API (requires GUI cancel).
+        for _w in range(15):          # up to 15 × 1s = 15s
+            ib.sleep(1.0)
+            status = new_stop_trade.orderStatus.status
+            if status in ("Submitted", "PreSubmitted"):
+                # PreSubmitted is acceptable intermediate state; Submitted = confirmed
+                if status == "Submitted":
+                    break
+            elif status in ("Filled", "Cancelled", "ApiCancelled", "Inactive"):
+                break  # terminal state -- stop placed (or failed)
+        if new_stop_trade.orderStatus.status != "Submitted":
+            print(f"  WARNING: new stop for {sym} is '{new_stop_trade.orderStatus.status}' "
+                  f"(not Submitted) -- keeping old stop to avoid frozen PreSubmitted state")
+            ic.cancel_order_by_id(ib, new_stop_trade.order.orderId)
+            continue
 
         if stop_order_id:
             open_orders = ib.openTrades()
