@@ -306,6 +306,27 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
         return
 
     # -- Execute SELLs ---------------------------------------------------------
+    # Cancel any active GTC stop order before selling -- having an open stop for the
+    # same symbol causes IBKR to reject the new sell order with "Cancelled" status.
+    if sells:
+        held_by_sym = {p["symbol"]: p for p in held}
+        ib.reqOpenOrders()
+        ib.sleep(0.5)
+        live_order_ids = {
+            t.order.orderId for t in ib.openTrades() if t.order.account == account_id
+        }
+        for s in sells:
+            p = held_by_sym.get(s["symbol"], {})
+            stop_id = p.get("stop_order_id")
+            if stop_id and str(stop_id) not in ("", "None", "0"):
+                try:
+                    if int(stop_id) in live_order_ids:
+                        ic.cancel_order_by_id(ib, int(stop_id))
+                        print(f"  [pre-sell] Cancelled GTC stop {stop_id} for {s['symbol']}")
+                        ib.sleep(0.5)
+                except Exception:
+                    pass
+
     for s in sells:
         print(f"\n  SELL {s['qty']} {s['symbol']} @ ~${s['price']:.2f}  "
               f"(value ~${s['value']:,.0f})")
@@ -314,16 +335,28 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
             print("  Skipped.")
             continue
 
-        trade = ic.place_market_order(ib, account_id, s["symbol"], "SELL", s["qty"])
-        st.record_order(str(trade.order.orderId), s["symbol"], "SELL", s["qty"], strategy="blend")
-        print(f"  Order placed (id={trade.order.orderId}). Waiting for fill...")
-        fill = ic.confirm_fill(ib, trade)
+        fill = None
+        fill_trade = None
+        for attempt in range(2):
+            if attempt > 0:
+                print(f"  Retrying sell {s['symbol']} (attempt {attempt + 1}/2)...")
+                ib.sleep(5.0)
+            _t = ic.place_market_order(ib, account_id, s["symbol"], "SELL", s["qty"])
+            st.record_order(str(_t.order.orderId), s["symbol"], "SELL", s["qty"], strategy="blend")
+            print(f"  Order placed (id={_t.order.orderId}). Waiting for fill...")
+            _f = ic.confirm_fill(ib, _t)
+            if _f is None:
+                st.mark_cancelled(str(_t.order.orderId))
+            else:
+                fill = _f
+                fill_trade = _t
+                break
+
         if fill is None:
-            print(f"  WARNING: fill not confirmed within timeout for {s['symbol']} -- sell cancelled, will retry next cycle.")
-            st.mark_cancelled(str(trade.order.orderId))
+            print(f"  WARNING: sell failed for {s['symbol']} after 2 attempts -- will retry next cycle.")
         else:
             print(f"  Filled @ ${fill:.4f}")
-            st.mark_filled(str(trade.order.orderId), fill, side="SELL")
+            st.mark_filled(str(fill_trade.order.orderId), fill, side="SELL")
             st.close_buy_position(s["symbol"], "blend")
             _email_ibkr_fill("SELL", s["symbol"], s["qty"], fill, "blend")
 
@@ -858,17 +891,29 @@ def run_reversion_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
             print("  Skipped.")
             continue
 
-        trade = ic.place_market_order(ib, account_id, c["ticker"], "BUY", qty)
-        st.record_order(str(trade.order.orderId), c["ticker"], "BUY", qty, strategy="reversion")
-        print(f"  Order placed (id={trade.order.orderId}). Waiting for fill...")
-        fill = ic.confirm_fill(ib, trade)
+        fill = None
+        fill_trade = None
+        for attempt in range(2):
+            if attempt > 0:
+                print(f"  Retrying buy {c['ticker']} (attempt {attempt + 1}/2)...")
+                ib.sleep(5.0)
+            _t = ic.place_market_order(ib, account_id, c["ticker"], "BUY", qty)
+            st.record_order(str(_t.order.orderId), c["ticker"], "BUY", qty, strategy="reversion")
+            print(f"  Order placed (id={_t.order.orderId}). Waiting for fill...")
+            _f = ic.confirm_fill(ib, _t)
+            if _f is None:
+                st.mark_cancelled(str(_t.order.orderId))
+            else:
+                fill = _f
+                fill_trade = _t
+                break
+
         if fill is None:
-            print(f"  WARNING: fill not confirmed for {c['ticker']}.")
-            st.mark_cancelled(str(trade.order.orderId))
+            print(f"  WARNING: fill not confirmed for {c['ticker']} after 2 attempts.")
             continue
 
         print(f"  Filled @ ${fill:.4f}")
-        st.mark_filled(str(trade.order.orderId), fill, side="BUY")
+        st.mark_filled(str(fill_trade.order.orderId), fill, side="BUY")
         actual_stop = round(fill * (1 - stop_pct), 2)
         stop_trade  = ic.place_stop_order(ib, account_id, c["ticker"], qty, actual_stop)
         ib.sleep(1.0)

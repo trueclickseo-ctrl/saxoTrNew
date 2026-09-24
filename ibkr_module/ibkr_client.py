@@ -44,7 +44,7 @@ def _save_price_cache(prices: dict[str, float]) -> None:
         pass
 
 try:
-    from ib_insync import IB, Stock, MarketOrder, LimitOrder, StopOrder, util
+    from ib_insync import IB, Stock, MarketOrder, LimitOrder, StopOrder, Order, util
 except ImportError:
     raise ImportError(
         "ib_insync not installed. Run: pip install ib_insync\n"
@@ -394,6 +394,14 @@ def cancel_order(ib: IB, trade: Any) -> None:
         pass
 
 
+def cancel_order_by_id(ib: IB, order_id: int) -> None:
+    """Cancel an open order by integer order ID (for existing GTC stops)."""
+    try:
+        ib.cancelOrder(Order(orderId=order_id))
+    except Exception:
+        pass
+
+
 def get_open_orders(ib: IB) -> list[dict]:
     """Return list of open orders across all contracts."""
     result = []
@@ -417,6 +425,7 @@ def confirm_fill(ib: IB, trade: Any, timeout_s: int = 180,
     sym = getattr(trade.contract, "symbol", "?")
     deadline = time.monotonic() + timeout_s
     last_status = None
+    inactive_streak = 0
     while time.monotonic() < deadline:
         ib.sleep(poll_s)
         ib.reqOpenOrders()
@@ -427,11 +436,20 @@ def confirm_fill(ib: IB, trade: Any, timeout_s: int = 180,
         if status == "Filled":
             price = float(trade.orderStatus.avgFillPrice or 0)
             return price if price > 0 else None
-        if status in ("Inactive", "Cancelled", "ApiCancelled"):
+        if status in ("Cancelled", "ApiCancelled"):
             return None
+        if status == "Inactive":
+            inactive_streak += 1
+            if inactive_streak >= 5:   # 10s of continuous Inactive -> dead
+                print(f"    [fill] {sym} stuck Inactive ({inactive_streak} polls) -- cancelling")
+                cancel_order(ib, trade)
+                ib.sleep(1.0)
+                return None
+        else:
+            inactive_streak = 0  # reset if status changes away from Inactive
 
     # Timeout: cancel
-    print(f"    [fill] {sym} fill timeout after {timeout_s}s — cancelling order")
+    print(f"    [fill] {sym} fill timeout after {timeout_s}s -- cancelling order")
     cancel_order(ib, trade)
     ib.sleep(1.0)
     return None
