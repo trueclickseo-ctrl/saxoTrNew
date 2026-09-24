@@ -38,12 +38,20 @@ _ROOT = Path(__file__).parent.parent
 _ai_cfg = None
 _ai_copilot = None
 _ai_stock_proposal = None
+_sc = None   # stock observation cards
 try:
     import ai.config as _ai_cfg
     import ai.agent.trading_copilot as _ai_copilot
     from ai.features import stock_proposal as _ai_stock_proposal
+    from ai.features import stock_cards as _sc
 except Exception:
     pass
+
+_LIVE_ACCOUNT_ID = "U28013794"
+
+
+def _ibkr_account_env(account_id: str) -> str:
+    return "ibkr_live" if account_id == _LIVE_ACCOUNT_ID else "ibkr_paper"
 
 
 def _ai_ibkr_score(strategy: str, ticker: str, price: float, stop_price: float,
@@ -434,6 +442,27 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
             st.close_buy_position(s["symbol"], "blend")
             _email_ibkr_fill("SELL", s["symbol"], s["qty"], fill, "blend")
 
+            if _sc and _ai_cfg and _ai_cfg.stocks_enabled(_ibkr_account_env(account_id)):
+                _acenv  = _ibkr_account_env(account_id)
+                _p      = held_by_sym.get(s["symbol"], {})
+                _epx    = float(_p.get("fill_price") or s["price"])
+                _edate  = (_p.get("filled_at") or _p.get("created_at") or "")[:10]
+                _risk   = round((_epx - float(_p.get("stop_price") or 0)) * s["qty"], 2) if _p.get("stop_price") else None
+                _gpnl   = round((fill - _epx) * s["qty"], 2)
+                _npnl   = round(_gpnl - 1.0, 2)   # ~$1 IBKR commission
+                try:
+                    _fdt  = datetime.datetime.fromisoformat((_p.get("filled_at") or "").replace("Z", "+00:00"))
+                    _hhrs = round((datetime.datetime.now(datetime.timezone.utc) - _fdt).total_seconds() / 3600, 1)
+                except Exception:
+                    _hhrs = None
+                _cid = _sc.card_id_for("us_blend", s["symbol"], _edate, _acenv)
+                _sc.log_stock_exit_card(
+                    card_id=_cid, exit_price=fill, exit_reason="blend_rebalance",
+                    gross_pnl_sek=_gpnl, commission_sek=1.0, net_pnl_sek=_npnl,
+                    holding_hours=_hhrs, sek_per_eur=None,
+                    risk_sek=_risk, native_currency="USD",
+                )
+
     if failed_sells:
         print(f"\n  Skipping buys -- sells failed: {', '.join(failed_sells)}. RETRY task will handle.")
         print("\n  Rebalance complete.")
@@ -488,6 +517,16 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
         st.update_stop(b["symbol"], actual_stop,
                        str(stop_trade.order.orderId), trailing_high=fill)
         print(f"  Stop placed @ ${actual_stop:.2f} (id={stop_trade.order.orderId})")
+
+        if _sc and _ai_cfg and _ai_cfg.stocks_enabled(_ibkr_account_env(account_id)):
+            _entry_date = datetime.date.today().isoformat()
+            _sc.log_stock_entry_card(
+                strategy="us_blend", ticker=b["symbol"], direction="BUY",
+                entry_price=fill, shares=b["qty"], stop_price=actual_stop,
+                sek_per_eur=None, entry_date=_entry_date,
+                risk_sek=round((fill - actual_stop) * b["qty"], 2),
+                account_env=_ibkr_account_env(account_id), native_currency="USD",
+            )
 
     print("\n  Rebalance complete.")
 
@@ -1029,6 +1068,17 @@ def run_reversion_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
         st.update_stop(c["ticker"], actual_stop, str(stop_trade.order.orderId), fill)
         print(f"  Stop placed @ ${actual_stop:.2f} (id={stop_trade.order.orderId})")
 
+        if _sc and _ai_cfg and _ai_cfg.stocks_enabled(_ibkr_account_env(account_id)):
+            _entry_date = datetime.date.today().isoformat()
+            _sc.log_stock_entry_card(
+                strategy="us_reversion", ticker=c["ticker"], direction="BUY",
+                entry_price=fill, shares=qty, stop_price=actual_stop,
+                sek_per_eur=None, entry_date=_entry_date,
+                risk_sek=round((fill - actual_stop) * qty, 2),
+                rsi_at_entry=c.get("rsi"),
+                account_env=_ibkr_account_env(account_id), native_currency="USD",
+            )
+
     print(f"\n  [{label}] entry scan complete.")
 
 
@@ -1123,6 +1173,25 @@ def run_reversion_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
             st.mark_filled(str(sell_trade.order.orderId), fill, side="SELL")
             st.close_buy_position(sym, "reversion")
             _email_ibkr_fill("SELL", sym, qty, fill, "reversion", entry_px)
+
+            if _sc and _ai_cfg and _ai_cfg.stocks_enabled(_ibkr_account_env(account_id)):
+                _acenv  = _ibkr_account_env(account_id)
+                _edate  = (pos.get("filled_at") or pos.get("created_at") or "")[:10]
+                _risk   = round((entry_px - float(pos.get("stop_price") or 0)) * qty, 2) if pos.get("stop_price") else None
+                _gpnl   = round(pnl, 2)
+                _npnl   = round(_gpnl - 1.0, 2)
+                try:
+                    _fdt  = datetime.datetime.fromisoformat((pos.get("filled_at") or "").replace("Z", "+00:00"))
+                    _hhrs = round((datetime.datetime.now(datetime.timezone.utc) - _fdt).total_seconds() / 3600, 1)
+                except Exception:
+                    _hhrs = None
+                _cid = _sc.card_id_for("us_reversion", sym, _edate, _acenv)
+                _sc.log_stock_exit_card(
+                    card_id=_cid, exit_price=fill, exit_reason=reason,
+                    gross_pnl_sek=_gpnl, commission_sek=1.0, net_pnl_sek=_npnl,
+                    holding_hours=_hhrs, sek_per_eur=None,
+                    risk_sek=_risk, native_currency="USD",
+                )
 
     print("\n  Reversion exit check complete.")
 

@@ -75,11 +75,13 @@ def log_stock_entry_card(*, strategy: str, ticker: str, direction: str,
                          risk_sek: float | None = None,
                          rsi_at_entry: float | None = None,
                          sma20_target: float | None = None,
-                         account_env: str = _ACCOUNT_ENV) -> str:
+                         account_env: str = _ACCOUNT_ENV,
+                         native_currency: str = "SEK") -> str:
     """Written once at entry. `strategy` is "us_reversion" or "us_blend".
     `entry_date` = the trade's DB entry_date ('YYYY-MM-DD'); the returned
     card_id is derived from it so the exit hook can reconstruct it.
-    `account_env` = "sim" (default) or "live_stocks" (real-money US Blend).
+    `account_env` = "sim" (default), "live_stocks" (Saxo real-money),
+    "ibkr_paper", or "ibkr_live". Pass native_currency="USD" for IBKR.
     Never raises."""
     card_id = card_id_for(strategy, ticker, entry_date, account_env)
     _append({
@@ -94,7 +96,7 @@ def log_stock_entry_card(*, strategy: str, ticker: str, direction: str,
         "entry_price": entry_price,
         "current_stop": stop_price,
         "quantity": shares,
-        "native_currency": "SEK",
+        "native_currency": native_currency,
         "risk_native": round(risk_sek, 2) if risk_sek is not None else None,
         "risk_eur": _eur(risk_sek, sek_per_eur),
         # equity-specific context the Journal prompt is taught to read
@@ -111,9 +113,11 @@ def log_stock_exit_card(*, card_id: str, exit_price: float, exit_reason: str,
                         gross_pnl_sek: float | None, commission_sek: float | None,
                         net_pnl_sek: float | None, holding_hours: float | None,
                         sek_per_eur: float | None,
-                        risk_sek: float | None = None) -> None:
-    """Written once at close, referencing the entry card's card_id. Never
-    raises; silently no-ops if card_id is falsy (pre-feature trade)."""
+                        risk_sek: float | None = None,
+                        native_currency: str = "SEK") -> None:
+    """Written once at close, referencing the entry card's card_id.
+    Pass native_currency="USD" for IBKR trades; pnl/risk values are then USD.
+    Never raises; silently no-ops if card_id is falsy (pre-feature trade)."""
     if not card_id:
         return
     gross_eur = _eur(gross_pnl_sek, sek_per_eur)
@@ -132,7 +136,7 @@ def log_stock_exit_card(*, card_id: str, exit_price: float, exit_reason: str,
         "market": "equity",
         "exit_price": exit_price,
         "exit_reason": exit_reason,
-        "native_currency": "SEK",
+        "native_currency": native_currency,
         "net_pnl_native": round(net_pnl_sek, 2) if net_pnl_sek is not None else None,
         "gross_pnl_eur": gross_eur,
         "commission_eur": comm_eur,
