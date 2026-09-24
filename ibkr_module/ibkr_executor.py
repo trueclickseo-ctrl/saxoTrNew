@@ -344,21 +344,27 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
             if stop_id and str(stop_id) not in ("", "None", "0"):
                 ic.cancel_order_by_id(ib, int(stop_id))
 
-        # Verify: poll until no SELL orders remain for sell symbols.
-        ib.reqAllOpenOrders()
-        ib.sleep(2.0)
-        sell_syms_list = list(sell_syms)
-        still_open = [
-            t for t in ib.openTrades()
-            if t.order.account == account_id
-            and t.order.action == "SELL"
-            and getattr(t.contract, "symbol", "") in sell_syms
-        ]
-        if still_open:
-            print(f"  [pre-sell] WARNING: {len(still_open)} stop(s) still visible after master-cancel")
-            for t in still_open:
-                print(f"    orderId={t.order.orderId} sym={getattr(t.contract,'symbol','?')} "
-                      f"type={t.order.orderType} status={t.orderStatus.status}")
+        # Verify: poll until all SELL orders for sell symbols are gone.
+        # PreSubmitted -> PendingCancel -> Cancelled can take 5-15s on live Gateway.
+        # We must NOT place the sell until the stop is fully cancelled -- otherwise
+        # IBKR still counts it and rejects with error 201 (implied short position).
+        for _poll in range(10):          # up to 10 × 2s = 20s
+            ib.reqAllOpenOrders()
+            ib.sleep(2.0)
+            still_open = [
+                t for t in ib.openTrades()
+                if t.order.account == account_id
+                and t.order.action == "SELL"
+                and getattr(t.contract, "symbol", "") in sell_syms
+                and t.orderStatus.status not in ("Cancelled", "ApiCancelled", "Inactive")
+            ]
+            if not still_open:
+                print(f"  [pre-sell] All stops confirmed cancelled.")
+                break
+            statuses = {t.orderStatus.status for t in still_open}
+            print(f"  [pre-sell] Waiting for stop cancellation ({statuses}) ...")
+        else:
+            print(f"  [pre-sell] WARNING: stop(s) still active after 20s -- sell may fail")
 
     failed_sells: list[str] = []
     for s in sells:
