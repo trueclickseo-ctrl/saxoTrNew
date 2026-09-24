@@ -1,5 +1,8 @@
 @echo off
-REM Run this ONCE as Administrator (right-click -> Run as administrator).
-REM Creates 3 IBKR Live retry tasks (exits/entries/blend) 23 min after main tasks.
+REM Auto-elevates to admin if needed, then creates the 3 IBKR Live retry tasks.
+if not "%1"=="am_admin" (
+    powershell -NoProfile -Command "Start-Process '%~f0' 'am_admin' -Verb RunAs"
+    exit /b
+)
 powershell -NoProfile -ExecutionPolicy Bypass -File "E:\SaxoTrNew\SaxoTrNew\setup_live_retry_tasks.ps1"
 pause
