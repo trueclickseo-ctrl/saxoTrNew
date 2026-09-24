@@ -46,7 +46,7 @@
     "live_reversion": {
       "budget_usd": 2000,
       "_budget_note": "half of live account; mean-reversion entries during market hours",
-      "max_slots": 4,
+      "max_slots": 3,
       "stop_pct": 0.03,
       "max_hold_days": 10,
       "rsi_entry": 38,
