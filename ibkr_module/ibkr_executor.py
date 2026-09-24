@@ -118,6 +118,15 @@ def _email_ibkr_fill(side: str, ticker: str, qty, fill: float,
         pass
 
 
+def _email_ibkr_alert(title: str, message: str, strategy: str = "IBKR Live") -> None:
+    """Fire-and-forget alert email when a live order fails. Never raises."""
+    try:
+        from atos import notifier as _ntf
+        _ntf.notify_ibkr_alert(title, message, strategy)
+    except Exception:
+        pass
+
+
 def _compute_plan(
     targets: list[str],
     held: list[dict],
@@ -384,6 +393,12 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
         if fill is None:
             failed_sells.append(s["symbol"])
             print(f"  WARNING: sell failed for {s['symbol']} after 2 attempts -- will retry next cycle.")
+            _email_ibkr_alert(
+                f"Sell failed: {s['symbol']}",
+                f"SELL {s['qty']} {s['symbol']} failed after 2 attempts. "
+                f"RETRY task fires in ~25 min. If RETRY also fails, check IB Gateway and re-run manually.",
+                strategy="blend",
+            )
         else:
             print(f"  Filled @ ${fill:.4f}")
             st.mark_filled(str(fill_trade.order.orderId), fill, side="SELL")
@@ -426,6 +441,12 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
         if fill is None:
             print(f"  WARNING: fill not confirmed for {b['symbol']}. Skipping stop.")
             st.mark_cancelled(str(trade.order.orderId))
+            _email_ibkr_alert(
+                f"Buy failed: {b['symbol']}",
+                f"BUY {b['qty']} {b['symbol']} (blend) failed to fill. "
+                f"Likely insufficient cash. RETRY task fires in ~25 min.",
+                strategy="blend",
+            )
             continue
 
         print(f"  Filled @ ${fill:.4f}")
@@ -945,6 +966,12 @@ def run_reversion_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
 
         if fill is None:
             print(f"  WARNING: fill not confirmed for {c['ticker']} after 2 attempts.")
+            _email_ibkr_alert(
+                f"Buy failed: {c['ticker']}",
+                f"BUY {qty} {c['ticker']} (reversion) failed after 2 attempts. "
+                f"RETRY task fires in ~25 min. If no cash, blend sells may not have run yet.",
+                strategy="reversion",
+            )
             continue
 
         print(f"  Filled @ ${fill:.4f}")

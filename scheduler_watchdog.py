@@ -189,6 +189,15 @@ WINDOWS_TASKS = {
     # IBKR blend rebalance (2026-09-04) -- fortnightly dry-run scan (logs signal, no orders).
     # Execution is manual (--execute). grace=30, max_first_run_wait=26h.
     "IBKR Blend Rebalance":    ("ATOS IBKR Blend Rebalance",    "ibkr_blend_rebalance.log",   30, 26),
+    # IBKR LIVE blend + reversion (2026-09-24) -- real money on U28013794.
+    # Blend split: sells at 19:30, buys at 21:00. Reversion exits 20:10, entries 20:35.
+    # Contains "Live" in name -> hard-excluded from AUTO_FIX_ELIGIBLE (never auto-restarted).
+    # Watchdog reports failure but NEVER touches these tasks automatically.
+    # max_log_age=26h (once-daily). Log files are under logs/ (set by run_hidden.vbs).
+    "IBKR Blend Live Sells":          ("ATOS IBKR Blend Rebalance",              "logs/ibkr_blend_live_sells.log",    30, 26),
+    "IBKR Blend Live Buys":           ("ATOS IBKR Blend Live Buys",              "logs/ibkr_blend_live_buys.log",     30, 26),
+    "IBKR Reversion Live Entries":    ("ATOS IBKR Reversion Live Entries",       "ibkr_reversion_live.log",           30, 26),
+    "IBKR Reversion Live Exits":      ("ATOS IBKR Reversion Live Exits",         "ibkr_reversion_live_exits.log",     30, 26),
     # AI Strategy Evolver (2026-09-05) -- weekly Saturday 09:00 PKT. Evolves
     # US Blend + US Reversion AI twin params, sends email report. Weekly cadence
     # so max_log_age=200h (7d + 32h buffer). grace=60 (generous; run is slow

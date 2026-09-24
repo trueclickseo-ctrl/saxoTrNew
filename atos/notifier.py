@@ -426,6 +426,31 @@ def notify_ibkr_trade(
     _send(subject, _wrap(f"IBKR — {strategy} {side.upper()}", body))
 
 
+def notify_ibkr_alert(title: str, body_text: str, strategy: str = "IBKR Live") -> None:
+    """Send an urgent alert email when a live IBKR order fails. Never raises."""
+    try:
+        today = date.today().isoformat()
+        body = f"""
+        <span class="badge sell">⚠ LIVE ORDER FAILURE</span>
+        <div class="metric-row" style="margin-top:16px">
+          <div class="metric">
+            <div class="label">Strategy</div>
+            <div class="value">{strategy}</div>
+          </div>
+          <div class="metric">
+            <div class="label">Date</div>
+            <div class="value">{today}</div>
+          </div>
+        </div>
+        <p style="color:#f87171;font-size:15px;margin-top:12px">{body_text}</p>
+        <p style="color:#94a3b8;font-size:13px">Check IB Gateway and re-run the bat manually if needed.</p>
+        """
+        _send(f"⚠ IBKR LIVE ALERT — {title} [{today}]",
+              _wrap(f"IBKR Live — {title}", body))
+    except Exception:
+        pass
+
+
 def notify_weekly_report(
     total_equity_sek:  float,
     week_pnl_sek:      float,
