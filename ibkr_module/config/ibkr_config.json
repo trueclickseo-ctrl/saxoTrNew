@@ -13,7 +13,9 @@
     "reversion_v2": 18,
     "intraday":     12,
     "trail":        13,
-    "trail_live":   20,
+    "trail_live":       20,
+    "reversion_live":   22,
+    "reversion_live_exits": 23,
     "info":      14,
     "positions": 14,
     "dashboard": 96,
@@ -33,13 +35,26 @@
   },
   "strategies": {
     "live_blend": {
-      "budget_usd": 4000,
-      "_budget_sek": 38000,
-      "_budget_note": "10k SEK initial + 10k SEK 2026-09-14 deposit; ~$3700 target, $300 cash buffer",
+      "budget_usd": 2000,
+      "_budget_note": "half of live account; other half goes to live_reversion",
       "max_positions": 5,
       "fractional": false,
+      "force_targets": ["ROKU", "DELL"],
+      "_force_targets_note": "TONIGHT ONLY -- keeps ROKU+DELL, sells U+HPE, no new buys. Remove after 2026-09-24 run.",
       "stop_pct": 0.08,
       "rebal_days": 14,
+      "min_trade_usd": 50
+    },
+    "live_reversion": {
+      "budget_usd": 2000,
+      "_budget_note": "half of live account; mean-reversion entries during market hours",
+      "max_slots": 4,
+      "stop_pct": 0.03,
+      "max_hold_days": 10,
+      "rsi_entry": 38,
+      "rsi_exit": 60,
+      "dip_pct_min": 0.05,
+      "vol_mult": 1.5,
       "min_trade_usd": 50
     },
     "blend": {

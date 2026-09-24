@@ -232,23 +232,29 @@ def main() -> None:
     _live_info_only = not is_paper and (args.info or args.positions or args.dashboard)
 
     if not is_paper and not _live_info_only:
-        if not args.trail_stops and args.strategy not in ("blend",):
-            print(f"ERROR: --live only supports --strategy blend or --trail-stops.")
+        if not args.trail_stops and args.strategy not in ("blend", "reversion"):
+            print(f"ERROR: --live only supports --strategy blend, reversion, or --trail-stops.")
             print(f"  Got: --strategy {args.strategy}.")
-            print("  Reversion / intraday / signals / scorer are paper-only strategies.")
+            print("  Intraday / signals / scorer are paper-only strategies.")
             sys.exit(1)
 
-        live_blend_cfg = cfg.get("strategies", {}).get("live_blend", {})
-        if live_blend_cfg.get("budget_usd", 0) <= 0:
-            print("ERROR: strategies.live_blend.budget_usd is not set in ibkr_config.json.")
-            print("  Set it to your ISK account capital in USD before running live.")
-            sys.exit(1)
-
-        # Swap in live_blend config so run_rebalance uses the live budget/slots
         cfg = dict(cfg)
         cfg["strategies"] = dict(cfg["strategies"])
-        cfg["strategies"]["blend"] = live_blend_cfg
         cfg["paper"] = False
+
+        if args.strategy in ("blend",) or args.trail_stops:
+            live_blend_cfg = cfg.get("strategies", {}).get("live_blend", {})
+            if live_blend_cfg.get("budget_usd", 0) <= 0:
+                print("ERROR: strategies.live_blend.budget_usd is not set in ibkr_config.json.")
+                sys.exit(1)
+            cfg["strategies"]["blend"] = live_blend_cfg
+
+        if args.strategy == "reversion":
+            live_rev_cfg = cfg.get("strategies", {}).get("live_reversion", {})
+            if live_rev_cfg.get("budget_usd", 0) <= 0:
+                print("ERROR: strategies.live_reversion.budget_usd is not set in ibkr_config.json.")
+                sys.exit(1)
+            cfg["strategies"]["reversion"] = live_rev_cfg
 
         # Confirmed gate: only required when actually placing orders
         if args.execute:
@@ -293,6 +299,9 @@ def main() -> None:
         client_id = client_ids.get("info", cfg["client_id"])
     elif args.dashboard:
         client_id = client_ids.get("dashboard", cfg["client_id"])
+    elif args.strategy == "reversion" and not is_paper:
+        key = "reversion_live_exits" if args.exits else "reversion_live"
+        client_id = client_ids.get(key, cfg["client_id"])
     else:
         client_id = client_ids.get(args.strategy, cfg["client_id"])
 
