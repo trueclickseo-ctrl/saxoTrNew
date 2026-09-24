@@ -193,7 +193,8 @@ def _compute_plan(
 # â"€â"€ US Blend rebalance â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
-                  signal: dict | None = None, auto: bool = False) -> None:
+                  signal: dict | None = None, auto: bool = False,
+                  sells_only: bool = False, buys_only: bool = False) -> None:
     """US Blend cross-sectional momentum rebalance.
 
     signal: pre-generated result from ibkr_signals.blend_targets().
@@ -304,6 +305,11 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
         print("\n  [DRY RUN] No orders placed. Pass --execute to trade.\n")
         _print_plan(buys, sells, stop_pct)
         return
+
+    if buys_only:
+        sells = []   # skip sell phase; cash already freed by a prior sells-only run
+    if sells_only:
+        buys = []    # skip buy phase; reversion will use the freed cash
 
     # -- Execute SELLs ---------------------------------------------------------
     # Cancel ALL open sell-side orders for each symbol before selling.

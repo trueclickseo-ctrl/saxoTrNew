@@ -211,6 +211,10 @@ def main() -> None:
     parser.add_argument("--interval",    type=int, default=30)
     parser.add_argument("--client-id",   type=int, default=None,
                         help="IB Gateway client ID override (default: per-strategy from config)")
+    parser.add_argument("--sells-only",  action="store_true",
+                        help="Blend: execute sells only (free cash for reversion); skip buys")
+    parser.add_argument("--buys-only",   action="store_true",
+                        help="Blend: execute buys only (after reversion has run); skip sells")
     args = parser.parse_args()
 
     if args.live and args.paper:
@@ -502,7 +506,8 @@ def main() -> None:
             if dry_run:
                 print("  [DRY RUN] Showing blend plan -- pass --execute to place orders.\n")
             ex.run_rebalance(ib, account_id, cfg, dry_run=dry_run, signal=pre_signal,
-                             auto=args.auto)
+                             auto=args.auto,
+                             sells_only=args.sells_only, buys_only=args.buys_only)
 
         elif args.strategy == "blend_v2":
             dry_run = not args.execute
