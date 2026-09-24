@@ -362,7 +362,29 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
                 except Exception:
                     pass
 
-        ib.sleep(3.0)  # Let all cancellations propagate before placing sell orders
+        # Verify cancellations actually landed: poll until all SELL orders are gone.
+        # A fixed sleep isn't enough -- IB Gateway may take >3s to confirm a cancel.
+        sell_syms = {s["symbol"] for s in sells}
+        for _attempt in range(6):           # up to 6 × 2s = 12s total
+            ib.sleep(2.0)
+            ib.reqAllOpenOrders()
+            ib.sleep(1.0)
+            still_open = [
+                t for t in ib.openTrades()
+                if t.order.account == account_id
+                and t.order.action == "SELL"
+                and getattr(t.contract, "symbol", "") in sell_syms
+            ]
+            if not still_open:
+                break
+            print(f"  [pre-sell] {len(still_open)} sell order(s) still active -- re-cancelling")
+            for t in still_open:
+                try:
+                    ic.cancel_order(ib, t)
+                    print(f"  [pre-sell] Re-cancelled {t.order.orderId} "
+                          f"({t.order.orderType}) for {getattr(t.contract,'symbol','?')}")
+                except Exception:
+                    pass
 
     failed_sells: list[str] = []
     for s in sells:
