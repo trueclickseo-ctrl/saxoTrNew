@@ -39,8 +39,6 @@
       "_budget_note": "half of live account; other half goes to live_reversion",
       "max_positions": 5,
       "fractional": false,
-      "force_targets": ["ROKU", "DELL"],
-      "_force_targets_note": "TONIGHT ONLY -- keeps ROKU+DELL, sells U+HPE, no new buys. Remove after 2026-09-24 run.",
       "stop_pct": 0.08,
       "rebal_days": 14,
       "min_trade_usd": 50
