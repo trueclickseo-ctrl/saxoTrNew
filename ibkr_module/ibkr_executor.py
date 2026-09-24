@@ -106,6 +106,33 @@ def _ai_ibkr_apply(dec: dict | None, ticker: str, qty: int,
 
 
 
+def _place_stop_submitted(ib, account_id: str, sym: str, qty, stop_price: float,
+                           strategy: str = "") -> tuple:
+    """Place a GTC stop and wait up to 15s for Submitted state.
+
+    Returns (trade, ok) where ok=True when the stop reached Submitted.
+    If the stop stays PreSubmitted, it is left in place (not cancelled) so
+    heal_missing_stops can detect it later -- the DB is still updated so we
+    have a record of the pending order.  PreSubmitted = the exchange has not
+    yet acknowledged the order; it will usually self-resolve once the session
+    stays connected, but can freeze if the session disconnects too quickly.
+    """
+    trade = ic.place_stop_order(ib, account_id, sym, qty, stop_price)
+    for _w in range(15):   # up to 15 x 1s = 15s
+        ib.sleep(1.0)
+        status = trade.orderStatus.status
+        if status == "Submitted":
+            return trade, True
+        if status in ("Filled", "Cancelled", "ApiCancelled", "Inactive"):
+            return trade, False
+    status = trade.orderStatus.status
+    if status != "Submitted":
+        lbl = f" [{strategy}]" if strategy else ""
+        print(f"  WARNING{lbl}: stop for {sym} is '{status}' after 15s "
+              f"(id={trade.order.orderId}) -- DB updated; heal_stops will verify at next run")
+    return trade, status == "Submitted"
+
+
 def _email_ibkr_fill(side: str, ticker: str, qty, fill: float,
                      strategy: str, entry_px: float = 0.0, reason: str = "") -> None:
     """Fire-and-forget email after a confirmed IBKR fill. Never raises."""
@@ -456,8 +483,8 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
         _email_ibkr_fill("BUY", b["symbol"], b["qty"], fill, "blend")
 
         actual_stop = round(fill * (1 - stop_pct), 2)
-        stop_trade  = ic.place_stop_order(ib, account_id, b["symbol"], b["qty"], actual_stop)
-        ib.sleep(1.0)
+        stop_trade, _ = _place_stop_submitted(ib, account_id, b["symbol"], b["qty"],
+                                              actual_stop, strategy="blend")
         st.update_stop(b["symbol"], actual_stop,
                        str(stop_trade.order.orderId), trailing_high=fill)
         print(f"  Stop placed @ ${actual_stop:.2f} (id={stop_trade.order.orderId})")
@@ -584,8 +611,8 @@ def run_rebalance_v2(ib, account_id: str, cfg: dict, dry_run: bool = True,
         st.mark_filled(str(trade.order.orderId), fill, side="BUY")
         _email_ibkr_fill("BUY", b["symbol"], b["qty"], fill, "blend_v2")
         actual_stop = round(fill * (1 - stop_pct), 2)
-        stop_trade  = ic.place_stop_order(ib, account_id, b["symbol"], b["qty"], actual_stop)
-        ib.sleep(1.0)
+        stop_trade, _ = _place_stop_submitted(ib, account_id, b["symbol"], b["qty"],
+                                              actual_stop, strategy="blend_v2")
         st.update_stop(b["symbol"], actual_stop,
                        str(stop_trade.order.orderId), trailing_high=fill,
                        strategy="blend_v2")
@@ -996,8 +1023,8 @@ def run_reversion_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
         print(f"  Filled @ ${fill:.4f}")
         st.mark_filled(str(fill_trade.order.orderId), fill, side="BUY")
         actual_stop = round(fill * (1 - stop_pct), 2)
-        stop_trade  = ic.place_stop_order(ib, account_id, c["ticker"], qty, actual_stop)
-        ib.sleep(1.0)
+        stop_trade, _ = _place_stop_submitted(ib, account_id, c["ticker"], qty,
+                                              actual_stop, strategy=label)
         _email_ibkr_fill("BUY", c["ticker"], qty, fill, label)
         st.update_stop(c["ticker"], actual_stop, str(stop_trade.order.orderId), fill)
         print(f"  Stop placed @ ${actual_stop:.2f} (id={stop_trade.order.orderId})")
@@ -1208,8 +1235,8 @@ def run_penny_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
         print(f"  Filled @ ${fill:.4f}")
         st.mark_filled(str(trade.order.orderId), fill, side="BUY")
         actual_stop = round(fill * (1 - stop_pct), 2)
-        stop_trade  = ic.place_stop_order(ib, account_id, c["ticker"], qty, actual_stop)
-        ib.sleep(1.0)
+        stop_trade, _ = _place_stop_submitted(ib, account_id, c["ticker"], qty,
+                                              actual_stop, strategy="penny")
         _email_ibkr_fill("BUY", c["ticker"], qty, fill, "penny")
         st.update_stop(c["ticker"], actual_stop, str(stop_trade.order.orderId), fill)
         print(f"  Stop placed @ ${actual_stop:.2f} (id={stop_trade.order.orderId})")
