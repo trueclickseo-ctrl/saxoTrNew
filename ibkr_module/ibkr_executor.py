@@ -310,8 +310,11 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
     # same symbol causes IBKR to reject the new sell order with "Cancelled" status.
     if sells:
         held_by_sym = {p["symbol"]: p for p in held}
-        ib.reqOpenOrders()
-        ib.sleep(0.5)
+        # reqAllOpenOrders fetches GTC stops placed in prior sessions (all clientIds).
+        # reqOpenOrders only returns current-session orders and misses old GTC stops,
+        # causing error 201 (sell + existing stop = position overshoot = short position).
+        ib.reqAllOpenOrders()
+        ib.sleep(1.0)
         live_order_ids = {
             t.order.orderId for t in ib.openTrades() if t.order.account == account_id
         }
@@ -320,10 +323,12 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
             stop_id = p.get("stop_order_id")
             if stop_id and str(stop_id) not in ("", "None", "0"):
                 try:
-                    if int(stop_id) in live_order_ids:
-                        ic.cancel_order_by_id(ib, int(stop_id))
-                        print(f"  [pre-sell] Cancelled GTC stop {stop_id} for {s['symbol']}")
-                        ib.sleep(0.5)
+                    stop_int = int(stop_id)
+                    # Cancel even if not in live_order_ids -- GTC stops from other
+                    # sessions won't always show in openTrades() right after reqAllOpenOrders.
+                    ic.cancel_order_by_id(ib, stop_int)
+                    print(f"  [pre-sell] Cancelled GTC stop {stop_id} for {s['symbol']}")
+                    ib.sleep(1.0)
                 except Exception:
                     pass
 
