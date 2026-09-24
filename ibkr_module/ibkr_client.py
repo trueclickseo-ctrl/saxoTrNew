@@ -172,16 +172,22 @@ def get_positions(ib: IB, account_id: str) -> list[dict]:
 
 # ── Prices ────────────────────────────────────────────────────────────────────
 
-# Tickers that are ambiguous under SMART routing — specify exchange explicitly.
-_EXCHANGE_OVERRIDE: dict[str, str] = {
-    "U": "NYSE",   # Unity Software — single-char ticker fails SMART qualification
+# Primary exchange hints for SMART routing (single-char or ambiguous tickers).
+# DO NOT put these in _EXCHANGE_OVERRIDE — direct NYSE/ARCA routing triggers
+# IBKR error 10311 (Precautionary Settings: "confirm direct routing") and the
+# order is immediately cancelled. Use SMART + primaryExch hint instead.
+_PRIMARY_EXCHANGE: dict[str, str] = {
+    "U": "NYSE",   # Unity Software — single-char ticker; SMART needs the hint
 }
 
 
 def _make_contract(symbol: str) -> Stock:
-    """Return a Stock contract, using an explicit exchange for ambiguous tickers."""
-    exchange = _EXCHANGE_OVERRIDE.get(symbol, "SMART")
-    return Stock(symbol, exchange, "USD")
+    """Return a Stock contract using SMART routing, with primaryExch hint where needed."""
+    contract = Stock(symbol, "SMART", "USD")
+    primary = _PRIMARY_EXCHANGE.get(symbol)
+    if primary:
+        contract.primaryExch = primary
+    return contract
 
 
 def get_price(ib: IB, symbol: str, timeout_s: float = 5.0) -> float:
@@ -418,38 +424,46 @@ def get_open_orders(ib: IB) -> list[dict]:
 
 def confirm_fill(ib: IB, trade: Any, timeout_s: int = 180,
                  poll_s: float = 2.0) -> float | None:
-    """
-    Poll until trade is filled or timeout. Returns fill price or None (timed out).
-    Cancels the order on timeout.
+    """Poll until filled or timeout. Returns fill price or None.
+    Logs IBKR error codes automatically so every rejection is self-documented.
     """
     sym = getattr(trade.contract, "symbol", "?")
-    deadline = time.monotonic() + timeout_s
-    last_status = None
-    inactive_streak = 0
-    while time.monotonic() < deadline:
-        ib.sleep(poll_s)
-        ib.reqOpenOrders()
-        status = trade.orderStatus.status
-        if status != last_status:
-            print(f"    [fill] {sym} order status: {status}")
-            last_status = status
-        if status == "Filled":
-            price = float(trade.orderStatus.avgFillPrice or 0)
-            return price if price > 0 else None
-        if status in ("Cancelled", "ApiCancelled"):
-            return None
-        if status == "Inactive":
-            inactive_streak += 1
-            if inactive_streak >= 5:   # 10s of continuous Inactive -> dead
-                print(f"    [fill] {sym} stuck Inactive ({inactive_streak} polls) -- cancelling")
-                cancel_order(ib, trade)
-                ib.sleep(1.0)
-                return None
-        else:
-            inactive_streak = 0  # reset if status changes away from Inactive
+    order_id = trade.order.orderId
 
-    # Timeout: cancel
-    print(f"    [fill] {sym} fill timeout after {timeout_s}s -- cancelling order")
-    cancel_order(ib, trade)
-    ib.sleep(1.0)
-    return None
+    def _capture_error(reqId, errorCode, errorString, contract):
+        if reqId == order_id and errorCode not in (2104, 2106, 2107, 2158):
+            print(f"    [IBKR error {errorCode}] {sym}: {errorString}")
+
+    ib.errorEvent += _capture_error
+    try:
+        deadline = time.monotonic() + timeout_s
+        last_status = None
+        inactive_streak = 0
+        while time.monotonic() < deadline:
+            ib.sleep(poll_s)
+            ib.reqOpenOrders()
+            status = trade.orderStatus.status
+            if status != last_status:
+                print(f"    [fill] {sym} order status: {status}")
+                last_status = status
+            if status == "Filled":
+                price = float(trade.orderStatus.avgFillPrice or 0)
+                return price if price > 0 else None
+            if status in ("Cancelled", "ApiCancelled"):
+                return None
+            if status == "Inactive":
+                inactive_streak += 1
+                if inactive_streak >= 5:   # 10s continuous Inactive -> dead
+                    print(f"    [fill] {sym} stuck Inactive ({inactive_streak} polls) -- cancelling")
+                    cancel_order(ib, trade)
+                    ib.sleep(1.0)
+                    return None
+            else:
+                inactive_streak = 0
+        # Timeout
+        print(f"    [fill] {sym} fill timeout after {timeout_s}s -- cancelling order")
+        cancel_order(ib, trade)
+        ib.sleep(1.0)
+        return None
+    finally:
+        ib.errorEvent -= _capture_error
