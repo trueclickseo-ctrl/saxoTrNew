@@ -306,32 +306,50 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
         return
 
     # -- Execute SELLs ---------------------------------------------------------
-    # Cancel any active GTC stop order before selling -- having an open stop for the
-    # same symbol causes IBKR to reject the new sell order with "Cancelled" status.
+    # Cancel ALL open sell-side orders for each symbol before selling.
+    # trail_stops replaces the GTC stop each night with a new order ID; the DB
+    # still holds the old ID.  Cancelling only the DB ID leaves the new stop alive
+    # → IBKR error 201 (new sell + active stop > owned qty = implied short).
     if sells:
         held_by_sym = {p["symbol"]: p for p in held}
-        # reqAllOpenOrders fetches GTC stops placed in prior sessions (all clientIds).
-        # reqOpenOrders only returns current-session orders and misses old GTC stops,
-        # causing error 201 (sell + existing stop = position overshoot = short position).
         ib.reqAllOpenOrders()
-        ib.sleep(1.0)
-        live_order_ids = {
-            t.order.orderId for t in ib.openTrades() if t.order.account == account_id
-        }
+        ib.sleep(2.0)  # Allow response to populate openTrades()
+
+        open_sell_by_sym: dict[str, list] = {}
+        for t in ib.openTrades():
+            if t.order.account == account_id and t.order.action == "SELL":
+                sym = getattr(t.contract, "symbol", "")
+                open_sell_by_sym.setdefault(sym, []).append(t)
+
         for s in sells:
-            p = held_by_sym.get(s["symbol"], {})
+            sym = s["symbol"]
+            cancelled_ids: set[int] = set()
+            # Cancel every live SELL order for this symbol (stop, limit, market)
+            for t in open_sell_by_sym.get(sym, []):
+                try:
+                    ic.cancel_order(ib, t)
+                    cancelled_ids.add(t.order.orderId)
+                    print(f"  [pre-sell] Cancelled order {t.order.orderId} "
+                          f"({t.order.orderType}) for {sym}")
+                    ib.sleep(0.5)
+                except Exception:
+                    pass
+            # Belt-and-suspenders: also cancel the DB-tracked stop ID in case
+            # reqAllOpenOrders missed it (different session, not yet visible).
+            p = held_by_sym.get(sym, {})
             stop_id = p.get("stop_order_id")
             if stop_id and str(stop_id) not in ("", "None", "0"):
                 try:
                     stop_int = int(stop_id)
-                    # Cancel even if not in live_order_ids -- GTC stops from other
-                    # sessions won't always show in openTrades() right after reqAllOpenOrders.
-                    ic.cancel_order_by_id(ib, stop_int)
-                    print(f"  [pre-sell] Cancelled GTC stop {stop_id} for {s['symbol']}")
-                    ib.sleep(1.0)
+                    if stop_int not in cancelled_ids:
+                        ic.cancel_order_by_id(ib, stop_int)
+                        print(f"  [pre-sell] Cancelled DB-tracked stop {stop_id} for {sym}")
                 except Exception:
                     pass
 
+        ib.sleep(3.0)  # Let all cancellations propagate before placing sell orders
+
+    failed_sells: list[str] = []
     for s in sells:
         print(f"\n  SELL {s['qty']} {s['symbol']} @ ~${s['price']:.2f}  "
               f"(value ~${s['value']:,.0f})")
@@ -358,12 +376,18 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
                 break
 
         if fill is None:
+            failed_sells.append(s["symbol"])
             print(f"  WARNING: sell failed for {s['symbol']} after 2 attempts -- will retry next cycle.")
         else:
             print(f"  Filled @ ${fill:.4f}")
             st.mark_filled(str(fill_trade.order.orderId), fill, side="SELL")
             st.close_buy_position(s["symbol"], "blend")
             _email_ibkr_fill("SELL", s["symbol"], s["qty"], fill, "blend")
+
+    if failed_sells:
+        print(f"\n  Skipping buys -- sells failed: {', '.join(failed_sells)}. RETRY task will handle.")
+        print("\n  Rebalance complete.")
+        return
 
     for b in buys:
         stop_price = round(b["price"] * (1 - stop_pct), 2)
