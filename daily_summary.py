@@ -283,6 +283,165 @@ def _ai_health_section() -> str:
         return ""
 
 
+def _stocks_ai_sim_health_section() -> str:
+    """Stocks AI SIM health: observation card flow, gate progress, copilot status.
+
+    Tracks:
+      - shadow_copilot_reversion toggle (on/off)
+      - Closed observation cards vs 50-card gate
+      - Cards written today / last card date
+      - Per-strategy breakdown: us_blend, us_reversion
+      - Alert if no cards written in last 7 days (strategy silent)
+    """
+    try:
+        import json
+        import os
+        from datetime import datetime, timedelta, timezone
+
+        CARDS_FILE = os.path.join("data", "stock_observation_cards.jsonl")
+        GATE_NEEDED = 50
+        SILENT_DAYS = 7
+
+        # --- Load observation cards ---
+        cards: list[dict] = []
+        if os.path.exists(CARDS_FILE):
+            with open(CARDS_FILE, encoding="utf-8") as fh:
+                for line in fh:
+                    try:
+                        cards.append(json.loads(line.strip()))
+                    except Exception:
+                        pass
+
+        # Only Saxo SIM cards (not live_stocks / ibkr_paper)
+        sim_cards = [c for c in cards if c.get("account_env", "sim") == "sim"]
+        entry_cards = [c for c in sim_cards if c.get("event") == "entry"]
+        exit_cards  = [c for c in sim_cards if c.get("event") == "exit"]
+
+        # Closed = entry card that has a matching exit card
+        exit_ids = {c["card_id"] for c in exit_cards if c.get("card_id")}
+        closed_cards = [c for c in entry_cards if c.get("card_id") in exit_ids]
+        n_closed = len(closed_cards)
+        n_open   = len(entry_cards) - n_closed
+
+        # Last card timestamp across all sim events
+        ts_list = []
+        for c in sim_cards:
+            ts = c.get("timestamp", "")
+            if ts:
+                try:
+                    ts_list.append(datetime.fromisoformat(ts.replace("Z", "+00:00")))
+                except Exception:
+                    pass
+        last_card_dt = max(ts_list, default=None)
+        now_utc = datetime.now(timezone.utc)
+        if last_card_dt:
+            last_ago_days = (now_utc - last_card_dt).days
+            last_str = last_card_dt.strftime("%Y-%m-%d")
+        else:
+            last_ago_days = 9999
+            last_str = "never"
+
+        # Per-strategy breakdown
+        by_strat: dict[str, dict] = {}
+        for c in entry_cards:
+            s = c.get("strategy", "unknown")
+            if s not in by_strat:
+                by_strat[s] = {"open": 0, "closed": 0, "last": "—"}
+            cid = c.get("card_id", "")
+            if cid in exit_ids:
+                by_strat[s]["closed"] += 1
+            else:
+                by_strat[s]["open"] += 1
+            ts = (c.get("timestamp") or "")[:10]
+            if ts > by_strat[s]["last"]:
+                by_strat[s]["last"] = ts
+
+        # Today's cards
+        today_str = date.today().isoformat()
+        today_cards = [c for c in sim_cards if (c.get("timestamp") or "")[:10] == today_str]
+
+        # --- Shadow copilot status from config ---
+        copilot_on = False
+        copilot_label = "disabled"
+        try:
+            from ai.config import stocks_reversion_copilot_enabled
+            copilot_on = stocks_reversion_copilot_enabled()
+            copilot_label = "ENABLED (logging decisions)" if copilot_on else "disabled (shadow_copilot_reversion=false)"
+        except Exception:
+            copilot_label = "config unreadable"
+
+        # --- Gate progress bar ---
+        pct = min(100, int(n_closed / GATE_NEEDED * 100))
+        bar_filled = int(pct / 5)
+        bar = "&#x2588;" * bar_filled + "&#x2591;" * (20 - bar_filled)
+        gate_col = "pos" if n_closed >= GATE_NEEDED else "muted"
+        gate_label = "GATE CLEARED" if n_closed >= GATE_NEEDED else f"{GATE_NEEDED - n_closed} more needed"
+
+        # --- Silent alert ---
+        if last_ago_days >= SILENT_DAYS and len(entry_cards) > 0:
+            silent_html = (
+                f"<div style='background:#3a1212;border-left:4px solid #f85149;"
+                f"padding:8px 14px;border-radius:6px;margin:8px 0'>"
+                f"<b class='neg'>&#9679; SILENT — no observation cards in {last_ago_days} days "
+                f"(last: {last_str}). Check if atos_runner scheduled task is running.</b></div>"
+            )
+        elif len(entry_cards) == 0:
+            silent_html = (
+                "<div style='background:#3a1212;border-left:4px solid #f85149;"
+                "padding:8px 14px;border-radius:6px;margin:8px 0'>"
+                "<b class='neg'>&#9679; NO CARDS YET — stocks AI observation cards have never been written. "
+                "Check ai.json stocks.enabled and that atos_runner is wired.</b></div>"
+            )
+        else:
+            silent_html = (
+                "<div style='background:#12261a;border-left:4px solid #3fb950;"
+                "padding:8px 14px;border-radius:6px;margin:8px 0'>"
+                f"<b class='pos'>&#9679; ACTIVE — last card {last_str} ({last_ago_days}d ago)</b></div>"
+            )
+
+        # --- Per-strategy table ---
+        strat_rows = "".join(
+            f"<tr><td><code>{s}</code></td>"
+            f"<td style='text-align:center'>{d['closed']}</td>"
+            f"<td style='text-align:center'>{d['open']}</td>"
+            f"<td style='text-align:center'>{d['last']}</td></tr>"
+            for s, d in sorted(by_strat.items())
+        )
+        strat_table = f"""
+        <table style='width:100%;border-collapse:collapse;font-size:12px;margin-top:8px'>
+          <tr style='color:#8b949e'>
+            <th style='text-align:left'>Strategy</th>
+            <th>Closed cards</th><th>Open cards</th><th>Last entry</th>
+          </tr>
+          {strat_rows if strat_rows else "<tr><td colspan='4' class='muted'>—</td></tr>"}
+        </table>"""
+
+        return f"""
+        <h2>Stocks AI SIM Health</h2>
+        {silent_html}
+        <div class="metric-row">
+          <div class="metric"><div class="lbl">Closed cards</div>
+            <div class="val {gate_col}">{n_closed} / {GATE_NEEDED}</div></div>
+          <div class="metric"><div class="lbl">Open cards</div>
+            <div class="val">{n_open}</div></div>
+          <div class="metric"><div class="lbl">Cards today</div>
+            <div class="val">{len(today_cards)}</div></div>
+          <div class="metric"><div class="lbl">Reversion copilot</div>
+            <div class="val {'pos' if copilot_on else 'muted'}">{copilot_label}</div></div>
+        </div>
+        <p class="muted" style="margin:4px 0 6px">
+          Gate: {bar} {pct}% &mdash; <span class="{gate_col}">{gate_label}</span>
+          &nbsp;&middot;&nbsp; Flip <code>shadow_copilot_reversion=true</code> in config/ai.json once cleared.
+        </p>
+        {strat_table}
+        <p class='muted' style='font-size:11px;margin:4px 0 0'>
+          Closed = entry card with matching exit card (sim account_env only, excludes live_stocks/ibkr_paper).
+        </p>
+        """
+    except Exception:
+        return ""
+
+
 def _ai_sim_strategy_health_section() -> str:
     """Compare regular SIM vs AI SIM per-strategy trade counts.
 
@@ -728,6 +887,7 @@ def send_daily_summary(since: str | None = None) -> bool:
 
     body = (header + "".join(sections) + _account_equity_section()
             + _ibkr_positions_section() + _ai_copilot_stocks_section()
+            + _stocks_ai_sim_health_section()
             + _ai_sim_strategy_health_section()
             + _ai_health_section() + _ai_journal_section() + _profit_ladder_section())
     subject = f"Daily Summary — {total_trades} trades | {day_sign}${total_pnl:,.0f} | {since}"
