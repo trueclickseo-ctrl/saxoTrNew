@@ -873,6 +873,8 @@ PENNY_TICKERS: list = [
     "BNGO",   # Bionano Genomics      — optical genome mapping AI
     # Apps / software
     "LPSN",   # LivePerson            — conversational AI / messaging
+    # ── Quality-scan additions (2026-09-26, vol >= 300k/day, price <= $2.20) ────
+    "NCPL",   # Netcapital            — fintech crowdfunding; $1.36, 29.6M vol/day
 ]
 
 # ── US Bagger universe (2026-09-20) ──────────────────────────────────────────
@@ -956,6 +958,30 @@ BAGGER_TICKERS: list = [
     "VRT",   # Vertiv Holdings — data-center cooling/power
     # ── Power / AI-datacenter demand theme ───────────────────────────────────
     "CEG",   # Constellation Energy — largest US nuclear
+    # ── Quality-scan additions (2026-09-26) — 6m ROC >= 60%, 3m positive ─────
+    # Large/mid-cap momentum names not previously in the bagger universe.
+    # All pass: vol >= 100k/day, 3m ROC > 0 (momentum still running, not peaked).
+    "IOVA",  # Iovance Biotherapeutics — cell therapy oncology; +213% 6m, +161% 3m
+    "AMD",   # Advanced Micro Devices  — CPU/GPU compute;       +212% 6m,  +17% 3m
+    "TEAM",  # Atlassian               — DevOps SaaS;           +188% 6m, +137% 3m
+    "CRWD",  # CrowdStrike             — cybersecurity;         +173% 6m,  +36% 3m
+    "OKTA",  # Okta                    — identity security;     +167% 6m,  +49% 3m
+    "HPE",   # Hewlett Packard Ent.    — AI-server infra;       +164% 6m,  +42% 3m
+    "PANW",  # Palo Alto Networks      — cybersecurity;         +155% 6m,  +13% 3m
+    "FIVN",  # Five9                   — contact-center AI;     +148% 6m,  +68% 3m
+    "DDOG",  # Datadog                 — observability SaaS;    +134% 6m,   +8% 3m
+    "TWLO",  # Twilio                  — comms API;             +130% 6m,  +39% 3m
+    "ILMN",  # Illumina                — genomic sequencing;    +130% 6m,  +49% 3m
+    "SNOW",  # Snowflake               — cloud data warehouse;  +120% 6m,  +34% 3m
+    "U",     # Unity Technologies      — gaming/spatial engine; +114% 6m,  +47% 3m
+    "NTAP",  # NetApp                  — data infrastructure;    +98% 6m,  +30% 3m
+    "PAYC",  # Paycom Software         — HR/payroll SaaS;        +89% 6m,  +74% 3m
+    "ROKU",  # Roku                    — streaming platform;     +75% 6m,  +12% 3m
+    "MDB",   # MongoDB                 — document database;      +74% 6m,  +21% 3m
+    "NET",   # Cloudflare              — network-security cloud; +72% 6m,  +43% 3m
+    "ANET",  # Arista Networks         — AI-datacenter switches; +71% 6m,  +26% 3m
+    "VEEV",  # Veeva Systems           — life-sciences cloud;    +63% 6m,  +59% 3m
+    "QCOM",  # Qualcomm                — mobile/edge chips;      +60% 6m,   +8% 3m
 ]
 
 # ── LIVE vs SIM split (2026-09-04) ───────────────────────────────────────────
