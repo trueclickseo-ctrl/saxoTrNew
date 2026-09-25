@@ -35,20 +35,21 @@ def _load_cfg() -> dict | None:
         return None
 
 
-def _send(subject: str, html: str) -> bool:
+def _send(subject: str, html: str, live: bool = False) -> bool:
     cfg = _load_cfg()
     if not cfg:
         return False
+    recipient = cfg.get("recipient_email_live", cfg["recipient_email"]) if live else cfg["recipient_email"]
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
         msg["From"]    = f"FX Autopilot <{cfg['sender_email']}>"
-        msg["To"]      = cfg["recipient_email"]
+        msg["To"]      = recipient
         msg.attach(MIMEText(html, "html"))
         with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as s:
             s.starttls()
             s.login(cfg["sender_email"], cfg["sender_password"])
-            s.sendmail(cfg["sender_email"], cfg["recipient_email"], msg.as_string())
+            s.sendmail(cfg["sender_email"], recipient, msg.as_string())
         print(f"  [fx_notifier] email sent: {subject}", file=sys.stderr)
         return True
     except Exception as exc:
@@ -159,7 +160,7 @@ def send_token_expired(scheduled_time: str = "", live: bool = False) -> None:
 
     tag = "[LIVE] " if live else ""
     subject = f"{tag}FX Autopilot ⚠ TOKEN EXPIRED — run {run_time} SKIPPED [{today}]"
-    _send(subject, _wrap(f"{'LIVE — ' if live else ''}Saxo Token Expired — Refresh Required", body))
+    _send(subject, _wrap(f"{'LIVE — ' if live else ''}Saxo Token Expired — Refresh Required", body), live=live)
 
 
 def send_order_venue_down(account_env: str = "sim", consecutive: int = 0,
@@ -227,7 +228,8 @@ def send_order_venue_down(account_env: str = "sim", consecutive: int = 0,
         subject = (f"{tag}FX Autopilot ⚠ ORDER VENUE DOWN — "
                    f"{n_paper} paper-filled [{today} {run_time}]" if paper_fill
                    else f"{tag}FX Autopilot ⚠ ORDER VENUE DOWN — entries paused [{today} {run_time}]")
-        _send(subject, _wrap(f"{env_name} — Saxo Order Venue Down", body))
+        _send(subject, _wrap(f"{env_name} — Saxo Order Venue Down", body),
+              live=(account_env in ("live", "live_eur")))
     except Exception as exc:  # notifier must never crash the runner
         print(f"  [fx_notifier] send_order_venue_down FAILED: {exc}", file=sys.stderr)
 
@@ -395,7 +397,7 @@ def send_run_summary(
         venue or ("Saxo LIVE" if live else "Saxo SIM"),
     ] if x)
     _send(subject, _wrap(f"{'LIVE — ' if live else ''}Run Complete — {session.upper()} Session",
-                         body, subtitle=_sub))
+                         body, subtitle=_sub), live=live)
 
 
 def send_signals_detected(
@@ -476,7 +478,7 @@ def send_signals_detected(
         subj = (f"[LIVE] {strategy.upper()} — {len(signals)} signal(s), "
                 f"{n_entered} entered [{today}]")
     _send(subj, _wrap(f"LIVE — {strategy.upper()} Signals Detected", body,
-                      subtitle=f"{venue} · {time_} PKT"))
+                      subtitle=f"{venue} · {time_} PKT"), live=True)
 
 
 def send_weekly_report(
@@ -755,7 +757,7 @@ def send_trade_closed(
     tag = "[LIVE] " if live else ""
     subject = (f"{tag}{label} {'✅' if won else '❌'} {symbol} {result} {sign}{pnl_pct:.2f}% "
                f"({pnl_sgn}{pnl_native:,.0f} {quote_ccy}) [{time_} PKT]")
-    _send(subject, _wrap(f"{'LIVE — ' if live else ''}{label} Closed — {symbol} {result}", body))
+    _send(subject, _wrap(f"{'LIVE — ' if live else ''}{label} Closed — {symbol} {result}", body), live=live)
 
 
 def send_lbo_trade_closed(**kwargs) -> None:

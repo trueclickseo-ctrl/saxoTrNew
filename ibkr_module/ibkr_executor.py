@@ -142,22 +142,24 @@ def _place_stop_submitted(ib, account_id: str, sym: str, qty, stop_price: float,
 
 
 def _email_ibkr_fill(side: str, ticker: str, qty, fill: float,
-                     strategy: str, entry_px: float = 0.0, reason: str = "") -> None:
+                     strategy: str, entry_px: float = 0.0, reason: str = "",
+                     live: bool = False) -> None:
     """Fire-and-forget email after a confirmed IBKR fill. Never raises."""
     try:
         from atos import notifier as _ntf
         pnl = (fill - entry_px) * qty if (side.upper() == "SELL" and entry_px > 0) else None
         _ntf.notify_ibkr_trade(side, ticker, qty, fill, strategy,
-                               pnl_usd=pnl, reason=reason)
+                               pnl_usd=pnl, reason=reason, live=live)
     except Exception:
         pass
 
 
-def _email_ibkr_alert(title: str, message: str, strategy: str = "IBKR Live") -> None:
+def _email_ibkr_alert(title: str, message: str, strategy: str = "IBKR Live",
+                      live: bool = False) -> None:
     """Fire-and-forget alert email when a live order fails. Never raises."""
     try:
         from atos import notifier as _ntf
-        _ntf.notify_ibkr_alert(title, message, strategy)
+        _ntf.notify_ibkr_alert(title, message, strategy, live=live)
     except Exception:
         pass
 
@@ -440,7 +442,8 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
             print(f"  Filled @ ${fill:.4f}")
             st.mark_filled(str(fill_trade.order.orderId), fill, side="SELL")
             st.close_buy_position(s["symbol"], "blend")
-            _email_ibkr_fill("SELL", s["symbol"], s["qty"], fill, "blend")
+            _email_ibkr_fill("SELL", s["symbol"], s["qty"], fill, "blend",
+                             live=(_ibkr_account_env(account_id) == "ibkr_live"))
 
             if _sc and _ai_cfg and _ai_cfg.stocks_enabled(_ibkr_account_env(account_id)):
                 _acenv  = _ibkr_account_env(account_id)
@@ -509,7 +512,8 @@ def run_rebalance(ib, account_id: str, cfg: dict, dry_run: bool = True,
 
         print(f"  Filled @ ${fill:.4f}")
         st.mark_filled(str(trade.order.orderId), fill, side="BUY")
-        _email_ibkr_fill("BUY", b["symbol"], b["qty"], fill, "blend")
+        _email_ibkr_fill("BUY", b["symbol"], b["qty"], fill, "blend",
+                         live=(_ibkr_account_env(account_id) == "ibkr_live"))
 
         actual_stop = round(fill * (1 - stop_pct), 2)
         stop_trade, _ = _place_stop_submitted(ib, account_id, b["symbol"], b["qty"],
@@ -628,7 +632,8 @@ def run_rebalance_v2(ib, account_id: str, cfg: dict, dry_run: bool = True,
             print(f"  Filled @ ${fill:.4f}")
             st.mark_filled(str(trade.order.orderId), fill, side="SELL")
             st.close_buy_position(s["symbol"], "blend_v2")
-            _email_ibkr_fill("SELL", s["symbol"], s["qty"], fill, "blend_v2")
+            _email_ibkr_fill("SELL", s["symbol"], s["qty"], fill, "blend_v2",
+                             live=(_ibkr_account_env(account_id) == "ibkr_live"))
 
     for b in buys:
         actual_stop_est = round(b["price"] * (1 - stop_pct), 2)
@@ -648,7 +653,8 @@ def run_rebalance_v2(ib, account_id: str, cfg: dict, dry_run: bool = True,
             continue
         print(f"  Filled @ ${fill:.4f}")
         st.mark_filled(str(trade.order.orderId), fill, side="BUY")
-        _email_ibkr_fill("BUY", b["symbol"], b["qty"], fill, "blend_v2")
+        _email_ibkr_fill("BUY", b["symbol"], b["qty"], fill, "blend_v2",
+                         live=(_ibkr_account_env(account_id) == "ibkr_live"))
         actual_stop = round(fill * (1 - stop_pct), 2)
         stop_trade, _ = _place_stop_submitted(ib, account_id, b["symbol"], b["qty"],
                                               actual_stop, strategy="blend_v2")
@@ -784,7 +790,8 @@ def heal_missing_stops(ib, account_id: str, cfg: dict,
                         st.close_buy_position(sym, strategy)
                         _email_ibkr_fill("SELL", sym, qty, exit_price, strategy,
                                          float(pos.get("fill_price") or 0),
-                                         "GTC stop triggered")
+                                         "GTC stop triggered",
+                                         live=(_ibkr_account_env(account_id) == "ibkr_live"))
                     print(f"  [heal-stop] {sym}: GTC stop triggered @ "
                           f"${exit_price:.2f} -- exit recorded in DB"
                           + (" [DRY RUN]" if dry_run else ""))
@@ -1064,7 +1071,8 @@ def run_reversion_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
         actual_stop = round(fill * (1 - stop_pct), 2)
         stop_trade, _ = _place_stop_submitted(ib, account_id, c["ticker"], qty,
                                               actual_stop, strategy=label)
-        _email_ibkr_fill("BUY", c["ticker"], qty, fill, label)
+        _email_ibkr_fill("BUY", c["ticker"], qty, fill, label,
+                         live=(_ibkr_account_env(account_id) == "ibkr_live"))
         st.update_stop(c["ticker"], actual_stop, str(stop_trade.order.orderId), fill)
         print(f"  Stop placed @ ${actual_stop:.2f} (id={stop_trade.order.orderId})")
 
@@ -1172,7 +1180,8 @@ def run_reversion_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
             print(f"  Sold {qty} {sym} @ ${fill:.4f}  P&L: ${pnl:+,.2f}")
             st.mark_filled(str(sell_trade.order.orderId), fill, side="SELL")
             st.close_buy_position(sym, "reversion")
-            _email_ibkr_fill("SELL", sym, qty, fill, "reversion", entry_px)
+            _email_ibkr_fill("SELL", sym, qty, fill, "reversion", entry_px,
+                             live=(_ibkr_account_env(account_id) == "ibkr_live"))
 
             if _sc and _ai_cfg and _ai_cfg.stocks_enabled(_ibkr_account_env(account_id)):
                 _acenv  = _ibkr_account_env(account_id)
@@ -1306,7 +1315,8 @@ def run_penny_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
         actual_stop = round(fill * (1 - stop_pct), 2)
         stop_trade, _ = _place_stop_submitted(ib, account_id, c["ticker"], qty,
                                               actual_stop, strategy="penny")
-        _email_ibkr_fill("BUY", c["ticker"], qty, fill, "penny")
+        _email_ibkr_fill("BUY", c["ticker"], qty, fill, "penny",
+                         live=(_ibkr_account_env(account_id) == "ibkr_live"))
         st.update_stop(c["ticker"], actual_stop, str(stop_trade.order.orderId), fill)
         print(f"  Stop placed @ ${actual_stop:.2f} (id={stop_trade.order.orderId})")
 
@@ -1387,7 +1397,8 @@ def run_penny_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
             print(f"  Sold {qty} {sym} @ ${fill:.4f}  P&L: ${pnl:+,.2f}")
             st.mark_filled(str(sell_trade.order.orderId), fill, side="SELL")
             st.close_buy_position(sym, "penny")
-            _email_ibkr_fill("SELL", sym, qty, fill, "penny", entry_px)
+            _email_ibkr_fill("SELL", sym, qty, fill, "penny", entry_px,
+                             live=(_ibkr_account_env(account_id) == "ibkr_live"))
 
     print("\n  Penny exit check complete.")
 
@@ -1491,7 +1502,8 @@ def run_bagger_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
 
         print(f"  Filled @ ${fill:.4f}  trailing_high = ${fill:.4f}")
         st.mark_filled(str(trade.order.orderId), fill, side="BUY")
-        _email_ibkr_fill("BUY", c["ticker"], qty, fill, "bagger")
+        _email_ibkr_fill("BUY", c["ticker"], qty, fill, "bagger",
+                         live=(_ibkr_account_env(account_id) == "ibkr_live"))
         # mark_filled sets trailing_high = fill_price; no broker stop order.
 
     print(f"\n  [bagger] entry scan complete.")
@@ -1569,7 +1581,8 @@ def run_bagger_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
             print(f"  Sold {qty} {sym} @ ${fill:.4f}  P&L: ${pnl:+,.2f}")
             st.mark_filled(str(sell_trade.order.orderId), fill, side="SELL")
             st.close_buy_position(sym, "bagger")
-            _email_ibkr_fill("SELL", sym, qty, fill, "bagger", entry_px)
+            _email_ibkr_fill("SELL", sym, qty, fill, "bagger", entry_px,
+                             live=(_ibkr_account_env(account_id) == "ibkr_live"))
 
     print("\n  Bagger exit check complete.")
 
@@ -1676,7 +1689,8 @@ def run_reversion_v2_entries(ib, account_id: str, cfg: dict, dry_run: bool = Tru
         actual_stop = round(fill * (1 - stop_pct), 2)
         stop_trade  = ic.place_stop_order(ib, account_id, c["ticker"], qty, actual_stop)
         ib.sleep(1.0)
-        _email_ibkr_fill("BUY", c["ticker"], qty, fill, "reversion_v2")
+        _email_ibkr_fill("BUY", c["ticker"], qty, fill, "reversion_v2",
+                         live=(_ibkr_account_env(account_id) == "ibkr_live"))
         st.update_stop(c["ticker"], actual_stop, str(stop_trade.order.orderId), fill)
         print(f"  Stop placed @ ${actual_stop:.2f} (id={stop_trade.order.orderId})")
 
@@ -1760,7 +1774,8 @@ def run_reversion_v2_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
             print(f"  Sold {qty} {sym} @ ${fill:.4f}  P&L: ${pnl:+,.2f}")
             st.mark_filled(str(sell_trade.order.orderId), fill, side="SELL")
             st.close_buy_position(sym, "reversion_v2")
-            _email_ibkr_fill("SELL", sym, qty, fill, "reversion_v2", entry_px)
+            _email_ibkr_fill("SELL", sym, qty, fill, "reversion_v2", entry_px,
+                             live=(_ibkr_account_env(account_id) == "ibkr_live"))
 
     print("\n  Reversion v2 exit check complete.")
 
@@ -1910,7 +1925,8 @@ def run_us_signals_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
 
         print(f"  Filled @ ${fill:.4f}")
         st.mark_filled(str(trade.order.orderId), fill, side="BUY")
-        _email_ibkr_fill("BUY", ticker, qty, fill, strat)
+        _email_ibkr_fill("BUY", ticker, qty, fill, strat,
+                         live=(_ibkr_account_env(account_id) == "ibkr_live"))
         actual_stop = compute_stop(df, fill)
         stop_trade  = ic.place_stop_order(ib, account_id, ticker, qty, actual_stop)
         ib.sleep(1.0)
@@ -2012,7 +2028,8 @@ def run_us_signals_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
             print(f"  Sold {qty} {sym} @ ${fill:.4f}  P&L: ${pnl:+,.2f}")
             st.mark_filled(str(sell_trade.order.orderId), fill, side="SELL")
             st.close_buy_position(sym, strat)
-            _email_ibkr_fill("SELL", sym, qty, fill, strat, entry_px)
+            _email_ibkr_fill("SELL", sym, qty, fill, strat, entry_px,
+                             live=(_ibkr_account_env(account_id) == "ibkr_live"))
 
     print("\n  [us signals] exit check complete.")
 
@@ -2193,7 +2210,8 @@ def run_scorer_entries(
 
             print(f"  Filled @ ${fill:.4f}")
             st.mark_filled(str(trade.order.orderId), fill, side="BUY")
-            _email_ibkr_fill("BUY", ticker, qty, fill, strategy)
+            _email_ibkr_fill("BUY", ticker, qty, fill, strategy,
+                             live=(_ibkr_account_env(account_id) == "ibkr_live"))
             actual_stop = round(fill * (1 - stop_pct), 2)
             stop_trade  = ic.place_stop_order(ib, account_id, ticker, qty, actual_stop)
             ib.sleep(1.0)
@@ -2334,7 +2352,8 @@ def run_scorer_exits(
                 print(f"  Sold {qty} {sym} @ ${fill:.4f}  P&L: ${pnl:+,.2f}")
                 st.mark_filled(str(sell_trade.order.orderId), fill, side="SELL")
                 st.close_buy_position(sym, strategy)
-                _email_ibkr_fill("SELL", sym, qty, fill, strategy, entry_px)
+                _email_ibkr_fill("SELL", sym, qty, fill, strategy, entry_px,
+                                 live=(_ibkr_account_env(account_id) == "ibkr_live"))
 
         print(f"  [scorer/{label}] exit check complete.")
 

@@ -397,16 +397,17 @@ def _send_email_live(subject: str, html: str) -> bool:
     if not cfg:
         logger.info(f"[housekeeping_live] no config/email.json -- would have sent: {subject}")
         return False
+    recipient = cfg.get("recipient_email_live", cfg["recipient_email"])
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = f"[LIVE] {subject}"
         msg["From"]    = f"Housekeeping LIVE Agent <{cfg['sender_email']}>"
-        msg["To"]      = cfg["recipient_email"]
+        msg["To"]      = recipient
         msg.attach(MIMEText(html, "html"))
         with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as s:
             s.starttls()
             s.login(cfg["sender_email"], cfg["sender_password"])
-            s.sendmail(cfg["sender_email"], cfg["recipient_email"], msg.as_string())
+            s.sendmail(cfg["sender_email"], recipient, msg.as_string())
         return True
     except Exception as exc:
         logger.warning(f"[housekeeping_live] email FAILED: {exc}")

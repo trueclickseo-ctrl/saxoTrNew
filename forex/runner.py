@@ -5491,7 +5491,7 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
                 strategy_stats = strategy_stats,
                 healed_stops   = healed_stops,
                 healed_tp      = healed_tp,
-                live           = (ACCOUNT_ENV == "live"),
+                live           = (ACCOUNT_ENV in ("live", "live_eur")),
                 # holdings counts strategy:symbol keys; pairs_trading is the
                 # distinct-symbol count -- both shown so the email and the
                 # dashboard header reconcile (see forex_dashboard.py note).

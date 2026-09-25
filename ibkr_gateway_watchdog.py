@@ -142,10 +142,10 @@ def _save_state(state: dict) -> None:
 
 
 # ── Email ─────────────────────────────────────────────────────────────────────
-def _send_alert(subject: str, body: str) -> None:
+def _send_alert(subject: str, body: str, live: bool = False) -> None:
     try:
         from atos.notifier import _send
-        _send(subject, f"<pre style='font-family:monospace'>{body}</pre>")
+        _send(subject, f"<pre style='font-family:monospace'>{body}</pre>", live=live)
         _log(f"  [email] sent: {subject}")
     except Exception as e:
         _log(f"  [email] failed: {e}")
@@ -283,6 +283,7 @@ def _wait_for_gateway(gw: _GW) -> bool:
 def _check_gateway(gw: _GW, state: dict, simulate_crash: bool = False) -> None:
     now_ts  = time.time()
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    is_live_gw = (gw.name == "Live")
 
     restarts_key = f"{gw.state_key}_restarts"
     alert_key    = f"{gw.state_key}_last_alert"
@@ -302,6 +303,7 @@ def _check_gateway(gw: _GW, state: dict, simulate_crash: bool = False) -> None:
                     f"IB {gw.name} Gateway is healthy again at {now_str}.\n"
                     f"It was down for approximately {down_ago // 60} min {down_ago % 60} s.\n\n"
                     f"No manual action required -- strategies will reconnect on next run.",
+                    live=is_live_gw,
                 )
                 state[down_key] = 0
                 _save_state(state)
@@ -321,6 +323,7 @@ def _check_gateway(gw: _GW, state: dict, simulate_crash: bool = False) -> None:
                 f"IB {gw.name} Gateway (port {gw.port}) is not responding at {now_str}.\n\n"
                 f"Watchdog will attempt an automatic restart now.\n"
                 f"You will receive a follow-up email once it is back up or if manual action is needed.",
+                live=is_live_gw,
             )
             state[down_key] = now_ts
             _save_state(state)
@@ -348,6 +351,7 @@ def _check_gateway(gw: _GW, state: dict, simulate_crash: bool = False) -> None:
                 f"and is STILL down at {now_str}.\n\n"
                 f"Action: check the Gateway window -- it may need credentials entered manually.\n"
                 f"If no window is visible, run {gw.bat} manually.\n",
+                live=is_live_gw,
             )
             state[alert_key] = now_ts
             _save_state(state)
@@ -378,6 +382,7 @@ def _check_gateway(gw: _GW, state: dict, simulate_crash: bool = False) -> None:
             f"Restart #{len(recent)+1} in the past hour.\n\n"
             f"All IBKR strategies will reconnect on their next scheduled run.\n"
             f"No manual action required.",
+            live=is_live_gw,
         )
     else:
         _log(f"  [{gw.name}] Gateway did NOT respond within {STARTUP_TIMEOUT_S}s")
@@ -389,6 +394,7 @@ def _check_gateway(gw: _GW, state: dict, simulate_crash: bool = False) -> None:
             f"responsive within {STARTUP_TIMEOUT_S}s.\n\n"
             f"Action: open the Gateway window -- it may be waiting for credentials.\n"
             f"If no window is visible, run {gw.bat} manually.\n",
+            live=is_live_gw,
         )
 
 
@@ -430,6 +436,7 @@ def _check_saxo(env: str, label: str, state: dict) -> None:
                 f"Was down for approximately {down_ago // 60} min {down_ago % 60} s.\n\n"
                 f"All Saxo {label} strategies will work normally on next run.\n"
                 f"No manual action required.",
+                live=(env == "live"),
             )
             state[down_key] = 0
             _save_state(state)
@@ -447,6 +454,7 @@ def _check_saxo(env: str, label: str, state: dict) -> None:
                 f"  {login_cmd}\n\n"
                 f"The watchdog will automatically send a recovery email once the\n"
                 f"token is healthy again.",
+                live=(env == "live"),
             )
             state[down_key] = now_ts
             _save_state(state)

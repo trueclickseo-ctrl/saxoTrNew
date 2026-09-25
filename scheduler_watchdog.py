@@ -958,7 +958,8 @@ def _check_claude_task(name: str, log_file: str, schedule: list, grace_min: int)
     return None
 
 
-def _send_alert(failures: list[str], label: str = "Scheduler Watchdog") -> None:
+def _send_alert(failures: list[str], label: str = "Scheduler Watchdog",
+                live: bool = False) -> None:
     if not os.path.exists(EMAIL_CFG):
         print(f"[{label}] no config/email.json — cannot send alert, printing instead:", file=sys.stderr)
         for f in failures:
@@ -966,6 +967,7 @@ def _send_alert(failures: list[str], label: str = "Scheduler Watchdog") -> None:
         return
     with open(EMAIL_CFG) as f:
         cfg = json.load(f)
+    recipient = cfg.get("recipient_email_live", cfg["recipient_email"]) if live else cfg["recipient_email"]
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M PKT")
     rows = "".join(f"<li style='margin:6px 0'>{f}</li>" for f in failures)
@@ -985,12 +987,12 @@ check data/*.log and Task Scheduler directly for detail</div>
         msg = MIMEMultipart("alternative")
         msg["Subject"] = f"[ATOS] {label} — {len(failures)} task(s) failed"
         msg["From"]    = f"ATOS {label} <{cfg['sender_email']}>"
-        msg["To"]      = cfg["recipient_email"]
+        msg["To"]      = recipient
         msg.attach(MIMEText(html, "html"))
         with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as s:
             s.starttls()
             s.login(cfg["sender_email"], cfg["sender_password"])
-            s.sendmail(cfg["sender_email"], cfg["recipient_email"], msg.as_string())
+            s.sendmail(cfg["sender_email"], recipient, msg.as_string())
         print(f"[{label}] alert email sent for {len(failures)} failure(s)")
     except Exception as exc:
         print(f"[{label}] ALERT EMAIL FAILED to send: {exc}", file=sys.stderr)
@@ -1159,10 +1161,11 @@ def main() -> None:
 
     state          = _load_state(state_file)
     alerted_at     = state.get("alerted_at", {})
-    failures       = []   # new alerts to actually send this run
-    unhealthy      = []   # every currently-failing task, regardless of dedup
-    task_info      = {}   # name -> raw _query_task_info() result, for the heartbeat email
-    auto_fixed     = []   # tasks this run auto-restarted and confirmed running again
+    failures       = []       # non-LIVE failures → regular email
+    live_failures  = []       # LIVE task failures → live email
+    unhealthy      = []       # every currently-failing task, regardless of dedup
+    task_info      = {}       # name -> raw _query_task_info() result, for the heartbeat email
+    auto_fixed     = []       # tasks this run auto-restarted and confirmed running again
     now_iso        = datetime.now().isoformat()
 
     for name, (task_name, log_file, grace, max_wait) in tasks.items():
@@ -1175,7 +1178,11 @@ def main() -> None:
             last_alert = alerted_at.get(name)
             if last_alert and (datetime.now() - datetime.fromisoformat(last_alert)) < timedelta(hours=REALERT_AFTER_HOURS):
                 continue  # already alerted recently, suppress repeat
-            failures.append(result)
+            is_live_task = any(kw in name for kw in ("LIVE", "Live"))
+            if is_live_task:
+                live_failures.append(result)
+            else:
+                failures.append(result)
             alerted_at[name] = now_iso
         else:
             alerted_at.pop(name, None)
@@ -1228,13 +1235,15 @@ def main() -> None:
 
     label = "Forex Watchdog" if args.only_forex else "Scheduler Watchdog"
     if failures:
-        _send_alert(failures, label)
-    elif unhealthy:
-        if args.verbose:
+        _send_alert(failures, label, live=False)
+    if live_failures:
+        _send_alert(live_failures, label, live=True)
+    if args.verbose:
+        if not failures and not live_failures and unhealthy:
             print(f"[{label}] {len(unhealthy)} task(s) still unhealthy but already alerted "
                   f"within the last {REALERT_AFTER_HOURS}h, not re-sending: {', '.join(unhealthy)}")
-    elif args.verbose:
-        print(f"[{label}] all {len(tasks) + (0 if args.only_forex else len(CLAUDE_TASKS))} tasks healthy at {now_iso}")
+        elif not failures and not live_failures and not unhealthy:
+            print(f"[{label}] all {len(tasks) + (0 if args.only_forex else len(CLAUDE_TASKS))} tasks healthy at {now_iso}")
 
     if auto_fixed:
         _send_autofix_confirmation(auto_fixed, label)

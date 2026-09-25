@@ -37,20 +37,21 @@ def _load_cfg() -> dict | None:
         return None
 
 
-def _send(subject: str, html: str) -> bool:
+def _send(subject: str, html: str, live: bool = False) -> bool:
     cfg = _load_cfg()
     if not cfg:
         return False
+    recipient = cfg.get("recipient_email_live", cfg["recipient_email"]) if live else cfg["recipient_email"]
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
         msg["From"] = f"ATOS Trading <{cfg['sender_email']}>"
-        msg["To"]   = cfg["recipient_email"]
+        msg["To"]   = recipient
         msg.attach(MIMEText(html, "html"))
         with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as s:
             s.starttls()
             s.login(cfg["sender_email"], cfg["sender_password"])
-            s.sendmail(cfg["sender_email"], cfg["recipient_email"], msg.as_string())
+            s.sendmail(cfg["sender_email"], recipient, msg.as_string())
         print(f"  [notifier] email sent: {subject}")
         return True
     except Exception as e:
@@ -363,6 +364,7 @@ def notify_ibkr_trade(
     strategy: str,
     pnl_usd: float | None = None,   # SELL only
     reason: str = "",
+    live: bool = False,      # True = real-money IBKR account
 ) -> None:
     """Send email on every confirmed IBKR fill (BUY or SELL, any strategy)."""
     today    = date.today().isoformat()
@@ -409,7 +411,7 @@ def notify_ibkr_trade(
       </div>
       <div class="metric">
         <div class="label">Account</div>
-        <div class="value" style="font-size:14px;color:#94a3b8">IBKR Paper</div>
+        <div class="value" style="font-size:14px;color:#94a3b8">{"IBKR Live" if live else "IBKR Paper"}</div>
       </div>
       <div class="metric">
         <div class="label">Date</div>
@@ -423,10 +425,11 @@ def notify_ibkr_trade(
     pnl_str = f"  P&L: ${pnl_usd:+,.2f}" if (pnl_usd is not None) else ""
     subject = (f"IBKR {side.upper()} — {action_word} {int(shares)} {ticker} "
                f"@ ${fill_price:.2f}{pnl_str}  [{strategy}]")
-    _send(subject, _wrap(f"IBKR — {strategy} {side.upper()}", body))
+    _send(subject, _wrap(f"IBKR — {strategy} {side.upper()}", body), live=live)
 
 
-def notify_ibkr_alert(title: str, body_text: str, strategy: str = "IBKR Live") -> None:
+def notify_ibkr_alert(title: str, body_text: str, strategy: str = "IBKR Live",
+                      live: bool = False) -> None:
     """Send an urgent alert email when a live IBKR order fails. Never raises."""
     try:
         today = date.today().isoformat()
@@ -446,7 +449,7 @@ def notify_ibkr_alert(title: str, body_text: str, strategy: str = "IBKR Live") -
         <p style="color:#94a3b8;font-size:13px">Check IB Gateway and re-run the bat manually if needed.</p>
         """
         _send(f"⚠ IBKR LIVE ALERT — {title} [{today}]",
-              _wrap(f"IBKR Live — {title}", body))
+              _wrap(f"IBKR Live — {title}", body), live=live)
     except Exception:
         pass
 
