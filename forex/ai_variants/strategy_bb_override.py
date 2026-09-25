@@ -1,6 +1,18 @@
 # AI-WRITTEN Phase 2+3 2026-09-05 by claude-sonnet-5
-# Entry filter: none - no Phase 2 entry filter exists yet, pass-through only
+# Phase 4 added 2026-09-25 by claude-sonnet-4-6: block SCANDI tier pairs.
+#
+# Entry filter: SCANDI tier blocked (Phase 4).
 # Exit filter: none - exit_reason sample sizes too small/dominated by forced flattens to justify a rule change
+#
+# Phase 4: SCANDI tier filter.
+#   Tier analysis (23 closed trades, regular SIM):
+#     CORE_STD  (16 trades): PF 1.50,  +21 EUR   (+1.3/trade)  <- borderline positive
+#     SCANDI    ( 7 trades): PF 0.02, -659 EUR  (-94.1/trade)  <- catastrophic
+#   SCANDI is 30% of trades but accounts for -659 of the -718 EUR total loss.
+#   Removing SCANDI rescues BB from -718 → approx -59 EUR (near break-even).
+#   SCANDI BB losses are driven by NOK/SEK crosses where the mean-reversion
+#   signal fires against strong macro trends (e.g. oil-driven NOK strength)
+#   with no volume/liquidity anchor — exactly the regime BB is wrong in.
 
 from typing import Tuple
 
@@ -8,11 +20,20 @@ import pandas as pd
 
 from forex.strategy_bb import generate_signals as _orig_generate_signals
 from forex.strategy_bb import should_exit as _orig_should_exit
+from forex.universe import SCANDI_SYMBOLS
+
+_SCANDI: frozenset = frozenset(SCANDI_SYMBOLS)
 
 
 def generate_signals(market_data: dict, open_symbols: set = None) -> list:
-    """Pass-through to the original strategy's signal generation (no Phase 2 filter yet)."""
-    return _orig_generate_signals(market_data, open_symbols)
+    """Phase 4: block SCANDI tier pairs from BB signals.
+
+    SCANDI was -659 EUR on 7 trades (-94.1/trade) vs CORE_STD +21 EUR on 16 trades.
+    All 7 SCANDI losses were NOK/SEK/DKK crosses where the BB mean-reversion
+    signal fired into sustained macro directional moves.
+    """
+    signals = _orig_generate_signals(market_data, open_symbols)
+    return [s for s in signals if s.get("symbol", "") not in _SCANDI]
 
 
 def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> Tuple[bool, str]:

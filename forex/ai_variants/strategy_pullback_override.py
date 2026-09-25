@@ -1,20 +1,36 @@
 # AI-WRITTEN Phase 2+3 2026-10-24 by claude-sonnet-5
-# Entry filter: Excludes NZD-pairs and DKKJPY specifically (repeated whipsaw hard-stop losses).
-# Exit filter: Tightens trend_break exit to require a 2-bar close-beyond-EMA50 confirmation WITH an ATR buffer, cutting false/whipsaw trend_break exits (14/15 losers in sample).
+# Phase 4 added 2026-09-25 by claude-sonnet-4-6: block EXOTIC tier pairs.
+#
+# Entry filter: NZD-pairs + DKKJPY blocked (prior cycles). EXOTIC tier blocked (Phase 4).
+# Exit filter: Tightens trend_break exit to require a 2-bar close-beyond-EMA50 confirmation WITH an ATR buffer.
 #
 # PENDING ACTION FOR EVOLVER (do not remove this comment until actioned):
 # When closed organic trades from 2026-09-18 onwards >= 50 AND PF >= 1.2:
 # reassess pair-level filters — JPY block committed 2026-09-18 (2910f47), NZD block
 # committed 2026-09-05. Count only clean post-block trades. If PF >= 1.2 confirmed,
 # flag in evolver report as live candidate for human review. Human decision logged 2026-09-18.
+#
+# Phase 4: EXOTIC tier filter.
+#   Tier analysis (98 closed trades, regular SIM):
+#     SCANDI    (26 trades): PF 3.82,  +300 EUR  (+11.5/trade) <- only profitable tier
+#     HIGH_VOL  (22 trades): PF 0.67,  -333 EUR  (-15.1/trade)
+#     CORE_STD  (12 trades): PF 0.75,   -72 EUR   (-6.0/trade)
+#     EXOTIC    (45 trades): PF 0.27,  -889 EUR  (-19.8/trade) <- clear structural loser
+#   EXOTIC is 46% of all trades and delivers -889 EUR (-19.8/trade).
+#   Removing EXOTIC rescues net from -994 → approx -105 EUR.
+#   EXOTIC losses are driven by thin EM-cross pairs where pullback retests
+#   fail to hold due to wide spreads and event-driven gap risk.
 
 import pandas as pd
 import numpy as np
 from forex import strategy_pullback as _orig
 from forex.strategy_pullback import should_exit as _orig_should_exit
+from forex.universe import EXOTIC_SYMBOLS
 
 EXCLUDED_SUBSTR = ("NZD",)          # retained from prior cycle
 EXCLUDED_EXACT = ("DKKJPY",)        # retained from prior cycle
+
+_EXOTIC: frozenset = frozenset(EXOTIC_SYMBOLS)
 
 # New this cycle: require the trend_break confirmation bars to close beyond EMA50 by at
 # least this many ATRs (not just a bare cross) before honoring the exit. This adds
@@ -27,13 +43,10 @@ def generate_signals(market_data: dict, open_symbols: set = None, **kwargs) -> l
 
     Filters applied:
       1. (retained) Skip any symbol containing 'NZD' -- historically ~71% of losses.
-      2. (retained) Skip DKKJPY specifically. In the latest 100-closed-trade sample, the 5
-         sampled DKKJPY trades netted roughly -14 EUR, driven by two outsized hard-stop
-         losses (-7.03 EUR, -7.27 EUR) versus a typical per-trade loss well under 1 EUR
-         for other pairs traded in the same batch (JPYEUR, JPYDKK, EURJPY, SGDJPY). The
-         exit-reason log also shows DKKJPY's hard-stop price level (~24.x) recurring 11
-         separate times, consistent with repeated whipsaw stop-outs on this specific,
-         likely thin/wide-spread cross.
+      2. (retained) Skip DKKJPY specifically — repeated whipsaw stop-outs at ~24.x.
+      3. (Phase 4) Skip all EXOTIC tier pairs — 45 trades, -889 EUR (-19.8/trade),
+         46% of all pullback trades. Thin EM-cross pairs where retest levels fail due
+         to wide spreads and event-driven gap risk.
     """
     signals = _orig.generate_signals(market_data, open_symbols=open_symbols, **kwargs)
 
@@ -44,6 +57,8 @@ def generate_signals(market_data: dict, open_symbols: set = None, **kwargs) -> l
         if any(tag in sym_u for tag in EXCLUDED_SUBSTR):
             continue
         if sym_u in EXCLUDED_EXACT:
+            continue
+        if sym_u in _EXOTIC:
             continue
         filtered.append(sig)
 
