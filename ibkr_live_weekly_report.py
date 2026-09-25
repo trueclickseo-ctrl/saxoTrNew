@@ -21,8 +21,10 @@ from datetime import date, datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-_LIVE_DB   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "ibkr_live_stocks.db")
-_START_CAP_SEK = 250_000.0
+_LIVE_DB         = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "ibkr_live_stocks.db")
+_LIVE_ACCOUNT_ID = "U28013794"
+_LIVE_PORT       = 4001
+_REPORT_CLIENT   = 97   # dedicated readonly clientId for this report
 
 
 # ── Data helpers ──────────────────────────────────────────────────────────────
@@ -212,6 +214,41 @@ def _fetch_usdsek() -> float:
         return 10.5
 
 
+def _fetch_ibkr_live_balance() -> float | None:
+    """Connect readonly to LIVE gateway and return NetLiquidation in base currency (SEK).
+    Returns None if the gateway is unreachable."""
+    try:
+        from ib_insync import IB
+        import logging
+        for _log in ("ib_insync", "ib_insync.ib", "ib_insync.wrapper",
+                     "ib_insync.client", "ib_insync.ticker"):
+            logging.getLogger(_log).setLevel(logging.CRITICAL)
+        ib = IB()
+        ib.connect("127.0.0.1", _LIVE_PORT, clientId=_REPORT_CLIENT, readonly=True, timeout=10)
+        values = ib.accountValues(_LIVE_ACCOUNT_ID)
+        # Find NetLiquidation in BASE currency
+        net_liq = None
+        for v in values:
+            if v.tag in ("NetLiquidation", "$LEDGER-NetLiquidation") and v.currency == "BASE":
+                try:
+                    net_liq = float(v.value)
+                except (ValueError, TypeError):
+                    pass
+        # Fallback: NetLiquidation tagged in SEK directly
+        if net_liq is None:
+            for v in values:
+                if v.tag == "NetLiquidation" and v.currency == "SEK":
+                    try:
+                        net_liq = float(v.value)
+                    except (ValueError, TypeError):
+                        pass
+        ib.disconnect()
+        return net_liq
+    except Exception as e:
+        print(f"  [weekly report] IBKR balance fetch failed (gateway may be offline): {e}")
+        return None
+
+
 # ── Chart builders (inline SVG) ───────────────────────────────────────────────
 
 def _strategy_bars(by_strat: dict[str, float]) -> str:
@@ -270,43 +307,35 @@ def _ticker_bars(closed: list[dict]) -> str:
 
 
 def _equity_bar(realized_usd: float, unrealized_usd: float, fx: float) -> str:
-    """Simple stacked-bar showing starting cap, realized gains, unrealized gains (in SEK)."""
+    """Horizontal bars showing realized and unrealized P&L in SEK."""
     realized_sek   = realized_usd * fx
     unrealized_sek = unrealized_usd * fx
-    total_sek      = _START_CAP_SEK + realized_sek + unrealized_sek
 
-    cap_w = 200
     max_v = max(abs(realized_sek), abs(unrealized_sek), 1)
-    r_w   = max(2, int(abs(realized_sek)   / max_v * 80))
-    u_w   = max(2, int(abs(unrealized_sek) / max_v * 80))
+    r_w   = max(2, int(abs(realized_sek)   / max_v * 200))
+    u_w   = max(2, int(abs(unrealized_sek) / max_v * 200))
     r_col = "#4ade80" if realized_sek   >= 0 else "#f87171"
     u_col = "#60a5fa" if unrealized_sek >= 0 else "#f87171"
     r_sign = "+" if realized_sek   >= 0 else ""
     u_sign = "+" if unrealized_sek >= 0 else ""
 
     return f"""
-<svg viewBox="0 0 420 110" xmlns="http://www.w3.org/2000/svg"
+<svg viewBox="0 0 420 80" xmlns="http://www.w3.org/2000/svg"
      style="width:100%;max-width:420px;margin:12px 0">
-  <text x="0" y="18" fill="#64748b" font-size="11" font-family="sans-serif">Starting cap</text>
-  <rect x="110" y="4"  width="{cap_w}" height="18" rx="3" fill="#334155" opacity="0.85"/>
-  <text x="{115+cap_w}" y="18" fill="#94a3b8" font-size="11" font-family="sans-serif">
-    {_START_CAP_SEK:,.0f} SEK
-  </text>
-
-  <text x="0" y="50" fill="#64748b" font-size="11" font-family="sans-serif">Realized P&amp;L</text>
-  <rect x="110" y="36" width="{r_w}" height="18" rx="3" fill="{r_col}" opacity="0.85"/>
-  <text x="{115+r_w}" y="50" fill="{r_col}" font-size="11" font-family="sans-serif">
+  <text x="0" y="18" fill="#64748b" font-size="11" font-family="sans-serif">Realized P&amp;L</text>
+  <rect x="110" y="4"  width="{r_w}" height="18" rx="3" fill="{r_col}" opacity="0.85"/>
+  <text x="{115+r_w}" y="18" fill="{r_col}" font-size="11" font-family="sans-serif">
     {r_sign}{realized_sek:,.0f} SEK
   </text>
 
-  <text x="0" y="82" fill="#64748b" font-size="11" font-family="sans-serif">Unrealized</text>
-  <rect x="110" y="68" width="{u_w}" height="18" rx="3" fill="{u_col}" opacity="0.5"/>
-  <text x="{115+u_w}" y="82" fill="{u_col}" font-size="11" font-family="sans-serif">
-    {u_sign}{unrealized_sek:,.0f} SEK (est.)
+  <text x="0" y="52" fill="#64748b" font-size="11" font-family="sans-serif">Unrealized</text>
+  <rect x="110" y="38" width="{u_w}" height="18" rx="3" fill="{u_col}" opacity="0.6"/>
+  <text x="{115+u_w}" y="52" fill="{u_col}" font-size="11" font-family="sans-serif">
+    {u_sign}{unrealized_sek:,.0f} SEK (Yahoo est.)
   </text>
 
-  <text x="0" y="106" fill="#f1f5f9" font-size="12" font-weight="bold" font-family="sans-serif">
-    Est. Total: {total_sek:,.0f} SEK
+  <text x="0" y="75" fill="#475569" font-size="10" font-family="sans-serif">
+    Unrealized uses Yahoo Finance prices for display only &amp;mdash; not for orders.
   </text>
 </svg>"""
 
@@ -423,6 +452,9 @@ def _build_and_send() -> bool:
     prices   = _fetch_prices(syms)
     fx       = _fetch_usdsek()
 
+    # Live balance from IBKR gateway (readonly connection)
+    live_balance_sek = _fetch_ibkr_live_balance()
+
     # P&L summary
     realized_usd   = sum(c["pnl_usd"] for c in closed)
     unrealized_usd = sum((prices.get(p["symbol"], p["entry_price"]) - p["entry_price"]) * p["qty"]
@@ -430,13 +462,11 @@ def _build_and_send() -> bool:
     week_usd       = sum(c["pnl_usd"] for c in this_week)
     realized_sek   = realized_usd   * fx
     week_sek       = week_usd       * fx
-    total_sek      = _START_CAP_SEK + realized_sek + unrealized_usd * fx
 
     pnl_col  = "#4ade80" if week_sek >= 0 else "#f87171"
     pnl_sign = "+" if week_sek >= 0 else ""
-    tot_col  = "#4ade80" if total_sek >= _START_CAP_SEK else "#f87171"
-    ret_pct  = (total_sek - _START_CAP_SEK) / _START_CAP_SEK * 100
-    ret_sign = "+" if ret_pct >= 0 else ""
+    bal_str  = f"{live_balance_sek:,.0f} SEK" if live_balance_sek is not None else "— (gateway offline)"
+    bal_col  = "#60a5fa" if live_balance_sek is not None else "#64748b"
 
     # Strategy P&L
     by_strat: dict[str, float] = {}
@@ -478,19 +508,26 @@ def _build_and_send() -> bool:
   <tbody>{strat_rows}</tbody>
 </table>"""
 
+    r_sign = "+" if realized_sek >= 0 else ""
+    u_sign = "+" if unrealized_usd * fx >= 0 else ""
+
     body = f"""
 <div class="metric-row">
   <div class="metric">
-    <div class="label">Est. Balance</div>
-    <div class="value" style="color:{tot_col}">{total_sek:,.0f} SEK</div>
+    <div class="label">Account Balance</div>
+    <div class="value" style="color:{bal_col}">{bal_str}</div>
   </div>
   <div class="metric">
     <div class="label">Week P&amp;L</div>
     <div class="value" style="color:{pnl_col}">{pnl_sign}{week_sek:,.0f} SEK</div>
   </div>
   <div class="metric">
-    <div class="label">Total Return</div>
-    <div class="value" style="color:{tot_col}">{ret_sign}{ret_pct:.1f}%</div>
+    <div class="label">Realized P&amp;L</div>
+    <div class="value" style="color:{'#4ade80' if realized_sek>=0 else '#f87171'}">{r_sign}{realized_sek:,.0f} SEK</div>
+  </div>
+  <div class="metric">
+    <div class="label">Unrealized P&amp;L</div>
+    <div class="value" style="color:{'#60a5fa' if unrealized_usd*fx>=0 else '#f87171'}">{u_sign}{unrealized_usd*fx:,.0f} SEK</div>
   </div>
   <div class="metric">
     <div class="label">Open Positions</div>
@@ -502,7 +539,7 @@ def _build_and_send() -> bool:
   </div>
 </div>
 
-<h3 style="color:#f1f5f9;font-size:15px;margin:20px 0 8px">Account Equity Breakdown</h3>
+<h3 style="color:#f1f5f9;font-size:15px;margin:20px 0 8px">P&amp;L Breakdown</h3>
 {_equity_bar(realized_usd, unrealized_usd, fx)}
 
 {strat_table_html}
@@ -518,16 +555,17 @@ def _build_and_send() -> bool:
 
 <p class="muted" style="margin-top:16px">
   Account: U28013794 &nbsp;·&nbsp;
-  Starting capital: {_START_CAP_SEK:,.0f} SEK &nbsp;·&nbsp;
-  FX rate used: 1 USD = {fx:.3f} SEK &nbsp;·&nbsp;
-  Open-position prices via Yahoo Finance (display only) &nbsp;·&nbsp;
+  Balance: live from IBKR gateway &nbsp;·&nbsp;
+  FX rate: 1 USD = {fx:.3f} SEK (Yahoo Finance) &nbsp;·&nbsp;
+  Unrealized P&amp;L uses Yahoo prices (display only, not for orders) &nbsp;·&nbsp;
   Next report: next Saturday 21:00 PKT
 </p>
 """
 
+    bal_subj = f"{live_balance_sek:,.0f} SEK" if live_balance_sek is not None else "—"
     subject = (
         f"[IBKR LIVE] Weekly Report — "
-        f"Est. {total_sek:,.0f} SEK  |  "
+        f"Balance: {bal_subj}  |  "
         f"Week: {pnl_sign}{week_sek:,.0f} SEK  |  "
         f"Open: {len(open_pos)}  [{today}]"
     )

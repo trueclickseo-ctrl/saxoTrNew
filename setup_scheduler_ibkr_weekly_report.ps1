@@ -1,9 +1,10 @@
-# setup_scheduler_ibkr_weekly_report.ps1
+﻿# setup_scheduler_ibkr_weekly_report.ps1
 # Registers "IBKR Live Weekly Report" as a Windows Scheduled Task.
 #
 # Schedule: Every Saturday at 21:00 PKT (16:00 UTC) -- after Friday US close.
 # Sends a rich HTML email to atoslive500@gmail.com with:
-#   - Account equity breakdown (SVG bar chart)
+#   - Account balance (live from IBKR gateway, readonly)
+#   - Realized and unrealized P&L
 #   - Strategy performance (Blend vs Reversion)
 #   - Per-ticker realized P&L chart
 #   - Open positions with unrealized P&L (Yahoo Finance prices)
@@ -44,7 +45,7 @@ Register-ScheduledTask `
     -Trigger    $trigger `
     -Settings   $settings `
     -RunLevel   Highest `
-    -Description "IBKR LIVE: weekly portfolio report email — equity, strategy stats, open positions, closed trades." `
+    -Description "IBKR LIVE: weekly portfolio report email -- equity, strategy stats, open positions, closed trades." `
     -Force | Out-Null
 
 Write-Host "Registered: '$TaskName'"
