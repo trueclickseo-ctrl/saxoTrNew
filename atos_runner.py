@@ -784,6 +784,12 @@ US_PENNY_ENABLED = True
 #        + price > SMA50. EXIT: 12% trailing stop | RSI>80 exhaustion | 60d safety.
 US_BAGGER_ENABLED = True
 
+# ── US Scorer (2026-09-26) ─────────────────────────────────────────────────────
+# SIM-ONLY — paper=1 always. ATOS US 500 Scoring Engine; 492-stock universe.
+# Two sub-books: Swing (4% stop, 12 slots) + Portfolio (8% stop, 15 slots).
+# EXIT: score < 65 on daily rescan | stop hit | 30-day time limit.
+US_SCORER_ENABLED = True
+
 # ── SIM paper-fill fallback (2026-09-01) ──────────────────────────────────
 # Mirrors forex/runner.py's SIM_PAPER_FILL_ON_REJECT. Saxo SIM's order
 # engine has been rejecting essentially every order with
@@ -1418,6 +1424,13 @@ def run_open_scan(log_fn=None) -> dict:
         except Exception as e:
             _log(f"  [US Bagger ERROR] {e}")
 
+    if US_SCORER_ENABLED:
+        _log("  Running US Scorer strategy (SIM-ONLY)...")
+        try:
+            run_us_scorer(db.get_open_trades(), todays_actions)
+        except Exception as e:
+            _log(f"  [US Scorer ERROR] {e}")
+
     buy_n     = sum(1 for a in todays_actions if a["action"] == "BUY")
     exit_n    = sum(1 for a in todays_actions if a["action"] == "EXIT")
     blocked_n = sum(1 for a in todays_actions if a["action"] == "BLOCKED")
@@ -1879,6 +1892,13 @@ def run_cycle():
             run_us_bagger(db.get_open_trades(), todays_actions)
         except Exception as e:
             print(f"  [US Bagger] ERROR: {e}")
+
+    if US_SCORER_ENABLED:
+        print("  Running US Scorer strategy (SIM-ONLY)...")
+        try:
+            run_us_scorer(db.get_open_trades(), todays_actions)
+        except Exception as e:
+            print(f"  [US Scorer] ERROR: {e}")
 
     # ── 7. Learning pass ──────────────────────────────────────────
     print("  Running learning pass...")
@@ -4288,6 +4308,180 @@ def run_us_bagger(open_trades: list, todays_actions: list) -> None:
                        f"rsi={cand['rsi']}, vol_trend={cand['vol_trend']}x"),
             "pnl_sek": None,
         })
+
+
+# ── US Scorer — SIM only ──────────────────────────────────────────────────────
+
+def run_us_scorer(open_trades: list, todays_actions: list) -> None:
+    """ATOS US 500 Scoring Engine — Saxo SIM paper book.
+
+    Two sub-books (mirroring IBKR scorer config):
+      US Scorer Swing     — top Swing/Momentum picks  (4% stop, 12 slots, ~310k SEK)
+      US Scorer Portfolio — top Hybrid/Portfolio picks (8% stop, 15 slots, ~310k SEK)
+
+    Signal:  ibkr_scorer.run_scan() — same 492-stock universe, Yahoo Finance.
+    Exit:    swing_score / trade_score < 65 on daily rescan, stop hit, or 30d time limit.
+    Orders:  paper=1 (SIM paper fill, no real Saxo order placed — mirrors US Bagger).
+    """
+    from ibkr_module.ibkr_scorer import run_scan
+    import pandas as pd
+
+    if kill_switch_active():
+        print("  [US Scorer] STOP_TRADING present — skip"); return
+
+    tag    = "[US Scorer SIM]"
+    fx_usd = _rate_to_sek("USD")
+    today  = date.today()
+
+    SW_STRATEGY    = "US Scorer Swing"
+    PO_STRATEGY    = "US Scorer Portfolio"
+    SW_BUDGET_SEK  = 310_000.0    # ~$30k at ~10.35 SEK/USD
+    PO_BUDGET_SEK  = 310_000.0
+    SW_MAX_SLOTS   = 12
+    PO_MAX_SLOTS   = 15
+    SW_STOP_PCT    = 0.04
+    PO_STOP_PCT    = 0.08
+    SW_MIN_SCORE   = 65.0
+    PO_MIN_SCORE   = 65.0
+    MAX_HOLD_DAYS  = 30
+
+    print(f"  {tag} running ATOS US 500 scoring engine ({today})...")
+    try:
+        results = run_scan(
+            n_swing=SW_MAX_SLOTS, n_portfolio=PO_MAX_SLOTS,
+            min_score=min(SW_MIN_SCORE, PO_MIN_SCORE),
+            verbose=False,
+        )
+    except Exception as e:
+        print(f"  {tag} run_scan failed: {e}"); return
+
+    sw_df      = results.get("swing",     pd.DataFrame())
+    po_df      = results.get("portfolio", pd.DataFrame())
+    all_scored = results.get("all_scored", pd.DataFrame())
+
+    # Price + score lookup keyed by ticker
+    price_map: dict[str, float] = {}
+    score_map: dict[str, dict]  = {}
+    if not all_scored.empty:
+        for _, row in all_scored.iterrows():
+            tk = str(row["ticker"]).upper()
+            price_map[tk] = float(row.get("price", 0))
+            score_map[tk] = {
+                "swing_score": float(row.get("swing_score", 0)),
+                "trade_score": float(row.get("trade_score", 0)),
+            }
+
+    sw_open = {t["ticker"].upper(): t for t in open_trades if t.get("strategy") == SW_STRATEGY}
+    po_open = {t["ticker"].upper(): t for t in open_trades if t.get("strategy") == PO_STRATEGY}
+
+    # ── Exits ──────────────────────────────────────────────────────────────────
+    def _check_exits(book_open: dict, min_score: float, score_col: str, strategy: str) -> None:
+        for ticker, trade in list(book_open.items()):
+            price = price_map.get(ticker, 0.0)
+            if price <= 0:
+                continue
+            entry_px  = trade.get("entry_price", 0) or 0
+            stop_px   = trade.get("stop_price",  0) or 0
+            entry_d   = str(trade.get("entry_date", today.isoformat()))[:10]
+            try:
+                days_held = (today - date.fromisoformat(entry_d)).days
+            except Exception:
+                days_held = 0
+            cur_score = score_map.get(ticker, {}).get(score_col, 0.0)
+
+            reason = None
+            if stop_px > 0 and price <= stop_px:
+                reason = f"stop hit (${price:.2f} <= ${stop_px:.2f})"
+            elif cur_score < min_score:
+                reason = f"score dropped ({cur_score:.1f} < {min_score})"
+            elif days_held >= MAX_HOLD_DAYS:
+                reason = f"time stop ({days_held}d)"
+            if not reason:
+                continue
+
+            sh        = trade.get("shares", 0) or 0
+            comm_exit = commission_sek(sh, sh * price * fx_usd)
+            pnl_sek   = (price - entry_px) * sh * fx_usd - comm_exit
+            print(f"  {tag} EXIT {ticker} [{strategy}]: {reason} [PAPER]")
+            db.close_trade(trade["id"], exit_price=price,
+                           exit_reason=reason, pnl_sek=pnl_sek,
+                           commission_sek=comm_exit)
+            _append_trade_log(strategy, "SELL", ticker, sh, price,
+                              sh * price * fx_usd, pnl_sek, reason)
+            todays_actions.append({
+                "action": "EXIT", "ticker": ticker, "market_group": "US Equities",
+                "strategy": strategy, "score": 0, "shares": sh,
+                "price": price, "reason": f"scorer exit: {reason}", "pnl_sek": pnl_sek,
+            })
+
+    _check_exits(sw_open, SW_MIN_SCORE, "swing_score", SW_STRATEGY)
+    _check_exits(po_open, PO_MIN_SCORE, "trade_score", PO_STRATEGY)
+
+    # ── Entries ────────────────────────────────────────────────────────────────
+    sw_open_now = {t["ticker"].upper() for t in db.get_open_trades() if t.get("strategy") == SW_STRATEGY}
+    po_open_now = {t["ticker"].upper() for t in db.get_open_trades() if t.get("strategy") == PO_STRATEGY}
+    all_open    = {t["ticker"].upper() for t in db.get_open_trades()}
+
+    sw_free = SW_MAX_SLOTS - len(sw_open_now)
+    po_free = PO_MAX_SLOTS - len(po_open_now)
+    print(f"  {tag} swing: {len(sw_open_now)}/{SW_MAX_SLOTS} slots | "
+          f"portfolio: {len(po_open_now)}/{PO_MAX_SLOTS} slots")
+
+    def _place_entries(
+        cands_df: "pd.DataFrame", budget_sek: float, max_slots: int,
+        stop_pct: float, min_score: float, score_col: str,
+        strategy: str, slots_free: int,
+    ) -> None:
+        if slots_free <= 0 or cands_df.empty:
+            if slots_free <= 0:
+                print(f"  {tag} [{strategy}] slots full")
+            return
+        slot_sek = budget_sek / max_slots
+        placed = 0
+        for _, row in cands_df.iterrows():
+            if placed >= slots_free:
+                break
+            ticker = str(row["ticker"]).upper()
+            if ticker in all_open:
+                continue
+            price = float(row.get("price", 0))
+            if price <= 0:
+                continue
+            cur_score = float(row.get(score_col, 0))
+            if cur_score < min_score:
+                continue
+            shares = int(slot_sek / (price * fx_usd))
+            if shares < 1:
+                continue
+            shares   = _sim_cap_shares(shares, price, fx_usd)
+            stop_p   = round(price * (1 - stop_pct), 4)
+            cost_sek = shares * price * fx_usd
+            comm     = commission_sek(shares, cost_sek)
+            print(f"  {tag} BUY {ticker} [{strategy}] score={cur_score:.1f} "
+                  f"@ ${price:.2f} x{shares} (~{cost_sek:,.0f} SEK) stop={stop_p:.2f} [PAPER]")
+            db.insert_trade({
+                "strategy": strategy, "market_group": "US Equities",
+                "ticker": ticker, "direction": "BUY",
+                "entry_date": today.isoformat(), "entry_price": price,
+                "shares": shares, "commission_sek": comm,
+                "entry_score": cur_score, "stop_price": stop_p,
+                "paper": 1, "value_sek": cost_sek,
+            })
+            _append_trade_log(strategy, "BUY", ticker, shares, price,
+                              cost_sek, None, f"scorer entry score={cur_score:.1f}")
+            todays_actions.append({
+                "action": "BUY", "ticker": ticker, "market_group": "US Equities",
+                "strategy": strategy, "score": cur_score, "shares": shares,
+                "price": price, "reason": f"scorer entry score={cur_score:.1f}",
+                "pnl_sek": 0,
+            })
+            all_open.add(ticker)
+            placed += 1
+
+    _place_entries(sw_df, SW_BUDGET_SEK, SW_MAX_SLOTS, SW_STOP_PCT,
+                   SW_MIN_SCORE, "swing_score", SW_STRATEGY, sw_free)
+    _place_entries(po_df, PO_BUDGET_SEK, PO_MAX_SLOTS, PO_STOP_PCT,
+                   PO_MIN_SCORE, "trade_score", PO_STRATEGY, po_free)
 
 
 # ── USA Strategy signals — SIM only ───────────────────────────────────────────
