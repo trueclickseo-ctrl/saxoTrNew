@@ -2380,6 +2380,17 @@ def _place_us(side: str, ticker: str, shares: int, imap: dict,
         else:
             cur_is_paper = bool(cur_trade and cur_trade.get("paper"))
             if not cur_is_paper:
+                # Cancel any existing bracket stop/TP before the market sell.
+                # Saxo rejects a second sell order with SellOrdersAlreadyExistForOwnedContracts
+                # when a GTC stop is still live on the position (e.g. RISK-OFF firing while
+                # a trailing stop is parked at Saxo).
+                _stop_oid = cur_trade.get("stop_order_id") if cur_trade else None
+                if _stop_oid:
+                    try:
+                        saxo_client.cancel_order(str(_stop_oid), env=_sx())
+                        print(f"  [US momentum] {ticker}: cancelled stop {_stop_oid} before market sell")
+                    except Exception as _ce:
+                        print(f"  [US momentum] {ticker}: stop cancel attempt ({_stop_oid}): {_ce} — proceeding")
                 saxo_client.place_market_order(imap[ticker]["uic"], "Stock", side, shares, env=_sx())
             # paper position: no Saxo counterpart -- DB close happens below
     except Exception as e:
