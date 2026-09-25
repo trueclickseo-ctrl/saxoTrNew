@@ -307,7 +307,9 @@ def run(argv=None) -> int:
         rails = live_stocks_rails(bal)
         for n in rails["notes"]:
             print(f"    rail: {n}")
-        exits_only = args.exits_only or rails["exits_only"]
+        # 2026-09-26: Saxo stocks sleeve locked to exits-only permanently.
+        # All new stock positions go to IBKR ISK. Saxo = Forex only.
+        exits_only = True
 
         result = atos_runner.run_us_blend_live(
             budget_sek=rails["budget_sek"], dry_run=dry_run, exits_only=exits_only,
