@@ -4,7 +4,7 @@
 **Platform:** Interactive Brokers via IB Gateway  
 **Status:** PAPER — simulated trades, no real money  
 **Funded:** SEK 250,000  
-**Last verified:** 2026-09-25  
+**Last verified:** 2026-09-26  
 **Live account docs:** [ibkr_live_bot.md](ibkr_live_bot.md)
 
 ---
@@ -70,7 +70,7 @@ The paper account shares the same codebase as live:
 - DB file: `ibkr_stocks.db` vs `ibkr_live_stocks.db`
 - Gateway port: `4002` vs `4001`
 - Account ID: `DUR952126` vs `U28013794`
-- Strategies: paper runs all 7 strategies; live runs only blend + reversion
+- Strategies: paper runs all 9 strategies (11 sub-strategies: blend, reversion, intraday, signals×4, scorer swing, scorer portfolio, penny, bagger — signals counts as 4, scorer as 2); live runs only blend + reversion
 - Budgets: paper uses larger paper budgets ($50k per strategy); live uses real capital (~$2k each)
 - AI Copilot: applies to paper (shadow mode active); live blend has no copilot (the ranker IS the AI layer)
 
@@ -167,7 +167,7 @@ clientId: `16`
 | Sleeve | Budget | Slots | Stop | Min Score |
 |--------|--------|-------|------|-----------|
 | Swing | $30,000 | 12 | 4% | 65.0 |
-| Portfolio | $30,000 | 15 | 4% | 65.0 |
+| Portfolio | $30,000 | 15 | 8% | 65.0 |
 
 - `--exits` re-scans and closes positions whose score dropped below minimum
 - clientId: `17`
@@ -307,7 +307,7 @@ python ibkr_dashboard.py --once --client-id 88
 | Gateway port | 4002 | 4001 |
 | DB file | `ibkr_stocks.db` | `ibkr_live_stocks.db` |
 | CLI flag | _(none)_ | `--live` |
-| Strategies | All 7 (blend, reversion, intraday, signals×4, scorer, penny, bagger) | blend + reversion only |
+| Strategies | All 9 groups (blend, reversion, intraday, signals×4, scorer swing, scorer portfolio, penny, bagger — 11 sub-strategies total) | blend + reversion only |
 | Capital | $50k paper per main strategy | ~$2k real per strategy |
 | Fill simulation | IBKR paper engine (simulated) | Real market fills |
 | AI Copilot | Active (shadow + apply mode) | Observation-only on live blend |

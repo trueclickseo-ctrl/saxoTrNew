@@ -24,7 +24,7 @@
 **Universe**: **424** US stocks spanning all 3 major indices — Dow-30 (30/30),
 Nasdaq-100, and the large/mid-cap core of the S&P 500 (`atos/universe.py`
 `US_TICKERS` = `SP500_TICKERS` + `HIGH_GROWTH_TICKERS` + `NASDAQ100_DOW_TICKERS`)  
-**Strategies**: 2 concurrent on SIM (Momentum Blend + Mean Reversion); **US Blend only** on the real-money sleeve  
+**Strategies**: 10 strategies on SIM (see [SIM Strategy Roster](#sim-strategy-roster) below); **US Blend only** on the real-money sleeve  
 **Capital**: SIM = 85% of SIM account (split 50/50); real money = 30,000 SEK (US Blend sleeve, capped)  
 **Scheduled**: 06:00 PKT daily (main) — `ATOS Daily Run` → `daily_run.py` →
 `atos_runner.run_cycle()`, the only Task Scheduler entry point confirmed
@@ -44,9 +44,32 @@ positions (NoAccess), so `stocks_dashboard.py` (SIM) backfills the **last
 daily close** from `saxo_history.fetch_daily_bars` for any position Saxo
 won't price (paper fills etc.) — labelled as such; not real-time but a real
 number. LIVE has real stock quotes.  
-**Last updated**: 2026-09-03 (LIVE STOCKS live + go-live schedule + book_state
-tracking + SIM dashboard price backfill; 3-index universe; price-source note
-2026-08-22; original audit 2026-08-19)  
+**Last updated**: 2026-09-26 (added SIM Strategy Roster; scorer added to Saxo SIM; LIVE STOCKS live + go-live schedule + book_state tracking + SIM dashboard price backfill; 3-index universe; price-source note 2026-08-22; original audit 2026-08-19)  
+
+---
+
+## SIM Strategy Roster
+
+All strategies below run in `atos_runner.py` (Saxo SIM, paper fills). None affect the real-money sleeve (`atos_live_stocks.py`).
+
+| # | Strategy | File | Slots | Stop/Exit | Notes |
+|---|----------|------|-------|-----------|-------|
+| 1 | **US Blend** | `atos/us_momentum.py` | 6 offense + 2 defense | 8% Chandelier stop | Cross-sectional momentum; fortnightly rebalance; also runs LIVE |
+| 2 | **US Blend V2** | `atos/us_momentum_v2.py` | 8 | 8% Chandelier stop | Alternate parameter set; SIM A/B vs V1 |
+| 3 | **US Reversion** | `atos/us_reversion.py` | 6 max | −4% stop, 10-day time stop | RSI<38 + dip>5% mean reversion |
+| 4 | **US Reversion V2** | `atos/us_reversion_v2.py` | 6 max | −4% stop, 10-day time stop | Alternate parameter set |
+| 5 | **US Signals — SMA Crossover** | `atos/us_signals.py` | 7 | −8% fixed stop | 50d SMA crosses 200d SMA |
+| 6 | **US Signals — RSI Reversal** | `atos/us_signals.py` | 7 | −8% fixed stop | RSI(14) oversold then bounces above 40 |
+| 7 | **US Signals — Momentum** | `atos/us_signals.py` | 7 | −8% fixed stop | 6-month ROC leaders |
+| 8 | **US Signals — Ensemble** | `atos/us_signals.py` | 7 | −8% fixed stop | Weighted blend of above 3 |
+| 9 | **US Scorer Swing** | `ibkr_module/ibkr_scorer.py` | 12 | −4% fixed stop, 30-day time limit | ATOS 492-stock scoring engine; score≥65; paper=1 only |
+| 10 | **US Scorer Portfolio** | `ibkr_module/ibkr_scorer.py` | 15 | −8% fixed stop, 30-day time limit | Hybrid/Portfolio universe; score≥65; paper=1 only |
+| 11 | **US Penny** | `atos/us_penny.py` | 5 | −12% stop, 25% target, 15-day limit | Sub-$2.20 momentum breakout; SIM-ONLY forever |
+| 12 | **US Bagger** | `atos/us_bagger.py` | 5 | 12% trailing stop (software-managed) | ≥80% 6-month ROC trend continuation; SIM-ONLY forever |
+
+**Signal source note:** US Scorer Swing/Portfolio use `ibkr_scorer.run_scan()` (Yahoo Finance, 492-stock universe, 8-hour cache) shared with the IBKR paper scorer. All other SIM strategies use Saxo historical data via `saxo_history.py`.
+
+**Paper fill note:** US Penny, US Bagger, and US Scorer use `paper=1` fills — no real Saxo order is placed. US Signals uses `saxo_client.place_market_order()` with a SIM paper-fill fallback.
 
 ---
 
