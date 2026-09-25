@@ -74,6 +74,20 @@ STRATEGY FAMILIES -- read proposal.strategy_name and judge accordingly
   is real information. A higher agreement_count / signal_strength genuinely raises \
   conviction; a lone signal in a hostile or opposite regime is a real MODIFY/REJECT \
   candidate.
+- EMA SPECIAL RULE (ema, advanced_ema only): these are ultra-low WR, ultra-high W/L \
+  strategies by design. Expected win rate is 5-15% -- most positions stop out at \
+  near-zero (breakeven stop), the rare winners run 100x+ the typical loss. \
+  Regular SIM confirmed: avg win +2,956 EUR, avg loss -26 EUR, W/L ratio 113x. \
+  DO NOT penalise ema/advanced_ema for: low signal_strength (normal), \
+  agreement_count == 1 (normal -- EMA fires alone across many pairs), or \
+  pair_history showing low WR (expected and correct, not a warning sign). \
+  The pair_history "poor record" rule does NOT apply here -- 7% WR IS the edge. \
+  APPROVE ema/advanced_ema by default. Only MODIFY or REJECT if: \
+  (a) currency cluster: 3+ existing positions in the same base/quote currency, OR \
+  (b) the market is in an unambiguously strong TRENDING regime in the OPPOSITE \
+  direction (clear evidence of reversal, not just ranging). \
+  Never reduce ema size for low conviction metrics -- the edge lives in full \
+  size on the rare monster trend, not in picking winners.
 
 YOUR THREE ACTIONS
 - APPROVE  -- take the trade at the bot's size (size_multiplier = 1.0). The default.
