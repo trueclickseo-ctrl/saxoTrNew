@@ -283,6 +283,148 @@ def _ai_health_section() -> str:
         return ""
 
 
+def _ai_sim_strategy_health_section() -> str:
+    """Compare regular SIM vs AI SIM per-strategy trade counts.
+
+    Flags any strategy that has generated regular SIM trades in the last 30 days
+    but has zero AI SIM trades in the same window — the exact blind spot that hid
+    the GAP generate_session_signals bug for weeks.
+
+    Also shows a full AI SIM roster with last-trade date so silent strategies
+    are visible at a glance every day.
+    """
+    try:
+        import sqlite3
+        import os
+        from datetime import timedelta
+
+        DB = os.path.join("data", "pnl_ledger.db")
+        if not os.path.exists(DB):
+            return ""
+
+        LOOKBACK = 30
+        since = (date.today() - timedelta(days=LOOKBACK)).isoformat()
+
+        # Strategies intentionally paused in AI SIM — expected to be silent.
+        PAUSED = {"rsi", "bb_quality", "supertrend"}
+        # Strategy name variants that represent versioned/renamed data
+        # (e.g. donchian_v3, zscore_quality_v3) — not independently active.
+        def _is_versioned(s: str) -> bool:
+            return any(s.endswith(f"_v{i}") for i in range(2, 10))
+
+        con = sqlite3.connect(DB)
+        cur = con.cursor()
+
+        # Regular SIM trades in last LOOKBACK days
+        cur.execute("""
+            SELECT strategy, COUNT(*) FROM trades
+            WHERE module='forex' AND timestamp_open >= ?
+            GROUP BY strategy
+        """, (since,))
+        sim_recent = {r[0]: r[1] for r in cur.fetchall()}
+
+        # AI SIM: all-time last trade + recent count
+        cur.execute("""
+            SELECT strategy,
+                   SUM(CASE WHEN timestamp_open >= ? THEN 1 ELSE 0 END) AS n_recent,
+                   MAX(timestamp_open) AS last_trade,
+                   COUNT(*) AS n_total
+            FROM trades
+            WHERE module='forex_ai'
+            GROUP BY strategy
+        """, (since,))
+        ai_rows = {r[0]: {"n_recent": r[1], "last": r[2], "n_total": r[3]}
+                   for r in cur.fetchall()}
+        con.close()
+
+        # --- Silent-strategy alert ------------------------------------------
+        # Strategy is in regular SIM recently but absent/silent in AI SIM
+        silent = []
+        for strat, sim_n in sorted(sim_recent.items()):
+            if strat in PAUSED or _is_versioned(strat):
+                continue
+            ai = ai_rows.get(strat)
+            if ai is None or ai["n_recent"] == 0:
+                last_ai = ai["last"][:10] if ai and ai["last"] else "never"
+                silent.append((strat, sim_n, last_ai))
+
+        if silent:
+            alert_rows = "".join(
+                f"<tr><td><code>{s}</code></td>"
+                f"<td style='text-align:center'>{sim_n}</td>"
+                f"<td style='text-align:center'>{last_ai}</td></tr>"
+                for s, sim_n, last_ai in silent
+            )
+            alert_html = f"""
+            <div style='background:#3a1212;border-left:4px solid #f85149;
+                        padding:10px 14px;border-radius:6px;margin:8px 0 12px'>
+              <b class='neg'>&#9679; SILENT AI SIM STRATEGIES — active in regular SIM
+              but 0 trades in AI SIM in the last {LOOKBACK} days</b>
+              <table style='margin:8px 0 0;width:100%;border-collapse:collapse;font-size:12px'>
+                <tr style='color:#8b949e'>
+                  <th style='text-align:left'>Strategy</th>
+                  <th>SIM trades ({LOOKBACK}d)</th>
+                  <th>Last AI SIM trade</th>
+                </tr>
+                {alert_rows}
+              </table>
+            </div>"""
+        else:
+            alert_html = (
+                "<div style='background:#12261a;border-left:4px solid #3fb950;"
+                "padding:8px 14px;border-radius:6px;margin:8px 0 12px'>"
+                "<b class='pos'>&#9679; All active strategies generating AI SIM trades</b>"
+                "</div>")
+
+        # --- Full AI SIM roster table ---------------------------------------
+        all_strats = sorted(
+            set(sim_recent) | set(ai_rows),
+            key=lambda s: ai_rows.get(s, {}).get("last") or "0000",
+            reverse=True,
+        )
+        roster_rows = []
+        for strat in all_strats:
+            if _is_versioned(strat):
+                continue
+            ai = ai_rows.get(strat, {})
+            sim_n = sim_recent.get(strat, 0)
+            n_recent = ai.get("n_recent", 0)
+            n_total = ai.get("n_total", 0)
+            last = (ai.get("last") or "")[:10] or "—"
+            paused_tag = " <span style='color:#d29922'>(paused)</span>" if strat in PAUSED else ""
+            warn = " class='neg'" if (strat not in PAUSED and sim_n > 0 and n_recent == 0) else ""
+            roster_rows.append(
+                f"<tr{warn}><td><code>{strat}</code>{paused_tag}</td>"
+                f"<td style='text-align:center'>{sim_n}</td>"
+                f"<td style='text-align:center'>{n_recent}</td>"
+                f"<td style='text-align:center'>{n_total}</td>"
+                f"<td style='text-align:center'>{last}</td></tr>"
+            )
+
+        roster_html = f"""
+        <table style='width:100%;border-collapse:collapse;font-size:12px;margin-top:8px'>
+          <tr style='color:#8b949e'>
+            <th style='text-align:left'>Strategy</th>
+            <th>SIM ({LOOKBACK}d)</th>
+            <th>AI SIM ({LOOKBACK}d)</th>
+            <th>AI SIM total</th>
+            <th>Last AI SIM trade</th>
+          </tr>
+          {"".join(roster_rows)}
+        </table>
+        <p class='muted' style='margin:4px 0 0;font-size:11px'>
+          Paused = in AI_SIM_PAUSED_STRATEGIES (intentional). Red row = should be trading but isn't.
+        </p>"""
+
+        return f"""
+        <h2>AI SIM Strategy Health</h2>
+        {alert_html}
+        {roster_html}
+        """
+    except Exception:
+        return ""
+
+
 def _account_equity_section() -> str:
     """Real-money account equity: peak / drawdown / return / give-back,
     from account_equity.py's tracked curve (NOT the sizing cap). Best-
@@ -586,6 +728,7 @@ def send_daily_summary(since: str | None = None) -> bool:
 
     body = (header + "".join(sections) + _account_equity_section()
             + _ibkr_positions_section() + _ai_copilot_stocks_section()
+            + _ai_sim_strategy_health_section()
             + _ai_health_section() + _ai_journal_section() + _profit_ladder_section())
     subject = f"Daily Summary — {total_trades} trades | {day_sign}${total_pnl:,.0f} | {since}"
     html = _wrap(f"Trading Day — {since}", body)
