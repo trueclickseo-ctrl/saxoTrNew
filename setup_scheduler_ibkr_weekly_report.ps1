@@ -1,7 +1,7 @@
 # setup_scheduler_ibkr_weekly_report.ps1
 # Registers "IBKR Live Weekly Report" as a Windows Scheduled Task.
 #
-# Schedule: Every Friday at 21:00 PKT (16:00 UTC / 11:00 ET).
+# Schedule: Every Saturday at 21:00 PKT (16:00 UTC) -- after Friday US close.
 # Sends a rich HTML email to atoslive500@gmail.com with:
 #   - Account equity breakdown (SVG bar chart)
 #   - Strategy performance (Blend vs Reversion)
@@ -25,7 +25,7 @@ $action = New-ScheduledTaskAction -Execute "wscript.exe" `
 
 $trigger = New-ScheduledTaskTrigger `
     -Weekly `
-    -DaysOfWeek Friday `
+    -DaysOfWeek Saturday `
     -At "21:00"
 
 $settings = New-ScheduledTaskSettingsSet `
@@ -48,7 +48,7 @@ Register-ScheduledTask `
     -Force | Out-Null
 
 Write-Host "Registered: '$TaskName'"
-Write-Host "  Schedule : every Friday at 21:00 PKT (16:00 UTC)"
+Write-Host "  Schedule : every Saturday at 21:00 PKT (16:00 UTC)"
 Write-Host "  Command  : wscript run_hidden.vbs run_ibkr_weekly_report.bat"
 Write-Host "  Log      : $LogFile"
 Write-Host "  Email to : atoslive500@gmail.com (LIVE routing)"

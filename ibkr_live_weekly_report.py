@@ -10,7 +10,7 @@ atoslive500@gmail.com (the LIVE routing address in config/email.json).
 Usage (manual):
     python ibkr_live_weekly_report.py
 
-Scheduled: every Friday 21:00 PKT via Task Scheduler.
+Scheduled: every Saturday 21:00 PKT via Task Scheduler (after Friday US close).
 """
 from __future__ import annotations
 
@@ -521,7 +521,7 @@ def _build_and_send() -> bool:
   Starting capital: {_START_CAP_SEK:,.0f} SEK &nbsp;·&nbsp;
   FX rate used: 1 USD = {fx:.3f} SEK &nbsp;·&nbsp;
   Open-position prices via Yahoo Finance (display only) &nbsp;·&nbsp;
-  Next report: next Friday 21:00 PKT
+  Next report: next Saturday 21:00 PKT
 </p>
 """
 
