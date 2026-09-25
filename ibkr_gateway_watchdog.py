@@ -1,36 +1,28 @@
 """
-ibkr_gateway_watchdog.py
-------------------------
-Monitors BOTH IB Gateway instances and auto-restarts each when the
-connection drops or the API becomes unresponsive.
+ibkr_gateway_watchdog.py  (ATOS System Watchdog)
+-------------------------------------------------
+Monitors all 4 trading gateways and sends email on DOWN/UP transitions:
 
-  Live  Gateway: 127.0.0.1:4001  (U28013794  real money)
-  Paper Gateway: 127.0.0.1:4002  (DUR952126  paper / AI Copilot / ATOS)
+  IBKR Live  Gateway: 127.0.0.1:4001  (U28013794  real money)
+  IBKR Paper Gateway: 127.0.0.1:4002  (DUR952126  paper)
+  Saxo LIVE  token:   OAuth session for the real-money Saxo account
+  Saxo SIM   token:   OAuth session for the Saxo SIM account
 
-Scheduled every 5 minutes via "ATOS IBKR Gateway Watchdog" (Windows Task
-Scheduler). One check-and-exit per invocation -- no internal loop.
+IBKR behaviour (full auto-restart):
+  1. TCP connect to port → ib_insync API handshake (reqCurrentTime)
+  2. If either fails: IBC STOP → kill java PID → relaunch via bat file
+  3. Poll up to 600 s → email UP or "manual action needed"
+  Kill is port-specific: live restart never touches paper and vice versa.
+  Safety: never restarts while an IBKR strategy task is Running (mid-trade).
+  Limit: 3 restarts/hour per gateway; skips quiet window 02:00-04:15 PKT.
 
-Checks per gateway (in order):
-  1. TCP connect to port (fast -- no ib_insync overhead)
-  2. ib_insync API handshake (reqCurrentTime) to confirm API responds
-  3. If either fails: send IBC STOP → wait → kill the specific java PID
-     holding that port → relaunch via that gateway's bat file
-  4. Poll the port for up to 600 s after relaunch
-  5. Email alert (success or failure)
-
-Kill strategy is port-specific: we find the PID holding port 4001 (or 4002)
-and kill only that process, so a live-Gateway restart never touches the
-paper instance and vice versa.
-
-Safety guards:
-  - Never restarts while any IBKR strategy task is Running (mid-trade)
-  - Stops auto-restarting after 3 restarts/hour per gateway; emails for manual login
-  - Skips restart during the quiet window 02:00-04:15 AM PKT
-    (auto-restart + machine reboot -- no 2FA needed)
-
-2FA schedule (after AutoRestartTime in each config.ini, ColdRestartTime=blank):
-  Every day: zero 2FA -- Gateways auto-restart with stored session tokens
-  If TST token expires (months apart): one IBKR Mobile push -- approve on phone
+Saxo behaviour (keepalive + alert, no auto-restart):
+  1. Refresh token via saxo_auth.get_valid_access_token(env)
+  2. Test connection via saxo_client.test_connection(env)
+  3. OK  → log "Token OK"; send UP email if previously reported down
+  4. FAIL → email "manual login required": python saxo_auth.py [--live]
+  Runs every watchdog tick (~5 min) -- replaces the separate
+  saxo_sim_token_keepalive and saxo_live_token_keepalive tasks.
 
 State:  data/ibkr_gateway_watchdog.json
 Log:    data/ibkr_gateway_watchdog.log
@@ -135,6 +127,11 @@ def _load_state() -> dict:
     s.setdefault("paper_restarts",   [])
     s.setdefault("paper_last_alert", 0)
     s.setdefault("paper_down_ts",    0)   # ts when "DOWN" email last sent; 0 = up
+    # Saxo tokens (can't auto-restart -- only keepalive + alert)
+    s.setdefault("saxo_live_down_ts",    0)
+    s.setdefault("saxo_live_last_alert", 0)
+    s.setdefault("saxo_sim_down_ts",     0)
+    s.setdefault("saxo_sim_last_alert",  0)
     return s
 
 
@@ -395,13 +392,75 @@ def _check_gateway(gw: _GW, state: dict, simulate_crash: bool = False) -> None:
         )
 
 
+# ── Saxo token check ─────────────────────────────────────────────────────────
+def _check_saxo(env: str, label: str, state: dict) -> None:
+    """Refresh + test a Saxo OAuth token.
+
+    env:   "live" or "sim"
+    label: "LIVE" or "SIM"
+
+    Unlike IBKR gateways, a dead Saxo session cannot be auto-restarted --
+    a browser-based PKCE login is required once the refresh-token chain
+    breaks.  This function:
+      - Refreshes the access token (no-op if it is still fresh)
+      - Makes a live /port/v1/users/me call to confirm the token is valid
+      - Sends one DOWN email per hour if the check fails
+      - Sends an UP email when recovery is detected (user did manual re-login)
+    Runs every watchdog tick, replacing the separate keepalive tasks.
+    """
+    down_key  = f"saxo_{env}_down_ts"
+    alert_key = f"saxo_{env}_last_alert"
+    now_ts    = time.time()
+    now_str   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    try:
+        import saxo_auth
+        import saxo_client
+        saxo_auth.get_valid_access_token(env=env)
+        me = saxo_client.test_connection(env=env)
+        name = me.get("Name", "?")
+        uid  = me.get("UserId", "?")
+        _log(f"  [Saxo {label}] Token OK — {name} (UserId {uid})")
+
+        if state.get(down_key, 0) > 0:
+            down_ago = int(now_ts - state[down_key])
+            _send_alert(
+                f"[ATOS] Saxo {label} token back UP",
+                f"Saxo {label} API is responding again at {now_str}.\n"
+                f"Was down for approximately {down_ago // 60} min {down_ago % 60} s.\n\n"
+                f"All Saxo {label} strategies will work normally on next run.\n"
+                f"No manual action required.",
+            )
+            state[down_key] = 0
+            _save_state(state)
+
+    except Exception as exc:
+        _log(f"  [Saxo {label}] Token check FAILED: {exc}")
+        last_down = state.get(down_key, 0)
+        if now_ts - last_down > 3600:
+            login_cmd = "python saxo_auth.py --live" if env == "live" else "python saxo_auth.py"
+            _send_alert(
+                f"[ATOS] Saxo {label} token is DOWN — manual login required",
+                f"Saxo {label} token check failed at {now_str}.\n\n"
+                f"Error: {exc}\n\n"
+                f"Action required — run:\n"
+                f"  {login_cmd}\n\n"
+                f"The watchdog will automatically send a recovery email once the\n"
+                f"token is healthy again.",
+            )
+            state[down_key] = now_ts
+            _save_state(state)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main(simulate_crash: bool = False) -> None:
     _init_log()
-    _log("=== IBKR Gateway Watchdog ===")
+    _log("=== ATOS System Watchdog (IBKR + Saxo) ===")
     state = _load_state()
     for gw in GATEWAYS:
         _check_gateway(gw, state, simulate_crash=simulate_crash)
+    _check_saxo("live", "LIVE", state)
+    _check_saxo("sim",  "SIM",  state)
 
 
 if __name__ == "__main__":
