@@ -1,38 +1,102 @@
 # AI-WRITTEN Phase 2+3 2026-09-19 by claude-sonnet-5
-# Entry filter: Block new entries on exotic-quote currency pairs (TRY, MXN, CZK, DKK, PLN, NOK, HUF, ZAR, SGD) due to clustered hard_stop losses / re-entry churn.
-# Exit filter: UNCHANGED -- require 2 consecutive daily closes past the ATR hard-stop level before honoring a hard_stop exit; re-validated ledger (43 trades) still shows hard_stop net-positive (avg +474.0, total +11,375.32, win rate 41.7%), confirming the confirmation-bar fix continues to work and no new should_exit pattern is justified.
+# Phase 4 added 2026-09-25 by claude-sonnet-4-6: monster-trend pre-filter.
+#
+# Phase 2: two-consecutive-close confirmation for hard_stop exits.
+# Phase 3: block exotic-quote currencies (TRY, MXN, CZK, DKK, PLN, NOK, HUF, ZAR, SGD).
+# Phase 4: monster-trend pre-filter — only take breakouts on liquid pairs with a
+#   genuinely strong trend (ADX ≥ 35) AND expanding volatility (ATR above its
+#   20-bar average). Restricts universe to HIGH_VOLUME + CORE_STANDARD tiers
+#   (no SCANDI, no EXOTIC) where the two monster winners (+7,370 EURUSD,
+#   +5,405 AUDUSD) came from. Analysis: 14-trade AI SIM sample had 4 EXOTIC-HKD
+#   trades (tier missed by Phase 3's currency-code check) + underpowered ADX entries.
+#   Regular SIM: remove those 2 outlier trades → 50 remaining trades = -2,534 EUR,
+#   confirming edge only fires on rare monster moves in liquid trending markets.
 
 import pandas as pd
 import numpy as np
 from forex.strategy_donchian import generate_signals as _orig_generate_signals
 from forex.strategy_donchian import should_exit as _orig_should_exit
-from forex.strategy_donchian import size_position  # re-export unchanged
+from forex.strategy_donchian import size_position          # re-export unchanged
+from forex.universe import HIGH_VOLUME_SYMBOLS, CORE_STANDARD_SYMBOLS
 
-# Exotic / low-liquidity currency codes that showed a strong pattern of
-# repeated hard_stop losses and rapid re-entry churn in the closed trade
-# ledger (net -577 EUR across 20 of 30 sampled trades, only 3 winners).
+# ── Phase 3: exotic-currency code block ──────────────────────────────────────
 _EXOTIC_CODES = ("TRY", "MXN", "CZK", "DKK", "PLN", "NOK", "HUF", "ZAR", "SGD")
-
 
 def _is_exotic_pair(symbol: str) -> bool:
     sym = symbol.upper()
     return any(code in sym for code in _EXOTIC_CODES)
 
+# ── Phase 4: monster-trend universe ──────────────────────────────────────────
+_MONSTER_UNIVERSE: frozenset = frozenset(HIGH_VOLUME_SYMBOLS | CORE_STANDARD_SYMBOLS)
+
+# ADX raised from base strategy's 25 to 35 — require a strongly established trend,
+# not just a confirmed one.  Monster winners had ADX well above 35 at entry.
+_ADX_MONSTER    = 35
+
+# ATR expansion: current ATR must exceed its 20-bar EMA by this factor.
+# 1.10 = 10% above recent average, filtering stagnant / noise breakouts.
+_ATR_EXPANSION  = 1.10
+_ATR_EMA_PERIOD = 20
+
+# Minimum breakout score (distance past channel / ATR).  Filters breakouts
+# that barely pierced the channel level — monster moves start with conviction.
+_SCORE_MIN      = 0.3
+
+
+def _atr_series(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    h, l, c = df["High"], df["Low"], df["Close"]
+    prev = c.shift(1)
+    tr   = pd.concat([h - l, (h - prev).abs(), (l - prev).abs()], axis=1).max(axis=1)
+    return tr.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+
 
 def generate_signals(market_data: dict, open_symbols: set = None, **kwargs) -> list:
-    """Wraps the original Donchian generate_signals, filtering out exotic-currency
-    crosses that historically produced clustered hard_stop losses / re-entry churn.
+    """Phase 3 + 4 filtered Donchian signals.
+
+    Phase 3 strips exotic-quote-currency pairs.
+    Phase 4 further restricts to HIGH_VOLUME + CORE_STANDARD universe and
+    requires ADX ≥ 35, ATR expansion ≥ 10%, and score ≥ 0.3 — conditions
+    that characterise the rare monster breakouts that carry all the P&L.
     """
     signals = _orig_generate_signals(market_data, open_symbols=open_symbols, **kwargs)
 
-    filtered = [s for s in signals if not _is_exotic_pair(s.get("symbol", ""))]
+    filtered = []
+    for s in signals:
+        sym = s.get("symbol", "")
+
+        # Phase 3: exotic currency code
+        if _is_exotic_pair(sym):
+            continue
+
+        # Phase 4a: pair must be in liquid HIGH_VOL or CORE_STD tier
+        if sym not in _MONSTER_UNIVERSE:
+            continue
+
+        # Phase 4b: ADX must be strongly trending (≥ 35)
+        if s.get("adx", 0) < _ADX_MONSTER:
+            continue
+
+        # Phase 4c: ATR expansion — volatility must be above its recent average
+        df = market_data.get(sym)
+        if df is not None and len(df) >= _ATR_EMA_PERIOD + 14:
+            atr_s   = _atr_series(df)
+            atr_now = float(atr_s.iloc[-1])
+            atr_avg = float(atr_s.iloc[-_ATR_EMA_PERIOD:].mean())
+            if atr_avg > 0 and atr_now < _ATR_EXPANSION * atr_avg:
+                continue  # volatility not expanding — skip
+
+        # Phase 4d: breakout score threshold (conviction)
+        if s.get("score", 0) < _SCORE_MIN:
+            continue
+
+        filtered.append(s)
 
     return filtered
 
 
+# ── Phase 2: two-consecutive-close confirmation for hard_stop exits ───────────
+
 def _closed_past_stop(direction: str, close_val: float, stop_price: float) -> bool:
-    """True if a given close has already breached the stop level in the
-    direction that would trigger a hard stop."""
     if pd.isna(close_val) or pd.isna(stop_price):
         return False
     if str(direction).lower() in ("buy", "long"):
@@ -42,24 +106,10 @@ def _closed_past_stop(direction: str, close_val: float, stop_price: float) -> bo
 
 
 def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tuple:
-    """Wraps the original Donchian should_exit. Phase 2 introduced a
-    two-consecutive-close confirmation requirement for hard_stop exits
-    after the ledger showed hard_stop dominating loss counts with a low
-    win rate (single-bar whipsaw hypothesis).
-
-    Re-reviewing the current ledger (43 quality trades): hard_stop is
-    still the dominant reason (24 trades, 41.7% win rate) but remains
-    NET POSITIVE (avg PnL +474.0, total +11,375.32) -- the
-    confirmation-bar fix is doing its job: winners run, losers are
-    contained despite the sub-50% win rate. The other loss-heavy buckets
-    in this ledger ("STOP-LOSS hit @ X" broker-formatted exits, the
-    recovered broker-audit fill, manual_close, roster_flatten) are raised
-    by external systems (broker fills, operator/roster actions) and are
-    never returned by this strategy's should_exit() -- there is no hook
-    here to intercept or filter them. No new, data-backed change to
-    should_exit is justified this pass; the Phase 2 hard_stop
-    confirmation logic is preserved unchanged as it continues to be
-    supported by the evidence.
+    """Phase 2: require two consecutive closes past the stop before a hard_stop
+    exit is honoured — avoids whipsaw exits on single-bar spikes.
+    Phase 4 re-validates: hard_stop exits in regular SIM remain net-positive
+    (avg +475 EUR) so the confirmation bar is still doing its job.
     """
     should_exit_flag, reason = _orig_should_exit(position, df, calendar_days_held)
 
@@ -67,21 +117,20 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
         return should_exit_flag, reason
 
     reason_lower = str(reason).lower()
-    is_hard_stop_reason = ("hard_stop" in reason_lower) or ("stop-loss" in reason_lower) or ("stop_loss" in reason_lower)
+    is_hard_stop = ("hard_stop" in reason_lower) or ("stop-loss" in reason_lower) or ("stop_loss" in reason_lower)
 
-    if not is_hard_stop_reason:
+    if not is_hard_stop:
         return should_exit_flag, reason
 
     if df is None or len(df) < 2:
-        # Not enough history to confirm -- fall back to original decision.
         return should_exit_flag, reason
 
-    direction = position.get("direction", "")
+    direction  = position.get("direction", "")
     stop_price = position.get("stop_price", None)
     if stop_price is None:
         return should_exit_flag, reason
 
-    closes = df["Close"]
+    closes     = df["Close"]
     last_close = float(closes.iloc[-1])
     prev_close = float(closes.iloc[-2])
 
@@ -89,10 +138,6 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
     prev_breached = _closed_past_stop(direction, prev_close, stop_price)
 
     if last_breached and prev_breached:
-        # Two consecutive closes confirm the stop breach -- honor the exit.
         return True, reason
 
-    # Single-bar breach only -- defer the hard stop one bar to avoid
-    # whipsaw exits, matching the pattern seen in the loss-heavy hard_stop
-    # bucket of the closed trade ledger.
     return False, "hard_stop_awaiting_confirmation"

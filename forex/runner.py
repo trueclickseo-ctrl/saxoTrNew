@@ -308,10 +308,12 @@ STRATEGIES = {k: v for k, v in STRATEGIES.items() if v is not None}
 RETIRED_STRATEGIES: set[str] = set()
 
 # Strategies paused in AI SIM only (too few data or structurally losing).
-# 2026-09-25: donchian (0% WR / 14 trades), rsi (44.7% WR / 38 trades, W/L 0.65x),
-# bb_quality (28.6% WR / 14 trades, 12/14 time-stops).
+# 2026-09-25: rsi (44.7% WR / 38 trades, W/L 0.65x — structurally losing),
+#             bb_quality (28.6% WR / 14 trades, 12/14 time-stops — signal timing broken).
+# donchian removed 2026-09-25: Phase 4 monster-trend filter added to its AI override
+#   (HIGH_VOL+CORE_STD only, ADX≥35, ATR expansion) — re-activated for data collection.
 # Reversible: remove the name to re-activate. Regular SIM is unaffected.
-AI_SIM_PAUSED_STRATEGIES: set[str] = {"donchian", "rsi", "bb_quality"}
+AI_SIM_PAUSED_STRATEGIES: set[str] = {"rsi", "bb_quality"}
 
 # ── SIM entry roster ──────────────────────────────────────────────────────────
 # 2026-09-02: narrowed to validated strategies only.
