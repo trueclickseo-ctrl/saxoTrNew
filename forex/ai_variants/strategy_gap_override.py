@@ -14,26 +14,48 @@
 
 import pandas as pd
 from forex.strategy_gap import generate_signals as _orig_generate_signals
+from forex.strategy_gap import generate_session_signals as _orig_generate_session_signals
 from forex.strategy_gap import should_exit as _orig_should_exit
 from forex.universe import EXOTIC_SYMBOLS
 
 _EXOTIC: frozenset = frozenset(EXOTIC_SYMBOLS)
 
 
+def _filter_exotic(signals: list) -> list:
+    return [s for s in signals if s.get("symbol", "") not in _EXOTIC]
+
+
 def generate_signals(market_data: dict, open_symbols: set = None,
                      live_prices: dict = None,
                      exhausted_symbols: set = None, **kwargs) -> list:
-    """Phase 4: strip EXOTIC tier pairs before returning gap signals.
-    HIGH_VOL + CORE_STD + SCANDI + METALS pass through unchanged.
-    """
-    signals = _orig_generate_signals(
+    """Phase 4: strip EXOTIC tier pairs from daily gap signals."""
+    return _filter_exotic(_orig_generate_signals(
         market_data,
         open_symbols=open_symbols,
         live_prices=live_prices,
         exhausted_symbols=exhausted_symbols,
         **kwargs,
-    )
-    return [s for s in signals if s.get("symbol", "") not in _EXOTIC]
+    ))
+
+
+def generate_session_signals(session: str,
+                              market_data_h1: dict,
+                              open_symbols: set = None,
+                              live_prices: dict = None,
+                              exhausted_symbols: set = None) -> list:
+    """Phase 4: strip EXOTIC tier pairs from H1 session-gap signals.
+    This is the function the runner actually calls for london/newyork/tokyo/weekly.
+    The missing override of this method was the root cause of GAP having 0 AI SIM
+    trades -- the runner called generate_session_signals on the override module,
+    got AttributeError, and silently fell through.
+    """
+    return _filter_exotic(_orig_generate_session_signals(
+        session,
+        market_data_h1,
+        open_symbols=open_symbols,
+        live_prices=live_prices,
+        exhausted_symbols=exhausted_symbols,
+    ))
 
 
 def _is_hard_stop_reason(reason: str) -> bool:
