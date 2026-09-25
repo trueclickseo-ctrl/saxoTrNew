@@ -307,6 +307,12 @@ STRATEGIES = {k: v for k, v in STRATEGIES.items() if v is not None}
 # consideration. LIVE is unaffected (LIVE_ALLOWED_STRATEGIES is the gate).
 RETIRED_STRATEGIES: set[str] = set()
 
+# Strategies paused in AI SIM only (too few data or structurally losing).
+# 2026-09-25: donchian (0% WR / 14 trades), rsi (44.7% WR / 38 trades, W/L 0.65x),
+# bb_quality (28.6% WR / 14 trades, 12/14 time-stops).
+# Reversible: remove the name to re-activate. Regular SIM is unaffected.
+AI_SIM_PAUSED_STRATEGIES: set[str] = {"donchian", "rsi", "bb_quality"}
+
 # ── SIM entry roster ──────────────────────────────────────────────────────────
 # 2026-09-02: narrowed to validated strategies only.
 # 2026-09-08: re-opened to ALL swing strategies as AI research tracks. Every
@@ -5855,6 +5861,11 @@ if __name__ == "__main__":
         sys.exit(0)
 
     active = requested_strategies if requested_strategies is not None else list(_ACTIVE_STRATEGIES)
+    if ACCOUNT_ENV == "ai_sim" and requested_strategies is None and AI_SIM_PAUSED_STRATEGIES:
+        _paused = sorted(s for s in active if s in AI_SIM_PAUSED_STRATEGIES)
+        active  = [s for s in active if s not in AI_SIM_PAUSED_STRATEGIES]
+        if _paused:
+            logger.info(f"  [ai_sim] paused strategies (losers gate): {_paused}")
     if requested_strategies is not None and ACCOUNT_ENV in ("sim", "ai_sim"):
         _explicit_retired = sorted(set(active) & RETIRED_STRATEGIES)
         _explicit_offroster = sorted((set(active) & set(STRATEGIES))
