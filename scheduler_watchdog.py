@@ -209,6 +209,13 @@ WINDOWS_TASKS = {
     # grace=30, max_first_run_wait=26h (daily).
     "IBKR Signals Entries":    ("ATOS IBKR Signals Entries",    "ibkr_signals_entries.log",   30, 26),
     "IBKR Signals Exits":      ("ATOS IBKR Signals Exits",      "ibkr_signals_exits.log",     30, 26),
+    # IBKR penny / bagger (2026-09-25) -- daily SIM-ONLY entries at 19:30 PKT (10:30 ET),
+    # exits at 23:00 PKT (14:00 ET). Auto-executes on paper account DUR952126.
+    # grace=30, max_first_run_wait=26h (once-daily).
+    "IBKR Penny Entries":      ("ATOS IBKR Penny Entries",      "ibkr_penny_entries.log",     30, 26),
+    "IBKR Penny Exits":        ("ATOS IBKR Penny Exits",        "ibkr_penny_exits.log",       30, 26),
+    "IBKR Bagger Entries":     ("ATOS IBKR Bagger Entries",     "ibkr_bagger_entries.log",    30, 26),
+    "IBKR Bagger Exits":       ("ATOS IBKR Bagger Exits",       "ibkr_bagger_exits.log",      30, 26),
     "Stocks Daily Run":       ("ATOS Daily Run",              "engine_TODAY.log",      15, 2),  # special-cased below
     # log_file fixed 2026-08-25: this was pointed at data/intraday_monitor.log,
     # a dead file only a crash traceback ever touches -- the script's real
