@@ -1,16 +1,20 @@
 # AI-WRITTEN Phase 2+3 2026-09-19 by claude-sonnet-5
 # Phase 4 added 2026-09-25 by claude-sonnet-4-6: monster-trend pre-filter.
+# Phase 5 added 2026-09-25 by claude-sonnet-4-6: BUY-only direction filter.
 #
 # Phase 2: two-consecutive-close confirmation for hard_stop exits.
 # Phase 3: block exotic-quote currencies (TRY, MXN, CZK, DKK, PLN, NOK, HUF, ZAR, SGD).
 # Phase 4: monster-trend pre-filter — only take breakouts on liquid pairs with a
 #   genuinely strong trend (ADX ≥ 35) AND expanding volatility (ATR above its
-#   20-bar average). Restricts universe to HIGH_VOLUME + CORE_STANDARD tiers
-#   (no SCANDI, no EXOTIC) where the two monster winners (+7,370 EURUSD,
-#   +5,405 AUDUSD) came from. Analysis: 14-trade AI SIM sample had 4 EXOTIC-HKD
-#   trades (tier missed by Phase 3's currency-code check) + underpowered ADX entries.
-#   Regular SIM: remove those 2 outlier trades → 50 remaining trades = -2,534 EUR,
-#   confirming edge only fires on rare monster moves in liquid trending markets.
+#   20-bar average). Restricts universe to HIGH_VOLUME + CORE_STANDARD tiers.
+# Phase 5: BUY-only direction filter.
+#   Direction analysis (52 closed regular SIM trades):
+#     BUY  (23 trades): WR 34.8%,  Net +11,047 EUR  (+480/trade)
+#     SELL (29 trades): WR 31.0%,  Net   -804 EUR   (-28/trade)
+#   All the P&L is in BUY breakouts (EURUSD +7,371, AUDUSD +5,449 both BUY).
+#   SELL breakdowns are marginally losing across all pair tiers.
+#   Blocking SELL reduces trade frequency but concentrates on the only
+#   direction with a confirmed edge.
 
 import pandas as pd
 import numpy as np
@@ -87,6 +91,11 @@ def generate_signals(market_data: dict, open_symbols: set = None, **kwargs) -> l
 
         # Phase 4d: breakout score threshold (conviction)
         if s.get("score", 0) < _SCORE_MIN:
+            continue
+
+        # Phase 5: BUY-only — SELL breakdowns are structurally losing
+        # (29 trades, -804 EUR, -28/trade vs BUY +480/trade in regular SIM)
+        if str(s.get("direction", "")).lower() not in ("buy", "long"):
             continue
 
         filtered.append(s)
