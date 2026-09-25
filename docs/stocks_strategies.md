@@ -556,7 +556,12 @@ The 1-second monitor (`intraday_monitor.py`) runs during US market hours (09:30â
 
 ## Email Notifications
 
-All notifications go to `heyitskaxhif@gmail.com` automatically.
+Email routing is split by account type (configured in `config/email.json`):
+
+| Route | Address | Used for |
+|-------|---------|---------|
+| **SIM / Paper** | `atos55636@gmail.com` | All SIM/paper trade fills, signals, alerts |
+| **LIVE** | `atoslive500@gmail.com` | All LIVE trade fills, gateway failures, strategy failures |
 
 | Event | Trigger |
 |-------|---------|

@@ -334,7 +334,7 @@ python forex_live_dashboard.py             # refresh every 60s
 python saxo_auth.py --live
 ```
 
-**Emails**: every run (signal found or not) sends a `[LIVE]`-tagged summary email; every close sends an immediate `[LIVE]`-tagged win/loss alert. Token-expiry alerts are also `[LIVE]`-tagged.
+**Emails**: every run (signal found or not) sends a `[LIVE]`-tagged summary email; every close sends an immediate `[LIVE]`-tagged win/loss alert. Token-expiry alerts are also `[LIVE]`-tagged. All `[LIVE]`-tagged emails route to `atoslive500@gmail.com`; SIM/paper emails route to `atos55636@gmail.com`. Routing is controlled by `recipient_email_live` in `config/email.json`.
 
 **Turning it off**: remove `SAXO_LIVE_CONFIRMED` (or set to any value other than `"1"`) to stop real order placement while leaving the scheduled tasks in place, or unregister the tasks entirely:
 ```powershell

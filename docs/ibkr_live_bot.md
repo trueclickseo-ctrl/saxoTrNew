@@ -424,6 +424,7 @@ python -X utf8 test_ibkr_live_module.py
 6. **failed_sells blocks buys** — If any sell fails during blend rebalance, the buy phase is entirely skipped. This prevents deploying cash from positions that weren't freed.
 7. **DB must match broker** — Before any live run after a Gateway restart or incident, verify `B04` in the test suite passes (DB positions match broker positions).
 8. **PreSubmitted stops** — After any Gateway restart, stops already placed may show as PreSubmitted. They self-resolve once the Gateway is stable; `heal_missing_stops` handles any that don't.
+9. **Email routing** — All LIVE trade fills, gateway failures, and strategy alerts route to `atoslive500@gmail.com`. SIM/paper emails route to `atos55636@gmail.com`. Controlled by `recipient_email_live` in `config/email.json`.
 
 ---
 
