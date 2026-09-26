@@ -55,7 +55,7 @@ python report_phase_c_counterfactual.py sim    # Gate C detail
 
 Track counts every Monday: `python -m ai.agent.strategy_evolver --dry-run`
 
-**Stock Outcome Predictor gate:** 50 paired cards needed (currently ~27/50). IBKR paper + Saxo SIM all now contributing. Est. gate clear ~late October 2026. Retrain: `python ai_stock_outcome_predictor.py --train`.
+**Stock Outcome Predictor gate:** ✅ 179 cards — gate already cleared (needed 50). Retrain now: `python ai_stock_outcome_predictor.py --train` (runs daily at 22:00 PKT automatically).
 
 **End goal: Phase E — Limited LIVE autonomy**
 - Phases B → C → D must prove on SIM first
@@ -68,7 +68,7 @@ Track counts every Monday: `python -m ai.agent.strategy_evolver --dry-run`
 3. **Phase C exit data** — `data/ai_exit_decisions.jsonl`. Gate check ~2026-10-06: `python report_phase_c_counterfactual.py sim`.
 4. **Stocks copilot shadow data** — started 2026-09-26. Gate check ~2026-10-13.
 5. **Evolver forex_ai counts** — CNN-LSTM: ~24 closed, ML: ~5 closed. Run dry-run weekly.
-6. **Stock Outcome Predictor** — ~27/50 cards. All 8 IBKR + 4 Saxo SIM strategies now contributing.
+6. **Stock Outcome Predictor** — 179/50 cards ✅ gate already passed. All 8 IBKR + 4 Saxo SIM strategies contributing. Retrain: `python ai_stock_outcome_predictor.py --train`.
 7. **Clean give-back data (P2)** — `python report_giveback.py`. When ≥10–15 clean trades/strategy.
 
 Everything else (opportunity ranking, calendar blackout, correlation gate) is queued — see **Next modules queue** below.
@@ -241,6 +241,8 @@ Not in the v1 sprint plan. Cheap interim version (hardcoded economic-calendar bl
   - IBKR observation cards gate fix: `stocks_enabled("sim")` → `stocks_enabled("ibkr_paper")` (commit `3867faa`)
   - `check_ai_gates.py` weekly gate checker added (commit `5adc9b1`) — auto-emails every Monday at 09:00 PKT
   - `strategy` field added to stock exit cards (commit `38fd9b1`)
+  - Saxo SIM copilot hooks re-wired into `atos_runner.py` (commit `161ecd7`) — hooks had been removed in `ddab32a`; all 4 strategies (reversion/penny/bagger/signals) now wired, each fires before order placement
+  - Full smoke test run: 32/32 checks pass; 179 stock observation cards confirmed
   - Phase B check 2026-09-26: B1 ✅ +1,117.3 EUR (95 trades), B2 ❌ small-sample, C ❌ 0 matched
 
 - **2026-09-06 — Phase C exit timing agent built (shadow-only); Phase B counterfactual built; Phase A complete**
