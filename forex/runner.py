@@ -75,6 +75,7 @@ import forex.strategy_pullback    as strat_pullback
 import forex.strategy_advanced_pullback_master as strat_advanced_pullback_master
 import forex.strategy_nzd_reversal as strat_nzd_reversal  # 2026-09-08: AI-derived contrarian
 import forex.strategy_gap         as strat_gap
+import forex.strategy_gap_quality as strat_gap_quality
 import forex.strategy_gap_weekend as strat_gap_weekend
 import forex.strategy_supertrend  as strat_supertrend
 import forex.strategy_zscore      as strat_zscore
@@ -236,6 +237,7 @@ STRATEGIES = {
     # (close > prev close). "pullback" is untouched; SIM only.
     "advanced_pullback_master": strat_advanced_pullback_master,
     "gap":         strat_gap,
+    "gap_quality": strat_gap_quality,
     # 2026-08-29: SIM-only parallel A/B test against "gap" -- fixed
     # sizing/ref-close bugs, sessions disabled pending separate-by-type
     # results (see strategy_gap_weekend.py's module docstring). Never
@@ -350,7 +352,7 @@ SIM_ACTIVE_STRATEGIES: list[str] = [
     "advanced_bb_master", "advanced_pullback_master",
     "advanced_rsi_master", "advanced_cnn_lstm_master",
     # Gap strategies: session-time-gated internally — no-op when not in session.
-    "gap", "gap_weekend",
+    "gap", "gap_quality", "gap_weekend",
     # Day-trade strategies: session-gated internally, run via main roster for AI data.
     "london_breakout", "london_breakout_v2",
 ]
@@ -387,7 +389,7 @@ SLOTS_PER_STRATEGY = {
     "donchian": _SWING_SLOTS, "donchian_ai": strat_donchian_ai.MAX_POSITIONS,  # 2026-09-03: AI-gated cap matches module
     "bb": _SWING_SLOTS,
     "pullback": _SWING_SLOTS, "nzd_reversal": _SWING_SLOTS,
-    "gap": _SWING_SLOTS, "gap_weekend": _SWING_SLOTS,
+    "gap": _SWING_SLOTS, "gap_quality": _SWING_SLOTS, "gap_weekend": _SWING_SLOTS,
     # 2026-08-30: the 4 user-supplied "advanced_*_master" A/B strategies --
     # each uncapped, mirroring its original (rsi / bb / pullback / cnn_lstm)
     # so neither side of the comparison has an artificial concurrency edge.
@@ -438,7 +440,7 @@ DAY_TRADE_STRATEGIES = {"london_breakout", "london_breakout_v2"}
 # a few hours). For these the forward-observation excursion is taken from the
 # single most-recent daily bar only (bounded, but coarse -- flagged as such
 # on the exit card).
-_INTRADAY_STRATEGIES = DAY_TRADE_STRATEGIES | {"gap", "gap_weekend"}
+_INTRADAY_STRATEGIES = DAY_TRADE_STRATEGIES | {"gap", "gap_quality", "gap_weekend"}
 
 # An unrealised excursion more than this many times the trade's own entry
 # risk is not real -- it means the bar window wasn't bounded to the holding
@@ -2526,6 +2528,7 @@ GAP_COOLDOWN_FILE = os.path.join(DATA_DIR, "gap_cooldown.json")
 # A/B tested independently, not sharing exhausted-symbol state.
 GAP_COOLDOWN_FILES = {
     "gap":         GAP_COOLDOWN_FILE,
+    "gap_quality": os.path.join(DATA_DIR, "gap_quality_cooldown.json"),
     "gap_weekend": os.path.join(DATA_DIR, "gap_weekend_cooldown.json"),
 }
 
@@ -3157,7 +3160,7 @@ def _apply_breakeven_stop(key: str, pos: dict, df, strat_name: str,
     cur_stop    = float(pos.get("stop_price", 0))
     cur_close   = float(df["Close"].iloc[-1])
 
-    if strat_name in ("gap", "gap_weekend"):
+    if strat_name in ("gap", "gap_quality", "gap_weekend"):
         gap_target = float(pos.get("gap_target", entry_price))
         if abs(gap_target - entry_price) < 1e-8:
             return False
@@ -3621,7 +3624,7 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
         # forcing a bad close) when it disagrees, costs nothing: a
         # genuine hit still closes via the resting order regardless, and
         # skipping never touches (or cancels) that resting order.
-        if strat_name in ("gap", "gap_weekend") and (reason.startswith("gap_filled") or reason.startswith("hard_stop")):
+        if strat_name in ("gap", "gap_quality", "gap_weekend") and (reason.startswith("gap_filled") or reason.startswith("hard_stop")):
             gap_target = float(pos.get("gap_target", entry))
             stop_price = float(pos.get("stop_price", 0))
             if reason.startswith("gap_filled"):
@@ -3782,7 +3785,7 @@ def _run_exits(strat_name: str, strat_mod, positions: dict,
             pnl_tracker.log_close(_pnl_module(), sym, live_px, reason, strategy=strat_name,
                                   fx_rate_to_base=fx_rate,
                                   gross_pnl_base_override=saxo_pnl_eur)
-            if strat_name in ("gap", "gap_weekend"):
+            if strat_name in ("gap", "gap_quality", "gap_weekend"):
                 _mark_gap_exhausted(sym, strat_name)
             if strat_name in _DONCHIAN_STRATS and "hard_stop" in reason:
                 _mark_donchian_cooled(sym)
@@ -3905,7 +3908,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
     # during defined session windows (weekly/london/newyork/tokyo).
     # Outside those windows, any overnight move ≥ 0.10% would generate false signals
     # with none of the structural fill edge that makes gap fading profitable.
-    _GAP_STRATS = ("gap", "gap_weekend")
+    _GAP_STRATS = ("gap", "gap_quality", "gap_weekend")
     gap_session: str | None = _detect_gap_session() if strat_name in _GAP_STRATS else None
     if strat_name in _GAP_STRATS and gap_session is None:
         logger.info(f"  [{strat_name}] Entries skipped — not in a gap session window "
@@ -3919,7 +3922,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
     # open london/tokyo positions still exit-manage normally. Reversible --
     # drop the session from this set. gap_weekend only ever runs `weekly`, so
     # it is unaffected.
-    if strat_name == "gap" and gap_session in DISABLED_GAP_SESSIONS:
+    if strat_name in ("gap", "gap_quality") and gap_session in DISABLED_GAP_SESSIONS:
         logger.info(f"  [gap] Entries skipped — the '{gap_session}' session leg is "
                     f"disabled (net-negative, see the 2026-09-02 decomposition); "
                     f"exits on any open {gap_session} position still run")
@@ -4036,7 +4039,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
         # 2026-09-02: within the (surviving) newyork leg, drop gaps whose pair
         # is in a skip-regime -- HIGH_VOLATILITY newyork gaps ran -0.357 R /
         # 43% WR in the decomposition. regime_data = the full daily-bar dict.
-        if (strat_name == "gap" and gap_session == "newyork"
+        if (strat_name in ("gap", "gap_quality") and gap_session == "newyork"
                 and GAP_NEWYORK_SKIP_REGIMES and regime_data):
             try:
                 from ai.regime.classifier import classify_regime
@@ -5389,7 +5392,7 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
                 # designed to find. Only trend-following strategies (ema,
                 # donchian, pullback, supertrend, ml, cnn_lstm) should be
                 # momentum-filtered.
-                _NO_MOMENTUM_FILTER = ("gap", "gap_weekend", "london_breakout", "london_breakout_v2",
+                _NO_MOMENTUM_FILTER = ("gap", "gap_quality", "gap_weekend", "london_breakout", "london_breakout_v2",
                                        "rsi", "rsi_trend", "bb", "zscore", "zscore_quality",
                                        # 2026-08-30: mean-reversion A/B variants -- exempt for the
                                        # same reason as their originals ("rsi"/"bb"): the momentum
