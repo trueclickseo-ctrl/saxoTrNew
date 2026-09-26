@@ -324,19 +324,20 @@ _run("forex/runner: _filter_pairs_for_account() is a no-op under SIM (all pairs 
 
 def test_live_allowed_strategies():
     import forex.runner as r
-    # 2026-09-02: forex LIVE ENTRIES STOPPED on BOTH accounts -- the user moved
-    # all real-money trading to stocks (atos_live_stocks.py / US Blend). Both
-    # allowlists empty = NO new forex entries, but the open positions on each
-    # account stay exit-managed via _legacy_exit_strategies(active=[], ...).
-    assert r.LIVE_ALLOWED_STRATEGIES == set(), (
+    # 2026-09-27: EMA re-enabled on LIVE SEK account with AI copilot active
+    # (23k SEK capital, €25 fixed risk/trade, 'live' in _AI_ACTING_ACCOUNTS).
+    # History: {donchian,ema,rsi} -> {bb,rsi} -> {bb} -> {rsi} (2026-08-31)
+    # -> set() (2026-09-02, real money moved to stocks)
+    # -> {"ema"} (2026-09-27, EMA LIVE go-live with copilot).
+    assert r.LIVE_ALLOWED_STRATEGIES == {"ema"}, (
         "history: {donchian,ema,rsi} -> {bb,rsi} -> {bb} -> {rsi} (2026-08-31) "
-        "-> set() (2026-09-02, real money moved to stocks). Exits still managed."
+        "-> set() (2026-09-02) -> {ema} (2026-09-27, EMA LIVE + copilot)."
     )
     assert r.LIVE_EUR_ALLOWED_STRATEGIES == set(), (
         "EUR sub-account consolidated into SEK 2026-09-01, then all forex live "
         "stopped 2026-09-02 -- empty allowlist, exits-only wind-down"
     )
-_run("forex/runner: both LIVE allowlists empty (real money -> stocks 2026-09-02); exits still managed",
+_run("forex/runner: LIVE_ALLOWED_STRATEGIES={ema} (2026-09-27 EMA go-live); EUR exits-only",
      test_live_allowed_strategies)
 
 
@@ -382,26 +383,26 @@ _run("forex/runner CLI: --account live --live refuses to run without SAXO_LIVE_C
      test_cli_rejects_live_without_confirmation_envvar)
 
 
-def test_cli_live_exit_check_dry_runs_cleanly_with_empty_allowlist():
-    # 2026-09-02: forex LIVE entries stopped, LIVE_ALLOWED_STRATEGIES empty.
-    # The Exit Check task runs `--account live --exits-only` with NO
-    # `--strategy` -- effective_strats resolves to [] (== sorted(set())), the
-    # not-allowed check passes, and _run_exits_only manages the open positions.
+def test_cli_live_exit_check_dry_runs_cleanly():
+    # --account live --exits-only runs cleanly regardless of allowlist contents.
+    # With LIVE_ALLOWED_STRATEGIES={"ema"}, effective_strats=["ema"] but
+    # --exits-only skips all entry logic, so the allowlist check passes and
+    # _run_exits_only manages open positions.
     proc = _run_cli(["--account", "live", "--exits-only"], timeout=150)
     assert proc.returncode == 0, f"expected clean dry-run exit(0), got {proc.returncode}: {proc.stderr}"
-_run("forex/runner CLI: --account live --exits-only dry-runs cleanly (empty allowlist, exits-only wind-down)",
-     test_cli_live_exit_check_dry_runs_cleanly_with_empty_allowlist)
+_run("forex/runner CLI: --account live --exits-only dry-runs cleanly",
+     test_cli_live_exit_check_dry_runs_cleanly)
 
 
-def test_cli_rejects_any_strategy_on_live_sek_account():
-    # 2026-09-02: LIVE_ALLOWED_STRATEGIES is empty -- EVERY explicit --strategy
-    # on a LIVE account is now a hard error (rsi included), same as bb always was.
+def test_cli_rejects_non_ema_strategy_on_live_sek_account():
+    # 2026-09-27: LIVE_ALLOWED_STRATEGIES={"ema"} -- rsi and bb are still hard
+    # errors; only ema is allowed.
     for strat in ("rsi", "bb"):
         proc = _run_cli(["--account", "live", "--strategy", strat])
         assert proc.returncode == 2, f"--strategy {strat}: expected exit(2), got {proc.returncode}: {proc.stderr}"
         assert "only allows" in proc.stderr
-_run("forex/runner CLI: --account live --strategy <anything> is a hard error (real money moved to stocks)",
-     test_cli_rejects_any_strategy_on_live_sek_account)
+_run("forex/runner CLI: --account live --strategy rsi/bb is a hard error; only ema is allowed",
+     test_cli_rejects_non_ema_strategy_on_live_sek_account)
 
 
 def test_cli_sim_default_behavior_unaffected():

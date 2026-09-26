@@ -64,11 +64,10 @@ def test_dormant_positions_still_exit_managed():
     assert "active_strategies = list(STRATEGIES)" in inspect.getsource(runner.run_exits_only)
 
 
-def test_live_is_unaffected():
-    # 2026-09-02: forex LIVE entries stopped on BOTH accounts (real money
-    # moved to the LIVE stocks sleeve). Both allowlists empty -> no new forex
-    # entries; open positions still exit-managed via _legacy_exit_strategies.
-    assert runner.LIVE_ALLOWED_STRATEGIES == set()
+def test_live_allowlists():
+    # 2026-09-27: EMA re-enabled on LIVE SEK (23k SEK, €25/trade, copilot on).
+    # EUR stays empty (exits-only wind-down since 2026-09-01).
+    assert runner.LIVE_ALLOWED_STRATEGIES == {"ema"}
     assert runner.LIVE_EUR_ALLOWED_STRATEGIES == set()
     # the LIVE/LIVE_EUR CLI branches resolve from those, not _ACTIVE_STRATEGIES
     src = inspect.getsource(runner)

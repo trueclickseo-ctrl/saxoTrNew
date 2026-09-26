@@ -35,11 +35,14 @@ def _run(n, f):
 
 # ── config ──────────────────────────────────────────────────────────────
 
-def test_ai_sim_is_a_paper_acting_account_but_live_is_not():
+def test_ai_sim_is_a_paper_acting_account():
     import ai.config as c
     assert "ai_sim" in c._AI_SHADOW_ACCOUNTS
     assert "ai_sim" in c._AI_ACTING_ACCOUNTS
-    for live in ("live", "live_eur", "live_stocks"):
+    # 2026-09-27: 'live' added to _AI_ACTING_ACCOUNTS (EMA go-live, shadow_mode
+    # gates actual execution). live_eur and live_stocks remain log-only forever.
+    assert "live" in c._AI_ACTING_ACCOUNTS
+    for live in ("live_eur", "live_stocks"):
         assert live not in c._AI_ACTING_ACCOUNTS
         assert c.can_apply_decision(live) is False
 

@@ -42,12 +42,16 @@ _CONFIG_PATH = os.path.join(_BASE_DIR, "config", "ai.json")
 #   deterministic SIM books. In _AI_ACTING_ACCOUNTS below.
 _AI_SHADOW_ACCOUNTS = {"sim", "live", "live_eur", "live_stocks", "ai_sim"}
 
-# Accounts an AI decision may ever ACTUALLY CHANGE an order for. SIM paper
-# only, in code. This is the hard wall between "AI has an opinion on LIVE"
-# and "AI moves real money" -- a config flip cannot cross it.
-#   ai_sim is a paper book (no real orders anywhere) whose whole purpose is
-#   to let the agent act, so it can be A/B'd against the deterministic book.
-_AI_ACTING_ACCOUNTS = {"sim", "ai_sim"}
+# Accounts an AI decision may ever ACTUALLY CHANGE an order for.
+#   sim:    paper SIM, gated by shadow_mode (a sprint flips it)
+#   ai_sim: paper twin whose whole purpose is to act (A/B vs deterministic)
+#   live:   2026-09-27 — SEK LIVE real-money account added for EMA strategy.
+#           The copilot evaluates every EMA signal before a real order is
+#           placed; it can APPROVE/MODIFY/REJECT. Gated by shadow_mode
+#           (config/ai.json shadow_mode:false required to act) plus
+#           enabled_live_shadow and agent_enabled. live_eur and live_stocks
+#           remain log-only forever (not in this set).
+_AI_ACTING_ACCOUNTS = {"sim", "ai_sim", "live"}
 
 _DEFAULTS = {
     "enabled_sim": False,
@@ -224,9 +228,9 @@ def shadow_mode(account_env: str = "sim") -> bool:
 
 def can_apply_decision(account_env: str) -> bool:
     """Sprint 4+ gate: may the agent's decision ACTUALLY change an order
-    (resize / skip) for this account? True only for sim, only with the agent
-    enabled, only when shadow_mode is off. A LIVE account can never make
-    this True -- it is not in _AI_ACTING_ACCOUNTS."""
+    (resize / skip) for this account? True for sim (shadow_mode off) and
+    live (2026-09-27, EMA strategy, shadow_mode off). live_eur and
+    live_stocks cannot make this True -- not in _AI_ACTING_ACCOUNTS."""
     if account_env not in _AI_ACTING_ACCOUNTS:
         return False
     return agent_enabled_for(account_env) and not shadow_mode(account_env)

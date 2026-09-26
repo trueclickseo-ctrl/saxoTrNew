@@ -58,13 +58,12 @@ def test_killswitch_defaults_are_off_in_code():
     assert aic._DEFAULTS.get("enabled_ai_sim") is False
     assert aic._DEFAULTS["agent_enabled"] is False
     assert aic._DEFAULTS["shadow_mode"] is True
-    # NO real-money account can ever be an acting account, no matter the
-    # config. The acting set is SIM paper only: "sim" (gated by shadow_mode)
-    # and "ai_sim" (the AI-decision paper twin, 2026-09-03).
-    for _live in ("live", "live_eur", "live_stocks"):
+    # live_eur and live_stocks can never be acting accounts. 'live' was added
+    # 2026-09-27 (EMA go-live) -- it can act when shadow_mode=False in config.
+    for _live in ("live_eur", "live_stocks"):
         assert _live not in aic._AI_ACTING_ACCOUNTS
         assert aic.can_apply_decision(_live) is False
-    assert aic._AI_ACTING_ACCOUNTS == {"sim", "ai_sim"}
+    assert aic._AI_ACTING_ACCOUNTS == {"sim", "ai_sim", "live"}
 _run("kill-switch fail-safe defaults are OFF in code (config file is mutable)",
      test_killswitch_defaults_are_off_in_code)
 
@@ -100,28 +99,31 @@ def test_enabled_sim_true_enables_only_sim():
 _run("enabled_sim:true -> ON for sim only; live/live_eur stay OFF", test_enabled_sim_true_enables_only_sim)
 
 
-def test_live_can_shadow_but_never_act():
+def test_live_can_act_when_shadow_mode_off():
     try:
-        # config turns on LIVE shadow AND tries to take it out of shadow_mode
-        # AND enables the agent -- LIVE must still be log-only.
+        # 2026-09-27: 'live' is now in _AI_ACTING_ACCOUNTS (EMA go-live).
+        # With shadow_mode=False + enabled_live_shadow + agent_enabled,
+        # can_apply_decision("live") is True. live_eur is still log-only.
         _point_at(json.dumps({"enabled_live_shadow": True, "shadow_mode": False,
                               "agent_enabled": True}))
-        # observe/log: allowed
+        # observe/log: allowed for both
         assert aic.ai_enabled_for("live") is True
         assert aic.ai_enabled_for("live_eur") is True
-        # act: NEVER, hardcoded -- not in _AI_ACTING_ACCOUNTS
-        assert aic.shadow_mode("live") is True, "LIVE is always shadow, config cannot flip it"
+        # live CAN act when shadow_mode=False (2026-09-27 EMA go-live)
+        assert aic.shadow_mode("live") is False
+        assert aic.can_apply_decision("live") is True
+        # live_eur still cannot act -- not in _AI_ACTING_ACCOUNTS
         assert aic.shadow_mode("live_eur") is True
-        assert aic.can_apply_decision("live") is False
         assert aic.can_apply_decision("live_eur") is False
-        assert "sim" in aic._AI_ACTING_ACCOUNTS
-        assert "live" not in aic._AI_ACTING_ACCOUNTS and "live_eur" not in aic._AI_ACTING_ACCOUNTS
+        assert "live" in aic._AI_ACTING_ACCOUNTS
+        assert "live_eur" not in aic._AI_ACTING_ACCOUNTS
         # a totally unknown account is off for everything
         assert aic.ai_enabled_for("futures") is False
         assert aic.can_apply_decision("futures") is False
     finally:
         _restore()
-_run("LIVE may shadow-log (enabled_live_shadow) but can NEVER act -- hardcoded", test_live_can_shadow_but_never_act)
+_run("LIVE can act when shadow_mode=False (2026-09-27 EMA go-live); live_eur stays log-only",
+     test_live_can_act_when_shadow_mode_off)
 
 
 def test_live_shadow_off_by_default():

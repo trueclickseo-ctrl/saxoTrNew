@@ -307,6 +307,7 @@ STRATEGIES = {k: v for k, v in STRATEGIES.items() if v is not None}
 # a warning). AI copilot scores every signal from every strategy; goal is for the
 # AI to observe, learn, and propose improvements over time before any live
 # consideration. LIVE is unaffected (LIVE_ALLOWED_STRATEGIES is the gate).
+# 2026-09-27: EMA added to LIVE_ALLOWED_STRATEGIES (see below).
 RETIRED_STRATEGIES: set[str] = set()
 
 # Strategies paused in AI SIM only (too few data or structurally losing).
@@ -586,6 +587,12 @@ RSI_LIVE_LOT_MAX  = 100_000
 # minimum -- user corrected it to the max/round-down/skip rules above.
 RSI_LIVE_FIXED_RISK_EUR: float | None = 45.0
 
+# 2026-09-27: EMA LIVE fixed risk per trade (SEK account, small capital).
+# €25 keeps total open risk inside the 50% margin gate with 20-30 simultaneous
+# open EMA positions (EMA is a long-duration swing strategy with many small
+# losses and rare outsized winners). Set to None to revert to equity-% sizing.
+EMA_LIVE_FIXED_RISK_EUR: float | None = 25.0
+
 
 def _snap_rsi_live_lot(raw_qty: int) -> int:
     """Snap a risk-sized RSI quantity to the nearest 10k rung, clamped to
@@ -689,7 +696,7 @@ ACCOUNT_ENV = "sim"
 # task is already Disabled; the `ATOS Forex LIVE Exit Check` task stays on to
 # wind the 5 positions down. Re-populate this set only on the user's explicit
 # go-ahead to resume live forex.
-LIVE_ALLOWED_STRATEGIES: set[str] = set()
+LIVE_ALLOWED_STRATEGIES: set[str] = {"ema"}
 
 # 2026-08-26: a SECOND, genuinely separate real-money account -- the EUR
 # sub-account under the same Saxo LIVE login (see _account()'s Currency
@@ -4239,7 +4246,9 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                     regime_bars=(regime_data or {}).get(sym),
                     est_commission_eur=_comm_eur,
                     est_all_in_cost_eur=(round(_all_in_eur, 2) if _all_in_eur else None),
-                    fixed_risk_eur=(RSI_LIVE_FIXED_RISK_EUR if strat_name == "rsi" else None),
+                    fixed_risk_eur=(RSI_LIVE_FIXED_RISK_EUR if strat_name == "rsi"
+                                    else EMA_LIVE_FIXED_RISK_EUR if strat_name == "ema"
+                                    else None),
                     pair_stats=_pair_history_stats(sym, strat_name),
                     exposure_snapshot=(_exposure_ctrl.snapshot()
                                        if _exposure_ctrl is not None else None),
@@ -4327,6 +4336,19 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 _rej("no_fx_rate", f"no live EUR rate for {_q_ccy} (LIVE €45 cap)")
                 continue
             rp_kw["risk_amount"] = RSI_LIVE_FIXED_RISK_EUR / _eur_per
+            rp_kw.pop("risk_pct", None)
+        if (ACCOUNT_ENV in ("live",) and strat_name == "ema"
+                and EMA_LIVE_FIXED_RISK_EUR):
+            _q_ccy   = sig["symbol"][3:6] if len(sig["symbol"]) >= 6 else ""
+            _eur_per = _eur_per_unit(_q_ccy, akey)
+            if not _eur_per:
+                logger.warning(f"  [{strat_name}] SKIP {sym}: no live EUR rate for "
+                               f"{_q_ccy} — can't enforce the "
+                               f"€{EMA_LIVE_FIXED_RISK_EUR:.0f} risk cap, not "
+                               f"falling back to %-based sizing on real money")
+                _rej("no_fx_rate", f"no live EUR rate for {_q_ccy} (LIVE EMA €25 cap)")
+                continue
+            rp_kw["risk_amount"] = EMA_LIVE_FIXED_RISK_EUR / _eur_per
             rp_kw.pop("risk_pct", None)
         if "units" in sig:
             qty = sig["units"]   # london_breakout pre-computes sizing from SEK capital
