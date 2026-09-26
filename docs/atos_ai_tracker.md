@@ -55,7 +55,7 @@ python report_phase_c_counterfactual.py sim    # Gate C detail
 
 Track counts every Monday: `python -m ai.agent.strategy_evolver --dry-run`
 
-**Stock Outcome Predictor gate:** ✅ 179 cards — gate already cleared (needed 50). Retrain now: `python ai_stock_outcome_predictor.py --train` (runs daily at 22:00 PKT automatically).
+**Stock Outcome Predictor gate:** 27/50 closed paired cards (179 total rows, but most are open/entry-only). Gate clears when 50 closed trades exist. Check: `python ai_stock_outcome_predictor.py --train`.
 
 **End goal: Phase E — Limited LIVE autonomy**
 - Phases B → C → D must prove on SIM first
@@ -68,7 +68,7 @@ Track counts every Monday: `python -m ai.agent.strategy_evolver --dry-run`
 3. **Phase C exit data** — `data/ai_exit_decisions.jsonl`. Gate check ~2026-10-06: `python report_phase_c_counterfactual.py sim`.
 4. **Stocks copilot shadow data** — started 2026-09-26. Gate check ~2026-10-13.
 5. **Evolver forex_ai counts** — CNN-LSTM: ~24 closed, ML: ~5 closed. Run dry-run weekly.
-6. **Stock Outcome Predictor** — 179/50 cards ✅ gate already passed. All 8 IBKR + 4 Saxo SIM strategies contributing. Retrain: `python ai_stock_outcome_predictor.py --train`.
+6. **Stock Outcome Predictor** — 27/50 closed paired cards (179 total rows incl. open). Gate clears ~mid-Oct at current close rate. Retrain: `python ai_stock_outcome_predictor.py --train`.
 7. **Clean give-back data (P2)** — `python report_giveback.py`. When ≥10–15 clean trades/strategy.
 
 Everything else (opportunity ranking, calendar blackout, correlation gate) is queued — see **Next modules queue** below.
