@@ -1,6 +1,8 @@
 # AI-WRITTEN Phase 2+3 2026-09-08 by claude-sonnet-5
 # Entry filter: block simultaneous entries that share a currency leg with an already-open EMA position (NZD-cross cascade)
-# Exit filter: unchanged -- require the ATR hard-stop breach to hold for 2 consecutive daily closes before honoring the exit, to filter single-bar noise whipsaws
+# Exit filter: 2-bar hard-stop confirmation (NOTE: direction check has a bug — "long"/"short" vs "Buy"/"Sell" — filter never fires)
+# SUPERSEDED 2026-09-26: currency concentration filter promoted to runner.py _apply_ema_currency_filter().
+# This file kept as a no-op passthrough so ai_sim still loads it without error.
 
 from typing import Set, Tuple
 

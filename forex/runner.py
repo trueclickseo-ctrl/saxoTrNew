@@ -2638,6 +2638,40 @@ def _mark_donchian_cooled(sym: str) -> None:
         logger.warning(f"donchian_cooldown: could not write {DONCHIAN_COOLDOWN_FILE}: {e}")
 
 
+def _apply_ema_currency_filter(signals: list, open_syms: set) -> list:
+    """One open position per currency leg for the EMA strategy.
+
+    Promoted from ai_variants/strategy_ema_override.py (2026-09-26).
+    Trade history showed NZD/HKD/AUD cascade losses: the strategy would open
+    NZDSGD, NZDUSD, NZDHKD simultaneously on the same underlying NZD move,
+    multiplying exposure instead of diversifying it.
+
+    Blocks any new signal whose base or quote currency is already committed via
+    an open position, and also deduplicates within the current signal batch so
+    the same currency can't be claimed twice in one run.
+    """
+    committed: set = set()
+    for sym in (open_syms or set()):
+        s = sym.upper()
+        if len(s) >= 6:
+            committed.add(s[:3])
+            committed.add(s[3:6])
+
+    filtered = []
+    for sig in signals:
+        s = sig.get("symbol", "").upper()
+        if len(s) < 6:
+            filtered.append(sig)
+            continue
+        base, quote = s[:3], s[3:6]
+        if base in committed or quote in committed:
+            continue
+        filtered.append(sig)
+        committed.add(base)
+        committed.add(quote)
+    return filtered
+
+
 def _log_order(entry: dict) -> None:
     os.makedirs(DATA_DIR, exist_ok=True)
     orders = []
@@ -4038,6 +4072,12 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                     logger.info(f"  [{strat_name}] donchian cooldown: suppressed "
                                 f"{before - len(signals)} pair(s) hard-stopped today "
                                 f"({sorted(_dc_cooled)})")
+        if strat_name == "ema":
+            before = len(signals)
+            signals = _apply_ema_currency_filter(signals, open_syms)
+            if before != len(signals):
+                logger.info(f"  [ema] currency filter: suppressed "
+                            f"{before - len(signals)} signal(s) (currency leg already open)")
 
     # Weekend on a real-money account: signals are generated (above) so they
     # can be surfaced, but no entry is placed -- they'd only rest as stale
