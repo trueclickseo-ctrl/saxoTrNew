@@ -156,6 +156,21 @@ def main():
                        if ea > er else
                        f"{R}rejected trades did BETTER than approved ({er - ea:+.2f}) -- agent is mis-ranking{X}")
             print(f"\n  {verdict}")
+            # Gate 2 robustness: flag any single APPROVE trade that is an outlier
+            # (|pnl| > 3x the REJECT avg_abs) that could be distorting the metric.
+            reject_avg_abs = sum(abs(p) for p in rej) / len(rej) if rej else 1.0
+            outliers = [(i, p) for i, p in enumerate(appr) if abs(p) > 3 * reject_avg_abs]
+            if outliers:
+                print(f"  {Y}Gate 2 note: {len(outliers)} APPROVE trade(s) are outliers "
+                      f"(|pnl| > 3x reject avg_abs={reject_avg_abs:.0f}) and may be P&L "
+                      f"calc errors (e.g. roster_flatten mis-records): "
+                      + ", ".join(f"{p:+.1f}" for _, p in outliers) + f"{X}")
+                appr_clean = [p for p in appr if abs(p) <= 3 * reject_avg_abs]
+                if appr_clean:
+                    ea_c = sum(appr_clean) / len(appr_clean)
+                    print(f"  {Y}Without outliers (n={len(appr_clean)}): APPROVE avg {ea_c:+.2f}  "
+                          f"REJECT avg {er:+.2f}  delta {ea_c-er:+.2f}  "
+                          + (f"-> {G}PASS{X}" if ea_c > er else f"-> {R}FAIL{X}") + f"{X}")
 
         # candidate rough days -- for the USER to judge, not this script
         day_pnl = defaultdict(float)

@@ -73,7 +73,14 @@ STRATEGY FAMILIES -- read proposal.strategy_name and judge accordingly
   london_breakout, and advanced_* variants of those): here independent confirmation \
   is real information. A higher agreement_count / signal_strength genuinely raises \
   conviction; a lone signal in a hostile or opposite regime is a real MODIFY/REJECT \
-  candidate.
+  candidate. \
+  WEAK LONE SIGNAL RULE (non-ema/advanced_ema trend/breakout only): if \
+  agreement_count == 1 AND signal_strength < 0.10 AND pair_history is absent \
+  (null) or has n_closed < 5 -> MODIFY (0.75x). Do not APPROVE a lone weak trend \
+  signal with no confirmed track record on this pair. Reserve APPROVE for: \
+  (a) signal_strength >= 0.10, OR (b) pair_history shows n_closed >= 5 AND \
+  avg_pnl_eur > 0. This applies to donchian, pullback, supertrend, ml, cnn_lstm, \
+  gap, london_breakout -- NOT to ema/advanced_ema (their special rule overrides).
 - EMA SPECIAL RULE (ema, advanced_ema only): these are ultra-low WR, ultra-high W/L \
   strategies by design. Expected win rate is 5-15% -- most positions stop out at \
   near-zero (breakeven stop), the rare winners run 100x+ the typical loss. \
