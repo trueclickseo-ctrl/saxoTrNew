@@ -1,6 +1,11 @@
 # AI-WRITTEN Phase 2+3 2026-09-18 by claude-sonnet-5
 # Entry filter: Exclude TRY, XAU, and HKD cross-pair symbols (consistent losers in closed-trade sample).
 # Exit filter: Require 2 consecutive daily closes beyond the ATR hard-stop before confirming a "hard_stop" exit, to filter single-bar wick-outs.
+# SUPERSEDED 2026-09-27:
+#   - 2-bar hard_stop confirmation promoted to strategy_ml.py should_exit().
+#   - TRY/XAU/HKD exclusion dropped — all 5 trades on those pairs since reset
+#     were winners (NZDTRY +31, USDTRY +38, EURHKD +41, CADHKD +29, CNHHKD +10).
+# This file kept as a no-op passthrough so ai_sim still loads it without error.
 #
 # PENDING ACTION FOR EVOLVER (do not remove this comment until actioned):
 # When closed organic trades >= 30 AND WR >= 60% AND PF >= 1.2: flag in evolver

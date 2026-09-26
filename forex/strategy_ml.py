@@ -218,10 +218,19 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
         if profit / R >= PROFIT_TARGET_R:
             return True, f"profit_target ({profit / R:.2f}R >= {PROFIT_TARGET_R}R)"
 
+    # AI-derived fix (2026-09-26): single-bar wick-outs were the largest losing
+    # bucket (17 hard_stops, WR 35%). Require the previous daily close to also
+    # be beyond the stop before honoring the exit — filters single-bar spikes
+    # that reverse immediately without confirming the stop breach persists.
     if is_long and stop_px > 0 and low_now <= stop_px:
-        return True, f"hard_stop ({stop_px:.5f})"
+        prev_close = float(c.iloc[-2]) if len(c) >= 2 else stop_px - 1
+        if prev_close < stop_px:
+            return True, f"hard_stop ({stop_px:.5f})"
+        # Only one bar breached — hold one more bar for confirmation
     if not is_long and stop_px > 0 and high_now >= stop_px:
-        return True, f"hard_stop ({stop_px:.5f})"
+        prev_close = float(c.iloc[-2]) if len(c) >= 2 else stop_px + 1
+        if prev_close > stop_px:
+            return True, f"hard_stop ({stop_px:.5f})"
     # Model flip exit
     try:
         prob = _train_and_predict(h, l, c)
