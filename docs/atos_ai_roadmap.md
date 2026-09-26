@@ -665,7 +665,7 @@ Then news/sentiment (#14/#15) and strategy discovery (#19) after those ten.
 - [x] Regime classifier as a plain code function (ADX/ATR/MA-slope/vol-bands → a regime label) — `ai/regime/classifier.py`, no LLM
 - [x] Single consolidated agent, one structured JSON call — Signal Scoring + bounded-multiplier sizing, no SL/TP — `ai/agent/trading_copilot.py`
 - [x] Shadow mode: agent scores every real signal on SIM + both LIVE, logs next to the outcome, influences nothing — **RUNNING since 2026-08-31**, ~3 decisions so far, target ~40 through an adverse stretch
-- [~] Level 2 semi-autonomous (agent can skip/resize within fixed risk limits, SIM only) — **code shipped inert**; activation = flip `config/ai.json shadow_mode → false` after the shadow-evidence review
+- [x] Level 2 semi-autonomous (agent can skip/resize within fixed risk limits, SIM only) — **ACTIVE 2026-09-11 (forex SIM), 2026-09-26 (stocks SIM + IBKR paper)** — `shadow_mode=false` for forex + stocks; copilot sizing all SIM entries; `exit_copilot.shadow_mode` still `true` (Phase C accumulating)
 
 **Diagnostic layer (always read-only — observes, never acts; not on the autonomy ladder):**
 - [x] **#18 AI Trading Journal** — per-trade LLM retrospective, SIM + both LIVE. Its first run found the MAE/MFE measurement bug (now fixed).
