@@ -1391,6 +1391,7 @@ def run_open_scan(log_fn=None) -> dict:
                          available_cash_sek=rev_budget)
     except Exception as e:
         _log(f"  [US Reversion ERROR] {e}")
+        notifier.notify_strategy_error("US Reversion", e)
 
     # ── US Reversion v2 (SIM A/B twin — 4 improvements) ──────────
     if US_REVERSION_V2_ENABLED:
@@ -1400,6 +1401,7 @@ def run_open_scan(log_fn=None) -> dict:
                                 available_cash_sek=rev_budget)
         except Exception as e:
             _log(f"  [US Reversion v2 ERROR] {e}")
+            notifier.notify_strategy_error("US Reversion v2", e)
 
     # ── US Signals (4 SIM-only strategies) ───────────────────────
     if US_SIGNALS_ENABLED:
@@ -1408,6 +1410,7 @@ def run_open_scan(log_fn=None) -> dict:
             run_us_signals(feat_data, db.get_open_trades(), todays_actions)
         except Exception as e:
             _log(f"  [US signals ERROR] {e}")
+            notifier.notify_strategy_error("US Signals", e)
 
     # ── US Penny momentum breakout (SIM-ONLY) ─────────────────────
     if US_PENNY_ENABLED:
@@ -1416,6 +1419,7 @@ def run_open_scan(log_fn=None) -> dict:
             run_us_penny(db.get_open_trades(), todays_actions)
         except Exception as e:
             _log(f"  [US Penny ERROR] {e}")
+            notifier.notify_strategy_error("US Penny", e)
 
     if US_BAGGER_ENABLED:
         _log("  Running US Bagger strategy (SIM-ONLY)...")
@@ -1423,6 +1427,7 @@ def run_open_scan(log_fn=None) -> dict:
             run_us_bagger(db.get_open_trades(), todays_actions)
         except Exception as e:
             _log(f"  [US Bagger ERROR] {e}")
+            notifier.notify_strategy_error("US Bagger", e)
 
     if US_SCORER_ENABLED:
         _log("  Running US Scorer strategy (SIM-ONLY)...")
@@ -1430,6 +1435,7 @@ def run_open_scan(log_fn=None) -> dict:
             run_us_scorer(db.get_open_trades(), todays_actions)
         except Exception as e:
             _log(f"  [US Scorer ERROR] {e}")
+            notifier.notify_strategy_error("US Scorer", e)
 
     buy_n     = sum(1 for a in todays_actions if a["action"] == "BUY")
     exit_n    = sum(1 for a in todays_actions if a["action"] == "EXIT")
@@ -1850,6 +1856,7 @@ def run_cycle():
                                available_cash_sek=blend_v2_budget2)
         except Exception as e:
             print(f"  [US Blend V2] ERROR: {e}")
+            notifier.notify_strategy_error("US Blend V2", e)
 
     # ── 6d. US mean reversion v1 (original validated strategy) ───
     rev_budget = min(cash_sek * REV_CASH_PCT, _max_deploy2 * REV_CASH_PCT)
@@ -1860,6 +1867,7 @@ def run_cycle():
                              available_cash_sek=rev_budget)
         except Exception as e:
             print(f"  [US reversion] ERROR: {e}")
+            notifier.notify_strategy_error("US Reversion", e)
 
     # ── 6d2. US mean reversion v2 (SIM A/B twin — 4 improvements) ─
     if US_REVERSION_V2_ENABLED:
@@ -1869,6 +1877,7 @@ def run_cycle():
                                 available_cash_sek=rev_budget)
         except Exception as e:
             print(f"  [US reversion v2] ERROR: {e}")
+            notifier.notify_strategy_error("US Reversion v2", e)
 
     # ── 6e. USA Strategy signals (SIM-only, 4 strategies) ─────────
     if US_SIGNALS_ENABLED:
@@ -1877,6 +1886,7 @@ def run_cycle():
             run_us_signals(feat_data, db.get_open_trades(), todays_actions)
         except Exception as e:
             print(f"  [US signals] ERROR: {e}")
+            notifier.notify_strategy_error("US Signals", e)
 
     # ── 6f. US Penny momentum breakout (SIM-ONLY) ─────────────────
     if US_PENNY_ENABLED:
@@ -1885,6 +1895,7 @@ def run_cycle():
             run_us_penny(db.get_open_trades(), todays_actions)
         except Exception as e:
             print(f"  [US Penny] ERROR: {e}")
+            notifier.notify_strategy_error("US Penny", e)
 
     if US_BAGGER_ENABLED:
         print("  Running US Bagger strategy (SIM-ONLY)...")
@@ -1892,6 +1903,7 @@ def run_cycle():
             run_us_bagger(db.get_open_trades(), todays_actions)
         except Exception as e:
             print(f"  [US Bagger] ERROR: {e}")
+            notifier.notify_strategy_error("US Bagger", e)
 
     if US_SCORER_ENABLED:
         print("  Running US Scorer strategy (SIM-ONLY)...")
@@ -1899,6 +1911,7 @@ def run_cycle():
             run_us_scorer(db.get_open_trades(), todays_actions)
         except Exception as e:
             print(f"  [US Scorer] ERROR: {e}")
+            notifier.notify_strategy_error("US Scorer", e)
 
     # ── 7. Learning pass ──────────────────────────────────────────
     print("  Running learning pass...")

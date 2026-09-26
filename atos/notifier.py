@@ -454,6 +454,36 @@ def notify_ibkr_alert(title: str, body_text: str, strategy: str = "IBKR Live",
         pass
 
 
+def notify_strategy_error(strategy: str, error: Exception) -> None:
+    """Send an alert email when a strategy crashes during a scan cycle. Never raises."""
+    try:
+        import traceback as _tb
+        today = date.today().isoformat()
+        tb = _tb.format_exc()
+        body = f"""
+        <span class="badge sell">⚠ STRATEGY ERROR</span>
+        <div class="metric-row" style="margin-top:16px">
+          <div class="metric">
+            <div class="label">Strategy</div>
+            <div class="value">{strategy}</div>
+          </div>
+          <div class="metric">
+            <div class="label">Date</div>
+            <div class="value">{today}</div>
+          </div>
+        </div>
+        <p style="color:#f87171;font-size:15px;margin-top:12px">{error}</p>
+        <pre style="background:#1e293b;padding:12px;border-radius:6px;font-size:12px;
+                    color:#94a3b8;overflow:auto;max-height:300px">{tb}</pre>
+        <p style="color:#64748b;font-size:13px">The strategy was skipped for this cycle.
+        Other strategies ran normally.</p>
+        """
+        _send(f"ATOS Strategy Error - {strategy} [{today}]",
+              _wrap(f"Strategy Error: {strategy}", body))
+    except Exception:
+        pass
+
+
 def notify_weekly_report(
     total_equity_sek:  float,
     week_pnl_sek:      float,
