@@ -302,6 +302,15 @@ def run_safeguard(modules: list[str] | None = None) -> list[FixOutcome]:
     mid-run and break the post-fix verification match below (matched by
     uic, not by module+symbol, for the same reason)."""
     modules = modules or list(housekeeping.ADAPTERS)
+
+    # Gap-quality health check: auto-restores a broken override and emails
+    # if gap_quality is silently generating 0 ai_sim trades while gap trades normally.
+    # This check is purely local (no Saxo call) so it runs first, every cycle.
+    try:
+        housekeeping.check_gap_quality_health()
+    except Exception as _gq_exc:
+        logger.warning(f"[safeguard] gap_quality health check raised: {_gq_exc}")
+
     snapshot = housekeeping.fetch_live_snapshot()
 
     outcomes: list[FixOutcome] = []

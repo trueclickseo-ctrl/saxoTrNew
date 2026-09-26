@@ -763,3 +763,19 @@ def send_trade_closed(
 def send_lbo_trade_closed(**kwargs) -> None:
     """Backward-compatible alias — send_trade_closed() replaced this 2026-08-21."""
     send_trade_closed(strategy="london_breakout", **kwargs)
+
+
+def send_strategy_error(strat_name: str, account_env: str, exc: Exception) -> None:
+    """Email when a strategy pass crashes in the runner (gap/gap_quality primarily)."""
+    import traceback
+    now = datetime.now().strftime("%d %b %Y  %H:%M PKT")
+    tb  = traceback.format_exc()
+    body = f"""
+    <p>Strategy <strong>{strat_name}</strong> crashed during its runner pass on
+    account <strong>{account_env}</strong>.</p>
+    <p style="color:#c0392b"><strong>{exc.__class__.__name__}: {exc}</strong></p>
+    <pre style="background:#f8f8f8;padding:12px;font-size:12px;white-space:pre-wrap">{tb}</pre>
+    <p class="muted">{now}</p>
+    """
+    subject = f"[{account_env.upper()}] Strategy crash: {strat_name} — {exc.__class__.__name__}"
+    _send(subject, _wrap(f"Strategy crash — {strat_name} ({account_env})", body), live=False)

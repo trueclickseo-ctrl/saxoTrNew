@@ -5426,6 +5426,11 @@ def run_daily(dry_run: bool = True, active_strategies: list | None = None,
             # anyone else's work.
             logger.error(f"  [{strat_name}] pass crashed, continuing to next "
                         f"strategy (state already saved below): {exc}")
+            if strat_name in ("gap", "gap_quality"):
+                try:
+                    fx_notify.send_strategy_error(strat_name, ACCOUNT_ENV, exc)
+                except Exception:
+                    pass
 
         if not dry_run:
             _save_state(state)

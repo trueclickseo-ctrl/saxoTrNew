@@ -1247,6 +1247,113 @@ def _send_near_stop_email(near: list[NearStopPosition], threshold_pct: float) ->
     _send_email(f"⚠ Stop proximity: {len(near)} position(s) within {threshold_pct:.1f}% — {now}", html)
 
 
+_GAP_OVERRIDE_PATH = os.path.join(
+    _ROOT, "forex", "ai_variants", "strategy_gap_quality_override.py"
+)
+_PASSTHROUGH_OVERRIDE = '''\
+# Auto-restored passthrough by housekeeping (gap_quality override was broken).
+# The gap_quality strategy will still run using its own base logic.
+from forex.strategy_gap_quality import (
+    generate_signals as _orig_generate_signals,
+    generate_session_signals as _orig_generate_session_signals,
+    should_exit as _orig_should_exit,
+)
+
+
+def generate_signals(*args, **kwargs):
+    return _orig_generate_signals(*args, **kwargs)
+
+
+def generate_session_signals(*args, **kwargs):
+    return _orig_generate_session_signals(*args, **kwargs)
+
+
+def should_exit(*args, **kwargs):
+    return _orig_should_exit(*args, **kwargs)
+'''
+
+
+def check_gap_quality_health(lookback_days: int = 7) -> bool:
+    """Check that gap_quality is functioning in ai_sim; auto-fix a broken override.
+
+    Two failure modes detected:
+      1. Override file is un-importable → replaces it with a safe passthrough + emails.
+      2. gap had trades in ai_sim over the last `lookback_days` but gap_quality had 0 →
+         emails a silent-failure warning (same root cause as the original gap bug).
+
+    Returns True if everything looks healthy, False if a problem was found.
+    """
+    import importlib.util
+    import sqlite3
+    from datetime import timedelta
+
+    problems: list[str] = []
+
+    # ── 1. Override importability ──────────────────────────────────────────────
+    if os.path.exists(_GAP_OVERRIDE_PATH):
+        spec = importlib.util.spec_from_file_location(
+            "strategy_gap_quality_override_check", _GAP_OVERRIDE_PATH
+        )
+        try:
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            if not all(hasattr(mod, fn) for fn in ("generate_signals", "generate_session_signals", "should_exit")):
+                raise ImportError("missing required functions")
+        except Exception as exc:
+            logger.error(f"[housekeeping] gap_quality override broken ({exc}) — restoring passthrough")
+            try:
+                with open(_GAP_OVERRIDE_PATH, "w", encoding="utf-8") as fh:
+                    fh.write(_PASSTHROUGH_OVERRIDE)
+                problems.append(f"gap_quality override was un-importable ({exc.__class__.__name__}: {exc}). "
+                                 f"Restored a safe passthrough override.")
+            except Exception as write_exc:
+                problems.append(f"gap_quality override broken AND could not auto-restore: {write_exc}")
+
+    # ── 2. Silent-failure detection: gap trading but gap_quality silent ────────
+    _LEDGER = os.path.join(_DATA, "pnl_ledger.db")
+    if os.path.exists(_LEDGER):
+        try:
+            since = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+            with sqlite3.connect(_LEDGER) as conn:
+                row = conn.execute(
+                    """
+                    SELECT
+                        SUM(CASE WHEN strategy='gap'         THEN 1 ELSE 0 END) AS gap_n,
+                        SUM(CASE WHEN strategy='gap_quality' THEN 1 ELSE 0 END) AS gq_n
+                    FROM trades
+                    WHERE module='forex_ai'
+                      AND timestamp_open >= ?
+                    """,
+                    (since,),
+                ).fetchone()
+            gap_n, gq_n = (row or (0, 0))
+            gap_n  = gap_n  or 0
+            gq_n   = gq_n   or 0
+            if gap_n > 0 and gq_n == 0:
+                problems.append(
+                    f"Silent failure: gap had {gap_n} ai_sim trade(s) in the last "
+                    f"{lookback_days} days but gap_quality had 0. "
+                    f"Check forex/runner.py _GAP_STRATS wiring and the override file."
+                )
+        except Exception as db_exc:
+            logger.warning(f"[housekeeping] gap_quality health DB check failed: {db_exc}")
+
+    if problems:
+        now  = datetime.now().strftime("%d %b %Y  %H:%M PKT")
+        rows = "".join(f"<li>{p}</li>" for p in problems)
+        html = f"""<!DOCTYPE html><html><body style="font-family:sans-serif">
+        <h2 style="color:#c0392b">gap_quality health alert — {len(problems)} issue(s)</h2>
+        <p style="color:#666">{now}</p>
+        <ul>{rows}</ul>
+        <p style="color:#666;font-size:12px">Reported by housekeeping.check_gap_quality_health().
+        Override auto-restore is a passthrough — the base gap_quality logic will still run.</p>
+        </body></html>"""
+        _send_email(f"gap_quality health: {len(problems)} issue(s) — {now}", html)
+        return False
+
+    return True
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(message)s")
     import argparse
@@ -1255,10 +1362,14 @@ if __name__ == "__main__":
                    help="subset of forex/futures/etf/stocks (default: all)")
     p.add_argument("--naked-only", action="store_true")
     p.add_argument("--reconcile-only", action="store_true")
+    p.add_argument("--gap-quality-health", action="store_true")
     args = p.parse_args()
 
-    if not args.naked_only:
+    if args.gap_quality_health:
+        ok = check_gap_quality_health()
+        print("gap_quality health: OK" if ok else "gap_quality health: PROBLEMS FOUND")
+    elif not args.naked_only:
         reconcile_all(args.modules)
-    if not args.reconcile_only:
+    if not args.reconcile_only and not args.gap_quality_health:
         scan_naked_positions()
         scan_near_stop_positions()
