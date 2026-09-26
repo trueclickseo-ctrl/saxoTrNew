@@ -114,12 +114,17 @@ def log_stock_exit_card(*, card_id: str, exit_price: float, exit_reason: str,
                         net_pnl_sek: float | None, holding_hours: float | None,
                         sek_per_eur: float | None,
                         risk_sek: float | None = None,
-                        native_currency: str = "SEK") -> None:
+                        native_currency: str = "SEK",
+                        strategy: str | None = None) -> None:
     """Written once at close, referencing the entry card's card_id.
     Pass native_currency="USD" for IBKR trades; pnl/risk values are then USD.
+    `strategy` is redundantly stored for easier querying (also in card_id).
     Never raises; silently no-ops if card_id is falsy (pre-feature trade)."""
     if not card_id:
         return
+    if strategy is None:
+        parts = card_id.split(":")
+        strategy = parts[1] if len(parts) >= 3 else None
     gross_eur = _eur(gross_pnl_sek, sek_per_eur)
     net_eur = _eur(net_pnl_sek, sek_per_eur)
     comm_eur = _eur(commission_sek, sek_per_eur)
@@ -134,6 +139,7 @@ def log_stock_exit_card(*, card_id: str, exit_price: float, exit_reason: str,
         "event": "exit",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "market": "equity",
+        "strategy": strategy,
         "exit_price": exit_price,
         "exit_reason": exit_reason,
         "native_currency": native_currency,
