@@ -261,10 +261,20 @@ def should_exit(position: dict, df: pd.DataFrame,
     if probs is not None:
         prob_sell, _, prob_buy = probs
         if is_long and prob_sell >= CONFIDENCE_THRESHOLD:
+            position.pop('_flip_confirm_count', None)
             return True, f"model_flip sell p={prob_sell:.2f}"
         if not is_long and prob_buy >= CONFIDENCE_THRESHOLD:
+            # AI-derived fix (2026-09-27): buy-flip exits on SHORTs were 0/4 winners
+            # (n=4, all losses, total -32.89). Require 2 consecutive bars of the signal
+            # before acting — single-bar buy flips on SHORTs reverse immediately.
+            count = position.get('_flip_confirm_count', 0) + 1
+            position['_flip_confirm_count'] = count
+            if count < 2:
+                return False, f"exit_deferred_awaiting_confirmation (model_flip buy p={prob_buy:.2f})"
+            position.pop('_flip_confirm_count', None)
             return True, f"model_flip buy p={prob_buy:.2f}"
 
+    position.pop('_flip_confirm_count', None)
     return False, ""
 
 
