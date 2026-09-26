@@ -1,8 +1,8 @@
 # AI-WRITTEN Phase 2+3 2026-10-24 by claude-sonnet-5
 # Phase 4 added 2026-09-25 by claude-sonnet-4-6: block EXOTIC tier pairs.
-#
-# Entry filter: NZD-pairs + DKKJPY blocked (prior cycles). EXOTIC tier blocked (Phase 4).
-# Exit filter: Tightens trend_break exit to require a 2-bar close-beyond-EMA50 confirmation WITH an ATR buffer.
+# SUPERSEDED 2026-09-26: all overrides (EXOTIC block + ATR buffer) promoted to
+# strategy_pullback.py directly. This file is kept as a no-op passthrough so ai_sim
+# still loads it without error (runner expects the module to exist).
 #
 # PENDING ACTION FOR EVOLVER (do not remove this comment until actioned):
 # When closed organic trades from 2026-09-18 onwards >= 50 AND PF >= 1.2:

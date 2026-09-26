@@ -60,6 +60,14 @@ All execution lives in forex/runner.py.
 
 import numpy as np
 import pandas as pd
+from forex.universe import EXOTIC_SYMBOLS
+
+_EXOTIC: frozenset = frozenset(EXOTIC_SYMBOLS)
+
+# ATR buffer for trend_break exit hysteresis (promoted from ai_variants 2026-09-26).
+# Both of the last 2 closes must be beyond EMA50 by at least this many ATRs before
+# honoring the trend_break exit, to avoid whipsaw exits on minor EMA50 wobbles.
+TREND_BREAK_ATR_BUFFER = 0.25
 
 # ── Parameters ────────────────────────────────────────────────────────────────
 TREND_EMA        = 50    # slow EMA — defines trend direction
@@ -135,13 +143,14 @@ def generate_signals(market_data: dict, open_symbols: set = None) -> list:
             continue
         if df is None or len(df) < MIN_BARS:
             continue
-        # AI-derived filter (2026-09-05): NZD crosses drove ~71% of pullback losses
-        # (14 of 35 trades, two catastrophic). Skip them entirely.
-        # Evidence (2026-09-18): JPY crosses produced 36 micro-trades on Sept 7-8
-        # (all same-day bursts at the same stop level, P&L cents per trade).
-        # Net across 36 trades: +4/0/-6 EUR -- noise, not edge. Block JPY too.
+        # AI-derived filter (2026-09-05): NZD crosses drove ~71% of pullback losses.
+        # AI-derived filter (2026-09-18): JPY crosses -- 36 micro-trades, noise, no edge.
+        # AI-derived filter (2026-09-25): EXOTIC tier -- 45 trades, -889 EUR (-19.8/trade),
+        #   46% of all pullback trades; thin EM-cross spreads cause retest levels to fail.
         sym_up = sym.upper()
         if "NZD" in sym_up or "JPY" in sym_up:
+            continue
+        if sym_up in _EXOTIC:
             continue
 
         h, l, c = df["High"], df["Low"], df["Close"]
@@ -249,23 +258,27 @@ def should_exit(position: dict, df: pd.DataFrame,
         if profit / R >= PROFIT_TARGET_R:
             return True, f"profit_target ({profit / R:.2f}R >= {PROFIT_TARGET_R}R)"
 
-    # AI-derived fix (2026-09-05): single-bar trend_break exits were 14/15 losers
-    # (whipsaw across EMA50). Require 2 consecutive closes on the broken side.
+    # AI-derived fix (2026-09-05): single-bar trend_break exits were 14/15 losers.
+    # Require 2 consecutive closes on the broken side.
+    # AI-derived fix (2026-09-25): also require each close to be beyond EMA50 by at
+    # least TREND_BREAK_ATR_BUFFER * ATR -- bare 2-bar crosses on minor EMA wobbles
+    # still exited losing trades; ATR buffer adds hysteresis for genuine trend breaks.
+    atr = _atr(h, l, c)
     prev_ema_slow = float(ema_slow.iloc[-2])
     prev_close    = float(c.iloc[-2])
+    atr1 = float(atr.iloc[-1]) if pd.notna(atr.iloc[-1]) else 0.0
+    atr2 = float(atr.iloc[-2]) if pd.notna(atr.iloc[-2]) else 0.0
+    buf1 = TREND_BREAK_ATR_BUFFER * atr1
+    buf2 = TREND_BREAK_ATR_BUFFER * atr2
 
     if direction == "Buy":
-        # Trend break — price closes below EMA(50) for 2 consecutive bars
-        if cur_close < cur_ema_slow and prev_close < prev_ema_slow:
+        if (cur_close < cur_ema_slow - buf1) and (prev_close < prev_ema_slow - buf2):
             return True, f"trend_break (close {cur_close:.5f} < EMA50 {cur_ema_slow:.5f})"
-        # Hard stop
         if cur_low <= stop_price:
             return True, f"hard_stop ({stop_price:.5f})"
     else:
-        # Trend break — price closes above EMA(50) for 2 consecutive bars
-        if cur_close > cur_ema_slow and prev_close > prev_ema_slow:
+        if (cur_close > cur_ema_slow + buf1) and (prev_close > prev_ema_slow + buf2):
             return True, f"trend_break (close {cur_close:.5f} > EMA50 {cur_ema_slow:.5f})"
-        # Hard stop
         if cur_high >= stop_price:
             return True, f"hard_stop ({stop_price:.5f})"
 
