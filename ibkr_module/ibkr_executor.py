@@ -62,7 +62,7 @@ def _ai_ibkr_score(strategy: str, ticker: str, price: float, stop_price: float,
     if _ai_cfg is None or _ai_copilot is None or _ai_stock_proposal is None:
         return None
     try:
-        if not (_ai_cfg.stocks_enabled("sim")
+        if not (_ai_cfg.stocks_enabled("ibkr_paper")
                 and bool(_ai_cfg._load().get("agent_enabled", False))):
             return None
         prop = _ai_stock_proposal.build_stock_proposal(
@@ -635,6 +635,27 @@ def run_rebalance_v2(ib, account_id: str, cfg: dict, dry_run: bool = True,
             _email_ibkr_fill("SELL", s["symbol"], s["qty"], fill, "blend_v2",
                              live=(_ibkr_account_env(account_id) == "ibkr_live"))
 
+            if _sc and _ai_cfg and _ai_cfg.stocks_enabled(_ibkr_account_env(account_id)):
+                _p    = next((p for p in held if p["symbol"] == s["symbol"]), {})
+                _acenv = _ibkr_account_env(account_id)
+                _edate = (_p.get("filled_at") or _p.get("created_at") or "")[:10]
+                _epx2  = float(_p.get("fill_price") or s["price"])
+                _gpnl  = round((fill - _epx2) * s["qty"], 2)
+                _npnl  = round(_gpnl - 1.0, 2)
+                _risk  = round((_epx2 - float(_p.get("stop_price") or 0)) * s["qty"], 2) if _p.get("stop_price") else None
+                try:
+                    _fdt  = datetime.datetime.fromisoformat((_p.get("filled_at") or "").replace("Z", "+00:00"))
+                    _hhrs = round((datetime.datetime.now(datetime.timezone.utc) - _fdt).total_seconds() / 3600, 1)
+                except Exception:
+                    _hhrs = None
+                _cid = _sc.card_id_for("blend_v2", s["symbol"], _edate, _acenv)
+                _sc.log_stock_exit_card(
+                    card_id=_cid, exit_price=fill, exit_reason="blend_v2_rebalance",
+                    gross_pnl_sek=_gpnl, commission_sek=1.0, net_pnl_sek=_npnl,
+                    holding_hours=_hhrs, sek_per_eur=None,
+                    risk_sek=_risk, native_currency="USD",
+                )
+
     for b in buys:
         actual_stop_est = round(b["price"] * (1 - stop_pct), 2)
         print(f"\n  BUY  {b['qty']} {b['symbol']} @ ~${b['price']:.2f}  "
@@ -662,6 +683,16 @@ def run_rebalance_v2(ib, account_id: str, cfg: dict, dry_run: bool = True,
                        str(stop_trade.order.orderId), trailing_high=fill,
                        strategy="blend_v2")
         print(f"  Stop placed @ ${actual_stop:.2f} (id={stop_trade.order.orderId})")
+
+        if _sc and _ai_cfg and _ai_cfg.stocks_enabled(_ibkr_account_env(account_id)):
+            _entry_date = datetime.date.today().isoformat()
+            _sc.log_stock_entry_card(
+                strategy="blend_v2", ticker=b["symbol"], direction="BUY",
+                entry_price=fill, shares=b["qty"], stop_price=actual_stop,
+                sek_per_eur=None, entry_date=_entry_date,
+                risk_sek=round((fill - actual_stop) * b["qty"], 2),
+                account_env=_ibkr_account_env(account_id), native_currency="USD",
+            )
 
     print("\n  [blend_v2] Rebalance complete.")
 
@@ -1320,6 +1351,16 @@ def run_penny_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
         st.update_stop(c["ticker"], actual_stop, str(stop_trade.order.orderId), fill)
         print(f"  Stop placed @ ${actual_stop:.2f} (id={stop_trade.order.orderId})")
 
+        if _sc and _ai_cfg and _ai_cfg.stocks_enabled(_ibkr_account_env(account_id)):
+            _entry_date = datetime.date.today().isoformat()
+            _sc.log_stock_entry_card(
+                strategy="penny", ticker=c["ticker"], direction="BUY",
+                entry_price=fill, shares=qty, stop_price=actual_stop,
+                sek_per_eur=None, entry_date=_entry_date,
+                risk_sek=round((fill - actual_stop) * qty, 2),
+                account_env=_ibkr_account_env(account_id), native_currency="USD",
+            )
+
     print(f"\n  [penny] entry scan complete.")
 
 
@@ -1399,6 +1440,25 @@ def run_penny_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
             st.close_buy_position(sym, "penny")
             _email_ibkr_fill("SELL", sym, qty, fill, "penny", entry_px,
                              live=(_ibkr_account_env(account_id) == "ibkr_live"))
+
+            if _sc and _ai_cfg and _ai_cfg.stocks_enabled(_ibkr_account_env(account_id)):
+                _acenv = _ibkr_account_env(account_id)
+                _edate = (pos.get("filled_at") or pos.get("created_at") or "")[:10]
+                _risk  = round((entry_px - float(pos.get("stop_price") or 0)) * qty, 2) if pos.get("stop_price") else None
+                _gpnl  = round(pnl, 2)
+                _npnl  = round(_gpnl - 1.0, 2)
+                try:
+                    _fdt  = datetime.datetime.fromisoformat((pos.get("filled_at") or "").replace("Z", "+00:00"))
+                    _hhrs = round((datetime.datetime.now(datetime.timezone.utc) - _fdt).total_seconds() / 3600, 1)
+                except Exception:
+                    _hhrs = None
+                _cid = _sc.card_id_for("penny", sym, _edate, _acenv)
+                _sc.log_stock_exit_card(
+                    card_id=_cid, exit_price=fill, exit_reason=reason,
+                    gross_pnl_sek=_gpnl, commission_sek=1.0, net_pnl_sek=_npnl,
+                    holding_hours=_hhrs, sek_per_eur=None,
+                    risk_sek=_risk, native_currency="USD",
+                )
 
     print("\n  Penny exit check complete.")
 
@@ -1506,6 +1566,15 @@ def run_bagger_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
                          live=(_ibkr_account_env(account_id) == "ibkr_live"))
         # mark_filled sets trailing_high = fill_price; no broker stop order.
 
+        if _sc and _ai_cfg and _ai_cfg.stocks_enabled(_ibkr_account_env(account_id)):
+            _entry_date = datetime.date.today().isoformat()
+            _sc.log_stock_entry_card(
+                strategy="bagger", ticker=c["ticker"], direction="BUY",
+                entry_price=fill, shares=qty, stop_price=None,
+                sek_per_eur=None, entry_date=_entry_date, risk_sek=None,
+                account_env=_ibkr_account_env(account_id), native_currency="USD",
+            )
+
     print(f"\n  [bagger] entry scan complete.")
 
 
@@ -1583,6 +1652,24 @@ def run_bagger_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
             st.close_buy_position(sym, "bagger")
             _email_ibkr_fill("SELL", sym, qty, fill, "bagger", entry_px,
                              live=(_ibkr_account_env(account_id) == "ibkr_live"))
+
+            if _sc and _ai_cfg and _ai_cfg.stocks_enabled(_ibkr_account_env(account_id)):
+                _acenv = _ibkr_account_env(account_id)
+                _edate = (pos.get("filled_at") or pos.get("created_at") or "")[:10]
+                _gpnl  = round(pnl, 2)
+                _npnl  = round(_gpnl - 1.0, 2)
+                try:
+                    _fdt  = datetime.datetime.fromisoformat((pos.get("filled_at") or "").replace("Z", "+00:00"))
+                    _hhrs = round((datetime.datetime.now(datetime.timezone.utc) - _fdt).total_seconds() / 3600, 1)
+                except Exception:
+                    _hhrs = None
+                _cid = _sc.card_id_for("bagger", sym, _edate, _acenv)
+                _sc.log_stock_exit_card(
+                    card_id=_cid, exit_price=fill, exit_reason=reason,
+                    gross_pnl_sek=_gpnl, commission_sek=1.0, net_pnl_sek=_npnl,
+                    holding_hours=_hhrs, sek_per_eur=None,
+                    risk_sek=None, native_currency="USD",
+                )
 
     print("\n  Bagger exit check complete.")
 
@@ -1694,6 +1781,16 @@ def run_reversion_v2_entries(ib, account_id: str, cfg: dict, dry_run: bool = Tru
         st.update_stop(c["ticker"], actual_stop, str(stop_trade.order.orderId), fill)
         print(f"  Stop placed @ ${actual_stop:.2f} (id={stop_trade.order.orderId})")
 
+        if _sc and _ai_cfg and _ai_cfg.stocks_enabled(_ibkr_account_env(account_id)):
+            _entry_date = datetime.date.today().isoformat()
+            _sc.log_stock_entry_card(
+                strategy="reversion_v2", ticker=c["ticker"], direction="BUY",
+                entry_price=fill, shares=qty, stop_price=actual_stop,
+                sek_per_eur=None, entry_date=_entry_date,
+                risk_sek=round((fill - actual_stop) * qty, 2),
+                account_env=_ibkr_account_env(account_id), native_currency="USD",
+            )
+
     print("\n  [reversion_v2] entry scan complete.")
 
 
@@ -1776,6 +1873,25 @@ def run_reversion_v2_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
             st.close_buy_position(sym, "reversion_v2")
             _email_ibkr_fill("SELL", sym, qty, fill, "reversion_v2", entry_px,
                              live=(_ibkr_account_env(account_id) == "ibkr_live"))
+
+            if _sc and _ai_cfg and _ai_cfg.stocks_enabled(_ibkr_account_env(account_id)):
+                _acenv = _ibkr_account_env(account_id)
+                _edate = (pos.get("filled_at") or pos.get("created_at") or "")[:10]
+                _risk  = round((entry_px - float(pos.get("stop_price") or 0)) * qty, 2) if pos.get("stop_price") else None
+                _gpnl  = round(pnl, 2)
+                _npnl  = round(_gpnl - 1.0, 2)
+                try:
+                    _fdt  = datetime.datetime.fromisoformat((pos.get("filled_at") or "").replace("Z", "+00:00"))
+                    _hhrs = round((datetime.datetime.now(datetime.timezone.utc) - _fdt).total_seconds() / 3600, 1)
+                except Exception:
+                    _hhrs = None
+                _cid = _sc.card_id_for("reversion_v2", sym, _edate, _acenv)
+                _sc.log_stock_exit_card(
+                    card_id=_cid, exit_price=fill, exit_reason=reason,
+                    gross_pnl_sek=_gpnl, commission_sek=1.0, net_pnl_sek=_npnl,
+                    holding_hours=_hhrs, sek_per_eur=None,
+                    risk_sek=_risk, native_currency="USD",
+                )
 
     print("\n  Reversion v2 exit check complete.")
 
@@ -1933,6 +2049,17 @@ def run_us_signals_entries(ib, account_id: str, cfg: dict, dry_run: bool = True,
         st.update_stop(ticker, actual_stop, str(stop_trade.order.orderId), fill,
                        strategy=strat)
         print(f"  Stop placed @ ${actual_stop:.2f} (id={stop_trade.order.orderId})")
+
+        if _sc and _ai_cfg and _ai_cfg.stocks_enabled(_ibkr_account_env(account_id)):
+            _entry_date = datetime.date.today().isoformat()
+            _sc.log_stock_entry_card(
+                strategy=strat, ticker=ticker, direction="BUY",
+                entry_price=fill, shares=qty, stop_price=actual_stop,
+                sek_per_eur=None, entry_date=_entry_date,
+                risk_sek=round((fill - actual_stop) * qty, 2) if actual_stop else None,
+                account_env=_ibkr_account_env(account_id), native_currency="USD",
+            )
+
         open_by_strategy[strat].add(ticker)
 
     print("\n  [us signals] entry scan complete.")
@@ -2030,6 +2157,25 @@ def run_us_signals_exits(ib, account_id: str, cfg: dict, dry_run: bool = True,
             st.close_buy_position(sym, strat)
             _email_ibkr_fill("SELL", sym, qty, fill, strat, entry_px,
                              live=(_ibkr_account_env(account_id) == "ibkr_live"))
+
+            if _sc and _ai_cfg and _ai_cfg.stocks_enabled(_ibkr_account_env(account_id)):
+                _acenv = _ibkr_account_env(account_id)
+                _edate = (pos.get("filled_at") or pos.get("created_at") or "")[:10]
+                _risk  = round((entry_px - float(pos.get("stop_price") or 0)) * qty, 2) if pos.get("stop_price") else None
+                _gpnl  = round(pnl, 2)
+                _npnl  = round(_gpnl - 1.0, 2)
+                try:
+                    _fdt  = datetime.datetime.fromisoformat((pos.get("filled_at") or "").replace("Z", "+00:00"))
+                    _hhrs = round((datetime.datetime.now(datetime.timezone.utc) - _fdt).total_seconds() / 3600, 1)
+                except Exception:
+                    _hhrs = None
+                _cid = _sc.card_id_for(strat, sym, _edate, _acenv)
+                _sc.log_stock_exit_card(
+                    card_id=_cid, exit_price=fill, exit_reason=reason,
+                    gross_pnl_sek=_gpnl, commission_sek=1.0, net_pnl_sek=_npnl,
+                    holding_hours=_hhrs, sek_per_eur=None,
+                    risk_sek=_risk, native_currency="USD",
+                )
 
     print("\n  [us signals] exit check complete.")
 
@@ -2221,6 +2367,16 @@ def run_scorer_entries(
                            strategy=strategy)
             print(f"  Stop placed @ ${actual_stop:.2f} (id={stop_trade.order.orderId})")
 
+            if _sc and _ai_cfg and _ai_cfg.stocks_enabled(_ibkr_account_env(account_id)):
+                _entry_date = datetime.date.today().isoformat()
+                _sc.log_stock_entry_card(
+                    strategy=strategy, ticker=ticker, direction="BUY",
+                    entry_price=fill, shares=qty, stop_price=actual_stop,
+                    sek_per_eur=None, entry_date=_entry_date,
+                    risk_sek=round((fill - actual_stop) * qty, 2),
+                    account_env=_ibkr_account_env(account_id), native_currency="USD",
+                )
+
     _place_book(sw_new, sw_budget, sw_max_pos, sw_stop_pct, sw_min_usd,
                 "scorer_swing",     "swing_score")
     _place_book(po_new, po_budget, po_max_pos, po_stop_pct, po_min_usd,
@@ -2354,6 +2510,25 @@ def run_scorer_exits(
                 st.close_buy_position(sym, strategy)
                 _email_ibkr_fill("SELL", sym, qty, fill, strategy, entry_px,
                                  live=(_ibkr_account_env(account_id) == "ibkr_live"))
+
+                if _sc and _ai_cfg and _ai_cfg.stocks_enabled(_ibkr_account_env(account_id)):
+                    _acenv = _ibkr_account_env(account_id)
+                    _edate = (pos.get("filled_at") or pos.get("created_at") or "")[:10]
+                    _risk  = round((entry_px - float(pos.get("stop_price") or 0)) * qty, 2) if pos.get("stop_price") else None
+                    _gpnl  = round(pnl, 2)
+                    _npnl  = round(_gpnl - 1.0, 2)
+                    try:
+                        _fdt  = datetime.datetime.fromisoformat((pos.get("filled_at") or "").replace("Z", "+00:00"))
+                        _hhrs = round((datetime.datetime.now(datetime.timezone.utc) - _fdt).total_seconds() / 3600, 1)
+                    except Exception:
+                        _hhrs = None
+                    _cid = _sc.card_id_for(strategy, sym, _edate, _acenv)
+                    _sc.log_stock_exit_card(
+                        card_id=_cid, exit_price=fill, exit_reason=reason,
+                        gross_pnl_sek=_gpnl, commission_sek=1.0, net_pnl_sek=_npnl,
+                        holding_hours=_hhrs, sek_per_eur=None,
+                        risk_sek=_risk, native_currency="USD",
+                    )
 
         print(f"  [scorer/{label}] exit check complete.")
 
