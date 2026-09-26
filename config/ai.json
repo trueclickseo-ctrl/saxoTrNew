@@ -32,10 +32,10 @@
     "enabled": true,
     "shadow_mode": true,
     "journal": true,
-    "shadow_copilot_reversion": false,
-    "shadow_copilot_signals": false,
-    "shadow_copilot_penny": false,
-    "shadow_copilot_bagger": false,
+    "shadow_copilot_reversion": true,
+    "shadow_copilot_signals": true,
+    "shadow_copilot_penny": true,
+    "shadow_copilot_bagger": true,
     "basket_ranker_blend": true
   },
 
