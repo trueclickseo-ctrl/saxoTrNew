@@ -664,8 +664,18 @@ def run_rebalance_v2(ib, account_id: str, cfg: dict, dry_run: bool = True,
         if confirm != "y":
             print("  Skipped.")
             continue
-        trade = ic.place_market_order(ib, account_id, b["symbol"], "BUY", b["qty"])
-        st.record_order(str(trade.order.orderId), b["symbol"], "BUY", b["qty"],
+        _bv2_open = [{"symbol": p["symbol"], "side": "BUY", "size": p.get("qty"),
+                       "strategy": "blend_v2"} for p in held]
+        _bv2_dec = _ai_ibkr_score("blend_v2", b["symbol"], b["price"], actual_stop_est,
+                                   b["qty"], open_positions=_bv2_open)
+        _ai_skip_bv2, bv2_qty = _ai_ibkr_apply(_bv2_dec, b["symbol"], b["qty"], "blend_v2")
+        if _ai_skip_bv2:
+            print(f"  [blend_v2] AI REJECT {b['symbol']} — skipped")
+            continue
+        if bv2_qty != b["qty"]:
+            print(f"  [blend_v2] AI MODIFY {b['symbol']} qty {b['qty']} -> {bv2_qty}")
+        trade = ic.place_market_order(ib, account_id, b["symbol"], "BUY", bv2_qty)
+        st.record_order(str(trade.order.orderId), b["symbol"], "BUY", bv2_qty,
                         strategy="blend_v2")
         fill = ic.confirm_fill(ib, trade)
         if fill is None:
@@ -674,10 +684,10 @@ def run_rebalance_v2(ib, account_id: str, cfg: dict, dry_run: bool = True,
             continue
         print(f"  Filled @ ${fill:.4f}")
         st.mark_filled(str(trade.order.orderId), fill, side="BUY")
-        _email_ibkr_fill("BUY", b["symbol"], b["qty"], fill, "blend_v2",
+        _email_ibkr_fill("BUY", b["symbol"], bv2_qty, fill, "blend_v2",
                          live=(_ibkr_account_env(account_id) == "ibkr_live"))
         actual_stop = round(fill * (1 - stop_pct), 2)
-        stop_trade, _ = _place_stop_submitted(ib, account_id, b["symbol"], b["qty"],
+        stop_trade, _ = _place_stop_submitted(ib, account_id, b["symbol"], bv2_qty,
                                               actual_stop, strategy="blend_v2")
         st.update_stop(b["symbol"], actual_stop,
                        str(stop_trade.order.orderId), trailing_high=fill,
@@ -688,9 +698,9 @@ def run_rebalance_v2(ib, account_id: str, cfg: dict, dry_run: bool = True,
             _entry_date = datetime.date.today().isoformat()
             _sc.log_stock_entry_card(
                 strategy="blend_v2", ticker=b["symbol"], direction="BUY",
-                entry_price=fill, shares=b["qty"], stop_price=actual_stop,
+                entry_price=fill, shares=bv2_qty, stop_price=actual_stop,
                 sek_per_eur=None, entry_date=_entry_date,
-                risk_sek=round((fill - actual_stop) * b["qty"], 2),
+                risk_sek=round((fill - actual_stop) * bv2_qty, 2),
                 account_env=_ibkr_account_env(account_id), native_currency="USD",
             )
 
