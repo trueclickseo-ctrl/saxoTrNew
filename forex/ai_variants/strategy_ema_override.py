@@ -1,6 +1,6 @@
 # AI-WRITTEN Phase 2+3 2026-09-08 by claude-sonnet-5
 # Entry filter: block simultaneous entries that share a currency leg with an already-open EMA position (NZD-cross cascade)
-# Exit filter: require the ATR hard-stop breach to hold for 2 consecutive daily closes before honoring the exit, to filter single-bar noise whipsaws
+# Exit filter: unchanged -- require the ATR hard-stop breach to hold for 2 consecutive daily closes before honoring the exit, to filter single-bar noise whipsaws
 
 from typing import Set, Tuple
 
@@ -75,24 +75,38 @@ def generate_signals(market_data: dict, open_symbols: set = None, **kwargs) -> l
 def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tuple:
     """Wrap the original EMA should_exit with a 2-close confirmation on hard stops.
 
-    Exit-reason data (52 closed trades) showed 49 of 52 exits were hard_stop,
-    with only a 6.1%% win rate among those (46 losses vs 3 wins) even though the
-    total P&L for that bucket was net positive thanks to a few large winners.
-    A win rate that low on a stop-loss exit is a strong signal that many of
-    these stops are single-bar noise -- a brief spike through the ATR stop
-    level that reverses immediately, rather than a genuine sustained move
-    against the position. crossover_reversal (the other primary exit path) had
-    only 2 trades, both losses, which is too small a sample to act on.
+    Original Phase-3 rationale (52 closed trades, prior to this filter):
+    49 of 52 exits were hard_stop, with only a 6.1%% win rate among those (46
+    losses vs 3 wins) even though total P&L for that bucket was net positive
+    thanks to a few large winners. That low win rate on a stop-loss exit
+    indicated many stops were single-bar noise -- a brief spike through the
+    ATR stop level that reversed immediately rather than a genuine sustained
+    move against the position. The fix added here was: when the original
+    strategy signals a hard-stop exit, require that the *previous* daily
+    close had already breached the stop in the same direction before
+    honoring the exit on the current bar; otherwise hold one more bar.
+
+    Updated data (this review, 30 quality closed trades, all captured AFTER
+    this confirmation filter was live) shows hard_stop win rate has risen to
+    62.1%% (18 wins / 11 losses, avg P&L +22.4, total P&L +648.87), and the
+    lone profit_target exit was also a winner. There is no exit_reason bucket
+    in the current data with a high loss count and a low/zero win rate --
+    the opposite problem from before -- so there is no new pattern here to
+    correct. Per the evolution rules, when the data shows no clear new
+    pattern the existing, already-validated exit logic is preserved
+    unchanged rather than adding speculative rules on top of a small
+    (n=30, single dominant bucket) sample.
 
     This wrapper does not change entries, sizing, or the crossover/time-stop
-    exit paths. It only adds one guard: when the original strategy signals an
-    exit whose reason mentions "stop" (the ATR hard stop), we require that the
-    *previous* daily close was already beyond the stop level in the same
-    direction before honoring the exit on the current bar. If the previous
-    close had not yet breached the stop, we hold the position one more bar
-    (returning False with a 'stop_confirmation_pending' note) to avoid exiting
-    on a single-bar spike. If the original exit is for any other reason
-    (crossover_reversal, time stop, roster flatten, etc.), we pass it through
+    exit paths. It only adds the previously-validated guard: when the
+    original strategy signals an exit whose reason mentions "stop" (the ATR
+    hard stop), we require that the *previous* daily close was already
+    beyond the stop level in the same direction before honoring the exit on
+    the current bar. If the previous close had not yet breached the stop, we
+    hold the position one more bar (returning False with a
+    'stop_confirmation_pending' note) to avoid exiting on a single-bar
+    spike. If the original exit is for any other reason (crossover_reversal,
+    time stop, profit_target, roster flatten, etc.), we pass it through
     unchanged.
     """
     exit_flag, reason = _orig_should_exit(position, df, calendar_days_held)
@@ -102,8 +116,8 @@ def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tu
 
     reason_lower = (reason or "").lower()
     if "stop" not in reason_lower:
-        # Not a hard-stop exit (e.g. crossover_reversal, time stop, roster
-        # flatten) -- leave the original decision untouched.
+        # Not a hard-stop exit (e.g. crossover_reversal, time stop, profit
+        # target, roster flatten) -- leave the original decision untouched.
         return exit_flag, reason
 
     stop_price = position.get("stop_price")

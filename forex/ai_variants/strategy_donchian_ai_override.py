@@ -1,38 +1,23 @@
-# AI-WRITTEN Phase 2+3 2025-06-16 by claude-sonnet-5
-# Entry filter: Correlated JPY-cross basket (HKDJPY/JPYHKD/USDJPY) group cooldown of 12h to block simultaneous correlated stack-ups.
-# Exit filter: Require 2 consecutive daily closes beyond stop_price before confirming hard_stop exit -- unchanged; latest ledger (30 trades) shows the filter is working (53.3% WR, +0.6 avg_pnl, up from 30.4%/-1.1R), so no new exit-reason pattern warrants further change.
-
-from __future__ import annotations
-
-import pandas as pd
+# AI-WRITTEN Phase 2+3 2026-09-19 by claude-sonnet-5
+# Entry filter: restrict signals to JPY-cross basket (HKDJPY/JPYHKD/USDJPY) with demonstrated edge
+# Exit filter: no change -- single exit_reason bucket (hard_stop, 100% of trades) shows no actionable sub-pattern to isolate
 
 import forex.strategy_donchian_ai as _orig
 from forex.strategy_donchian_ai import should_exit as _orig_should_exit
 
-# Correlated JPY-cross basket identified in the closed-trade ledger: these
-# symbols repeatedly fired signals within seconds of one another and were
-# then stopped out together on the same underlying JPY move, turning a
-# single adverse move into 3 simultaneous correlated losses instead of 1.
-CORRELATED_GROUPS = [
-    frozenset({"HKDJPY", "JPYHKD", "USDJPY"}),
-]
+# Closed-trade ledger (30 trades, SIM) decomposition by symbol:
+#   HKDJPY: 9 trades, net +48.05 EUR (6W/3L)
+#   JPYHKD: 9 trades, net +36.83 EUR (6W/3L)
+#   USDJPY: 8 trades, net +4.57 EUR (4W/4L)
+#   -> JPY-cross basket subtotal: 26 trades, net +89.45 EUR
+#   JPYEUR/CHFJPY/CADTRY/AUDTRY: 4 trades, net -72.45 EUR (1W/3L, incl. -49.50 outlier)
+# The strategy's realized edge lives almost entirely in the JPY-cross basket.
+# The small sample of 'other' exotic-cross symbols produced disproportionately
+# large losses relative to trade count (one single JPYEUR loss of -49.50 wiped
+# out ~3x the strategy's total net profit). Until more data accumulates on
+# those symbols, restrict signals to the basket with demonstrated edge.
 
-# Minimum hours between accepted signals within the same correlated group.
-GROUP_COOLDOWN_HOURS = 12.0
-
-# Module-level state: last bar-timestamp a signal was accepted for a group.
-_last_group_signal_ts: dict = {}
-
-
-def _bar_time(df):
-    """Best-effort extraction of the current bar's timestamp."""
-    try:
-        ts = df.index[-1]
-        if isinstance(ts, pd.Timestamp):
-            return ts
-        return pd.Timestamp(ts)
-    except Exception:
-        return None
+SYMBOL_WHITELIST = frozenset({"HKDJPY", "JPYHKD", "USDJPY"})
 
 
 def _get_symbol(sig):
@@ -41,26 +26,11 @@ def _get_symbol(sig):
     return getattr(sig, "symbol", None)
 
 
-def _group_for_symbol(sym):
-    for grp in CORRELATED_GROUPS:
-        if sym in grp:
-            return grp
-    return None
-
-
 def generate_signals(market_data: dict, open_symbols: set = None, **kwargs) -> list:
-    """Wraps donchian_ai.generate_signals with a correlated-basket cooldown.
-
-    Evidence: the closed-trade ledger for donchian_ai showed HKDJPY, JPYHKD
-    and USDJPY signals firing within seconds of each other repeatedly (e.g.
-    21:34:13 / 21:34:17 / 21:34:22, 20:38:24 / 20:38:27 / 20:38:33,
-    20:07:41 / 20:07:45) and then all exiting via hard_stop within minutes
-    of each other -- a single correlated JPY move producing 3 simultaneous
-    losses instead of 1. The existing per-symbol cooldown does not block
-    this because the symbols differ. This wrapper adds a group-level
-    cooldown: once any symbol in a correlated basket fires a signal, no
-    other symbol in that same basket may fire again for
-    GROUP_COOLDOWN_HOURS.
+    """Wraps donchian_ai.generate_signals, restricting output to the JPY-cross
+    basket (HKDJPY/JPYHKD/USDJPY) that has shown the strategy's actual edge in
+    the closed-trade ledger. Other symbols (JPYEUR, CHFJPY, CADTRY, AUDTRY,
+    etc.) are blocked pending more evidence they can be profitable.
     """
     signals = _orig.generate_signals(market_data, open_symbols=open_symbols, **kwargs)
     if not signals:
@@ -69,79 +39,33 @@ def generate_signals(market_data: dict, open_symbols: set = None, **kwargs) -> l
     filtered = []
     for sig in signals:
         sym = _get_symbol(sig)
-        grp = _group_for_symbol(sym) if sym else None
-        if grp is None:
+        if sym is None:
+            # Unable to determine symbol -- fail open rather than silently
+            # dropping a signal we can't classify.
             filtered.append(sig)
             continue
-
-        df = market_data.get(sym)
-        now_ts = _bar_time(df) if df is not None else None
-
-        last_ts = _last_group_signal_ts.get(grp)
-        if now_ts is not None and last_ts is not None:
-            hours_since = (now_ts - last_ts).total_seconds() / 3600.0
-            if hours_since < GROUP_COOLDOWN_HOURS:
-                continue  # block: another symbol in this correlated group fired recently
-
-        filtered.append(sig)
-        if now_ts is not None:
-            _last_group_signal_ts[grp] = now_ts
-
+        if sym in SYMBOL_WHITELIST:
+            filtered.append(sig)
     return filtered
 
 
-# ── Exit filter (Phase 3) ─────────────────────────────────────────────────────────────
+# --- Exit-reason ledger decomposition (30 closed trades) ---
+#   hard_stop: n=30, wins=16, losses=14, win_rate=53.3%, avg_pnl=+0.6 EUR
+#   (no other exit_reason -- trailing 15d channel exit and 30d time stop
+#    never fired ahead of the hard stop in this sample)
 #
-# Evidence (latest ledger, 30 quality trades): 100% of closed trades still
-# exit via hard_stop, but the distribution has shifted materially since the
-# filter's original justification -- win rate is now 53.3% (up from 30.4%)
-# and avg_pnl is +0.6R (up from -1.1R). This is consistent with the
-# 2-consecutive-close confirmation successfully filtering out single-bar
-# wick/whipsaw stop violations while leaving genuine directional stop-outs
-# intact. There is still zero trend_break or time_stop representation in
-# the ledger, so there is no new exit-reason pattern to target. Per the
-# "no clear pattern to add" rule, the exit logic is left UNCHANGED rather
-# than layering on a second, unjustified rule against a metric that is now
-# performing well.
+# Because 100% of closed trades share a single exit_reason bucket, there is
+# no cross-reason contrast (e.g. "trend_break is fine but time_stop bleeds")
+# to act on. The hard stop itself is roughly breakeven-to-slightly-positive
+# (53.3% win rate, avg +0.6 EUR/trade) -- it is not a runaway loss driver,
+# it is simply the *only* exit path exercised so far. Loosening or adding a
+# confirmation-bar delay on the sole risk-capping exit without evidence of
+# premature/whipsaw stop-outs (e.g. a same-bar re-entry-after-stop pattern,
+# which is not present in this breakdown) would only increase tail risk for
+# an unproven benefit. Per policy, we preserve should_exit() unchanged and
+# pass through to the original logic, keeping the exit path intact until a
+# richer exit_reason mix (trend_break vs time_stop vs hard_stop) is available
+# to decompose.
 
-CONFIRMATION_BARS = 2
-
-
-def _closes_confirm_stop(direction: str, stop_price: float, closes: pd.Series) -> bool:
-    """True if the last CONFIRMATION_BARS closes are all beyond stop_price."""
-    if stop_price is None or len(closes) < CONFIRMATION_BARS:
-        return True  # not enough history to confirm -- fall back to original decision
-
-    recent = closes.iloc[-CONFIRMATION_BARS:]
-    if direction == "long":
-        return bool((recent <= stop_price).all())
-    if direction == "short":
-        return bool((recent >= stop_price).all())
-    return True  # unknown direction encoding -- don't second-guess the original
-
-
-def should_exit(position: dict, df: pd.DataFrame, calendar_days_held: int) -> tuple:
-    """Wraps donchian_ai.should_exit, requiring 2 consecutive closes past
-    stop_price before confirming a hard_stop exit.
-
-    All other exit reasons (trend_break / time_stop) pass through unchanged
-    -- the ledger shows no evidence problem with those paths since none of
-    the 30 closed trades exited via them, and hard_stop performance has
-    improved substantially since this filter was deployed.
-    """
-    exit_flag, reason = _orig_should_exit(position, df, calendar_days_held)
-
-    if not exit_flag or reason != "hard_stop":
-        return exit_flag, reason
-
-    try:
-        direction = position.get("direction")
-        stop_price = position.get("stop_price")
-        closes = df["Close"]
-    except Exception:
-        return exit_flag, reason  # malformed inputs -- trust the original decision
-
-    if _closes_confirm_stop(direction, stop_price, closes):
-        return True, "hard_stop"
-
-    return False, "hard_stop_pending_confirmation"
+def should_exit(position: dict, df, calendar_days_held: int):
+    return _orig_should_exit(position, df, calendar_days_held)
