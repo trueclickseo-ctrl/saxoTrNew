@@ -11,15 +11,16 @@ Two separate permissions, deliberately:
     can score real LIVE trades and log what it *would* have done). Gated by
     config: "enabled_sim" for sim, "enabled_live_shadow" for live/live_eur.
   * ACT (apply a decision, i.e. resize or skip an order) -- allowed on
-    "sim" ONLY, enforced in CODE here (_AI_ACTING_ACCOUNTS), not config.
-    A LIVE account can never reach can_apply_decision() == True regardless
-    of what config/ai.json says. Promoting AI to act on LIVE needs its own
-    separate written decision (roadmap governance) AND a change here.
+    "sim", "ai_sim", and (2026-09-27) "live" (SEK EMA strategy).
+    Enforced in CODE here (_AI_ACTING_ACCOUNTS) and gated by
+    live_shadow_mode (config/ai.json) for the live account.
+    live_eur and live_stocks can never reach can_apply_decision() == True
+    -- not in _AI_ACTING_ACCOUNTS, not changeable via config.
 
 Fail-safe contract (Sprint 0 test gate):
   * missing config/ai.json  -> disabled
   * malformed JSON          -> disabled (logged, never a crash)
-  * any live account + ACT  -> ALWAYS False, hardcoded
+  * live_eur / live_stocks  -> ACT always False (hardcoded)
 """
 
 from __future__ import annotations
@@ -212,10 +213,13 @@ def ai_enabled_for(account_env: str) -> bool:
 
 def shadow_mode(account_env: str = "sim") -> bool:
     """True = AI observes/logs only, never changes an order.
-      * any LIVE account -> ALWAYS True (hardcoded, not in _AI_ACTING_ACCOUNTS)
+      * live -> from config key "live_shadow_mode" (default False -- copilot
+        acts on EMA LIVE since 2026-09-27). Set True to pause LIVE AI
+        without touching SIM. Decoupled from the SIM "shadow_mode" key.
+      * live_eur / live_stocks -> ALWAYS True (not in _AI_ACTING_ACCOUNTS)
       * ai_sim -> ALWAYS False when enabled (the paper twin exists to ACT,
         so it is not gated by the SIM shadow-evidence flag)
-      * sim -> from config (a later sprint's evidence gate flips it)
+      * sim -> from config key "shadow_mode" (True = observe; False = act)
       * AI not enabled at all -> True (safe)"""
     if not ai_enabled_for(account_env):
         return True
@@ -223,6 +227,13 @@ def shadow_mode(account_env: str = "sim") -> bool:
         return True
     if account_env == "ai_sim":
         return False
+    if account_env == "live":
+        # Dedicated key so pausing SIM never silently touches LIVE and
+        # vice-versa. Falls back to the shared "shadow_mode" key until
+        # "live_shadow_mode" is added to _DEFAULTS (so the shared kill
+        # switch still works in the meantime).
+        cfg = _load()
+        return bool(cfg.get("live_shadow_mode", cfg.get("shadow_mode", True)))
     return bool(_load().get("shadow_mode", True))
 
 

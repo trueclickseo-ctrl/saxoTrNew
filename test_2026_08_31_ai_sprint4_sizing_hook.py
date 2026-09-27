@@ -1,6 +1,6 @@
 """
 AI Sprint 4 test gate -- the Trading Copilot's decision wired into SIM
-sizing (Level 2, SIM only).
+and LIVE EMA sizing.
 
 Contract:
   * FLOOR = 0.25 (D1, user-decided 2026-08-31) -- a MODIFY can cut to at
@@ -8,11 +8,13 @@ Contract:
   * _ai_apply_decision_to_qty: REJECT -> (0, reason); MODIFY -> scaled &
     floored to min_units, multiplier clamped to [FLOOR, 1.0]; APPROVE/HOLD
     -> unchanged.
-  * SHIPS INERT: under the committed config/ai.json (shadow_mode:true)
-    can_apply_decision("sim") is False, so the runner hook is a no-op --
-    exactly like the Sprint 2/3 hooks shipped.
-  * LIVE can NEVER reach the hook (can_apply_decision hardcoded False for
-    live/live_eur).
+  * ACTIVE: under the committed config/ai.json (shadow_mode:false,
+    live_shadow_mode:false) can_apply_decision("sim") and
+    can_apply_decision("live") are both True. 2026-09-27: LIVE (SEK EMA)
+    added to _AI_ACTING_ACCOUNTS; copilot APPROVE/MODIFY/REJECT fires on
+    real EMA orders.
+  * live_eur and live_stocks are never in _AI_ACTING_ACCOUNTS -> False
+    unconditionally in code.
   * the hook sits after size_position and before the cost gate; REJECT
     uses the same `continue` skip shape as every deterministic gate.
 """

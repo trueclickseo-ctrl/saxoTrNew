@@ -6,7 +6,7 @@ REM requirement and strategy/pair hard rails as run_forex_live_daily.bat.
 REM
 REM 2026-08-28 FIX: same bug as run_forex_live_daily.bat -- this hard-coded
 REM --strategy donchian,ema,rsi, none of which remain in
-REM LIVE_ALLOWED_STRATEGIES (now {bb}), so --account live's own validation
+REM LIVE_ALLOWED_STRATEGIES (now {ema}), so --account live's own validation
 REM was hard-erroring on every scheduled run before even checking exits.
 REM Omitting --strategy lets forex/runner.py resolve it to
 REM LIVE_ALLOWED_STRATEGIES itself so this can't drift out of sync again.

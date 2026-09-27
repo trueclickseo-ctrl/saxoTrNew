@@ -4193,18 +4193,20 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             except Exception as _ec_exc:
                 logger.debug(f"  [exposure_ctrl] check failed for {sym}: {_ec_exc}")
 
-        # ── AI advisory layer (Sprints 2-3) — INERT, log-only ─────────────
+        # ── AI advisory layer (Sprints 2-3+) ────────────────────────────────
         # For a signal that passed every deterministic filter above:
         #   Sprint 2: write a structured candidate to ai_trade_proposals.jsonl
         #   Sprint 3: if agent_enabled, also call the Trading Copilot and
         #             stash (proposal, decision) -- logged with the real
         #             entered/skipped outcome after this loop.
-        # Guarded by the AI kill switch (OFF by default). On the LIVE
-        # accounts this is log-only forever (ai.config.can_apply_decision is
-        # hardcoded False for them). Cannot change entries / qty / anything
-        # downstream; any exception is swallowed. Cost controls: the paid
-        # LLM call is scoped to config agent_strategies and de-duped so each
-        # signal is evaluated once per day, not every rescan.
+        #   Sprint 4 (2026-09-27): can_apply_decision("live") is True for the
+        #             SEK EMA account -- the sizing hook below can REJECT /
+        #             MODIFY real orders. live_eur and live_stocks remain
+        #             log-only (not in _AI_ACTING_ACCOUNTS).
+        # Guarded by the AI kill switch. Any exception is swallowed. Cost
+        # controls: the paid LLM call is scoped to config agent_strategies
+        # and de-duped so each signal is evaluated once per day (acting
+        # accounts bypass dedup so the hook always has a fresh decision).
         if ai_config is not None and ai_config.ai_enabled_for(ACCOUNT_ENV):
             try:
                 # give the agent the trade's real economics: the flat Saxo
@@ -4224,7 +4226,9 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                 # apparent cost for a 45 EUR risk trade). For RSI with a fixed
                 # risk budget, compute expected qty from stop-distance × rate.
                 _risk_dist = abs(_entry_px - _stop_px) if _entry_px and _stop_px else 0
-                _ref_risk  = RSI_LIVE_FIXED_RISK_EUR if strat_name == "rsi" else None
+                _ref_risk  = (RSI_LIVE_FIXED_RISK_EUR if strat_name == "rsi"
+                              else EMA_LIVE_FIXED_RISK_EUR if strat_name == "ema"
+                              else None)
                 if _ref_risk and _risk_dist and _q_rate:
                     _risk_pu = _risk_dist * _q_rate      # EUR risk per 1 unit
                     _est_qty = max(1, int(round(_ref_risk / _risk_pu))) if _risk_pu > 0 else 10_000
@@ -4267,7 +4271,12 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                     if _ai_acting or not _ai_already:
                         _dec = ai_trading_copilot.evaluate_proposal(_prop)
                         _ai_decision_by_sym[sym] = _dec
-                        if not _ai_already:
+                        # Always log when acting: on rescan N+1 the dict is
+                        # updated above and can drive the sizing hook, so the
+                        # decision MUST appear in the shadow log regardless of
+                        # dedup state -- otherwise a real order can be placed
+                        # on a decision that has no audit trail entry.
+                        if not _ai_already or _ai_acting:
                             _ai_shadow_pending.append((sym, _prop, _dec))
             except Exception as exc:
                 logger.warning(f"  [ai] advisory hook failed for {sym}: {exc}")
@@ -4338,7 +4347,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             rp_kw["risk_amount"] = RSI_LIVE_FIXED_RISK_EUR / _eur_per
             rp_kw.pop("risk_pct", None)
         if (ACCOUNT_ENV in ("live",) and strat_name == "ema"
-                and EMA_LIVE_FIXED_RISK_EUR):
+                and EMA_LIVE_FIXED_RISK_EUR is not None):
             _q_ccy   = sig["symbol"][3:6] if len(sig["symbol"]) >= 6 else ""
             _eur_per = _eur_per_unit(_q_ccy, akey)
             if not _eur_per:
@@ -4370,9 +4379,11 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                                           pair_info["min_units"], **rp_kw)
             if qty <= 0:
                 if rp_kw.get("risk_amount") is not None:
+                    _cap_eur = (EMA_LIVE_FIXED_RISK_EUR if strat_name == "ema"
+                                else RSI_LIVE_FIXED_RISK_EUR)
                     logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] — one "
                                 f"{pair_info['min_units']:,.0f}-unit lot would risk more than the "
-                                f"€{RSI_LIVE_FIXED_RISK_EUR:.0f} cap (stop too wide for this pair)")
+                                f"€{_cap_eur:.0f} cap (stop too wide for this pair)")
                 else:
                     logger.info(f"  [{strat_name}] SKIP {sym}[{direction}] — risk budget "
                                 f"doesn't naturally justify even the {pair_info['min_units']:,.0f}-unit "
@@ -4407,13 +4418,21 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
                                     f"{snapped:,} (LIVE 10k–100k lot ladder)")
                     qty = snapped
 
+            if (ACCOUNT_ENV in ("live",) and strat_name == "ema"):
+                capped = min(qty, RSI_LIVE_LOT_MAX)
+                if capped != qty:
+                    logger.warning(f"  [{strat_name}] {sym}: {qty:,} → {capped:,} "
+                                   f"(LIVE max-lot backstop {RSI_LIVE_LOT_MAX:,} hit — "
+                                   f"unexpected at €{EMA_LIVE_FIXED_RISK_EUR:.0f} risk, "
+                                   f"check ATR/stop)")
+                qty = capped
+
         # ── AI Sprint 4: apply the Trading Copilot's decision to sizing ──────
-        # Live ONLY when ai_config.can_apply_decision(ACCOUNT_ENV) is True:
-        # sim account + agent_enabled + shadow_mode OFF (config/ai.json). On
-        # main today shadow_mode is ON, so can_apply_decision("sim") is False
-        # and this whole block is inert -- it ships exactly as dormant as the
-        # Sprint 2/3 hooks did. LIVE can never reach here (can_apply_decision
-        # is hardcoded False for live/live_eur in ai/config.py).
+        # Active when ai_config.can_apply_decision(ACCOUNT_ENV) is True.
+        # 2026-09-11 (SIM Phase B): can_apply_decision("sim") is True.
+        # 2026-09-27 (EMA LIVE): can_apply_decision("live") is True for the
+        # SEK account running EMA. live_eur and live_stocks cannot reach here
+        # (not in _AI_ACTING_ACCOUNTS in ai/config.py).
         #
         # REJECT -> skip with the same `continue` shape as every deterministic
         # skip above. MODIFY -> scale qty by size_multiplier (the agent has
@@ -4430,6 +4449,7 @@ def _run_entries(strat_name: str, strat_mod, positions: dict,
             if _ai_note:
                 logger.info(f"  [{strat_name}] {sym}[{direction}] {_ai_note}")
             if _ai_qty <= 0:
+                _rej("ai_reject", _ai_decision_by_sym[sym].get("comment") or "REJECT")
                 continue
             qty = _ai_qty
 
@@ -5595,16 +5615,14 @@ if __name__ == "__main__":
                          "'ai_sim' is the AI-decision SIM paper twin (Copilot "
                          "resize/skip applied; no real orders; own forex_ai ledger). "
                          "'live' is the real-money SEK account -- restricted to "
-                         "LIVE_ALLOWED_STRATEGIES (rsi since 2026-08-31) and the "
-                         "17-pair HIGH_VOLUME_SYMBOLS universe, requires "
+                         "LIVE_ALLOWED_STRATEGIES (ema since 2026-09-27) and the "
+                         "17-pair HIGH_VOLUME_SYMBOLS universe; AI copilot "
+                         "APPROVE/MODIFY/REJECT active. Requires "
                          "SAXO_LIVE_CONFIRMED=1 to place real orders. 'live_eur' is "
                          "the real-money EUR sub-account (added 2026-08-26) -- "
-                         "restricted to LIVE_EUR_ALLOWED_STRATEGIES (rsi only), on "
-                         "the 49-pair CORE_SYMBOLS universe. Both accounts run RSI, "
-                         "so the 17 HIGH_VOLUME pairs are taken on both (safe pair "
-                         "overlap via AccountKey-based reconciliation, see "
-                         "housekeeping_live.py); requires SAXO_LIVE_EUR_CONFIRMED=1 "
-                         "to place real orders.")
+                         "exits-only (LIVE_EUR_ALLOWED_STRATEGIES is empty), on "
+                         "the 49-pair CORE_SYMBOLS universe. Requires "
+                         "SAXO_LIVE_EUR_CONFIRMED=1 to place real orders.")
     ap.add_argument("--status",   action="store_true",
                     help="Print open positions and exit")
     ap.add_argument("--scan",     action="store_true",
