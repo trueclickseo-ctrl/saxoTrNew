@@ -124,9 +124,10 @@ def test_can_apply_only_sim_and_only_out_of_shadow():
         # live_eur / live_stocks are never in _AI_ACTING_ACCOUNTS -> always False
         assert aic.can_apply_decision("live_eur") is False
         assert aic.can_apply_decision("live_stocks") is False
-        # live with shadow ON -> False (emergency pause for LIVE AI)
+        # live with live_shadow_mode:True -> False (dedicated LIVE pause)
         with open(tmp, "w") as f:
-            json.dump({"enabled_live_shadow": True, "agent_enabled": True, "shadow_mode": True}, f)
+            json.dump({"enabled_live_shadow": True, "agent_enabled": True,
+                       "live_shadow_mode": True}, f)
         assert aic.can_apply_decision("live") is False
     finally:
         aic._CONFIG_PATH = real
