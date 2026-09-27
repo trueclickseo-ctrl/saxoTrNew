@@ -67,7 +67,8 @@ _DEFAULTS = {
     # LIVE (see _AI_ACTING_ACCOUNTS) -- this only turns on proposal + agent
     # logging for live / live_eur.
     "enabled_live_shadow": False,
-    "shadow_mode": True,     # even when enabled, only observe -- until a sprint flips it (sim only)
+    "shadow_mode": True,     # SIM: observe-only until a sprint flips it to False (copilot acts)
+    "live_shadow_mode": False,  # LIVE SEK: False = copilot acts on EMA; True = emergency pause
     # Sprint 3: the trade-proposal LOG (enabled_*) is free; actually calling
     # the LLM agent to evaluate each proposal costs money per signal. Kept a
     # separate switch so proposal logging can run without paid agent calls.

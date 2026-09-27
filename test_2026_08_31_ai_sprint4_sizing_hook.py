@@ -97,13 +97,15 @@ def test_apply_bad_multiplier_is_safe():
         assert q == 10000, bad
 
 
-# ── ships inert under the committed config ────────────────────────────────
+# ── current committed config state ───────────────────────────────────────
 def test_hook_is_inert_on_main_today():
-    # committed config/ai.json has shadow_mode:true -> the Sprint 4 hook
-    # cannot fire on any account.
-    assert aic.can_apply_decision("sim") is False, "shadow_mode must gate Sprint 4 off"
-    assert aic.can_apply_decision("live") is False
-    assert aic.can_apply_decision("live_eur") is False
+    # committed config/ai.json: shadow_mode:false, live_shadow_mode:false,
+    # enabled_sim:true, enabled_live_shadow:true, agent_enabled:true.
+    # Both SIM and LIVE SEK (EMA) copilot are active. live_eur is exits-only
+    # and never in _AI_ACTING_ACCOUNTS, so it stays False in code.
+    assert aic.can_apply_decision("sim") is True,      "Phase B: shadow_mode:false on SIM"
+    assert aic.can_apply_decision("live") is True,     "EMA LIVE: shadow_mode:false on SEK"
+    assert aic.can_apply_decision("live_eur") is False, "EUR account exits-only"
 
 
 def test_can_apply_only_sim_and_only_out_of_shadow():
@@ -111,15 +113,21 @@ def test_can_apply_only_sim_and_only_out_of_shadow():
     tmp = os.path.join(BASE_DIR, "config", "_test_sprint4.json")
     aic._CONFIG_PATH = tmp
     try:
-        # sim + agent on + shadow OFF -> the ONLY True case
+        # sim + agent on + shadow OFF -> True
         with open(tmp, "w") as f:
             json.dump({"enabled_sim": True, "agent_enabled": True, "shadow_mode": False}, f)
         assert aic.can_apply_decision("sim") is True
-        # LIVE stays False even with the exact same flags + enabled_live_shadow
+        # live + agent on + shadow OFF -> True (2026-09-27: EMA LIVE added to _AI_ACTING_ACCOUNTS)
         with open(tmp, "w") as f:
             json.dump({"enabled_live_shadow": True, "agent_enabled": True, "shadow_mode": False}, f)
-        assert aic.can_apply_decision("live") is False
+        assert aic.can_apply_decision("live") is True
+        # live_eur / live_stocks are never in _AI_ACTING_ACCOUNTS -> always False
         assert aic.can_apply_decision("live_eur") is False
+        assert aic.can_apply_decision("live_stocks") is False
+        # live with shadow ON -> False (emergency pause for LIVE AI)
+        with open(tmp, "w") as f:
+            json.dump({"enabled_live_shadow": True, "agent_enabled": True, "shadow_mode": True}, f)
+        assert aic.can_apply_decision("live") is False
     finally:
         aic._CONFIG_PATH = real
         if os.path.exists(tmp):
